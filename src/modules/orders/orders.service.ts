@@ -79,21 +79,27 @@ export class OrdersService {
       let fulfillerId = '';
       let fulfillerType: 'PROVIDER' | 'CREATOR' = 'PROVIDER';
 
-      if (item.custom_product_id && item.variant_id) {
-        // Custom product with a specific variant
+      if (item.custom_product_id) {
+        // Custom product (with or without a selected variant)
         const cp = await this.prisma.customProduct.findUnique({
           where: { id: item.custom_product_id },
           include: {
             product: true,
-            selected_variants: { where: { variant_id: item.variant_id } },
+            selected_variants: item.variant_id
+              ? { where: { variant_id: item.variant_id } }
+              : true,
           },
         });
         if (!cp) throw new NotFoundException(`Custom product ${item.custom_product_id} not found`);
 
-        const variant = await this.prisma.productVariant.findUnique({
-          where: { id: item.variant_id },
-        });
-        if (!variant) throw new NotFoundException(`Variant ${item.variant_id} not found`);
+        let variant: { price_adjustment: any } | null = null;
+        if (item.variant_id) {
+          variant = await this.prisma.productVariant.findUnique({
+            where: { id: item.variant_id },
+          });
+          if (!variant) throw new NotFoundException(`Variant ${item.variant_id} not found`);
+        }
+        const variantAdjustment = variant ? Number(variant.price_adjustment || 0) : 0;
 
         // Compute price based on pricing strategy
         switch (cp.pricing_type) {
@@ -102,21 +108,25 @@ export class OrdersService {
             unitPrice = Number(cp.final_price);
             break;
           case PricingType.PER_VARIANT: {
-            // Match the specific variant the customer selected
-            const selected = cp.selected_variants.find((sv) => sv.variant_id === item.variant_id);
-            unitPrice = selected?.custom_price
-              ? Number(selected.custom_price)
-              : Number(cp.product.base_price) + Number(variant.price_adjustment || 0);
+            if (variant) {
+              const selected = cp.selected_variants.find((sv) => sv.variant_id === item.variant_id);
+              unitPrice = selected?.custom_price
+                ? Number(selected.custom_price)
+                : Number(cp.product.base_price) + variantAdjustment;
+            } else {
+              // No variant chosen on a per-variant product — fall back to final_price
+              unitPrice = Number(cp.final_price) || Number(cp.product.base_price);
+            }
             break;
           }
           case PricingType.MARGIN:
-            unitPrice = Number(cp.product.base_price) + Number(variant.price_adjustment || 0) + Number(cp.margin_amount || 0);
+            unitPrice = Number(cp.product.base_price) + variantAdjustment + Number(cp.margin_amount || 0);
             break;
         }
 
         // Provider base = their product's base price + variant adjustment (if provider exists)
         if (cp.product.provider_id) {
-          providerBasePrice = Number(cp.product.base_price) + Number(variant.price_adjustment || 0);
+          providerBasePrice = Number(cp.product.base_price) + variantAdjustment;
         }
 
         // Provider fulfills the product, creator is the seller
