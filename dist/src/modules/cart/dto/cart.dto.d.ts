@@ -1,0 +1,10 @@
+export declare class AddCartItemDto {
+    product_id?: string;
+    variant_id?: string;
+    custom_product_id?: string;
+    quantity: number;
+    custom_fields?: any;
+}
+export declare class UpdateCartItemDto {
+    quantity: number;
+}
