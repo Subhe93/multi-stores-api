@@ -1,7 +1,13 @@
-import { IsString, IsOptional, IsBoolean, IsArray, IsObject } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsArray, IsObject, Matches, MinLength, MaxLength } from 'class-validator';
+
+const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const SLUG_MESSAGE = 'slug must be lowercase letters, digits, and hyphens (no leading/trailing hyphen)';
 
 export class CreateStoreDto {
   @IsString()
+  @MinLength(2)
+  @MaxLength(50)
+  @Matches(SLUG_REGEX, { message: SLUG_MESSAGE })
   slug: string;
 
   @IsString()
@@ -22,6 +28,13 @@ export class CreateStoreDto {
 }
 
 export class UpdateStoreDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(50)
+  @Matches(SLUG_REGEX, { message: SLUG_MESSAGE })
+  slug?: string;
+
   @IsOptional()
   @IsString()
   name?: string;

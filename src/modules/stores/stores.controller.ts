@@ -18,7 +18,23 @@ import { UserRole } from '@prisma/client';
 export class StoresController {
   constructor(private storesService: StoresService) {}
 
-  // عام — الحصول على متجر بالـ slug
+  // Admin — Get a creator's store by creator id
+  @Get('by-creator/:creatorId')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  findByCreatorId(@Param('creatorId') creatorId: string) {
+    return this.storesService.findByCreatorId(creatorId);
+  }
+
+  // Admin — Update a creator's store (including slug)
+  @Put('by-creator/:creatorId')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  adminUpdate(@Param('creatorId') creatorId: string, @Body() dto: UpdateStoreDto) {
+    return this.storesService.adminUpdateByCreatorId(creatorId, dto);
+  }
+
+  // Public — Get a store by its slug
   @Get(':slug')
   findBySlug(@Param('slug') slug: string) {
     return this.storesService.findBySlug(slug);

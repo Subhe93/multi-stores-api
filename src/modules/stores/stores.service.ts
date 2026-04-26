@@ -89,8 +89,50 @@ export class StoresService {
     const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
     if (!creator) throw new NotFoundException('Creator not found');
 
+    if (dto.slug) {
+      const conflict = await this.prisma.store.findFirst({
+        where: { slug: dto.slug, creator_id: { not: creator.id } },
+        select: { id: true },
+      });
+      if (conflict) throw new ConflictException('Store slug already taken');
+    }
+
     return this.prisma.store.update({
       where: { creator_id: creator.id },
+      data: dto,
+      include: { language_config: true },
+    });
+  }
+
+  async findByCreatorId(creatorId: string) {
+    const store = await this.prisma.store.findUnique({
+      where: { creator_id: creatorId },
+      include: {
+        language_config: true,
+        creator: { select: { display_name: true, avatar_url: true } },
+      },
+    });
+    if (!store) throw new NotFoundException('Store not found');
+    return store;
+  }
+
+  async adminUpdateByCreatorId(creatorId: string, dto: UpdateStoreDto) {
+    const store = await this.prisma.store.findUnique({
+      where: { creator_id: creatorId },
+      select: { id: true },
+    });
+    if (!store) throw new NotFoundException('Store not found');
+
+    if (dto.slug) {
+      const conflict = await this.prisma.store.findFirst({
+        where: { slug: dto.slug, id: { not: store.id } },
+        select: { id: true },
+      });
+      if (conflict) throw new ConflictException('Store slug already taken');
+    }
+
+    return this.prisma.store.update({
+      where: { id: store.id },
       data: dto,
       include: { language_config: true },
     });
