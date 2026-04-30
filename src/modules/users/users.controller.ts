@@ -1,7 +1,9 @@
 import {
   Controller,
   Get,
+  Post,
   Put,
+  Delete,
   Param,
   Query,
   Body,
@@ -9,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { UsersService } from './users.service';
-import { Roles } from '../../common/decorators';
+import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole, UserStatus } from '@prisma/client';
 
@@ -45,12 +47,72 @@ export class UsersController {
     return this.usersService.findById(id);
   }
 
+  @Post('users')
+  create(
+    @Body()
+    body: {
+      email: string;
+      password: string;
+      role: UserRole;
+      status?: UserStatus;
+      avatar_url?: string;
+      company_name?: string;
+      description?: string;
+      country?: string;
+      phone?: string;
+      verified?: boolean;
+      display_name?: string;
+      bio?: string;
+      first_name?: string;
+      last_name?: string;
+    },
+  ) {
+    return this.usersService.create(body);
+  }
+
+  @Put('users/:id')
+  update(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      email?: string;
+      status?: UserStatus;
+      avatar_url?: string | null;
+      company_name?: string;
+      description?: string | null;
+      country?: string;
+      phone?: string | null;
+      verified?: boolean;
+      logo_url?: string | null;
+      display_name?: string;
+      bio?: string | null;
+      cover_url?: string | null;
+      first_name?: string;
+      last_name?: string;
+    },
+  ) {
+    return this.usersService.update(id, body);
+  }
+
   @Put('users/:id/status')
   updateStatus(
     @Param('id') id: string,
     @Body('status') status: UserStatus,
   ) {
     return this.usersService.updateStatus(id, status);
+  }
+
+  @Put('users/:id/password')
+  resetPassword(
+    @Param('id') id: string,
+    @Body('password') password: string,
+  ) {
+    return this.usersService.resetPassword(id, password);
+  }
+
+  @Delete('users/:id')
+  remove(@Param('id') id: string, @CurrentUser('id') actingUserId: string) {
+    return this.usersService.remove(id, actingUserId);
   }
 
   @Get('platform-config')

@@ -3,6 +3,56 @@ import { CreateStoreDto, UpdateStoreDto, UpdateThemeDto, UpdateLanguageDto } fro
 export declare class StoresController {
     private storesService;
     constructor(storesService: StoresService);
+    findByCreatorId(creatorId: string): Promise<{
+        creator: {
+            avatar_url: string | null;
+            display_name: string;
+        };
+        language_config: {
+            id: string;
+            primary_locale: string;
+            secondary_locales: string[];
+            auto_translate: boolean;
+            fallback_locale: string;
+            store_id: string;
+        } | null;
+    } & {
+        id: string;
+        created_at: Date;
+        updated_at: Date;
+        name: string;
+        description: string | null;
+        logo_url: string | null;
+        creator_id: string;
+        slug: string;
+        custom_domain: string | null;
+        favicon_url: string | null;
+        theme_config: import("@prisma/client/runtime/library").JsonValue;
+        is_active: boolean;
+    }>;
+    adminUpdate(creatorId: string, dto: UpdateStoreDto): Promise<{
+        language_config: {
+            id: string;
+            primary_locale: string;
+            secondary_locales: string[];
+            auto_translate: boolean;
+            fallback_locale: string;
+            store_id: string;
+        } | null;
+    } & {
+        id: string;
+        created_at: Date;
+        updated_at: Date;
+        name: string;
+        description: string | null;
+        logo_url: string | null;
+        creator_id: string;
+        slug: string;
+        custom_domain: string | null;
+        favicon_url: string | null;
+        theme_config: import("@prisma/client/runtime/library").JsonValue;
+        is_active: boolean;
+    }>;
     findBySlug(slug: string): Promise<{
         creator: {
             avatar_url: string | null;

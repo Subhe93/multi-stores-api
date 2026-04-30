@@ -77,38 +77,49 @@ let OrdersService = class OrdersService {
             let providerBasePrice = 0;
             let fulfillerId = '';
             let fulfillerType = 'PROVIDER';
-            if (item.custom_product_id && item.variant_id) {
+            if (item.custom_product_id) {
                 const cp = await this.prisma.customProduct.findUnique({
                     where: { id: item.custom_product_id },
                     include: {
                         product: true,
-                        selected_variants: { where: { variant_id: item.variant_id } },
+                        selected_variants: item.variant_id
+                            ? { where: { variant_id: item.variant_id } }
+                            : true,
                     },
                 });
                 if (!cp)
                     throw new common_1.NotFoundException(`Custom product ${item.custom_product_id} not found`);
-                const variant = await this.prisma.productVariant.findUnique({
-                    where: { id: item.variant_id },
-                });
-                if (!variant)
-                    throw new common_1.NotFoundException(`Variant ${item.variant_id} not found`);
+                let variant = null;
+                if (item.variant_id) {
+                    variant = await this.prisma.productVariant.findUnique({
+                        where: { id: item.variant_id },
+                    });
+                    if (!variant)
+                        throw new common_1.NotFoundException(`Variant ${item.variant_id} not found`);
+                }
+                const variantAdjustment = variant ? Number(variant.price_adjustment || 0) : 0;
                 switch (cp.pricing_type) {
                     case client_1.PricingType.SINGLE:
                         unitPrice = Number(cp.final_price);
                         break;
                     case client_1.PricingType.PER_VARIANT: {
-                        const selected = cp.selected_variants.find((sv) => sv.variant_id === item.variant_id);
-                        unitPrice = selected?.custom_price
-                            ? Number(selected.custom_price)
-                            : Number(cp.product.base_price) + Number(variant.price_adjustment || 0);
+                        if (variant) {
+                            const selected = cp.selected_variants.find((sv) => sv.variant_id === item.variant_id);
+                            unitPrice = selected?.custom_price
+                                ? Number(selected.custom_price)
+                                : Number(cp.product.base_price) + variantAdjustment;
+                        }
+                        else {
+                            unitPrice = Number(cp.final_price) || Number(cp.product.base_price);
+                        }
                         break;
                     }
                     case client_1.PricingType.MARGIN:
-                        unitPrice = Number(cp.product.base_price) + Number(variant.price_adjustment || 0) + Number(cp.margin_amount || 0);
+                        unitPrice = Number(cp.product.base_price) + variantAdjustment + Number(cp.margin_amount || 0);
                         break;
                 }
                 if (cp.product.provider_id) {
-                    providerBasePrice = Number(cp.product.base_price) + Number(variant.price_adjustment || 0);
+                    providerBasePrice = Number(cp.product.base_price) + variantAdjustment;
                 }
                 fulfillerId = cp.product.provider_id || cp.creator_id || '';
                 fulfillerType = cp.product.provider_id ? 'PROVIDER' : 'CREATOR';

@@ -44,6 +44,27 @@ export class ProvidersController {
     return this.providersService.update(userId, dto);
   }
 
+  @Get('me/stores')
+  @Roles(UserRole.PROVIDER)
+  @UseGuards(RolesGuard)
+  getMyStores(
+    @CurrentUser('id') userId: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.providersService.findStoresUsingProvider(userId, page, limit);
+  }
+
+  @Get('me/stores/:storeId')
+  @Roles(UserRole.PROVIDER)
+  @UseGuards(RolesGuard)
+  getMyStoreById(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+  ) {
+    return this.providersService.findStoreForProvider(userId, storeId);
+  }
+
   @Get()
   @Roles(UserRole.ADMIN)
   @UseGuards(RolesGuard)

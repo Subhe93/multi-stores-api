@@ -70,6 +70,108 @@ let ProvidersService = class ProvidersService {
             data: { verified: true },
         });
     }
+    async findStoresUsingProvider(userId, page = 1, limit = 20) {
+        const provider = await this.prisma.provider.findUnique({
+            where: { user_id: userId },
+            select: { id: true },
+        });
+        if (!provider)
+            throw new common_1.NotFoundException('Provider profile not found');
+        const skip = (page - 1) * limit;
+        const baseWhere = {
+            creator: {
+                custom_products: {
+                    some: { product: { provider_id: provider.id } },
+                },
+            },
+        };
+        const [stores, total] = await Promise.all([
+            this.prisma.store.findMany({
+                where: baseWhere,
+                skip,
+                take: limit,
+                include: {
+                    creator: { select: { display_name: true, avatar_url: true, verified: true } },
+                    language_config: { select: { primary_locale: true } },
+                    _count: { select: { static_pages: true } },
+                },
+                orderBy: { created_at: 'desc' },
+            }),
+            this.prisma.store.count({ where: baseWhere }),
+        ]);
+        const storesWithCounts = await Promise.all(stores.map(async (s) => {
+            const productsCount = await this.prisma.customProduct.count({
+                where: {
+                    creator_id: s.creator_id,
+                    product: { provider_id: provider.id },
+                },
+            });
+            return { ...s, products_using_count: productsCount };
+        }));
+        return {
+            data: storesWithCounts,
+            meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+        };
+    }
+    async findStoreForProvider(userId, storeId) {
+        const provider = await this.prisma.provider.findUnique({
+            where: { user_id: userId },
+            select: { id: true },
+        });
+        if (!provider)
+            throw new common_1.NotFoundException('Provider profile not found');
+        const store = await this.prisma.store.findUnique({
+            where: { id: storeId },
+            include: {
+                creator: {
+                    select: {
+                        display_name: true,
+                        avatar_url: true,
+                        cover_url: true,
+                        bio: true,
+                        verified: true,
+                    },
+                },
+                language_config: true,
+                static_pages: {
+                    where: { status: 'PUBLISHED' },
+                    include: { translations: true },
+                    orderBy: { sort_order: 'asc' },
+                },
+            },
+        });
+        if (!store)
+            throw new common_1.NotFoundException('Store not found');
+        const usesProvider = await this.prisma.customProduct.findFirst({
+            where: {
+                creator_id: store.creator_id,
+                product: { provider_id: provider.id },
+            },
+            select: { id: true },
+        });
+        if (!usesProvider) {
+            throw new common_1.NotFoundException('Store does not use your products');
+        }
+        const customProducts = await this.prisma.customProduct.findMany({
+            where: {
+                creator_id: store.creator_id,
+                product: { provider_id: provider.id },
+            },
+            include: {
+                translations: true,
+                mockup_images: { orderBy: { sort_order: 'asc' }, take: 1 },
+                product: {
+                    include: {
+                        translations: true,
+                        images: { orderBy: { sort_order: 'asc' }, take: 1 },
+                    },
+                },
+            },
+            orderBy: { created_at: 'desc' },
+            take: 50,
+        });
+        return { ...store, custom_products_using: customProducts };
+    }
 };
 exports.ProvidersService = ProvidersService;
 exports.ProvidersService = ProvidersService = __decorate([

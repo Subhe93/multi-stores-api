@@ -105,10 +105,10 @@ export declare class StorefrontService {
             description: string;
             slug: string;
             locale: string;
+            product_id: string;
             title: string;
             meta_title: string | null;
             meta_desc: string | null;
-            product_id: string;
         }[];
         category: {
             translations: {
@@ -126,6 +126,15 @@ export declare class StorefrontService {
             parent_id: string | null;
             icon: string | null;
         };
+        images: {
+            id: string;
+            sort_order: number;
+            is_featured: boolean;
+            product_id: string;
+            variant_id: string | null;
+            url: string;
+            alt_text: string | null;
+        }[];
         attributes: ({
             template: {
                 translations: {
@@ -148,23 +157,14 @@ export declare class StorefrontService {
             };
         } & {
             id: string;
+            product_id: string;
             template_id: string;
             value: import("@prisma/client/runtime/library").JsonValue;
-            product_id: string;
         })[];
         tags: {
             id: string;
             product_id: string;
             tag: string;
-        }[];
-        images: {
-            id: string;
-            sort_order: number;
-            is_featured: boolean;
-            product_id: string;
-            variant_id: string | null;
-            url: string;
-            alt_text: string | null;
         }[];
         custom_fields: ({
             translations: {
@@ -205,6 +205,7 @@ export declare class StorefrontService {
         created_at: Date;
         updated_at: Date;
         creator_id: string | null;
+        provider_id: string | null;
         category_id: string;
         product_type: import("@prisma/client").$Enums.ProductType;
         customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -217,7 +218,6 @@ export declare class StorefrontService {
         variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
         shipping_profile_id: string | null;
         is_featured: boolean;
-        provider_id: string | null;
         field_values?: undefined;
         pricing_type?: undefined;
         _type?: undefined;
@@ -272,9 +272,9 @@ export declare class StorefrontService {
             };
         } & {
             id: string;
+            product_id: string;
             template_id: string;
             value: import("@prisma/client/runtime/library").JsonValue;
-            product_id: string;
         })[];
         variants: any;
         tags: {

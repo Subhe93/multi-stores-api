@@ -6,6 +6,7 @@ export declare class CreateStoreDto {
     secondary_locales?: string[];
 }
 export declare class UpdateStoreDto {
+    slug?: string;
     name?: string;
     description?: string;
     logo_url?: string;

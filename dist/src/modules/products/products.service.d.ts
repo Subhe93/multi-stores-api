@@ -11,10 +11,10 @@ export declare class ProductsService {
             description: string;
             slug: string;
             locale: string;
+            product_id: string;
             title: string;
             meta_title: string | null;
             meta_desc: string | null;
-            product_id: string;
         }[];
         category: {
             translations: {
@@ -32,37 +32,6 @@ export declare class ProductsService {
             parent_id: string | null;
             icon: string | null;
         };
-        attributes: ({
-            template: {
-                translations: {
-                    id: string;
-                    label: string;
-                    locale: string;
-                    option_labels: import("@prisma/client/runtime/library").JsonValue | null;
-                    template_id: string;
-                }[];
-            } & {
-                id: string;
-                name: string;
-                type: import("@prisma/client").$Enums.AttributeType;
-                unit: string | null;
-                options: import("@prisma/client/runtime/library").JsonValue | null;
-                is_required: boolean;
-                group_name: string | null;
-                validation_rules: import("@prisma/client/runtime/library").JsonValue | null;
-                sort_order: number;
-            };
-        } & {
-            id: string;
-            template_id: string;
-            value: import("@prisma/client/runtime/library").JsonValue;
-            product_id: string;
-        })[];
-        tags: {
-            id: string;
-            product_id: string;
-            tag: string;
-        }[];
         shipping_profile: ({
             zones: {
                 id: string;
@@ -92,6 +61,32 @@ export declare class ProductsService {
             url: string;
             alt_text: string | null;
         }[];
+        attributes: ({
+            template: {
+                translations: {
+                    id: string;
+                    label: string;
+                    locale: string;
+                    option_labels: import("@prisma/client/runtime/library").JsonValue | null;
+                    template_id: string;
+                }[];
+            } & {
+                id: string;
+                name: string;
+                type: import("@prisma/client").$Enums.AttributeType;
+                unit: string | null;
+                options: import("@prisma/client/runtime/library").JsonValue | null;
+                is_required: boolean;
+                group_name: string | null;
+                validation_rules: import("@prisma/client/runtime/library").JsonValue | null;
+                sort_order: number;
+            };
+        } & {
+            id: string;
+            product_id: string;
+            template_id: string;
+            value: import("@prisma/client/runtime/library").JsonValue;
+        })[];
         variants: {
             id: string;
             is_active: boolean;
@@ -101,6 +96,11 @@ export declare class ProductsService {
             stock_quantity: number | null;
             product_id: string;
             price_adjustment: import("@prisma/client/runtime/library").Decimal;
+        }[];
+        tags: {
+            id: string;
+            product_id: string;
+            tag: string;
         }[];
         custom_fields: ({
             translations: {
@@ -142,6 +142,7 @@ export declare class ProductsService {
         created_at: Date;
         updated_at: Date;
         creator_id: string | null;
+        provider_id: string | null;
         category_id: string;
         product_type: import("@prisma/client").$Enums.ProductType;
         customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -156,7 +157,6 @@ export declare class ProductsService {
         variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
         shipping_profile_id: string | null;
         is_featured: boolean;
-        provider_id: string | null;
     }>;
     findAll(filters: {
         page?: number;
@@ -179,10 +179,10 @@ export declare class ProductsService {
                 description: string;
                 slug: string;
                 locale: string;
+                product_id: string;
                 title: string;
                 meta_title: string | null;
                 meta_desc: string | null;
-                product_id: string;
             }[];
             category: {
                 translations: {
@@ -225,6 +225,7 @@ export declare class ProductsService {
             created_at: Date;
             updated_at: Date;
             creator_id: string | null;
+            provider_id: string | null;
             category_id: string;
             product_type: import("@prisma/client").$Enums.ProductType;
             customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -239,7 +240,6 @@ export declare class ProductsService {
             variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
             shipping_profile_id: string | null;
             is_featured: boolean;
-            provider_id: string | null;
         })[];
         meta: {
             total: number;
@@ -254,10 +254,10 @@ export declare class ProductsService {
             description: string;
             slug: string;
             locale: string;
+            product_id: string;
             title: string;
             meta_title: string | null;
             meta_desc: string | null;
-            product_id: string;
         }[];
         category: {
             translations: {
@@ -275,37 +275,6 @@ export declare class ProductsService {
             parent_id: string | null;
             icon: string | null;
         };
-        attributes: ({
-            template: {
-                translations: {
-                    id: string;
-                    label: string;
-                    locale: string;
-                    option_labels: import("@prisma/client/runtime/library").JsonValue | null;
-                    template_id: string;
-                }[];
-            } & {
-                id: string;
-                name: string;
-                type: import("@prisma/client").$Enums.AttributeType;
-                unit: string | null;
-                options: import("@prisma/client/runtime/library").JsonValue | null;
-                is_required: boolean;
-                group_name: string | null;
-                validation_rules: import("@prisma/client/runtime/library").JsonValue | null;
-                sort_order: number;
-            };
-        } & {
-            id: string;
-            template_id: string;
-            value: import("@prisma/client/runtime/library").JsonValue;
-            product_id: string;
-        })[];
-        tags: {
-            id: string;
-            product_id: string;
-            tag: string;
-        }[];
         shipping_profile: ({
             zones: {
                 id: string;
@@ -335,6 +304,32 @@ export declare class ProductsService {
             url: string;
             alt_text: string | null;
         }[];
+        attributes: ({
+            template: {
+                translations: {
+                    id: string;
+                    label: string;
+                    locale: string;
+                    option_labels: import("@prisma/client/runtime/library").JsonValue | null;
+                    template_id: string;
+                }[];
+            } & {
+                id: string;
+                name: string;
+                type: import("@prisma/client").$Enums.AttributeType;
+                unit: string | null;
+                options: import("@prisma/client/runtime/library").JsonValue | null;
+                is_required: boolean;
+                group_name: string | null;
+                validation_rules: import("@prisma/client/runtime/library").JsonValue | null;
+                sort_order: number;
+            };
+        } & {
+            id: string;
+            product_id: string;
+            template_id: string;
+            value: import("@prisma/client/runtime/library").JsonValue;
+        })[];
         variants: {
             id: string;
             is_active: boolean;
@@ -344,6 +339,11 @@ export declare class ProductsService {
             stock_quantity: number | null;
             product_id: string;
             price_adjustment: import("@prisma/client/runtime/library").Decimal;
+        }[];
+        tags: {
+            id: string;
+            product_id: string;
+            tag: string;
         }[];
         custom_fields: ({
             translations: {
@@ -385,6 +385,7 @@ export declare class ProductsService {
         created_at: Date;
         updated_at: Date;
         creator_id: string | null;
+        provider_id: string | null;
         category_id: string;
         product_type: import("@prisma/client").$Enums.ProductType;
         customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -399,7 +400,6 @@ export declare class ProductsService {
         variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
         shipping_profile_id: string | null;
         is_featured: boolean;
-        provider_id: string | null;
     }>;
     update(id: string, userId: string, userRole: UserRole, dto: UpdateProductDto): Promise<{
         translations: {
@@ -407,10 +407,10 @@ export declare class ProductsService {
             description: string;
             slug: string;
             locale: string;
+            product_id: string;
             title: string;
             meta_title: string | null;
             meta_desc: string | null;
-            product_id: string;
         }[];
         category: {
             translations: {
@@ -428,37 +428,6 @@ export declare class ProductsService {
             parent_id: string | null;
             icon: string | null;
         };
-        attributes: ({
-            template: {
-                translations: {
-                    id: string;
-                    label: string;
-                    locale: string;
-                    option_labels: import("@prisma/client/runtime/library").JsonValue | null;
-                    template_id: string;
-                }[];
-            } & {
-                id: string;
-                name: string;
-                type: import("@prisma/client").$Enums.AttributeType;
-                unit: string | null;
-                options: import("@prisma/client/runtime/library").JsonValue | null;
-                is_required: boolean;
-                group_name: string | null;
-                validation_rules: import("@prisma/client/runtime/library").JsonValue | null;
-                sort_order: number;
-            };
-        } & {
-            id: string;
-            template_id: string;
-            value: import("@prisma/client/runtime/library").JsonValue;
-            product_id: string;
-        })[];
-        tags: {
-            id: string;
-            product_id: string;
-            tag: string;
-        }[];
         shipping_profile: ({
             zones: {
                 id: string;
@@ -488,6 +457,32 @@ export declare class ProductsService {
             url: string;
             alt_text: string | null;
         }[];
+        attributes: ({
+            template: {
+                translations: {
+                    id: string;
+                    label: string;
+                    locale: string;
+                    option_labels: import("@prisma/client/runtime/library").JsonValue | null;
+                    template_id: string;
+                }[];
+            } & {
+                id: string;
+                name: string;
+                type: import("@prisma/client").$Enums.AttributeType;
+                unit: string | null;
+                options: import("@prisma/client/runtime/library").JsonValue | null;
+                is_required: boolean;
+                group_name: string | null;
+                validation_rules: import("@prisma/client/runtime/library").JsonValue | null;
+                sort_order: number;
+            };
+        } & {
+            id: string;
+            product_id: string;
+            template_id: string;
+            value: import("@prisma/client/runtime/library").JsonValue;
+        })[];
         variants: {
             id: string;
             is_active: boolean;
@@ -497,6 +492,11 @@ export declare class ProductsService {
             stock_quantity: number | null;
             product_id: string;
             price_adjustment: import("@prisma/client/runtime/library").Decimal;
+        }[];
+        tags: {
+            id: string;
+            product_id: string;
+            tag: string;
         }[];
         custom_fields: ({
             translations: {
@@ -538,6 +538,7 @@ export declare class ProductsService {
         created_at: Date;
         updated_at: Date;
         creator_id: string | null;
+        provider_id: string | null;
         category_id: string;
         product_type: import("@prisma/client").$Enums.ProductType;
         customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -552,7 +553,6 @@ export declare class ProductsService {
         variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
         shipping_profile_id: string | null;
         is_featured: boolean;
-        provider_id: string | null;
     }>;
     delete(id: string, userId: string, userRole: UserRole): Promise<{
         id: string;
@@ -560,6 +560,7 @@ export declare class ProductsService {
         created_at: Date;
         updated_at: Date;
         creator_id: string | null;
+        provider_id: string | null;
         category_id: string;
         product_type: import("@prisma/client").$Enums.ProductType;
         customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -574,7 +575,6 @@ export declare class ProductsService {
         variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
         shipping_profile_id: string | null;
         is_featured: boolean;
-        provider_id: string | null;
     }>;
     updateStatus(id: string, status: ProductStatus, userId: string, userRole: UserRole): Promise<{
         id: string;
@@ -582,6 +582,7 @@ export declare class ProductsService {
         created_at: Date;
         updated_at: Date;
         creator_id: string | null;
+        provider_id: string | null;
         category_id: string;
         product_type: import("@prisma/client").$Enums.ProductType;
         customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -596,7 +597,6 @@ export declare class ProductsService {
         variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
         shipping_profile_id: string | null;
         is_featured: boolean;
-        provider_id: string | null;
     }>;
     addImage(productId: string, url: string, altText?: string, sortOrder?: number, isFeatured?: boolean, variantId?: string): Promise<{
         id: string;
@@ -644,10 +644,10 @@ export declare class ProductsService {
             description: string;
             slug: string;
             locale: string;
+            product_id: string;
             title: string;
             meta_title: string | null;
             meta_desc: string | null;
-            product_id: string;
         }[];
         category: {
             translations: {
@@ -665,37 +665,6 @@ export declare class ProductsService {
             parent_id: string | null;
             icon: string | null;
         };
-        attributes: ({
-            template: {
-                translations: {
-                    id: string;
-                    label: string;
-                    locale: string;
-                    option_labels: import("@prisma/client/runtime/library").JsonValue | null;
-                    template_id: string;
-                }[];
-            } & {
-                id: string;
-                name: string;
-                type: import("@prisma/client").$Enums.AttributeType;
-                unit: string | null;
-                options: import("@prisma/client/runtime/library").JsonValue | null;
-                is_required: boolean;
-                group_name: string | null;
-                validation_rules: import("@prisma/client/runtime/library").JsonValue | null;
-                sort_order: number;
-            };
-        } & {
-            id: string;
-            template_id: string;
-            value: import("@prisma/client/runtime/library").JsonValue;
-            product_id: string;
-        })[];
-        tags: {
-            id: string;
-            product_id: string;
-            tag: string;
-        }[];
         shipping_profile: ({
             zones: {
                 id: string;
@@ -725,6 +694,32 @@ export declare class ProductsService {
             url: string;
             alt_text: string | null;
         }[];
+        attributes: ({
+            template: {
+                translations: {
+                    id: string;
+                    label: string;
+                    locale: string;
+                    option_labels: import("@prisma/client/runtime/library").JsonValue | null;
+                    template_id: string;
+                }[];
+            } & {
+                id: string;
+                name: string;
+                type: import("@prisma/client").$Enums.AttributeType;
+                unit: string | null;
+                options: import("@prisma/client/runtime/library").JsonValue | null;
+                is_required: boolean;
+                group_name: string | null;
+                validation_rules: import("@prisma/client/runtime/library").JsonValue | null;
+                sort_order: number;
+            };
+        } & {
+            id: string;
+            product_id: string;
+            template_id: string;
+            value: import("@prisma/client/runtime/library").JsonValue;
+        })[];
         variants: ({
             images: {
                 id: string;
@@ -745,6 +740,11 @@ export declare class ProductsService {
             product_id: string;
             price_adjustment: import("@prisma/client/runtime/library").Decimal;
         })[];
+        tags: {
+            id: string;
+            product_id: string;
+            tag: string;
+        }[];
         custom_fields: ({
             translations: {
                 id: string;
@@ -785,6 +785,7 @@ export declare class ProductsService {
         created_at: Date;
         updated_at: Date;
         creator_id: string | null;
+        provider_id: string | null;
         category_id: string;
         product_type: import("@prisma/client").$Enums.ProductType;
         customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -799,7 +800,6 @@ export declare class ProductsService {
         variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
         shipping_profile_id: string | null;
         is_featured: boolean;
-        provider_id: string | null;
     }>;
     private checkOwnership;
 }

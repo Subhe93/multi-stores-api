@@ -34,6 +34,12 @@ let ProvidersController = class ProvidersController {
     updateMyProfile(userId, dto) {
         return this.providersService.update(userId, dto);
     }
+    getMyStores(userId, page, limit) {
+        return this.providersService.findStoresUsingProvider(userId, page, limit);
+    }
+    getMyStoreById(userId, storeId) {
+        return this.providersService.findStoreForProvider(userId, storeId);
+    }
     findAll(page, limit) {
         return this.providersService.findAll(page, limit);
     }
@@ -74,6 +80,27 @@ __decorate([
     __metadata("design:paramtypes", [String, create_provider_dto_1.UpdateProviderDto]),
     __metadata("design:returntype", void 0)
 ], ProvidersController.prototype, "updateMyProfile", null);
+__decorate([
+    (0, common_1.Get)('me/stores'),
+    (0, decorators_1.Roles)(client_1.UserRole.PROVIDER),
+    (0, common_1.UseGuards)(roles_guard_1.RolesGuard),
+    __param(0, (0, decorators_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Query)('page')),
+    __param(2, (0, common_1.Query)('limit')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Number, Number]),
+    __metadata("design:returntype", void 0)
+], ProvidersController.prototype, "getMyStores", null);
+__decorate([
+    (0, common_1.Get)('me/stores/:storeId'),
+    (0, decorators_1.Roles)(client_1.UserRole.PROVIDER),
+    (0, common_1.UseGuards)(roles_guard_1.RolesGuard),
+    __param(0, (0, decorators_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:returntype", void 0)
+], ProvidersController.prototype, "getMyStoreById", null);
 __decorate([
     (0, common_1.Get)(),
     (0, decorators_1.Roles)(client_1.UserRole.ADMIN),

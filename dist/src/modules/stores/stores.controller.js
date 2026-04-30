@@ -25,6 +25,12 @@ let StoresController = class StoresController {
     constructor(storesService) {
         this.storesService = storesService;
     }
+    findByCreatorId(creatorId) {
+        return this.storesService.findByCreatorId(creatorId);
+    }
+    adminUpdate(creatorId, dto) {
+        return this.storesService.adminUpdateByCreatorId(creatorId, dto);
+    }
     findBySlug(slug) {
         return this.storesService.findBySlug(slug);
     }
@@ -45,6 +51,25 @@ let StoresController = class StoresController {
     }
 };
 exports.StoresController = StoresController;
+__decorate([
+    (0, common_1.Get)('by-creator/:creatorId'),
+    (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt'), roles_guard_1.RolesGuard),
+    (0, decorators_1.Roles)(client_1.UserRole.ADMIN),
+    __param(0, (0, common_1.Param)('creatorId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", void 0)
+], StoresController.prototype, "findByCreatorId", null);
+__decorate([
+    (0, common_1.Put)('by-creator/:creatorId'),
+    (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt'), roles_guard_1.RolesGuard),
+    (0, decorators_1.Roles)(client_1.UserRole.ADMIN),
+    __param(0, (0, common_1.Param)('creatorId')),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, store_dto_1.UpdateStoreDto]),
+    __metadata("design:returntype", void 0)
+], StoresController.prototype, "adminUpdate", null);
 __decorate([
     (0, common_1.Get)(':slug'),
     __param(0, (0, common_1.Param)('slug')),

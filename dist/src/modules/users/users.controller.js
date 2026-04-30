@@ -36,8 +36,20 @@ let UsersController = class UsersController {
     findById(id) {
         return this.usersService.findById(id);
     }
+    create(body) {
+        return this.usersService.create(body);
+    }
+    update(id, body) {
+        return this.usersService.update(id, body);
+    }
     updateStatus(id, status) {
         return this.usersService.updateStatus(id, status);
+    }
+    resetPassword(id, password) {
+        return this.usersService.resetPassword(id, password);
+    }
+    remove(id, actingUserId) {
+        return this.usersService.remove(id, actingUserId);
     }
     getPlatformConfig() {
         return this.usersService.getPlatformConfig();
@@ -78,6 +90,21 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], UsersController.prototype, "findById", null);
 __decorate([
+    (0, common_1.Post)('users'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", void 0)
+], UsersController.prototype, "create", null);
+__decorate([
+    (0, common_1.Put)('users/:id'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", void 0)
+], UsersController.prototype, "update", null);
+__decorate([
     (0, common_1.Put)('users/:id/status'),
     __param(0, (0, common_1.Param)('id')),
     __param(1, (0, common_1.Body)('status')),
@@ -85,6 +112,22 @@ __decorate([
     __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", void 0)
 ], UsersController.prototype, "updateStatus", null);
+__decorate([
+    (0, common_1.Put)('users/:id/password'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Body)('password')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:returntype", void 0)
+], UsersController.prototype, "resetPassword", null);
+__decorate([
+    (0, common_1.Delete)('users/:id'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, decorators_1.CurrentUser)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:returntype", void 0)
+], UsersController.prototype, "remove", null);
 __decorate([
     (0, common_1.Get)('platform-config'),
     (0, decorators_1.Roles)(client_1.UserRole.ADMIN, client_1.UserRole.PROVIDER, client_1.UserRole.CREATOR),

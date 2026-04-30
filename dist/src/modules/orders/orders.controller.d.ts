@@ -14,10 +14,10 @@ export declare class OrdersController {
                         description: string;
                         slug: string;
                         locale: string;
+                        product_id: string;
                         title: string;
                         meta_title: string | null;
                         meta_desc: string | null;
-                        product_id: string;
                     }[];
                     images: {
                         id: string;
@@ -34,6 +34,7 @@ export declare class OrdersController {
                     created_at: Date;
                     updated_at: Date;
                     creator_id: string | null;
+                    provider_id: string | null;
                     category_id: string;
                     product_type: import("@prisma/client").$Enums.ProductType;
                     customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -48,7 +49,6 @@ export declare class OrdersController {
                     variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
                     shipping_profile_id: string | null;
                     is_featured: boolean;
-                    provider_id: string | null;
                 }) | null;
                 variant: {
                     id: string;
@@ -85,6 +85,7 @@ export declare class OrdersController {
                         created_at: Date;
                         updated_at: Date;
                         creator_id: string | null;
+                        provider_id: string | null;
                         category_id: string;
                         product_type: import("@prisma/client").$Enums.ProductType;
                         customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -99,7 +100,6 @@ export declare class OrdersController {
                         variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
                         shipping_profile_id: string | null;
                         is_featured: boolean;
-                        provider_id: string | null;
                     };
                     mockup_images: {
                         id: string;
@@ -175,12 +175,12 @@ export declare class OrdersController {
             created_at: Date;
             updated_at: Date;
             total: import("@prisma/client/runtime/library").Decimal;
-            customer_id: string;
             store_id: string | null;
+            customer_id: string;
+            subtotal: import("@prisma/client/runtime/library").Decimal;
             address_id: string;
             notes: string | null;
             payment_method: import("@prisma/client").$Enums.PaymentMethod;
-            subtotal: import("@prisma/client/runtime/library").Decimal;
             discount_amount: import("@prisma/client/runtime/library").Decimal;
             order_number: string;
             shipping_cost: import("@prisma/client/runtime/library").Decimal;
@@ -213,10 +213,10 @@ export declare class OrdersController {
                         description: string;
                         slug: string;
                         locale: string;
+                        product_id: string;
                         title: string;
                         meta_title: string | null;
                         meta_desc: string | null;
-                        product_id: string;
                     }[];
                     images: {
                         id: string;
@@ -233,6 +233,7 @@ export declare class OrdersController {
                     created_at: Date;
                     updated_at: Date;
                     creator_id: string | null;
+                    provider_id: string | null;
                     category_id: string;
                     product_type: import("@prisma/client").$Enums.ProductType;
                     customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -247,7 +248,6 @@ export declare class OrdersController {
                     variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
                     shipping_profile_id: string | null;
                     is_featured: boolean;
-                    provider_id: string | null;
                 }) | null;
                 variant: {
                     id: string;
@@ -284,6 +284,7 @@ export declare class OrdersController {
                         created_at: Date;
                         updated_at: Date;
                         creator_id: string | null;
+                        provider_id: string | null;
                         category_id: string;
                         product_type: import("@prisma/client").$Enums.ProductType;
                         customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -298,7 +299,6 @@ export declare class OrdersController {
                         variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
                         shipping_profile_id: string | null;
                         is_featured: boolean;
-                        provider_id: string | null;
                     };
                     mockup_images: {
                         id: string;
@@ -374,12 +374,12 @@ export declare class OrdersController {
             created_at: Date;
             updated_at: Date;
             total: import("@prisma/client/runtime/library").Decimal;
-            customer_id: string;
             store_id: string | null;
+            customer_id: string;
+            subtotal: import("@prisma/client/runtime/library").Decimal;
             address_id: string;
             notes: string | null;
             payment_method: import("@prisma/client").$Enums.PaymentMethod;
-            subtotal: import("@prisma/client/runtime/library").Decimal;
             discount_amount: import("@prisma/client/runtime/library").Decimal;
             order_number: string;
             shipping_cost: import("@prisma/client/runtime/library").Decimal;
@@ -427,10 +427,10 @@ export declare class OrdersController {
                         description: string;
                         slug: string;
                         locale: string;
+                        product_id: string;
                         title: string;
                         meta_title: string | null;
                         meta_desc: string | null;
-                        product_id: string;
                     }[];
                     images: {
                         id: string;
@@ -447,6 +447,7 @@ export declare class OrdersController {
                     created_at: Date;
                     updated_at: Date;
                     creator_id: string | null;
+                    provider_id: string | null;
                     category_id: string;
                     product_type: import("@prisma/client").$Enums.ProductType;
                     customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -461,7 +462,6 @@ export declare class OrdersController {
                     variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
                     shipping_profile_id: string | null;
                     is_featured: boolean;
-                    provider_id: string | null;
                 }) | null;
                 variant: {
                     id: string;
@@ -498,6 +498,7 @@ export declare class OrdersController {
                         created_at: Date;
                         updated_at: Date;
                         creator_id: string | null;
+                        provider_id: string | null;
                         category_id: string;
                         product_type: import("@prisma/client").$Enums.ProductType;
                         customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -512,7 +513,6 @@ export declare class OrdersController {
                         variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
                         shipping_profile_id: string | null;
                         is_featured: boolean;
-                        provider_id: string | null;
                     };
                     mockup_images: {
                         id: string;
@@ -588,12 +588,12 @@ export declare class OrdersController {
             created_at: Date;
             updated_at: Date;
             total: import("@prisma/client/runtime/library").Decimal;
-            customer_id: string;
             store_id: string | null;
+            customer_id: string;
+            subtotal: import("@prisma/client/runtime/library").Decimal;
             address_id: string;
             notes: string | null;
             payment_method: import("@prisma/client").$Enums.PaymentMethod;
-            subtotal: import("@prisma/client/runtime/library").Decimal;
             discount_amount: import("@prisma/client/runtime/library").Decimal;
             order_number: string;
             shipping_cost: import("@prisma/client/runtime/library").Decimal;
@@ -640,10 +640,10 @@ export declare class OrdersController {
                     description: string;
                     slug: string;
                     locale: string;
+                    product_id: string;
                     title: string;
                     meta_title: string | null;
                     meta_desc: string | null;
-                    product_id: string;
                 }[];
                 images: {
                     id: string;
@@ -660,6 +660,7 @@ export declare class OrdersController {
                 created_at: Date;
                 updated_at: Date;
                 creator_id: string | null;
+                provider_id: string | null;
                 category_id: string;
                 product_type: import("@prisma/client").$Enums.ProductType;
                 customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -674,7 +675,6 @@ export declare class OrdersController {
                 variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
                 shipping_profile_id: string | null;
                 is_featured: boolean;
-                provider_id: string | null;
             }) | null;
             variant: {
                 id: string;
@@ -711,6 +711,7 @@ export declare class OrdersController {
                     created_at: Date;
                     updated_at: Date;
                     creator_id: string | null;
+                    provider_id: string | null;
                     category_id: string;
                     product_type: import("@prisma/client").$Enums.ProductType;
                     customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -725,7 +726,6 @@ export declare class OrdersController {
                     variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
                     shipping_profile_id: string | null;
                     is_featured: boolean;
-                    provider_id: string | null;
                 };
                 mockup_images: {
                     id: string;
@@ -819,12 +819,12 @@ export declare class OrdersController {
         created_at: Date;
         updated_at: Date;
         total: import("@prisma/client/runtime/library").Decimal;
-        customer_id: string;
         store_id: string | null;
+        customer_id: string;
+        subtotal: import("@prisma/client/runtime/library").Decimal;
         address_id: string;
         notes: string | null;
         payment_method: import("@prisma/client").$Enums.PaymentMethod;
-        subtotal: import("@prisma/client/runtime/library").Decimal;
         discount_amount: import("@prisma/client/runtime/library").Decimal;
         order_number: string;
         shipping_cost: import("@prisma/client/runtime/library").Decimal;
@@ -864,10 +864,10 @@ export declare class OrdersController {
                     description: string;
                     slug: string;
                     locale: string;
+                    product_id: string;
                     title: string;
                     meta_title: string | null;
                     meta_desc: string | null;
-                    product_id: string;
                 }[];
                 images: {
                     id: string;
@@ -884,6 +884,7 @@ export declare class OrdersController {
                 created_at: Date;
                 updated_at: Date;
                 creator_id: string | null;
+                provider_id: string | null;
                 category_id: string;
                 product_type: import("@prisma/client").$Enums.ProductType;
                 customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -898,7 +899,6 @@ export declare class OrdersController {
                 variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
                 shipping_profile_id: string | null;
                 is_featured: boolean;
-                provider_id: string | null;
             }) | null;
             variant: {
                 id: string;
@@ -935,6 +935,7 @@ export declare class OrdersController {
                     created_at: Date;
                     updated_at: Date;
                     creator_id: string | null;
+                    provider_id: string | null;
                     category_id: string;
                     product_type: import("@prisma/client").$Enums.ProductType;
                     customization_type: import("@prisma/client").$Enums.CustomizationType | null;
@@ -949,7 +950,6 @@ export declare class OrdersController {
                     variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
                     shipping_profile_id: string | null;
                     is_featured: boolean;
-                    provider_id: string | null;
                 };
                 mockup_images: {
                     id: string;
@@ -1043,12 +1043,12 @@ export declare class OrdersController {
         created_at: Date;
         updated_at: Date;
         total: import("@prisma/client/runtime/library").Decimal;
-        customer_id: string;
         store_id: string | null;
+        customer_id: string;
+        subtotal: import("@prisma/client/runtime/library").Decimal;
         address_id: string;
         notes: string | null;
         payment_method: import("@prisma/client").$Enums.PaymentMethod;
-        subtotal: import("@prisma/client/runtime/library").Decimal;
         discount_amount: import("@prisma/client/runtime/library").Decimal;
         order_number: string;
         shipping_cost: import("@prisma/client/runtime/library").Decimal;

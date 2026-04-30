@@ -20,8 +20,8 @@ export declare class PromotionsController {
         creator_id: string | null;
         type: import("@prisma/client").$Enums.PromotionType;
         expires_at: Date | null;
-        value: import("@prisma/client/runtime/library").Decimal;
         provider_id: string | null;
+        value: import("@prisma/client/runtime/library").Decimal;
         coupon_code: string | null;
         level: import("@prisma/client").$Enums.PromotionLevel;
         conditions: import("@prisma/client/runtime/library").JsonValue;
@@ -46,8 +46,8 @@ export declare class PromotionsController {
             creator_id: string | null;
             type: import("@prisma/client").$Enums.PromotionType;
             expires_at: Date | null;
-            value: import("@prisma/client/runtime/library").Decimal;
             provider_id: string | null;
+            value: import("@prisma/client/runtime/library").Decimal;
             coupon_code: string | null;
             level: import("@prisma/client").$Enums.PromotionLevel;
             conditions: import("@prisma/client/runtime/library").JsonValue;
@@ -86,8 +86,8 @@ export declare class PromotionsController {
         creator_id: string | null;
         type: import("@prisma/client").$Enums.PromotionType;
         expires_at: Date | null;
-        value: import("@prisma/client/runtime/library").Decimal;
         provider_id: string | null;
+        value: import("@prisma/client/runtime/library").Decimal;
         coupon_code: string | null;
         level: import("@prisma/client").$Enums.PromotionLevel;
         conditions: import("@prisma/client/runtime/library").JsonValue;
@@ -111,8 +111,8 @@ export declare class PromotionsController {
         creator_id: string | null;
         type: import("@prisma/client").$Enums.PromotionType;
         expires_at: Date | null;
-        value: import("@prisma/client/runtime/library").Decimal;
         provider_id: string | null;
+        value: import("@prisma/client/runtime/library").Decimal;
         coupon_code: string | null;
         level: import("@prisma/client").$Enums.PromotionLevel;
         conditions: import("@prisma/client/runtime/library").JsonValue;
@@ -128,8 +128,8 @@ export declare class PromotionsController {
         creator_id: string | null;
         type: import("@prisma/client").$Enums.PromotionType;
         expires_at: Date | null;
-        value: import("@prisma/client/runtime/library").Decimal;
         provider_id: string | null;
+        value: import("@prisma/client/runtime/library").Decimal;
         coupon_code: string | null;
         level: import("@prisma/client").$Enums.PromotionLevel;
         conditions: import("@prisma/client/runtime/library").JsonValue;

@@ -11,6 +11,8 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.UpdateLanguageDto = exports.UpdateThemeDto = exports.UpdateStoreDto = exports.CreateStoreDto = void 0;
 const class_validator_1 = require("class-validator");
+const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const SLUG_MESSAGE = 'slug must be lowercase letters, digits, and hyphens (no leading/trailing hyphen)';
 class CreateStoreDto {
     slug;
     name;
@@ -21,6 +23,9 @@ class CreateStoreDto {
 exports.CreateStoreDto = CreateStoreDto;
 __decorate([
     (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MinLength)(2),
+    (0, class_validator_1.MaxLength)(50),
+    (0, class_validator_1.Matches)(SLUG_REGEX, { message: SLUG_MESSAGE }),
     __metadata("design:type", String)
 ], CreateStoreDto.prototype, "slug", void 0);
 __decorate([
@@ -44,6 +49,7 @@ __decorate([
     __metadata("design:type", Array)
 ], CreateStoreDto.prototype, "secondary_locales", void 0);
 class UpdateStoreDto {
+    slug;
     name;
     description;
     logo_url;
@@ -52,6 +58,14 @@ class UpdateStoreDto {
     is_active;
 }
 exports.UpdateStoreDto = UpdateStoreDto;
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MinLength)(2),
+    (0, class_validator_1.MaxLength)(50),
+    (0, class_validator_1.Matches)(SLUG_REGEX, { message: SLUG_MESSAGE }),
+    __metadata("design:type", String)
+], UpdateStoreDto.prototype, "slug", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
