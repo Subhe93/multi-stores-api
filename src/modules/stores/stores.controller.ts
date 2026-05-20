@@ -9,7 +9,13 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { StoresService } from './stores.service';
-import { CreateStoreDto, UpdateStoreDto, UpdateThemeDto, UpdateLanguageDto } from './dto/store.dto';
+import {
+  CreateStoreDto,
+  UpdateStoreDto,
+  UpdateThemeDto,
+  UpdateThemeSelectionDto,
+  UpdateLanguageDto,
+} from './dto/store.dto';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '@prisma/client';
@@ -70,6 +76,17 @@ export class StoresController {
   @Roles(UserRole.CREATOR)
   updateTheme(@CurrentUser('id') userId: string, @Body() dto: UpdateThemeDto) {
     return this.storesService.updateTheme(userId, dto);
+  }
+
+  // Creator — choose a built-in theme and/or override its tokens
+  @Put('my/theme-selection')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.CREATOR)
+  updateThemeSelection(
+    @CurrentUser('id') userId: string,
+    @Body() dto: UpdateThemeSelectionDto,
+  ) {
+    return this.storesService.updateThemeSelection(userId, dto);
   }
 
   // Creator — تحديث اللغات

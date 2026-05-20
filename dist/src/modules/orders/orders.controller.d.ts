@@ -50,26 +50,26 @@ export declare class OrdersController {
                     shipping_profile_id: string | null;
                     is_featured: boolean;
                 }) | null;
-                variant: {
-                    id: string;
-                    is_active: boolean;
-                    options: import("@prisma/client/runtime/library").JsonValue;
-                    compare_at_price: import("@prisma/client/runtime/library").Decimal | null;
-                    sku: string | null;
-                    stock_quantity: number | null;
-                    product_id: string;
-                    price_adjustment: import("@prisma/client/runtime/library").Decimal;
-                } | null;
                 custom_product: ({
                     translations: {
                         id: string;
                         description: string | null;
                         slug: string;
                         locale: string;
-                        title: string;
                         custom_product_id: string;
+                        title: string;
                     }[];
                     product: {
+                        translations: {
+                            id: string;
+                            description: string;
+                            slug: string;
+                            locale: string;
+                            product_id: string;
+                            title: string;
+                            meta_title: string | null;
+                            meta_desc: string | null;
+                        }[];
                         images: {
                             id: string;
                             sort_order: number;
@@ -104,8 +104,8 @@ export declare class OrdersController {
                     mockup_images: {
                         id: string;
                         sort_order: number;
-                        url: string;
                         custom_product_id: string;
+                        url: string;
                     }[];
                 } & {
                     id: string;
@@ -122,6 +122,91 @@ export declare class OrdersController {
                     submitted_at: Date | null;
                     reviewed_at: Date | null;
                     reviewed_by: string | null;
+                }) | null;
+                variant: ({
+                    product: {
+                        translations: {
+                            id: string;
+                            description: string;
+                            slug: string;
+                            locale: string;
+                            product_id: string;
+                            title: string;
+                            meta_title: string | null;
+                            meta_desc: string | null;
+                        }[];
+                        images: {
+                            id: string;
+                            sort_order: number;
+                            is_featured: boolean;
+                            product_id: string;
+                            variant_id: string | null;
+                            url: string;
+                            alt_text: string | null;
+                        }[];
+                    } & {
+                        id: string;
+                        status: import("@prisma/client").$Enums.ProductStatus;
+                        created_at: Date;
+                        updated_at: Date;
+                        creator_id: string | null;
+                        provider_id: string | null;
+                        category_id: string;
+                        product_type: import("@prisma/client").$Enums.ProductType;
+                        customization_type: import("@prisma/client").$Enums.CustomizationType | null;
+                        base_price: import("@prisma/client/runtime/library").Decimal;
+                        compare_at_price: import("@prisma/client/runtime/library").Decimal | null;
+                        cost_price: import("@prisma/client/runtime/library").Decimal | null;
+                        sku: string | null;
+                        track_inventory: boolean;
+                        stock_quantity: number | null;
+                        weight: import("@prisma/client/runtime/library").Decimal | null;
+                        weight_unit: string | null;
+                        variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
+                        shipping_profile_id: string | null;
+                        is_featured: boolean;
+                    };
+                } & {
+                    id: string;
+                    is_active: boolean;
+                    options: import("@prisma/client/runtime/library").JsonValue;
+                    compare_at_price: import("@prisma/client/runtime/library").Decimal | null;
+                    sku: string | null;
+                    stock_quantity: number | null;
+                    product_id: string;
+                    price_adjustment: import("@prisma/client/runtime/library").Decimal;
+                }) | null;
+                bundle_offer: ({
+                    translations: {
+                        id: string;
+                        label: string | null;
+                        locale: string;
+                        title: string;
+                        sticker_text: string | null;
+                        offer_id: string;
+                    }[];
+                    bundle: {
+                        translations: {
+                            id: string;
+                            name: string;
+                            locale: string;
+                            bundle_id: string;
+                        }[];
+                    } & {
+                        id: string;
+                        status: import("@prisma/client").$Enums.BundleStatus;
+                        created_at: Date;
+                        updated_at: Date;
+                        creator_id: string;
+                    };
+                } & {
+                    id: string;
+                    sort_order: number;
+                    quantity: number;
+                    discount_type: import("@prisma/client").$Enums.BundleDiscountType;
+                    discount_value: import("@prisma/client/runtime/library").Decimal;
+                    external_ref: string | null;
+                    bundle_id: string;
                 }) | null;
                 custom_field_values: ({
                     custom_field: {
@@ -155,19 +240,21 @@ export declare class OrdersController {
             } & {
                 id: string;
                 product_id: string | null;
+                custom_product_id: string | null;
                 variant_id: string | null;
                 quantity: number;
-                custom_product_id: string | null;
+                bundle_offer_id: string | null;
+                unit_price: import("@prisma/client/runtime/library").Decimal;
+                original_unit_price: import("@prisma/client/runtime/library").Decimal | null;
+                total_price: import("@prisma/client/runtime/library").Decimal;
                 customer_design_url: string | null;
                 design_notes: string | null;
+                fulfiller_type: import("@prisma/client").$Enums.FulfillerType;
+                fulfiller_id: string;
                 fulfillment_status: import("@prisma/client").$Enums.FulfillmentStatus;
                 tracking_number: string | null;
                 tracking_url: string | null;
                 order_id: string;
-                unit_price: import("@prisma/client/runtime/library").Decimal;
-                total_price: import("@prisma/client/runtime/library").Decimal;
-                fulfiller_type: import("@prisma/client").$Enums.FulfillerType;
-                fulfiller_id: string;
             })[];
         } & {
             id: string;
@@ -249,26 +336,26 @@ export declare class OrdersController {
                     shipping_profile_id: string | null;
                     is_featured: boolean;
                 }) | null;
-                variant: {
-                    id: string;
-                    is_active: boolean;
-                    options: import("@prisma/client/runtime/library").JsonValue;
-                    compare_at_price: import("@prisma/client/runtime/library").Decimal | null;
-                    sku: string | null;
-                    stock_quantity: number | null;
-                    product_id: string;
-                    price_adjustment: import("@prisma/client/runtime/library").Decimal;
-                } | null;
                 custom_product: ({
                     translations: {
                         id: string;
                         description: string | null;
                         slug: string;
                         locale: string;
-                        title: string;
                         custom_product_id: string;
+                        title: string;
                     }[];
                     product: {
+                        translations: {
+                            id: string;
+                            description: string;
+                            slug: string;
+                            locale: string;
+                            product_id: string;
+                            title: string;
+                            meta_title: string | null;
+                            meta_desc: string | null;
+                        }[];
                         images: {
                             id: string;
                             sort_order: number;
@@ -303,8 +390,8 @@ export declare class OrdersController {
                     mockup_images: {
                         id: string;
                         sort_order: number;
-                        url: string;
                         custom_product_id: string;
+                        url: string;
                     }[];
                 } & {
                     id: string;
@@ -321,6 +408,91 @@ export declare class OrdersController {
                     submitted_at: Date | null;
                     reviewed_at: Date | null;
                     reviewed_by: string | null;
+                }) | null;
+                variant: ({
+                    product: {
+                        translations: {
+                            id: string;
+                            description: string;
+                            slug: string;
+                            locale: string;
+                            product_id: string;
+                            title: string;
+                            meta_title: string | null;
+                            meta_desc: string | null;
+                        }[];
+                        images: {
+                            id: string;
+                            sort_order: number;
+                            is_featured: boolean;
+                            product_id: string;
+                            variant_id: string | null;
+                            url: string;
+                            alt_text: string | null;
+                        }[];
+                    } & {
+                        id: string;
+                        status: import("@prisma/client").$Enums.ProductStatus;
+                        created_at: Date;
+                        updated_at: Date;
+                        creator_id: string | null;
+                        provider_id: string | null;
+                        category_id: string;
+                        product_type: import("@prisma/client").$Enums.ProductType;
+                        customization_type: import("@prisma/client").$Enums.CustomizationType | null;
+                        base_price: import("@prisma/client/runtime/library").Decimal;
+                        compare_at_price: import("@prisma/client/runtime/library").Decimal | null;
+                        cost_price: import("@prisma/client/runtime/library").Decimal | null;
+                        sku: string | null;
+                        track_inventory: boolean;
+                        stock_quantity: number | null;
+                        weight: import("@prisma/client/runtime/library").Decimal | null;
+                        weight_unit: string | null;
+                        variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
+                        shipping_profile_id: string | null;
+                        is_featured: boolean;
+                    };
+                } & {
+                    id: string;
+                    is_active: boolean;
+                    options: import("@prisma/client/runtime/library").JsonValue;
+                    compare_at_price: import("@prisma/client/runtime/library").Decimal | null;
+                    sku: string | null;
+                    stock_quantity: number | null;
+                    product_id: string;
+                    price_adjustment: import("@prisma/client/runtime/library").Decimal;
+                }) | null;
+                bundle_offer: ({
+                    translations: {
+                        id: string;
+                        label: string | null;
+                        locale: string;
+                        title: string;
+                        sticker_text: string | null;
+                        offer_id: string;
+                    }[];
+                    bundle: {
+                        translations: {
+                            id: string;
+                            name: string;
+                            locale: string;
+                            bundle_id: string;
+                        }[];
+                    } & {
+                        id: string;
+                        status: import("@prisma/client").$Enums.BundleStatus;
+                        created_at: Date;
+                        updated_at: Date;
+                        creator_id: string;
+                    };
+                } & {
+                    id: string;
+                    sort_order: number;
+                    quantity: number;
+                    discount_type: import("@prisma/client").$Enums.BundleDiscountType;
+                    discount_value: import("@prisma/client/runtime/library").Decimal;
+                    external_ref: string | null;
+                    bundle_id: string;
                 }) | null;
                 custom_field_values: ({
                     custom_field: {
@@ -354,19 +526,21 @@ export declare class OrdersController {
             } & {
                 id: string;
                 product_id: string | null;
+                custom_product_id: string | null;
                 variant_id: string | null;
                 quantity: number;
-                custom_product_id: string | null;
+                bundle_offer_id: string | null;
+                unit_price: import("@prisma/client/runtime/library").Decimal;
+                original_unit_price: import("@prisma/client/runtime/library").Decimal | null;
+                total_price: import("@prisma/client/runtime/library").Decimal;
                 customer_design_url: string | null;
                 design_notes: string | null;
+                fulfiller_type: import("@prisma/client").$Enums.FulfillerType;
+                fulfiller_id: string;
                 fulfillment_status: import("@prisma/client").$Enums.FulfillmentStatus;
                 tracking_number: string | null;
                 tracking_url: string | null;
                 order_id: string;
-                unit_price: import("@prisma/client/runtime/library").Decimal;
-                total_price: import("@prisma/client/runtime/library").Decimal;
-                fulfiller_type: import("@prisma/client").$Enums.FulfillerType;
-                fulfiller_id: string;
             })[];
         } & {
             id: string;
@@ -463,26 +637,26 @@ export declare class OrdersController {
                     shipping_profile_id: string | null;
                     is_featured: boolean;
                 }) | null;
-                variant: {
-                    id: string;
-                    is_active: boolean;
-                    options: import("@prisma/client/runtime/library").JsonValue;
-                    compare_at_price: import("@prisma/client/runtime/library").Decimal | null;
-                    sku: string | null;
-                    stock_quantity: number | null;
-                    product_id: string;
-                    price_adjustment: import("@prisma/client/runtime/library").Decimal;
-                } | null;
                 custom_product: ({
                     translations: {
                         id: string;
                         description: string | null;
                         slug: string;
                         locale: string;
-                        title: string;
                         custom_product_id: string;
+                        title: string;
                     }[];
                     product: {
+                        translations: {
+                            id: string;
+                            description: string;
+                            slug: string;
+                            locale: string;
+                            product_id: string;
+                            title: string;
+                            meta_title: string | null;
+                            meta_desc: string | null;
+                        }[];
                         images: {
                             id: string;
                             sort_order: number;
@@ -517,8 +691,8 @@ export declare class OrdersController {
                     mockup_images: {
                         id: string;
                         sort_order: number;
-                        url: string;
                         custom_product_id: string;
+                        url: string;
                     }[];
                 } & {
                     id: string;
@@ -535,6 +709,91 @@ export declare class OrdersController {
                     submitted_at: Date | null;
                     reviewed_at: Date | null;
                     reviewed_by: string | null;
+                }) | null;
+                variant: ({
+                    product: {
+                        translations: {
+                            id: string;
+                            description: string;
+                            slug: string;
+                            locale: string;
+                            product_id: string;
+                            title: string;
+                            meta_title: string | null;
+                            meta_desc: string | null;
+                        }[];
+                        images: {
+                            id: string;
+                            sort_order: number;
+                            is_featured: boolean;
+                            product_id: string;
+                            variant_id: string | null;
+                            url: string;
+                            alt_text: string | null;
+                        }[];
+                    } & {
+                        id: string;
+                        status: import("@prisma/client").$Enums.ProductStatus;
+                        created_at: Date;
+                        updated_at: Date;
+                        creator_id: string | null;
+                        provider_id: string | null;
+                        category_id: string;
+                        product_type: import("@prisma/client").$Enums.ProductType;
+                        customization_type: import("@prisma/client").$Enums.CustomizationType | null;
+                        base_price: import("@prisma/client/runtime/library").Decimal;
+                        compare_at_price: import("@prisma/client/runtime/library").Decimal | null;
+                        cost_price: import("@prisma/client/runtime/library").Decimal | null;
+                        sku: string | null;
+                        track_inventory: boolean;
+                        stock_quantity: number | null;
+                        weight: import("@prisma/client/runtime/library").Decimal | null;
+                        weight_unit: string | null;
+                        variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
+                        shipping_profile_id: string | null;
+                        is_featured: boolean;
+                    };
+                } & {
+                    id: string;
+                    is_active: boolean;
+                    options: import("@prisma/client/runtime/library").JsonValue;
+                    compare_at_price: import("@prisma/client/runtime/library").Decimal | null;
+                    sku: string | null;
+                    stock_quantity: number | null;
+                    product_id: string;
+                    price_adjustment: import("@prisma/client/runtime/library").Decimal;
+                }) | null;
+                bundle_offer: ({
+                    translations: {
+                        id: string;
+                        label: string | null;
+                        locale: string;
+                        title: string;
+                        sticker_text: string | null;
+                        offer_id: string;
+                    }[];
+                    bundle: {
+                        translations: {
+                            id: string;
+                            name: string;
+                            locale: string;
+                            bundle_id: string;
+                        }[];
+                    } & {
+                        id: string;
+                        status: import("@prisma/client").$Enums.BundleStatus;
+                        created_at: Date;
+                        updated_at: Date;
+                        creator_id: string;
+                    };
+                } & {
+                    id: string;
+                    sort_order: number;
+                    quantity: number;
+                    discount_type: import("@prisma/client").$Enums.BundleDiscountType;
+                    discount_value: import("@prisma/client/runtime/library").Decimal;
+                    external_ref: string | null;
+                    bundle_id: string;
                 }) | null;
                 custom_field_values: ({
                     custom_field: {
@@ -568,20 +827,32 @@ export declare class OrdersController {
             } & {
                 id: string;
                 product_id: string | null;
+                custom_product_id: string | null;
                 variant_id: string | null;
                 quantity: number;
-                custom_product_id: string | null;
+                bundle_offer_id: string | null;
+                unit_price: import("@prisma/client/runtime/library").Decimal;
+                original_unit_price: import("@prisma/client/runtime/library").Decimal | null;
+                total_price: import("@prisma/client/runtime/library").Decimal;
                 customer_design_url: string | null;
                 design_notes: string | null;
+                fulfiller_type: import("@prisma/client").$Enums.FulfillerType;
+                fulfiller_id: string;
                 fulfillment_status: import("@prisma/client").$Enums.FulfillmentStatus;
                 tracking_number: string | null;
                 tracking_url: string | null;
                 order_id: string;
-                unit_price: import("@prisma/client/runtime/library").Decimal;
-                total_price: import("@prisma/client/runtime/library").Decimal;
-                fulfiller_type: import("@prisma/client").$Enums.FulfillerType;
-                fulfiller_id: string;
             })[];
+            commission: {
+                id: string;
+                status: import("@prisma/client").$Enums.CommissionStatus;
+                created_at: Date;
+                order_id: string;
+                currency: string;
+                provider_amount: import("@prisma/client/runtime/library").Decimal;
+                platform_amount: import("@prisma/client/runtime/library").Decimal;
+                creator_amount: import("@prisma/client/runtime/library").Decimal;
+            } | null;
         } & {
             id: string;
             status: import("@prisma/client").$Enums.OrderStatus;
@@ -676,26 +947,26 @@ export declare class OrdersController {
                 shipping_profile_id: string | null;
                 is_featured: boolean;
             }) | null;
-            variant: {
-                id: string;
-                is_active: boolean;
-                options: import("@prisma/client/runtime/library").JsonValue;
-                compare_at_price: import("@prisma/client/runtime/library").Decimal | null;
-                sku: string | null;
-                stock_quantity: number | null;
-                product_id: string;
-                price_adjustment: import("@prisma/client/runtime/library").Decimal;
-            } | null;
             custom_product: ({
                 translations: {
                     id: string;
                     description: string | null;
                     slug: string;
                     locale: string;
-                    title: string;
                     custom_product_id: string;
+                    title: string;
                 }[];
                 product: {
+                    translations: {
+                        id: string;
+                        description: string;
+                        slug: string;
+                        locale: string;
+                        product_id: string;
+                        title: string;
+                        meta_title: string | null;
+                        meta_desc: string | null;
+                    }[];
                     images: {
                         id: string;
                         sort_order: number;
@@ -730,8 +1001,8 @@ export declare class OrdersController {
                 mockup_images: {
                     id: string;
                     sort_order: number;
-                    url: string;
                     custom_product_id: string;
+                    url: string;
                 }[];
             } & {
                 id: string;
@@ -748,6 +1019,91 @@ export declare class OrdersController {
                 submitted_at: Date | null;
                 reviewed_at: Date | null;
                 reviewed_by: string | null;
+            }) | null;
+            variant: ({
+                product: {
+                    translations: {
+                        id: string;
+                        description: string;
+                        slug: string;
+                        locale: string;
+                        product_id: string;
+                        title: string;
+                        meta_title: string | null;
+                        meta_desc: string | null;
+                    }[];
+                    images: {
+                        id: string;
+                        sort_order: number;
+                        is_featured: boolean;
+                        product_id: string;
+                        variant_id: string | null;
+                        url: string;
+                        alt_text: string | null;
+                    }[];
+                } & {
+                    id: string;
+                    status: import("@prisma/client").$Enums.ProductStatus;
+                    created_at: Date;
+                    updated_at: Date;
+                    creator_id: string | null;
+                    provider_id: string | null;
+                    category_id: string;
+                    product_type: import("@prisma/client").$Enums.ProductType;
+                    customization_type: import("@prisma/client").$Enums.CustomizationType | null;
+                    base_price: import("@prisma/client/runtime/library").Decimal;
+                    compare_at_price: import("@prisma/client/runtime/library").Decimal | null;
+                    cost_price: import("@prisma/client/runtime/library").Decimal | null;
+                    sku: string | null;
+                    track_inventory: boolean;
+                    stock_quantity: number | null;
+                    weight: import("@prisma/client/runtime/library").Decimal | null;
+                    weight_unit: string | null;
+                    variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
+                    shipping_profile_id: string | null;
+                    is_featured: boolean;
+                };
+            } & {
+                id: string;
+                is_active: boolean;
+                options: import("@prisma/client/runtime/library").JsonValue;
+                compare_at_price: import("@prisma/client/runtime/library").Decimal | null;
+                sku: string | null;
+                stock_quantity: number | null;
+                product_id: string;
+                price_adjustment: import("@prisma/client/runtime/library").Decimal;
+            }) | null;
+            bundle_offer: ({
+                translations: {
+                    id: string;
+                    label: string | null;
+                    locale: string;
+                    title: string;
+                    sticker_text: string | null;
+                    offer_id: string;
+                }[];
+                bundle: {
+                    translations: {
+                        id: string;
+                        name: string;
+                        locale: string;
+                        bundle_id: string;
+                    }[];
+                } & {
+                    id: string;
+                    status: import("@prisma/client").$Enums.BundleStatus;
+                    created_at: Date;
+                    updated_at: Date;
+                    creator_id: string;
+                };
+            } & {
+                id: string;
+                sort_order: number;
+                quantity: number;
+                discount_type: import("@prisma/client").$Enums.BundleDiscountType;
+                discount_value: import("@prisma/client/runtime/library").Decimal;
+                external_ref: string | null;
+                bundle_id: string;
             }) | null;
             custom_field_values: ({
                 custom_field: {
@@ -781,19 +1137,21 @@ export declare class OrdersController {
         } & {
             id: string;
             product_id: string | null;
+            custom_product_id: string | null;
             variant_id: string | null;
             quantity: number;
-            custom_product_id: string | null;
+            bundle_offer_id: string | null;
+            unit_price: import("@prisma/client/runtime/library").Decimal;
+            original_unit_price: import("@prisma/client/runtime/library").Decimal | null;
+            total_price: import("@prisma/client/runtime/library").Decimal;
             customer_design_url: string | null;
             design_notes: string | null;
+            fulfiller_type: import("@prisma/client").$Enums.FulfillerType;
+            fulfiller_id: string;
             fulfillment_status: import("@prisma/client").$Enums.FulfillmentStatus;
             tracking_number: string | null;
             tracking_url: string | null;
             order_id: string;
-            unit_price: import("@prisma/client/runtime/library").Decimal;
-            total_price: import("@prisma/client/runtime/library").Decimal;
-            fulfiller_type: import("@prisma/client").$Enums.FulfillerType;
-            fulfiller_id: string;
         })[];
         commission: {
             id: string;
@@ -809,8 +1167,8 @@ export declare class OrdersController {
             id: string;
             status: string;
             created_at: Date;
-            note: string | null;
             order_id: string;
+            note: string | null;
             actor: string | null;
         }[];
     } & {
@@ -832,7 +1190,7 @@ export declare class OrdersController {
         payment_status: string | null;
         stripe_payment_id: string | null;
     }>;
-    updateStatus(id: string, dto: UpdateOrderStatusDto, userId: string): Promise<{
+    updateStatus(id: string, dto: UpdateOrderStatusDto, userId: string, userRole: UserRole): Promise<{
         customer: {
             id: string;
             created_at: Date;
@@ -900,26 +1258,26 @@ export declare class OrdersController {
                 shipping_profile_id: string | null;
                 is_featured: boolean;
             }) | null;
-            variant: {
-                id: string;
-                is_active: boolean;
-                options: import("@prisma/client/runtime/library").JsonValue;
-                compare_at_price: import("@prisma/client/runtime/library").Decimal | null;
-                sku: string | null;
-                stock_quantity: number | null;
-                product_id: string;
-                price_adjustment: import("@prisma/client/runtime/library").Decimal;
-            } | null;
             custom_product: ({
                 translations: {
                     id: string;
                     description: string | null;
                     slug: string;
                     locale: string;
-                    title: string;
                     custom_product_id: string;
+                    title: string;
                 }[];
                 product: {
+                    translations: {
+                        id: string;
+                        description: string;
+                        slug: string;
+                        locale: string;
+                        product_id: string;
+                        title: string;
+                        meta_title: string | null;
+                        meta_desc: string | null;
+                    }[];
                     images: {
                         id: string;
                         sort_order: number;
@@ -954,8 +1312,8 @@ export declare class OrdersController {
                 mockup_images: {
                     id: string;
                     sort_order: number;
-                    url: string;
                     custom_product_id: string;
+                    url: string;
                 }[];
             } & {
                 id: string;
@@ -972,6 +1330,91 @@ export declare class OrdersController {
                 submitted_at: Date | null;
                 reviewed_at: Date | null;
                 reviewed_by: string | null;
+            }) | null;
+            variant: ({
+                product: {
+                    translations: {
+                        id: string;
+                        description: string;
+                        slug: string;
+                        locale: string;
+                        product_id: string;
+                        title: string;
+                        meta_title: string | null;
+                        meta_desc: string | null;
+                    }[];
+                    images: {
+                        id: string;
+                        sort_order: number;
+                        is_featured: boolean;
+                        product_id: string;
+                        variant_id: string | null;
+                        url: string;
+                        alt_text: string | null;
+                    }[];
+                } & {
+                    id: string;
+                    status: import("@prisma/client").$Enums.ProductStatus;
+                    created_at: Date;
+                    updated_at: Date;
+                    creator_id: string | null;
+                    provider_id: string | null;
+                    category_id: string;
+                    product_type: import("@prisma/client").$Enums.ProductType;
+                    customization_type: import("@prisma/client").$Enums.CustomizationType | null;
+                    base_price: import("@prisma/client/runtime/library").Decimal;
+                    compare_at_price: import("@prisma/client/runtime/library").Decimal | null;
+                    cost_price: import("@prisma/client/runtime/library").Decimal | null;
+                    sku: string | null;
+                    track_inventory: boolean;
+                    stock_quantity: number | null;
+                    weight: import("@prisma/client/runtime/library").Decimal | null;
+                    weight_unit: string | null;
+                    variant_option_config: import("@prisma/client/runtime/library").JsonValue | null;
+                    shipping_profile_id: string | null;
+                    is_featured: boolean;
+                };
+            } & {
+                id: string;
+                is_active: boolean;
+                options: import("@prisma/client/runtime/library").JsonValue;
+                compare_at_price: import("@prisma/client/runtime/library").Decimal | null;
+                sku: string | null;
+                stock_quantity: number | null;
+                product_id: string;
+                price_adjustment: import("@prisma/client/runtime/library").Decimal;
+            }) | null;
+            bundle_offer: ({
+                translations: {
+                    id: string;
+                    label: string | null;
+                    locale: string;
+                    title: string;
+                    sticker_text: string | null;
+                    offer_id: string;
+                }[];
+                bundle: {
+                    translations: {
+                        id: string;
+                        name: string;
+                        locale: string;
+                        bundle_id: string;
+                    }[];
+                } & {
+                    id: string;
+                    status: import("@prisma/client").$Enums.BundleStatus;
+                    created_at: Date;
+                    updated_at: Date;
+                    creator_id: string;
+                };
+            } & {
+                id: string;
+                sort_order: number;
+                quantity: number;
+                discount_type: import("@prisma/client").$Enums.BundleDiscountType;
+                discount_value: import("@prisma/client/runtime/library").Decimal;
+                external_ref: string | null;
+                bundle_id: string;
             }) | null;
             custom_field_values: ({
                 custom_field: {
@@ -1005,19 +1448,21 @@ export declare class OrdersController {
         } & {
             id: string;
             product_id: string | null;
+            custom_product_id: string | null;
             variant_id: string | null;
             quantity: number;
-            custom_product_id: string | null;
+            bundle_offer_id: string | null;
+            unit_price: import("@prisma/client/runtime/library").Decimal;
+            original_unit_price: import("@prisma/client/runtime/library").Decimal | null;
+            total_price: import("@prisma/client/runtime/library").Decimal;
             customer_design_url: string | null;
             design_notes: string | null;
+            fulfiller_type: import("@prisma/client").$Enums.FulfillerType;
+            fulfiller_id: string;
             fulfillment_status: import("@prisma/client").$Enums.FulfillmentStatus;
             tracking_number: string | null;
             tracking_url: string | null;
             order_id: string;
-            unit_price: import("@prisma/client/runtime/library").Decimal;
-            total_price: import("@prisma/client/runtime/library").Decimal;
-            fulfiller_type: import("@prisma/client").$Enums.FulfillerType;
-            fulfiller_id: string;
         })[];
         commission: {
             id: string;
@@ -1033,8 +1478,8 @@ export declare class OrdersController {
             id: string;
             status: string;
             created_at: Date;
-            note: string | null;
             order_id: string;
+            note: string | null;
             actor: string | null;
         }[];
     } & {
@@ -1056,21 +1501,23 @@ export declare class OrdersController {
         payment_status: string | null;
         stripe_payment_id: string | null;
     }>;
-    updateFulfillment(orderId: string, itemId: string, dto: UpdateFulfillmentDto): Promise<{
+    updateFulfillment(orderId: string, itemId: string, dto: UpdateFulfillmentDto, userId: string, userRole: UserRole): Promise<{
         id: string;
         product_id: string | null;
+        custom_product_id: string | null;
         variant_id: string | null;
         quantity: number;
-        custom_product_id: string | null;
+        bundle_offer_id: string | null;
+        unit_price: import("@prisma/client/runtime/library").Decimal;
+        original_unit_price: import("@prisma/client/runtime/library").Decimal | null;
+        total_price: import("@prisma/client/runtime/library").Decimal;
         customer_design_url: string | null;
         design_notes: string | null;
+        fulfiller_type: import("@prisma/client").$Enums.FulfillerType;
+        fulfiller_id: string;
         fulfillment_status: import("@prisma/client").$Enums.FulfillmentStatus;
         tracking_number: string | null;
         tracking_url: string | null;
         order_id: string;
-        unit_price: import("@prisma/client/runtime/library").Decimal;
-        total_price: import("@prisma/client/runtime/library").Decimal;
-        fulfiller_type: import("@prisma/client").$Enums.FulfillerType;
-        fulfiller_id: string;
     }>;
 }

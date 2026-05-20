@@ -30,6 +30,7 @@ export class ProductsController {
     @Query('status') status?: ProductStatus,
     @Query('provider_id') provider_id?: string,
     @Query('creator_id') creator_id?: string,
+    @Query('owner_type') owner_type?: 'provider' | 'creator',
     @Query('search') search?: string,
     @Query('is_featured') is_featured?: string,
   ) {
@@ -41,6 +42,7 @@ export class ProductsController {
       status,
       provider_id,
       creator_id,
+      owner_type,
       search,
       is_featured: is_featured === 'true' ? true : undefined,
     });
@@ -91,6 +93,17 @@ export class ProductsController {
     @CurrentUser('role') userRole: UserRole,
   ) {
     return this.productsService.delete(id, userId, userRole);
+  }
+
+  @Post(':id/duplicate')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
+  duplicate(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') userRole: UserRole,
+  ) {
+    return this.productsService.duplicate(id, userId, userRole);
   }
 
   @Put(':id/status')

@@ -5,6 +5,7 @@ import {
   Put,
   Delete,
   Param,
+  Query,
   Body,
   UseGuards,
 } from '@nestjs/common';
@@ -22,13 +23,20 @@ export class CartController {
   constructor(private cartService: CartService) {}
 
   @Get()
-  getCart(@CurrentUser('id') userId: string) {
-    return this.cartService.getCart(userId);
+  getCart(
+    @CurrentUser('id') userId: string,
+    @Query('locale') locale?: string,
+  ) {
+    return this.cartService.getCart(userId, locale);
   }
 
   @Post('items')
-  addItem(@CurrentUser('id') userId: string, @Body() dto: AddCartItemDto) {
-    return this.cartService.addItem(userId, dto);
+  addItem(
+    @CurrentUser('id') userId: string,
+    @Body() dto: AddCartItemDto,
+    @Query('locale') locale?: string,
+  ) {
+    return this.cartService.addItem(userId, dto, locale);
   }
 
   @Put('items/:id')
@@ -36,16 +44,18 @@ export class CartController {
     @CurrentUser('id') userId: string,
     @Param('id') itemId: string,
     @Body() dto: UpdateCartItemDto,
+    @Query('locale') locale?: string,
   ) {
-    return this.cartService.updateItem(userId, itemId, dto);
+    return this.cartService.updateItem(userId, itemId, dto, locale);
   }
 
   @Delete('items/:id')
   removeItem(
     @CurrentUser('id') userId: string,
     @Param('id') itemId: string,
+    @Query('locale') locale?: string,
   ) {
-    return this.cartService.removeItem(userId, itemId);
+    return this.cartService.removeItem(userId, itemId, locale);
   }
 
   @Delete()

@@ -18,6 +18,34 @@ let StorefrontService = class StorefrontService {
     constructor(prisma) {
         this.prisma = prisma;
     }
+    async getBundlesForProduct(creatorId, opts) {
+        const where = {
+            creator_id: creatorId,
+            status: 'ACTIVE',
+            OR: [],
+        };
+        if (opts.productId) {
+            where.OR.push({ products: { some: { product_id: opts.productId } } });
+        }
+        if (opts.customProductId) {
+            where.OR.push({
+                custom_products: { some: { custom_product_id: opts.customProductId } },
+            });
+        }
+        if (where.OR.length === 0)
+            return [];
+        return this.prisma.bundle.findMany({
+            where,
+            include: {
+                translations: true,
+                offers: {
+                    include: { translations: true },
+                    orderBy: { sort_order: 'asc' },
+                },
+            },
+            orderBy: { updated_at: 'desc' },
+        });
+    }
     async getStore(slug) {
         const store = await this.prisma.store.findUnique({
             where: { slug, is_active: true },
@@ -41,10 +69,15 @@ let StorefrontService = class StorefrontService {
             ...store,
             currency: platformConfig?.default_currency || 'EUR',
             pages: store.static_pages,
+            theme_key: store.theme_key || 'minimal',
+            theme_customizations: store.theme_customizations || {},
             theme: {
                 primaryColor: themeConfig.primaryColor || '#2563eb',
                 secondaryColor: themeConfig.secondaryColor || '#1e40af',
                 fontFamily: themeConfig.fontFamily || undefined,
+                typography: themeConfig.typography || {},
+                header: themeConfig.header || {},
+                templateId: themeConfig.templateId || 'default',
                 socials: themeConfig.socials || {},
                 contact: themeConfig.contact || {},
                 seo: themeConfig.seo || {},
@@ -59,6 +92,28 @@ let StorefrontService = class StorefrontService {
         });
         if (!store)
             throw new common_1.NotFoundException('Store not found');
+        let creatorCategory = null;
+        if (filters.creator_category) {
+            const cc = await this.prisma.creatorCategory.findUnique({
+                where: {
+                    creator_id_slug: {
+                        creator_id: store.creator.id,
+                        slug: filters.creator_category,
+                    },
+                },
+                select: { id: true, match_rule: true, match_tags: true, is_active: true },
+            });
+            if (cc && cc.is_active) {
+                creatorCategory = {
+                    id: cc.id,
+                    match_rule: cc.match_rule,
+                    match_tags: cc.match_tags,
+                };
+            }
+            else {
+                return [];
+            }
+        }
         const ownWhere = {
             creator_id: store.creator.id,
             status: 'PUBLISHED',
@@ -69,6 +124,20 @@ let StorefrontService = class StorefrontService {
             ownWhere.translations = {
                 some: { title: { contains: filters.search, mode: 'insensitive' } },
             };
+        }
+        if (creatorCategory) {
+            if (creatorCategory.match_rule === 'TAGS') {
+                if (!creatorCategory.match_tags.length)
+                    return [];
+                ownWhere.tags = {
+                    some: { tag: { in: creatorCategory.match_tags } },
+                };
+            }
+            else {
+                ownWhere.creator_categories = {
+                    some: { creator_category_id: creatorCategory.id },
+                };
+            }
         }
         const customWhere = {
             creator_id: store.creator.id,
@@ -81,6 +150,19 @@ let StorefrontService = class StorefrontService {
             customWhere.translations = {
                 some: { title: { contains: filters.search, mode: 'insensitive' } },
             };
+        }
+        if (creatorCategory) {
+            if (creatorCategory.match_rule === 'TAGS') {
+                customWhere.product = {
+                    ...(customWhere.product || {}),
+                    tags: { some: { tag: { in: creatorCategory.match_tags } } },
+                };
+            }
+            else {
+                customWhere.creator_categories = {
+                    some: { creator_category_id: creatorCategory.id },
+                };
+            }
         }
         const [ownProducts, customProducts] = await Promise.all([
             this.prisma.product.findMany({
@@ -209,6 +291,7 @@ let StorefrontService = class StorefrontService {
                 status: 'PUBLISHED',
                 translations: { some: { slug: productSlug } },
             },
+            orderBy: { updated_at: 'desc' },
             include: {
                 translations: true,
                 images: { orderBy: { sort_order: 'asc' } },
@@ -218,6 +301,10 @@ let StorefrontService = class StorefrontService {
                 variants: { where: { is_active: true }, include: { images: true } },
                 tags: true,
                 category: { include: { translations: true } },
+                creator_categories: {
+                    include: { creator_category: { include: { translations: true } } },
+                    orderBy: { sort_order: 'asc' },
+                },
                 custom_fields: { include: { translations: true }, orderBy: { sort_order: 'asc' } },
                 faqs: { include: { translations: true }, orderBy: { sort_order: 'asc' } },
                 shipping_profile: { include: { zones: true } },
@@ -235,6 +322,9 @@ let StorefrontService = class StorefrontService {
                     shippingProfile = defaultProfile;
             }
             const promotions = await this.getActivePromotionsForProduct(store.creator.id, product.id);
+            const bundles = await this.getBundlesForProduct(store.creator.id, {
+                productId: product.id,
+            });
             return {
                 ...product,
                 shipping_profile: shippingProfile,
@@ -246,7 +336,11 @@ let StorefrontService = class StorefrontService {
                     compare_at_price: v.compare_at_price ? Number(v.compare_at_price) : undefined,
                     stock: v.stock_quantity ?? 999,
                 })),
+                creator_categories: (product.creator_categories || [])
+                    .map((pcc) => pcc.creator_category)
+                    .filter((cc) => cc && cc.is_active !== false),
                 promotions,
+                bundles,
             };
         }
         const customProduct = await this.prisma.customProduct.findFirst({
@@ -255,12 +349,17 @@ let StorefrontService = class StorefrontService {
                 status: 'PUBLISHED',
                 translations: { some: { slug: productSlug } },
             },
+            orderBy: { updated_at: 'desc' },
             include: {
                 translations: true,
                 mockup_images: { orderBy: { sort_order: 'asc' } },
                 selected_variants: { include: { variant: { include: { images: true } } } },
                 field_values: { include: { custom_field: { include: { translations: true } } } },
                 faqs: { include: { translations: true }, orderBy: { sort_order: 'asc' } },
+                creator_categories: {
+                    include: { creator_category: { include: { translations: true } } },
+                    orderBy: { sort_order: 'asc' },
+                },
                 product: {
                     include: {
                         images: { orderBy: { sort_order: 'asc' } },
@@ -292,6 +391,9 @@ let StorefrontService = class StorefrontService {
                 shippingProfile = defaultProfile;
         }
         const promotions = await this.getActivePromotionsForProduct(store.creator.id, customProduct.id);
+        const bundles = await this.getBundlesForProduct(store.creator.id, {
+            customProductId: customProduct.id,
+        });
         return {
             id: customProduct.id,
             base_price: displayPrice,
@@ -308,12 +410,16 @@ let StorefrontService = class StorefrontService {
             variants,
             tags: baseProduct.tags,
             category: baseProduct.category,
+            creator_categories: (customProduct.creator_categories || [])
+                .map((cpcc) => cpcc.creator_category)
+                .filter((cc) => cc && cc.is_active !== false),
             custom_fields: customerFields,
             faqs: [...(customProduct.faqs || []), ...baseProduct.faqs],
             field_values: customProduct.field_values,
             pricing_type: customProduct.pricing_type,
             shipping_profile: shippingProfile,
             promotions,
+            bundles,
             _type: 'custom_product',
         };
     }
@@ -357,6 +463,31 @@ let StorefrontService = class StorefrontService {
         });
         return categories;
     }
+    async getCreatorCategories(slug) {
+        const store = await this.prisma.store.findUnique({
+            where: { slug },
+            include: { creator: true },
+        });
+        if (!store)
+            throw new common_1.NotFoundException('Store not found');
+        const rows = await this.prisma.creatorCategory.findMany({
+            where: { creator_id: store.creator.id, is_active: true },
+            include: { translations: true },
+            orderBy: [{ parent_id: 'asc' }, { sort_order: 'asc' }],
+        });
+        const map = new Map();
+        rows.forEach((r) => map.set(r.id, { ...r, children: [] }));
+        const roots = [];
+        for (const node of map.values()) {
+            if (node.parent_id && map.has(node.parent_id)) {
+                map.get(node.parent_id).children.push(node);
+            }
+            else {
+                roots.push(node);
+            }
+        }
+        return roots;
+    }
     async getPage(slug, pageSlug) {
         const store = await this.prisma.store.findUnique({ where: { slug } });
         if (!store)
@@ -371,6 +502,152 @@ let StorefrontService = class StorefrontService {
             throw new common_1.NotFoundException('Page not found');
         }
         return page;
+    }
+    async getSitemapData(storeSlug) {
+        const store = await this.prisma.store.findUnique({
+            where: { slug: storeSlug },
+            include: {
+                creator: { select: { id: true } },
+                language_config: true,
+            },
+        });
+        if (!store)
+            throw new common_1.NotFoundException('Store not found');
+        const primaryLocale = store.language_config?.primary_locale || 'en';
+        const secondaryLocales = store.language_config?.secondary_locales || [];
+        const locales = Array.from(new Set([primaryLocale, ...secondaryLocales]));
+        const v2Pages = await this.prisma.page.findMany({
+            where: { store_id: store.id, published_version_id: { not: null } },
+            select: {
+                type: true,
+                slug: true,
+                updated_at: true,
+            },
+        });
+        const legacyPages = await this.prisma.staticPage.findMany({
+            where: { store_id: store.id, status: 'PUBLISHED' },
+            select: { slug: true, updated_at: true },
+        });
+        const [ownProducts, customProducts] = await Promise.all([
+            this.prisma.product.findMany({
+                where: { creator_id: store.creator.id, status: 'PUBLISHED' },
+                select: {
+                    updated_at: true,
+                    translations: { select: { locale: true, slug: true } },
+                },
+            }),
+            this.prisma.customProduct.findMany({
+                where: { creator_id: store.creator.id, status: 'PUBLISHED' },
+                select: {
+                    updated_at: true,
+                    translations: { select: { locale: true, slug: true } },
+                },
+            }),
+        ]);
+        return {
+            locales,
+            primaryLocale,
+            home: v2Pages.find((p) => p.type === 'HOME')
+                ? { lastmod: v2Pages.find((p) => p.type === 'HOME').updated_at }
+                : null,
+            static_pages: [
+                ...v2Pages
+                    .filter((p) => p.type === 'STATIC' && p.slug)
+                    .map((p) => ({ slug: p.slug, lastmod: p.updated_at })),
+                ...legacyPages.map((p) => ({ slug: p.slug, lastmod: p.updated_at })),
+            ],
+            landing_pages: v2Pages
+                .filter((p) => p.type === 'LANDING' && p.slug)
+                .map((p) => ({ slug: p.slug, lastmod: p.updated_at })),
+            products: [...ownProducts, ...customProducts]
+                .map((p) => {
+                const t = p.translations.find((tr) => !!tr.slug);
+                return t ? { slug: t.slug, lastmod: p.updated_at } : null;
+            })
+                .filter((p) => !!p),
+        };
+    }
+    async getSampleProduct(storeSlug) {
+        const store = await this.prisma.store.findUnique({
+            where: { slug: storeSlug },
+            include: { creator: true },
+        });
+        if (!store)
+            throw new common_1.NotFoundException('Store not found');
+        const own = await this.prisma.product.findFirst({
+            where: { creator_id: store.creator.id, status: 'PUBLISHED' },
+            include: {
+                translations: { select: { locale: true, title: true, description: true, slug: true } },
+                images: { orderBy: { sort_order: 'asc' } },
+                variants: { where: { is_active: true } },
+                faqs: { include: { translations: true }, orderBy: { sort_order: 'asc' } },
+            },
+            orderBy: { updated_at: 'desc' },
+        });
+        if (own) {
+            const slug = own.translations.find((t) => !!t.slug)?.slug || own.id;
+            return {
+                id: own.id,
+                slug,
+                base_price: Number(own.base_price),
+                compare_at_price: own.compare_at_price ? Number(own.compare_at_price) : undefined,
+                translations: own.translations,
+                images: own.images.map((img) => ({
+                    url: img.url,
+                    alt_text: img.alt_text,
+                    sort_order: img.sort_order,
+                })),
+                variants: own.variants.map((v) => ({
+                    id: v.id,
+                    price: Number(own.base_price) + Number(v.price_adjustment || 0),
+                    stock: v.stock_quantity ?? undefined,
+                    sku: v.sku ?? undefined,
+                })),
+                faqs: own.faqs,
+            };
+        }
+        return null;
+    }
+    async getMenus(storeSlug) {
+        const store = await this.prisma.store.findUnique({
+            where: { slug: storeSlug },
+            select: { id: true },
+        });
+        if (!store)
+            throw new common_1.NotFoundException('Store not found');
+        const menus = await this.prisma.menu.findMany({
+            where: { store_id: store.id },
+            include: {
+                items: {
+                    orderBy: { sort_order: 'asc' },
+                    select: { id: true, parent_id: true, label: true, label_i18n: true, url: true, open_in_new_tab: true, sort_order: true },
+                },
+            },
+            orderBy: { created_at: 'asc' },
+        });
+        return menus.map((m) => ({ id: m.id, key: m.key, name: m.name, items: m.items }));
+    }
+    async getPublishedPage(storeSlug, opts) {
+        const store = await this.prisma.store.findUnique({ where: { slug: storeSlug } });
+        if (!store)
+            throw new common_1.NotFoundException('Store not found');
+        const whereType = { store_id: store.id, type: opts.type };
+        if (opts.type === 'STATIC' || opts.type === 'LANDING')
+            whereType.slug = opts.slug;
+        const page = await this.prisma.page.findFirst({
+            where: whereType,
+            include: { published_version: true },
+        });
+        if (!page || !page.published_version)
+            return null;
+        return {
+            id: page.id,
+            type: page.type,
+            slug: page.slug,
+            seo: page.seo,
+            snapshot: page.published_version.snapshot,
+            published_at: page.published_version.published_at,
+        };
     }
     computeVariants(cp) {
         const hasSelectedVariants = cp.selected_variants && cp.selected_variants.length > 0;

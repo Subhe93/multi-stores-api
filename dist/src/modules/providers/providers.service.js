@@ -160,6 +160,12 @@ let ProvidersService = class ProvidersService {
             include: {
                 translations: true,
                 mockup_images: { orderBy: { sort_order: 'asc' }, take: 1 },
+                selected_variants: {
+                    select: {
+                        custom_price: true,
+                        variant: { select: { price_adjustment: true } },
+                    },
+                },
                 product: {
                     include: {
                         translations: true,

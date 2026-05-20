@@ -33,9 +33,20 @@ export class CreatorsService {
   }
 
   async update(userId: string, dto: UpdateCreatorDto) {
-    return this.prisma.creator.update({
-      where: { user_id: userId },
-      data: dto,
+    // avatar lives on both User (canonical for /auth/me) and Creator — keep
+    // them in sync so the header/sidebar reflects the new image immediately.
+    const { avatar_url, ...creatorFields } = dto;
+    return this.prisma.$transaction(async (tx) => {
+      if (avatar_url !== undefined) {
+        await tx.user.update({
+          where: { id: userId },
+          data: { avatar_url },
+        });
+      }
+      return tx.creator.update({
+        where: { user_id: userId },
+        data: { ...creatorFields, ...(avatar_url !== undefined ? { avatar_url } : {}) },
+      });
     });
   }
 

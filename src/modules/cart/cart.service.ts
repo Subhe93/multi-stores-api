@@ -1,6 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
+import { computeBundlePricing } from '../bundles/bundle-pricing.util';
+import { validateBundleEconomics } from '../bundles/bundle-economics.util';
 
 @Injectable()
 export class CartService {
@@ -26,9 +32,28 @@ export class CartService {
   }
 
   /**
-   * Enrich raw cart items with product data (title, price, image, variant info).
+   * Pick the translation row for the requested locale, falling back to English
+   * and then the first available row. Without this the caller would have to
+   * rely on row order, which is alphabetical by locale ('ar' before 'en') and
+   * therefore returns the wrong language for the storefront's active locale.
    */
-  private async enrichCartItems(items: any[]): Promise<any[]> {
+  private pickTranslation<T extends { locale: string }>(
+    translations: T[] | undefined,
+    locale?: string,
+  ): T | undefined {
+    if (!translations?.length) return undefined;
+    return (
+      (locale && translations.find((t) => t.locale === locale)) ||
+      translations.find((t) => t.locale === 'en') ||
+      translations[0]
+    );
+  }
+
+  /**
+   * Enrich raw cart items with product data (title, price, image, variant info).
+   * `locale` selects which translation to surface for the item title.
+   */
+  private async enrichCartItems(items: any[], locale?: string): Promise<any[]> {
     const enriched: any[] = [];
     const config = await this.prisma.platformConfig.findFirst();
     const platformCurrency = config?.default_currency || 'EUR';
@@ -45,11 +70,14 @@ export class CartService {
         const cp = await this.prisma.customProduct.findUnique({
           where: { id: item.custom_product_id },
           include: {
-            translations: { take: 1, orderBy: { locale: 'asc' as const } },
+            translations: true,
             mockup_images: { take: 1, orderBy: { sort_order: 'asc' as const } },
+            selected_variants: item.variant_id
+              ? { where: { variant_id: item.variant_id } }
+              : true,
             product: {
               include: {
-                translations: { take: 1, orderBy: { locale: 'asc' as const } },
+                translations: true,
                 images: { take: 1, orderBy: { sort_order: 'asc' as const } },
               },
             },
@@ -57,21 +85,62 @@ export class CartService {
         });
 
         if (cp) {
-          title = cp.translations[0]?.title || cp.product.translations[0]?.title || null;
-          price = Number(cp.final_price || cp.product.base_price);
+          title =
+            this.pickTranslation(cp.translations, locale)?.title ||
+            this.pickTranslation(cp.product.translations, locale)?.title ||
+            null;
           imageUrl = cp.mockup_images[0]?.url || cp.product.images[0]?.url || null;
+
+          // Resolve the chosen variant's adjustment (if any) up front so the
+          // pricing math below can use it for PER_VARIANT/MARGIN. This mirrors
+          // the calculation in orders.service so cart prices match checkout.
+          let variantAdjustment = 0;
+          if (item.variant_id) {
+            const v = await this.prisma.productVariant.findUnique({
+              where: { id: item.variant_id },
+              select: { price_adjustment: true },
+            });
+            variantAdjustment = Number(v?.price_adjustment || 0);
+          }
+
+          switch (cp.pricing_type) {
+            case 'SINGLE':
+              price = Number(cp.final_price);
+              break;
+            case 'PER_VARIANT': {
+              if (item.variant_id) {
+                const sv = cp.selected_variants.find(
+                  (s: any) => s.variant_id === item.variant_id,
+                );
+                price = sv?.custom_price
+                  ? Number(sv.custom_price)
+                  : Number(cp.product.base_price) + variantAdjustment;
+              } else {
+                price = Number(cp.final_price) || Number(cp.product.base_price);
+              }
+              break;
+            }
+            case 'MARGIN':
+              price =
+                Number(cp.product.base_price) +
+                variantAdjustment +
+                Number(cp.margin_amount || 0);
+              break;
+            default:
+              price = Number(cp.final_price) || Number(cp.product.base_price);
+          }
         }
       } else if (item.product_id) {
         const product = await this.prisma.product.findUnique({
           where: { id: item.product_id },
           include: {
-            translations: { take: 1, orderBy: { locale: 'asc' } },
+            translations: true,
             images: { where: { is_featured: true }, take: 1 },
           },
         });
 
         if (product) {
-          title = product.translations[0]?.title || null;
+          title = this.pickTranslation(product.translations, locale)?.title || null;
           price = Number(product.base_price);
           imageUrl = product.images[0]?.url || null;
 
@@ -104,6 +173,47 @@ export class CartService {
         }
       }
 
+      // Apply bundle pricing if a bundle offer is attached
+      let bundleOfferId: string | null = null;
+      let bundleOriginalUnitPrice: number | null = null;
+      let bundleTitle: string | null = null;
+      let bundleLabel: string | null = null;
+      let bundleStickerText: string | null = null;
+      let bundleCartQuantity: number | null = null;
+
+      if (item.bundle_offer_id) {
+        const offer = await this.prisma.bundleOffer.findUnique({
+          where: { id: item.bundle_offer_id },
+          include: {
+            translations: true,
+            bundle: { include: { translations: true } },
+          },
+        });
+
+        if (offer && offer.bundle.status === 'ACTIVE') {
+          const pricing = computeBundlePricing(price, {
+            quantity: offer.quantity,
+            discount_type: offer.discount_type,
+            discount_value: offer.discount_value as any,
+          });
+          bundleOfferId = offer.id;
+          bundleOriginalUnitPrice = price;
+          price = pricing.effectiveUnitPrice;
+          bundleCartQuantity = pricing.cartQuantity;
+          const tr = this.pickTranslation(offer.translations, locale);
+          bundleTitle = tr?.title || null;
+          bundleLabel = tr?.label || null;
+          bundleStickerText = tr?.sticker_text || null;
+        } else {
+          // Offer was deleted or its bundle is disabled — clear the stale
+          // reference so checkout doesn't reject the cart later.
+          await this.prisma.cartItem.update({
+            where: { id: item.id },
+            data: { bundle_offer_id: null },
+          });
+        }
+      }
+
       enriched.push({
         id: item.id,
         productId: item.product_id,
@@ -116,13 +226,180 @@ export class CartService {
         imageUrl,
         variant: variantLabel,
         currency,
+        bundleOfferId,
+        bundleOriginalUnitPrice,
+        bundleTitle,
+        bundleLabel,
+        bundleStickerText,
+        bundleCartQuantity,
       });
     }
 
     return enriched;
   }
 
-  async getCart(userId: string) {
+  /**
+   * Validate that a bundle offer exists, is on an ACTIVE bundle, and is linked
+   * to the requested product/custom_product. Returns the offer.
+   */
+  private async validateBundleOffer(
+    bundleOfferId: string,
+    productId?: string | null,
+    customProductId?: string | null,
+    variantId?: string | null,
+  ) {
+    const offer = await this.prisma.bundleOffer.findUnique({
+      where: { id: bundleOfferId },
+      include: {
+        bundle: {
+          include: {
+            products: true,
+            custom_products: true,
+          },
+        },
+      },
+    });
+    if (!offer) {
+      throw new BadRequestException('Bundle offer not found');
+    }
+    if (offer.bundle.status !== 'ACTIVE') {
+      throw new BadRequestException('Bundle is not active');
+    }
+    if (productId) {
+      const linked = offer.bundle.products.some(
+        (p) => p.product_id === productId,
+      );
+      if (!linked) {
+        throw new BadRequestException('Bundle is not available for this product');
+      }
+    } else if (customProductId) {
+      const linked = offer.bundle.custom_products.some(
+        (p) => p.custom_product_id === customProductId,
+      );
+      if (!linked) {
+        throw new BadRequestException('Bundle is not available for this product');
+      }
+    }
+
+    // Runtime economics guard: provider prices can change after the bundle was
+    // attached. Re-check that this specific offer doesn't push the product below
+    // provider cost before letting the customer add it to their cart.
+    let unitPrice = 0;
+    let providerBase = 0;
+    if (productId) {
+      const product = await this.prisma.product.findUnique({
+        where: { id: productId },
+        select: { base_price: true, provider_id: true },
+      });
+      if (product) {
+        unitPrice = Number(product.base_price);
+        providerBase = product.provider_id ? unitPrice : 0;
+      }
+    } else if (customProductId) {
+      const cp = await this.prisma.customProduct.findUnique({
+        where: { id: customProductId },
+        select: {
+          final_price: true,
+          pricing_type: true,
+          margin_amount: true,
+          selected_variants: variantId
+            ? { where: { variant_id: variantId } }
+            : true,
+          product: { select: { base_price: true, provider_id: true } },
+        },
+      });
+      if (cp) {
+        // Resolve the exact variant adjustment for this cart line so the
+        // economic check operates on the real customer-facing price, not a
+        // fallback. Mirrors orders.service pricing logic.
+        let variantAdjustment = 0;
+        if (variantId) {
+          const v = await this.prisma.productVariant.findUnique({
+            where: { id: variantId },
+            select: { price_adjustment: true },
+          });
+          variantAdjustment = Number(v?.price_adjustment || 0);
+        }
+
+        switch (cp.pricing_type) {
+          case 'SINGLE':
+            unitPrice = Number(cp.final_price) || Number(cp.product.base_price);
+            break;
+          case 'PER_VARIANT': {
+            if (variantId) {
+              const sv = cp.selected_variants.find(
+                (s: any) => s.variant_id === variantId,
+              );
+              unitPrice = sv?.custom_price
+                ? Number(sv.custom_price)
+                : Number(cp.product.base_price) + variantAdjustment;
+            } else {
+              // No variant chosen yet — use the cheapest declared so the
+              // check stays conservative (most likely to surface a loss).
+              const customPrices = cp.selected_variants
+                .map((sv: any) => Number(sv.custom_price ?? 0))
+                .filter((n) => n > 0);
+              unitPrice = customPrices.length
+                ? Math.min(...customPrices)
+                : Number(cp.product.base_price);
+            }
+            break;
+          }
+          case 'MARGIN':
+            unitPrice =
+              Number(cp.product.base_price) +
+              variantAdjustment +
+              Number(cp.margin_amount || 0);
+            break;
+        }
+        providerBase = cp.product.provider_id
+          ? Number(cp.product.base_price) + variantAdjustment
+          : 0;
+      }
+    }
+    if (providerBase > 0 && unitPrice > 0) {
+      const check = validateBundleEconomics(
+        [
+          {
+            quantity: offer.quantity,
+            discount_type: offer.discount_type,
+            discount_value: offer.discount_value as unknown as number,
+          },
+        ],
+        [{ id: 'cart-line', unitPrice, providerBasePrice: providerBase }],
+      );
+      if (!check.valid) {
+        throw new BadRequestException(
+          'This bundle offer is no longer profitable for this product and cannot be applied',
+        );
+      }
+    }
+
+    return offer;
+  }
+
+  /**
+   * Bundle offers require quantity in multiples of the offer's cartQuantity
+   * (e.g. ITEM "buy 2 get 1" → multiples of 3). Reject early so the user
+   * doesn't get a surprise at checkout.
+   */
+  private assertBundleQuantityValid(
+    offer: { quantity: number; discount_type: any; discount_value: any },
+    quantity: number,
+  ) {
+    const pricing = computeBundlePricing(1, {
+      quantity: offer.quantity,
+      discount_type: offer.discount_type,
+      discount_value: offer.discount_value,
+    });
+    if (pricing.cartQuantity <= 0 || quantity % pricing.cartQuantity !== 0) {
+      throw new BadRequestException(
+        `Bundle requires quantity in multiples of ${pricing.cartQuantity}`,
+      );
+    }
+  }
+
+  async getCart(userId: string, locale?: string) {
     const cart = await this.getOrCreateCart(userId);
 
     const cartWithItems = await this.prisma.cart.findUnique({
@@ -132,7 +409,10 @@ export class CartService {
       },
     });
 
-    const enrichedItems = await this.enrichCartItems(cartWithItems?.items || []);
+    const enrichedItems = await this.enrichCartItems(
+      cartWithItems?.items || [],
+      locale,
+    );
 
     return {
       id: cartWithItems?.id,
@@ -140,8 +420,29 @@ export class CartService {
     };
   }
 
-  async addItem(userId: string, dto: AddCartItemDto) {
+  async addItem(userId: string, dto: AddCartItemDto, locale?: string) {
     const cart = await this.getOrCreateCart(userId);
+
+    if (dto.bundle_offer_id) {
+      const offer = await this.validateBundleOffer(
+        dto.bundle_offer_id,
+        dto.product_id,
+        dto.custom_product_id,
+        dto.variant_id,
+      );
+
+      const existingSameLine = await this.prisma.cartItem.findFirst({
+        where: {
+          cart_id: cart.id,
+          product_id: dto.product_id || null,
+          variant_id: dto.variant_id || null,
+          custom_product_id: dto.custom_product_id || null,
+          bundle_offer_id: dto.bundle_offer_id,
+        },
+      });
+      const finalQuantity = (existingSameLine?.quantity ?? 0) + dto.quantity;
+      this.assertBundleQuantityValid(offer, finalQuantity);
+    }
 
     const existing = await this.prisma.cartItem.findFirst({
       where: {
@@ -149,6 +450,7 @@ export class CartService {
         product_id: dto.product_id || null,
         variant_id: dto.variant_id || null,
         custom_product_id: dto.custom_product_id || null,
+        bundle_offer_id: dto.bundle_offer_id || null,
       },
     });
 
@@ -167,10 +469,15 @@ export class CartService {
     }
 
     // Return enriched cart
-    return this.getCart(userId);
+    return this.getCart(userId, locale);
   }
 
-  async updateItem(userId: string, itemId: string, dto: UpdateCartItemDto) {
+  async updateItem(
+    userId: string,
+    itemId: string,
+    dto: UpdateCartItemDto,
+    locale?: string,
+  ) {
     const cart = await this.getOrCreateCart(userId);
 
     const item = await this.prisma.cartItem.findFirst({
@@ -178,22 +485,54 @@ export class CartService {
     });
     if (!item) throw new NotFoundException('Cart item not found');
 
-    await this.prisma.cartItem.update({
-      where: { id: itemId },
-      data: { quantity: dto.quantity },
-    });
+    const data: { quantity?: number; bundle_offer_id?: string | null } = {};
+    if (typeof dto.quantity === 'number') {
+      data.quantity = dto.quantity;
+    }
+    let nextBundleOfferId: string | null = item.bundle_offer_id;
+    if (dto.bundle_offer_id !== undefined) {
+      if (dto.bundle_offer_id === null) {
+        data.bundle_offer_id = null;
+        nextBundleOfferId = null;
+      } else {
+        await this.validateBundleOffer(
+          dto.bundle_offer_id,
+          item.product_id,
+          item.custom_product_id,
+          item.variant_id,
+        );
+        data.bundle_offer_id = dto.bundle_offer_id;
+        nextBundleOfferId = dto.bundle_offer_id;
+      }
+    }
 
-    return this.getCart(userId);
+    // Enforce quantity multiples if the resulting line carries a bundle offer.
+    if (nextBundleOfferId) {
+      const nextQty = data.quantity ?? item.quantity;
+      const offer = await this.prisma.bundleOffer.findUnique({
+        where: { id: nextBundleOfferId },
+      });
+      if (offer) this.assertBundleQuantityValid(offer, nextQty);
+    }
+
+    if (Object.keys(data).length > 0) {
+      await this.prisma.cartItem.update({
+        where: { id: itemId },
+        data,
+      });
+    }
+
+    return this.getCart(userId, locale);
   }
 
-  async removeItem(userId: string, itemId: string) {
+  async removeItem(userId: string, itemId: string, locale?: string) {
     const cart = await this.getOrCreateCart(userId);
 
     await this.prisma.cartItem.delete({
       where: { id: itemId, cart_id: cart.id },
     });
 
-    return this.getCart(userId);
+    return this.getCart(userId, locale);
   }
 
   async clearCart(userId: string) {

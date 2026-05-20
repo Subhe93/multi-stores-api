@@ -29,6 +29,8 @@ export declare class CreateProductDto {
     attributes?: ProductAttributeValueDto[];
     status?: ProductStatus;
     tags?: string[];
+    bundle_ids?: string[];
+    creator_category_ids?: string[];
 }
 export declare class UpdateProductDto {
     category_id?: string;
@@ -49,4 +51,6 @@ export declare class UpdateProductDto {
     translations?: ProductTranslationDto[];
     attributes?: ProductAttributeValueDto[];
     tags?: string[];
+    bundle_ids?: string[];
+    creator_category_ids?: string[];
 }

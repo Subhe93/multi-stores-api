@@ -92,6 +92,9 @@ let CustomProductsController = class CustomProductsController {
     findMyCustomProducts(userId, page, limit) {
         return this.customProductsService.findByCreator(userId, page ? +page : undefined, limit ? +limit : undefined);
     }
+    checkSlug(userId, slug, excludeId) {
+        return this.customProductsService.checkSlug(userId, slug, excludeId);
+    }
     pendingReviews(userId, page, limit) {
         return this.customProductsService.findPendingReviewsForProvider(userId, page ? +page : undefined, limit ? +limit : undefined);
     }
@@ -103,6 +106,9 @@ let CustomProductsController = class CustomProductsController {
     }
     delete(id, userId) {
         return this.customProductsService.delete(id, userId);
+    }
+    duplicate(id, userId) {
+        return this.customProductsService.duplicate(id, userId);
     }
     submit(id, userId) {
         return this.customProductsService.submitForReview(id, userId);
@@ -145,6 +151,15 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], CustomProductsController.prototype, "findMyCustomProducts", null);
 __decorate([
+    (0, common_1.Get)('check-slug'),
+    __param(0, (0, decorators_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Query)('slug')),
+    __param(2, (0, common_1.Query)('exclude_id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", void 0)
+], CustomProductsController.prototype, "checkSlug", null);
+__decorate([
     (0, common_1.Get)('pending-reviews'),
     (0, decorators_1.Roles)(client_1.UserRole.PROVIDER),
     __param(0, (0, decorators_1.CurrentUser)('id')),
@@ -179,6 +194,14 @@ __decorate([
     __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", void 0)
 ], CustomProductsController.prototype, "delete", null);
+__decorate([
+    (0, common_1.Post)(':id/duplicate'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, decorators_1.CurrentUser)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:returntype", void 0)
+], CustomProductsController.prototype, "duplicate", null);
 __decorate([
     (0, common_1.Post)(':id/submit'),
     __param(0, (0, common_1.Param)('id')),

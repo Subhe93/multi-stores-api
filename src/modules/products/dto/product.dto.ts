@@ -119,6 +119,17 @@ export class CreateProductDto {
   @IsArray()
   @IsString({ each: true })
   tags?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  bundle_ids?: string[];
+
+  // Creator's own collections (Shopify-style). Ignored when caller is a Provider.
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  creator_category_ids?: string[];
 }
 
 export class UpdateProductDto {
@@ -206,4 +217,14 @@ export class UpdateProductDto {
   @IsArray()
   @IsString({ each: true })
   tags?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  bundle_ids?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  creator_category_ids?: string[];
 }

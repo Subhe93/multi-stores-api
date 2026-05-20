@@ -46,6 +46,9 @@ let StoresController = class StoresController {
     updateTheme(userId, dto) {
         return this.storesService.updateTheme(userId, dto);
     }
+    updateThemeSelection(userId, dto) {
+        return this.storesService.updateThemeSelection(userId, dto);
+    }
     updateLanguages(userId, dto) {
         return this.storesService.updateLanguages(userId, dto);
     }
@@ -116,6 +119,16 @@ __decorate([
     __metadata("design:paramtypes", [String, store_dto_1.UpdateThemeDto]),
     __metadata("design:returntype", void 0)
 ], StoresController.prototype, "updateTheme", null);
+__decorate([
+    (0, common_1.Put)('my/theme-selection'),
+    (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt'), roles_guard_1.RolesGuard),
+    (0, decorators_1.Roles)(client_1.UserRole.CREATOR),
+    __param(0, (0, decorators_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, store_dto_1.UpdateThemeSelectionDto]),
+    __metadata("design:returntype", void 0)
+], StoresController.prototype, "updateThemeSelection", null);
 __decorate([
     (0, common_1.Put)('my/languages'),
     (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt'), roles_guard_1.RolesGuard),

@@ -14,12 +14,40 @@ const common_1 = require("@nestjs/common");
 const prisma_service_1 = require("../../prisma/prisma.service");
 const client_1 = require("@prisma/client");
 const notifications_service_1 = require("../notifications/notifications.service");
+const bundle_economics_util_1 = require("../bundles/bundle-economics.util");
 let CustomProductsService = class CustomProductsService {
     prisma;
     notificationsService;
     constructor(prisma, notificationsService) {
         this.prisma = prisma;
         this.notificationsService = notificationsService;
+    }
+    async assertCustomProductCompatibleWithBundles(productPricing, bundleIds) {
+        if (bundleIds.length === 0)
+            return;
+        const bundles = await this.prisma.bundle.findMany({
+            where: { id: { in: bundleIds } },
+            select: {
+                id: true,
+                offers: {
+                    select: { quantity: true, discount_type: true, discount_value: true },
+                },
+            },
+        });
+        const allViolations = [];
+        for (const b of bundles) {
+            const offers = b.offers.map((o) => ({
+                quantity: o.quantity,
+                discount_type: o.discount_type,
+                discount_value: o.discount_value,
+            }));
+            const result = (0, bundle_economics_util_1.validateBundleEconomics)(offers, [productPricing]);
+            if (!result.valid)
+                allViolations.push(...result.violations);
+        }
+        if (allViolations.length > 0) {
+            throw new common_1.BadRequestException((0, bundle_economics_util_1.formatViolationsMessage)(allViolations));
+        }
     }
     async assertCreatorOwns(customProductId, userId) {
         const cp = await this.prisma.customProduct.findUnique({
@@ -64,7 +92,128 @@ let CustomProductsService = class CustomProductsService {
         selected_variants: { include: { variant: true } },
         field_values: { include: { custom_field: true } },
         faqs: { include: { translations: true }, orderBy: { sort_order: 'asc' } },
+        bundles: {
+            include: {
+                bundle: {
+                    include: {
+                        translations: true,
+                        offers: {
+                            include: { translations: true },
+                            orderBy: { sort_order: 'asc' },
+                        },
+                    },
+                },
+            },
+        },
+        creator_categories: {
+            include: { creator_category: { include: { translations: true } } },
+        },
     };
+    async attachCreatorCategories(customProductId, creatorId, categoryIds) {
+        if (!categoryIds.length)
+            return;
+        const owned = await this.prisma.creatorCategory.findMany({
+            where: { id: { in: categoryIds }, creator_id: creatorId },
+            select: { id: true },
+        });
+        const ownedIds = new Set(owned.map((c) => c.id));
+        const toAttach = categoryIds.filter((id) => ownedIds.has(id));
+        if (!toAttach.length)
+            return;
+        await this.prisma.customProductCreatorCategory.createMany({
+            data: toAttach.map((creator_category_id, sort_order) => ({
+                custom_product_id: customProductId,
+                creator_category_id,
+                sort_order,
+            })),
+            skipDuplicates: true,
+        });
+    }
+    async assertSlugsAvailable(creatorId, translations, excludeCustomProductId) {
+        const slugs = (translations ?? [])
+            .map((t) => (t.slug || '').trim())
+            .filter((s) => s.length > 0);
+        if (!slugs.length)
+            return;
+        const [customConflicts, productConflicts] = await Promise.all([
+            this.prisma.customProductTranslation.findMany({
+                where: {
+                    slug: { in: slugs },
+                    custom_product: {
+                        creator_id: creatorId,
+                        ...(excludeCustomProductId ? { id: { not: excludeCustomProductId } } : {}),
+                    },
+                },
+                select: { slug: true },
+            }),
+            this.prisma.productTranslation.findMany({
+                where: {
+                    slug: { in: slugs },
+                    product: { creator_id: creatorId },
+                },
+                select: { slug: true },
+            }),
+        ]);
+        const taken = new Set([
+            ...customConflicts.map((c) => c.slug),
+            ...productConflicts.map((c) => c.slug),
+        ]);
+        if (taken.size > 0) {
+            throw new common_1.BadRequestException(`Slug already in use: ${Array.from(taken).join(', ')}`);
+        }
+    }
+    async checkSlug(userId, slug, excludeId) {
+        const trimmed = (slug || '').trim();
+        if (!trimmed)
+            return { available: false, reason: 'empty' };
+        const creator = await this.prisma.creator.findUnique({
+            where: { user_id: userId },
+            select: { id: true },
+        });
+        if (!creator)
+            throw new common_1.NotFoundException('Creator not found');
+        const [customConflict, productConflict] = await Promise.all([
+            this.prisma.customProduct.findFirst({
+                where: {
+                    creator_id: creator.id,
+                    ...(excludeId ? { id: { not: excludeId } } : {}),
+                    translations: { some: { slug: trimmed } },
+                },
+                select: { id: true },
+            }),
+            this.prisma.product.findFirst({
+                where: {
+                    creator_id: creator.id,
+                    translations: { some: { slug: trimmed } },
+                },
+                select: { id: true },
+            }),
+        ]);
+        return {
+            available: !customConflict && !productConflict,
+            conflictsWith: customConflict
+                ? 'custom_product'
+                : productConflict
+                    ? 'product'
+                    : null,
+        };
+    }
+    async assertBundlesOwnedByCreator(bundleIds, creatorId) {
+        if (bundleIds.length === 0)
+            return;
+        const found = await this.prisma.bundle.findMany({
+            where: { id: { in: bundleIds } },
+            select: { id: true, creator_id: true },
+        });
+        if (found.length !== bundleIds.length) {
+            throw new common_1.BadRequestException('One or more bundles do not exist');
+        }
+        for (const b of found) {
+            if (b.creator_id !== creatorId) {
+                throw new common_1.ForbiddenException('You can only attach your own bundles');
+            }
+        }
+    }
     async create(userId, dto) {
         const creator = await this.prisma.creator.findUnique({
             where: { user_id: userId },
@@ -72,7 +221,29 @@ let CustomProductsService = class CustomProductsService {
         if (!creator)
             throw new common_1.NotFoundException('Creator not found');
         this.validatePricing(dto.pricing_type, dto);
-        const { translations, selected_variants, field_values, mockup_image_urls, ...data } = dto;
+        await this.assertSlugsAvailable(creator.id, dto.translations);
+        const { translations, selected_variants, field_values, mockup_image_urls, bundle_ids, creator_category_ids, ...data } = dto;
+        if (bundle_ids && bundle_ids.length > 0) {
+            await this.assertBundlesOwnedByCreator(bundle_ids, creator.id);
+            if (data.pricing_type === client_1.PricingType.SINGLE) {
+                const baseProduct = await this.prisma.product.findUnique({
+                    where: { id: data.product_id },
+                    select: { base_price: true, provider_id: true },
+                });
+                if (baseProduct) {
+                    const unitPrice = Number(data.final_price) || Number(baseProduct.base_price);
+                    const providerBase = baseProduct.provider_id
+                        ? Number(baseProduct.base_price)
+                        : 0;
+                    await this.assertCustomProductCompatibleWithBundles({
+                        id: 'pending',
+                        unitPrice,
+                        providerBasePrice: providerBase,
+                        title: translations?.[0]?.title,
+                    }, bundle_ids);
+                }
+            }
+        }
         let variantRows = [];
         if (dto.import_mode === client_1.ImportMode.AS_IS) {
             const product = await this.prisma.product.findUnique({
@@ -112,7 +283,7 @@ let CustomProductsService = class CustomProductsService {
                 }));
             }
         }
-        return this.prisma.customProduct.create({
+        const created = await this.prisma.customProduct.create({
             data: {
                 product_id: data.product_id,
                 creator_id: creator.id,
@@ -143,9 +314,20 @@ let CustomProductsService = class CustomProductsService {
                         })),
                     },
                 }),
+                ...(bundle_ids &&
+                    bundle_ids.length > 0 && {
+                    bundles: {
+                        create: bundle_ids.map((bundle_id) => ({ bundle_id })),
+                    },
+                }),
             },
             include: this.includes,
         });
+        if (creator_category_ids?.length) {
+            await this.attachCreatorCategories(created.id, creator.id, creator_category_ids);
+            return this.findById(created.id);
+        }
+        return created;
     }
     async findByCreator(userId, page = 1, limit = 20) {
         const creator = await this.prisma.creator.findUnique({
@@ -183,7 +365,10 @@ let CustomProductsService = class CustomProductsService {
     async update(id, dto, userId) {
         const existing = await this.prisma.customProduct.findUnique({
             where: { id },
-            include: { creator: { select: { user_id: true } }, product: { select: { provider_id: true } } },
+            include: {
+                creator: { select: { user_id: true } },
+                product: { select: { provider_id: true, base_price: true } },
+            },
         });
         if (!existing)
             throw new common_1.NotFoundException('Custom product not found');
@@ -224,7 +409,59 @@ let CustomProductsService = class CustomProductsService {
                 pricing_type: pricingType,
             });
         }
-        const { translations, selected_variants, field_values, mockup_image_urls, ...data } = dto;
+        if (dto.translations && dto.translations.length > 0) {
+            await this.assertSlugsAvailable(existing.creator_id, dto.translations, id);
+        }
+        const { translations, selected_variants, field_values, mockup_image_urls, bundle_ids, creator_category_ids, ...data } = dto;
+        if (pricingType === client_1.PricingType.SINGLE &&
+            data.final_price !== undefined &&
+            bundle_ids === undefined) {
+            const currentAttachments = await this.prisma.bundleCustomProduct.findMany({
+                where: { custom_product_id: id },
+                select: { bundle_id: true },
+            });
+            const currentBundleIds = currentAttachments.map((a) => a.bundle_id);
+            if (currentBundleIds.length > 0) {
+                const nextFinal = Number(data.final_price);
+                const unitPrice = nextFinal || Number(existing.product.base_price);
+                const providerBase = existing.product.provider_id
+                    ? Number(existing.product.base_price)
+                    : 0;
+                const titleRow = await this.prisma.customProductTranslation.findFirst({
+                    where: { custom_product_id: id },
+                    select: { title: true },
+                });
+                await this.assertCustomProductCompatibleWithBundles({
+                    id,
+                    unitPrice,
+                    providerBasePrice: providerBase,
+                    title: titleRow?.title,
+                }, currentBundleIds);
+            }
+        }
+        if (bundle_ids) {
+            await this.assertBundlesOwnedByCreator(bundle_ids, existing.creator_id);
+            if (bundle_ids.length > 0 && pricingType === client_1.PricingType.SINGLE) {
+                const nextFinal = Number(data.final_price ?? existing.final_price);
+                const unitPrice = nextFinal || Number(existing.product.base_price);
+                const providerBase = existing.product.provider_id
+                    ? Number(existing.product.base_price)
+                    : 0;
+                const titleRow = await this.prisma.customProductTranslation.findFirst({
+                    where: { custom_product_id: id },
+                    select: { title: true },
+                });
+                await this.assertCustomProductCompatibleWithBundles({
+                    id,
+                    unitPrice,
+                    providerBasePrice: providerBase,
+                    title: titleRow?.title,
+                }, bundle_ids);
+            }
+            await this.prisma.bundleCustomProduct.deleteMany({
+                where: { custom_product_id: id },
+            });
+        }
         if (selected_variants) {
             await this.prisma.customProductVariant.deleteMany({
                 where: { custom_product_id: id },
@@ -278,18 +515,120 @@ let CustomProductsService = class CustomProductsService {
                         })),
                     },
                 }),
+                ...(bundle_ids &&
+                    bundle_ids.length > 0 && {
+                    bundles: {
+                        create: bundle_ids.map((bundle_id) => ({ bundle_id })),
+                    },
+                }),
             },
             include: this.includes,
         });
+        if (creator_category_ids !== undefined) {
+            await this.prisma.customProductCreatorCategory.deleteMany({
+                where: { custom_product_id: id },
+            });
+            if (creator_category_ids.length > 0) {
+                await this.attachCreatorCategories(id, existing.creator_id, creator_category_ids);
+            }
+        }
         if (autoRevertedToReview && existing.product.provider_id) {
             await this.notifyProviderOfSubmission(updated.id, 'CUSTOM_PRODUCT_RESUBMITTED');
         }
-        return updated;
+        return creator_category_ids !== undefined ? this.findById(id) : updated;
     }
     async delete(id, userId) {
         if (userId)
             await this.assertCreatorOwns(id, userId);
         return this.prisma.customProduct.delete({ where: { id } });
+    }
+    async duplicate(id, userId) {
+        await this.assertCreatorOwns(id, userId);
+        const source = await this.prisma.customProduct.findUnique({
+            where: { id },
+            include: {
+                translations: true,
+                mockup_images: true,
+                selected_variants: true,
+                field_values: true,
+                faqs: { include: { translations: true } },
+            },
+        });
+        if (!source)
+            throw new common_1.NotFoundException('Custom product not found');
+        const created = await this.prisma.$transaction(async (tx) => {
+            const newCp = await tx.customProduct.create({
+                data: {
+                    product_id: source.product_id,
+                    creator_id: source.creator_id,
+                    import_mode: source.import_mode,
+                    pricing_type: source.pricing_type,
+                    final_price: source.final_price,
+                    margin_amount: source.margin_amount,
+                    status: client_1.ProductStatus.DRAFT,
+                    rejection_reason: null,
+                    submitted_at: null,
+                    reviewed_at: null,
+                    reviewed_by: null,
+                },
+            });
+            if (source.translations.length > 0) {
+                await tx.customProductTranslation.createMany({
+                    data: source.translations.map((t) => ({
+                        custom_product_id: newCp.id,
+                        locale: t.locale,
+                        title: `${t.title} (Copy)`,
+                        description: t.description,
+                        slug: `${t.slug}-copy-${newCp.id.slice(0, 6)}`,
+                    })),
+                });
+            }
+            if (source.mockup_images.length > 0) {
+                await tx.customProductImage.createMany({
+                    data: source.mockup_images.map((img) => ({
+                        custom_product_id: newCp.id,
+                        url: img.url,
+                        sort_order: img.sort_order,
+                    })),
+                });
+            }
+            if (source.selected_variants.length > 0) {
+                await tx.customProductVariant.createMany({
+                    data: source.selected_variants.map((sv) => ({
+                        custom_product_id: newCp.id,
+                        variant_id: sv.variant_id,
+                        custom_price: sv.custom_price,
+                    })),
+                });
+            }
+            if (source.field_values.length > 0) {
+                await tx.customProductFieldValue.createMany({
+                    data: source.field_values.map((fv) => ({
+                        custom_product_id: newCp.id,
+                        custom_field_id: fv.custom_field_id,
+                        value: fv.value,
+                        file_url: fv.file_url,
+                    })),
+                });
+            }
+            for (const f of source.faqs) {
+                await tx.customProductFaq.create({
+                    data: {
+                        custom_product_id: newCp.id,
+                        sort_order: f.sort_order,
+                        translations: {
+                            create: f.translations.map((t) => ({
+                                locale: t.locale,
+                                question: t.question,
+                                answer: t.answer,
+                            })),
+                        },
+                    },
+                });
+            }
+            return newCp;
+        });
+        return this.findById(created.id);
     }
     async submitForReview(id, userId) {
         const cp = await this.assertCreatorOwns(id, userId);

@@ -82,8 +82,9 @@ export class OrdersController {
     @Param('id') id: string,
     @Body() dto: UpdateOrderStatusDto,
     @CurrentUser('id') userId: string,
+    @CurrentUser('role') userRole: UserRole,
   ) {
-    return this.ordersService.updateStatus(id, dto, userId);
+    return this.ordersService.updateStatus(id, dto, userId, userRole);
   }
 
   // Provider/Creator — تحديث حالة التنفيذ لعنصر
@@ -94,7 +95,9 @@ export class OrdersController {
     @Param('orderId') orderId: string,
     @Param('itemId') itemId: string,
     @Body() dto: UpdateFulfillmentDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') userRole: UserRole,
   ) {
-    return this.ordersService.updateFulfillment(orderId, itemId, dto);
+    return this.ordersService.updateFulfillment(orderId, itemId, dto, userId, userRole);
   }
 }

@@ -1,6 +1,12 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { CreateStoreDto, UpdateStoreDto, UpdateThemeDto, UpdateLanguageDto } from './dto/store.dto';
+import {
+  CreateStoreDto,
+  UpdateStoreDto,
+  UpdateThemeDto,
+  UpdateThemeSelectionDto,
+  UpdateLanguageDto,
+} from './dto/store.dto';
 
 @Injectable()
 export class StoresService {
@@ -145,6 +151,20 @@ export class StoresService {
     return this.prisma.store.update({
       where: { creator_id: creator.id },
       data: { theme_config: dto.theme_config },
+    });
+  }
+
+  async updateThemeSelection(userId: string, dto: UpdateThemeSelectionDto) {
+    const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
+    if (!creator) throw new NotFoundException('Creator not found');
+
+    const data: { theme_key?: string; theme_customizations?: Record<string, any> } = {};
+    if (dto.theme_key !== undefined) data.theme_key = dto.theme_key;
+    if (dto.theme_customizations !== undefined) data.theme_customizations = dto.theme_customizations;
+
+    return this.prisma.store.update({
+      where: { creator_id: creator.id },
+      data,
     });
   }
 

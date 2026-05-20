@@ -79,6 +79,8 @@ class CreateProductDto {
     attributes;
     status;
     tags;
+    bundle_ids;
+    creator_category_ids;
 }
 exports.CreateProductDto = CreateProductDto;
 __decorate([
@@ -175,6 +177,18 @@ __decorate([
     (0, class_validator_1.IsString)({ each: true }),
     __metadata("design:type", Array)
 ], CreateProductDto.prototype, "tags", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.IsString)({ each: true }),
+    __metadata("design:type", Array)
+], CreateProductDto.prototype, "bundle_ids", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.IsString)({ each: true }),
+    __metadata("design:type", Array)
+], CreateProductDto.prototype, "creator_category_ids", void 0);
 class UpdateProductDto {
     category_id;
     product_type;
@@ -194,6 +208,8 @@ class UpdateProductDto {
     translations;
     attributes;
     tags;
+    bundle_ids;
+    creator_category_ids;
 }
 exports.UpdateProductDto = UpdateProductDto;
 __decorate([
@@ -299,4 +315,16 @@ __decorate([
     (0, class_validator_1.IsString)({ each: true }),
     __metadata("design:type", Array)
 ], UpdateProductDto.prototype, "tags", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.IsString)({ each: true }),
+    __metadata("design:type", Array)
+], UpdateProductDto.prototype, "bundle_ids", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.IsString)({ each: true }),
+    __metadata("design:type", Array)
+], UpdateProductDto.prototype, "creator_category_ids", void 0);
 //# sourceMappingURL=product.dto.js.map

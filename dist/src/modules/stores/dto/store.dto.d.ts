@@ -17,6 +17,10 @@ export declare class UpdateStoreDto {
 export declare class UpdateThemeDto {
     theme_config: Record<string, any>;
 }
+export declare class UpdateThemeSelectionDto {
+    theme_key?: string;
+    theme_customizations?: Record<string, any>;
+}
 export declare class UpdateLanguageDto {
     primary_locale?: string;
     secondary_locales?: string[];

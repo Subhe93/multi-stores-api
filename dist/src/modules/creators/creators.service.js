@@ -43,9 +43,18 @@ let CreatorsService = class CreatorsService {
         return creator;
     }
     async update(userId, dto) {
-        return this.prisma.creator.update({
-            where: { user_id: userId },
-            data: dto,
+        const { avatar_url, ...creatorFields } = dto;
+        return this.prisma.$transaction(async (tx) => {
+            if (avatar_url !== undefined) {
+                await tx.user.update({
+                    where: { id: userId },
+                    data: { avatar_url },
+                });
+            }
+            return tx.creator.update({
+                where: { user_id: userId },
+                data: { ...creatorFields, ...(avatar_url !== undefined ? { avatar_url } : {}) },
+            });
         });
     }
     async findAll(page = 1, limit = 20) {

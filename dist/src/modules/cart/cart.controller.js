@@ -25,17 +25,17 @@ let CartController = class CartController {
     constructor(cartService) {
         this.cartService = cartService;
     }
-    getCart(userId) {
-        return this.cartService.getCart(userId);
+    getCart(userId, locale) {
+        return this.cartService.getCart(userId, locale);
     }
-    addItem(userId, dto) {
-        return this.cartService.addItem(userId, dto);
+    addItem(userId, dto, locale) {
+        return this.cartService.addItem(userId, dto, locale);
     }
-    updateItem(userId, itemId, dto) {
-        return this.cartService.updateItem(userId, itemId, dto);
+    updateItem(userId, itemId, dto, locale) {
+        return this.cartService.updateItem(userId, itemId, dto, locale);
     }
-    removeItem(userId, itemId) {
-        return this.cartService.removeItem(userId, itemId);
+    removeItem(userId, itemId, locale) {
+        return this.cartService.removeItem(userId, itemId, locale);
     }
     clearCart(userId) {
         return this.cartService.clearCart(userId);
@@ -51,16 +51,18 @@ exports.CartController = CartController;
 __decorate([
     (0, common_1.Get)(),
     __param(0, (0, decorators_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Query)('locale')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
+    __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", void 0)
 ], CartController.prototype, "getCart", null);
 __decorate([
     (0, common_1.Post)('items'),
     __param(0, (0, decorators_1.CurrentUser)('id')),
     __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Query)('locale')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, cart_dto_1.AddCartItemDto]),
+    __metadata("design:paramtypes", [String, cart_dto_1.AddCartItemDto, String]),
     __metadata("design:returntype", void 0)
 ], CartController.prototype, "addItem", null);
 __decorate([
@@ -68,16 +70,18 @@ __decorate([
     __param(0, (0, decorators_1.CurrentUser)('id')),
     __param(1, (0, common_1.Param)('id')),
     __param(2, (0, common_1.Body)()),
+    __param(3, (0, common_1.Query)('locale')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, String, cart_dto_1.UpdateCartItemDto]),
+    __metadata("design:paramtypes", [String, String, cart_dto_1.UpdateCartItemDto, String]),
     __metadata("design:returntype", void 0)
 ], CartController.prototype, "updateItem", null);
 __decorate([
     (0, common_1.Delete)('items/:id'),
     __param(0, (0, decorators_1.CurrentUser)('id')),
     __param(1, (0, common_1.Param)('id')),
+    __param(2, (0, common_1.Query)('locale')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:paramtypes", [String, String, String]),
     __metadata("design:returntype", void 0)
 ], CartController.prototype, "removeItem", null);
 __decorate([

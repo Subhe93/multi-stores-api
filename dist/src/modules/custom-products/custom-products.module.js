@@ -11,12 +11,13 @@ const common_1 = require("@nestjs/common");
 const custom_products_controller_1 = require("./custom-products.controller");
 const custom_products_service_1 = require("./custom-products.service");
 const notifications_module_1 = require("../notifications/notifications.module");
+const bundles_module_1 = require("../bundles/bundles.module");
 let CustomProductsModule = class CustomProductsModule {
 };
 exports.CustomProductsModule = CustomProductsModule;
 exports.CustomProductsModule = CustomProductsModule = __decorate([
     (0, common_1.Module)({
-        imports: [notifications_module_1.NotificationsModule],
+        imports: [notifications_module_1.NotificationsModule, bundles_module_1.BundlesModule],
         controllers: [custom_products_controller_1.CustomProductsController],
         providers: [custom_products_service_1.CustomProductsService],
         exports: [custom_products_service_1.CustomProductsService],

@@ -152,6 +152,20 @@ let StoresService = class StoresService {
             data: { theme_config: dto.theme_config },
         });
     }
+    async updateThemeSelection(userId, dto) {
+        const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
+        if (!creator)
+            throw new common_1.NotFoundException('Creator not found');
+        const data = {};
+        if (dto.theme_key !== undefined)
+            data.theme_key = dto.theme_key;
+        if (dto.theme_customizations !== undefined)
+            data.theme_customizations = dto.theme_customizations;
+        return this.prisma.store.update({
+            where: { creator_id: creator.id },
+            data,
+        });
+    }
     async updateLanguages(userId, dto) {
         const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
         if (!creator)

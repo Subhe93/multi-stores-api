@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.UpdateLanguageDto = exports.UpdateThemeDto = exports.UpdateStoreDto = exports.CreateStoreDto = void 0;
+exports.UpdateLanguageDto = exports.UpdateThemeSelectionDto = exports.UpdateThemeDto = exports.UpdateStoreDto = exports.CreateStoreDto = void 0;
 const class_validator_1 = require("class-validator");
 const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const SLUG_MESSAGE = 'slug must be lowercase letters, digits, and hyphens (no leading/trailing hyphen)';
@@ -104,6 +104,26 @@ __decorate([
     (0, class_validator_1.IsObject)(),
     __metadata("design:type", Object)
 ], UpdateThemeDto.prototype, "theme_config", void 0);
+class UpdateThemeSelectionDto {
+    theme_key;
+    theme_customizations;
+}
+exports.UpdateThemeSelectionDto = UpdateThemeSelectionDto;
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MinLength)(1),
+    (0, class_validator_1.MaxLength)(64),
+    (0, class_validator_1.Matches)(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, {
+        message: 'theme_key must be lowercase letters, digits, and hyphens',
+    }),
+    __metadata("design:type", String)
+], UpdateThemeSelectionDto.prototype, "theme_key", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsObject)(),
+    __metadata("design:type", Object)
+], UpdateThemeSelectionDto.prototype, "theme_customizations", void 0);
 class UpdateLanguageDto {
     primary_locale;
     secondary_locales;

@@ -2,14 +2,59 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { UserRole, ProductStatus } from '@prisma/client';
+import { BundlesService } from '../bundles/bundles.service';
+import {
+  validateBundleEconomics,
+  formatViolationsMessage,
+  type ProductForBundleCheck,
+} from '../bundles/bundle-economics.util';
+import { BundleOfferLike } from '../bundles/bundle-pricing.util';
 
 @Injectable()
 export class ProductsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private bundlesService: BundlesService,
+  ) {}
+
+  /**
+   * For each bundle the product is being attached to, verify the product's
+   * pricing keeps every offer above provider cost. Throws BadRequestException
+   * with a per-product breakdown if any combination would sell at a loss.
+   */
+  private async assertProductCompatibleWithBundles(
+    productPricing: ProductForBundleCheck,
+    bundleIds: string[],
+  ) {
+    if (bundleIds.length === 0) return;
+    const bundles = await this.prisma.bundle.findMany({
+      where: { id: { in: bundleIds } },
+      select: {
+        id: true,
+        offers: {
+          select: { quantity: true, discount_type: true, discount_value: true },
+        },
+      },
+    });
+    const allViolations = [] as ReturnType<typeof validateBundleEconomics>['violations'];
+    for (const b of bundles) {
+      const offers: BundleOfferLike[] = b.offers.map((o) => ({
+        quantity: o.quantity,
+        discount_type: o.discount_type,
+        discount_value: o.discount_value as unknown as number,
+      }));
+      const result = validateBundleEconomics(offers, [productPricing]);
+      if (!result.valid) allViolations.push(...result.violations);
+    }
+    if (allViolations.length > 0) {
+      throw new BadRequestException(formatViolationsMessage(allViolations));
+    }
+  }
 
   private readonly productIncludes = {
     translations: true,
@@ -23,10 +68,73 @@ export class ProductsService {
     faqs: { include: { translations: true }, orderBy: { sort_order: 'asc' as const } },
     category: { include: { translations: true } },
     shipping_profile: { include: { zones: true } },
+    creator_categories: {
+      include: {
+        creator_category: { include: { translations: true } },
+      },
+    },
+    bundles: {
+      include: {
+        bundle: {
+          include: {
+            translations: true,
+            offers: {
+              include: { translations: true },
+              orderBy: { sort_order: 'asc' as const },
+            },
+          },
+        },
+      },
+    },
   };
 
+  /**
+   * Attach a creator's product to one or more of their own collections.
+   * Silently skips any collection id that doesn't belong to this creator
+   * (defense-in-depth — DTO can't enforce ownership).
+   */
+  private async attachCreatorCategories(
+    productId: string,
+    creatorId: string,
+    categoryIds: string[],
+  ) {
+    const owned = await this.prisma.creatorCategory.findMany({
+      where: { id: { in: categoryIds }, creator_id: creatorId },
+      select: { id: true },
+    });
+    const ownedIds = new Set(owned.map((c) => c.id));
+    const toAttach = categoryIds.filter((id) => ownedIds.has(id));
+    if (!toAttach.length) return;
+    await this.prisma.productCreatorCategory.createMany({
+      data: toAttach.map((creator_category_id) => ({
+        product_id: productId,
+        creator_category_id,
+      })),
+      skipDuplicates: true,
+    });
+  }
+
+  private async assertBundlesOwnedByCreator(
+    bundleIds: string[],
+    creatorId: string,
+  ) {
+    if (bundleIds.length === 0) return;
+    const found = await this.prisma.bundle.findMany({
+      where: { id: { in: bundleIds } },
+      select: { id: true, creator_id: true },
+    });
+    if (found.length !== bundleIds.length) {
+      throw new NotFoundException('One or more bundles do not exist');
+    }
+    for (const b of found) {
+      if (b.creator_id !== creatorId) {
+        throw new ForbiddenException('You can only attach your own bundles');
+      }
+    }
+  }
+
   async create(userId: string, userRole: UserRole, dto: CreateProductDto) {
-    const { translations, attributes, tags, ...data } = dto;
+    const { translations, attributes, tags, bundle_ids, creator_category_ids, ...data } = dto;
 
     const productData: any = {
       ...data,
@@ -75,6 +183,44 @@ export class ProductsService {
       });
     }
 
+    // Attach creator collections (creator-only — collections are creator-scoped)
+    if (
+      creator_category_ids?.length &&
+      userRole === UserRole.CREATOR &&
+      productData.creator_id
+    ) {
+      await this.attachCreatorCategories(
+        product.id,
+        productData.creator_id,
+        creator_category_ids,
+      );
+    }
+
+    // Attach bundles (creator-only — bundles are creator-scoped)
+    if (
+      bundle_ids?.length &&
+      userRole === UserRole.CREATOR &&
+      productData.creator_id
+    ) {
+      await this.assertBundlesOwnedByCreator(bundle_ids, productData.creator_id);
+      const base = Number(product.base_price);
+      await this.assertProductCompatibleWithBundles(
+        {
+          id: product.id,
+          unitPrice: base,
+          providerBasePrice: product.provider_id ? base : 0,
+          title: product.translations?.[0]?.title,
+        },
+        bundle_ids,
+      );
+      await this.prisma.bundleProduct.createMany({
+        data: bundle_ids.map((bundle_id) => ({
+          bundle_id,
+          product_id: product.id,
+        })),
+      });
+    }
+
     return this.findById(product.id);
   }
 
@@ -86,6 +232,7 @@ export class ProductsService {
     status?: ProductStatus;
     provider_id?: string;
     creator_id?: string;
+    owner_type?: 'provider' | 'creator';
     search?: string;
     is_featured?: boolean;
   }) {
@@ -98,6 +245,8 @@ export class ProductsService {
     if (rest.status) where.status = rest.status;
     if (rest.provider_id) where.provider_id = rest.provider_id;
     if (rest.creator_id) where.creator_id = rest.creator_id;
+    if (rest.owner_type === 'provider') where.provider_id = { not: null };
+    if (rest.owner_type === 'creator') where.creator_id = { not: null };
     if (rest.is_featured !== undefined) where.is_featured = rest.is_featured;
     if (rest.search) {
       where.translations = {
@@ -152,13 +301,64 @@ export class ProductsService {
     // التحقق من الملكية
     await this.checkOwnership(product, userId, userRole);
 
-    const { translations, attributes, tags, ...data } = dto;
+    const { translations, attributes, tags, bundle_ids, creator_category_ids, ...data } = dto;
 
     // تحديث المنتج
     await this.prisma.product.update({
       where: { id },
       data,
     });
+
+    // Replace creator-collection attachments (creator-owned products only)
+    if (
+      creator_category_ids !== undefined &&
+      userRole === UserRole.CREATOR &&
+      product.creator_id
+    ) {
+      await this.prisma.productCreatorCategory.deleteMany({
+        where: { product_id: id },
+      });
+      if (creator_category_ids.length > 0) {
+        await this.attachCreatorCategories(
+          id,
+          product.creator_id,
+          creator_category_ids,
+        );
+      }
+    }
+
+    // Replace bundle attachments — only for creator-owned products.
+    if (bundle_ids && userRole === UserRole.CREATOR && product.creator_id) {
+      await this.assertBundlesOwnedByCreator(bundle_ids, product.creator_id);
+      if (bundle_ids.length > 0) {
+        // base_price may have changed in `data` above; use the new value.
+        const nextBase = Number(data.base_price ?? product.base_price);
+        const titleRow = await this.prisma.productTranslation.findFirst({
+          where: { product_id: id },
+          select: { title: true },
+        });
+        await this.assertProductCompatibleWithBundles(
+          {
+            id,
+            unitPrice: nextBase,
+            providerBasePrice: product.provider_id ? nextBase : 0,
+            title: titleRow?.title,
+          },
+          bundle_ids,
+        );
+      }
+      await this.prisma.bundleProduct.deleteMany({
+        where: { product_id: id },
+      });
+      if (bundle_ids.length > 0) {
+        await this.prisma.bundleProduct.createMany({
+          data: bundle_ids.map((bundle_id) => ({
+            bundle_id,
+            product_id: id,
+          })),
+        });
+      }
+    }
 
     // تحديث الترجمات
     if (translations) {
@@ -204,6 +404,169 @@ export class ProductsService {
     await this.checkOwnership(product, userId, userRole);
 
     return this.prisma.product.delete({ where: { id } });
+  }
+
+  /**
+   * Duplicate a product with all its relations. The clone is always created
+   * as DRAFT, never featured, and titles/slugs are suffixed with "(Copy)" to
+   * stay distinct from the source. Unique fields like SKU are cleared or
+   * suffixed to avoid conflicts. Variant→image links are remapped so a
+   * cloned image points at its cloned variant.
+   */
+  async duplicate(id: string, userId: string, userRole: UserRole) {
+    const source = await this.prisma.product.findUnique({
+      where: { id },
+      include: {
+        translations: true,
+        images: true,
+        attributes: true,
+        variants: true,
+        tags: true,
+        custom_fields: { include: { translations: true } },
+        faqs: { include: { translations: true } },
+      },
+    });
+    if (!source) throw new NotFoundException('Product not found');
+
+    await this.checkOwnership(source, userId, userRole);
+
+    const newProduct = await this.prisma.$transaction(async (tx) => {
+      // Create the bare product first so we have an id for child rows.
+      const created = await tx.product.create({
+        data: {
+          provider_id: source.provider_id,
+          creator_id: source.creator_id,
+          category_id: source.category_id,
+          product_type: source.product_type,
+          customization_type: source.customization_type,
+          base_price: source.base_price,
+          compare_at_price: source.compare_at_price,
+          cost_price: source.cost_price,
+          // Clear unique SKU; provider can set a new one in the duplicate.
+          sku: null,
+          track_inventory: source.track_inventory,
+          stock_quantity: source.stock_quantity,
+          weight: source.weight,
+          weight_unit: source.weight_unit,
+          variant_option_config: source.variant_option_config ?? undefined,
+          shipping_profile_id: source.shipping_profile_id,
+          // Force safe defaults for the clone.
+          status: ProductStatus.DRAFT,
+          is_featured: false,
+        },
+      });
+
+      // Translations — suffix title and slug to stay distinct.
+      if (source.translations.length > 0) {
+        await tx.productTranslation.createMany({
+          data: source.translations.map((t) => ({
+            product_id: created.id,
+            locale: t.locale,
+            title: `${t.title} (Copy)`,
+            description: t.description,
+            slug: `${t.slug}-copy-${created.id.slice(0, 6)}`,
+            meta_title: t.meta_title,
+            meta_desc: t.meta_desc,
+          })),
+        });
+      }
+
+      // Tags — flat copy.
+      if (source.tags.length > 0) {
+        await tx.productTag.createMany({
+          data: source.tags.map((t) => ({ product_id: created.id, tag: t.tag })),
+        });
+      }
+
+      // Attributes — flat copy.
+      if (source.attributes.length > 0) {
+        await tx.productAttribute.createMany({
+          data: source.attributes.map((a) => ({
+            product_id: created.id,
+            template_id: a.template_id,
+            value: a.value as any,
+          })),
+        });
+      }
+
+      // Variants — keep options/price; clear unique SKU. Map old→new id so
+      // we can rewire variant-linked images below.
+      const variantIdMap: Record<string, string> = {};
+      for (const v of source.variants) {
+        const newVariant = await tx.productVariant.create({
+          data: {
+            product_id: created.id,
+            sku: null,
+            price_adjustment: v.price_adjustment,
+            compare_at_price: v.compare_at_price,
+            stock_quantity: v.stock_quantity,
+            is_active: v.is_active,
+            options: v.options as any,
+          },
+        });
+        variantIdMap[v.id] = newVariant.id;
+      }
+
+      // Images — remap variant_id via the map (null stays null).
+      if (source.images.length > 0) {
+        await tx.productImage.createMany({
+          data: source.images.map((img) => ({
+            product_id: created.id,
+            variant_id: img.variant_id ? variantIdMap[img.variant_id] ?? null : null,
+            url: img.url,
+            alt_text: img.alt_text,
+            sort_order: img.sort_order,
+            is_featured: img.is_featured,
+          })),
+        });
+      }
+
+      // Custom fields with their translations.
+      for (const cf of source.custom_fields) {
+        await tx.productCustomField.create({
+          data: {
+            product_id: created.id,
+            name: cf.name,
+            type: cf.type,
+            is_required: cf.is_required,
+            placeholder: cf.placeholder,
+            options: cf.options as any,
+            validation_rules: cf.validation_rules as any,
+            linked_validation: cf.linked_validation as any,
+            sort_order: cf.sort_order,
+            translations: {
+              create: cf.translations.map((t) => ({
+                locale: t.locale,
+                label: t.label,
+                placeholder: t.placeholder,
+                option_labels: t.option_labels as any,
+              })),
+            },
+          },
+        });
+      }
+
+      // FAQs with their translations.
+      for (const f of source.faqs) {
+        await tx.productFaq.create({
+          data: {
+            product_id: created.id,
+            sort_order: f.sort_order,
+            translations: {
+              create: f.translations.map((t) => ({
+                locale: t.locale,
+                question: t.question,
+                answer: t.answer,
+              })),
+            },
+          },
+        });
+      }
+
+      return created;
+    });
+
+    return this.findById(newProduct.id);
   }
 
   async updateStatus(

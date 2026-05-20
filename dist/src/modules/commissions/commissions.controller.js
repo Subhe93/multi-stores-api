@@ -31,6 +31,17 @@ let CommissionsController = class CommissionsController {
     getPlatformSummary() {
         return this.commissionsService.getPlatformSummary();
     }
+    getAdminList(page, limit, status, search) {
+        const statusEnum = status && Object.values(client_1.CommissionStatus).includes(status)
+            ? status
+            : undefined;
+        return this.commissionsService.getAdminList({
+            page: page ? Number(page) : 1,
+            limit: limit ? Number(limit) : 20,
+            status: statusEnum,
+            search: search || undefined,
+        });
+    }
     getByOrder(orderId) {
         return this.commissionsService.getByOrder(orderId);
     }
@@ -54,6 +65,18 @@ __decorate([
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", void 0)
 ], CommissionsController.prototype, "getPlatformSummary", null);
+__decorate([
+    (0, common_1.Get)('admin/list'),
+    (0, common_1.UseGuards)(roles_guard_1.RolesGuard),
+    (0, decorators_1.Roles)(client_1.UserRole.ADMIN),
+    __param(0, (0, common_1.Query)('page')),
+    __param(1, (0, common_1.Query)('limit')),
+    __param(2, (0, common_1.Query)('status')),
+    __param(3, (0, common_1.Query)('search')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, String]),
+    __metadata("design:returntype", void 0)
+], CommissionsController.prototype, "getAdminList", null);
 __decorate([
     (0, common_1.Get)('order/:orderId'),
     (0, common_1.UseGuards)(roles_guard_1.RolesGuard),

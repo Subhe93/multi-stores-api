@@ -96,6 +96,16 @@ export class CreateCustomProductDto {
   @ValidateNested({ each: true })
   @Type(() => CustomProductTranslationDto)
   translations: CustomProductTranslationDto[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  bundle_ids?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  creator_category_ids?: string[];
 }
 
 // ── Update DTO ────────────────────────────────────────────
@@ -143,4 +153,14 @@ export class UpdateCustomProductDto {
   @ValidateNested({ each: true })
   @Type(() => CustomProductTranslationDto)
   translations?: CustomProductTranslationDto[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  bundle_ids?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  creator_category_ids?: string[];
 }

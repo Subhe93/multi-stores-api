@@ -24,6 +24,8 @@ export declare class CreateCustomProductDto {
     field_values?: CustomProductFieldValueDto[];
     mockup_image_urls?: string[];
     translations: CustomProductTranslationDto[];
+    bundle_ids?: string[];
+    creator_category_ids?: string[];
 }
 export declare class UpdateCustomProductDto {
     pricing_type?: PricingType;
@@ -34,4 +36,6 @@ export declare class UpdateCustomProductDto {
     field_values?: CustomProductFieldValueDto[];
     mockup_image_urls?: string[];
     translations?: CustomProductTranslationDto[];
+    bundle_ids?: string[];
+    creator_category_ids?: string[];
 }

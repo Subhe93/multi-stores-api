@@ -74,9 +74,9 @@ export declare class PromotionsController {
             id: string;
             created_at: Date;
             user_id: string;
+            order_id: string;
             promotion_id: string;
             discount_amount: import("@prisma/client/runtime/library").Decimal;
-            order_id: string;
         }[];
     } & {
         id: string;

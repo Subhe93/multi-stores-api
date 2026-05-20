@@ -20,10 +20,15 @@ export declare class StorefrontController {
             sort_order: number;
             store_id: string;
         })[];
+        theme_key: any;
+        theme_customizations: any;
         theme: {
             primaryColor: any;
             secondaryColor: any;
             fontFamily: any;
+            typography: any;
+            header: any;
+            templateId: any;
             socials: any;
             contact: any;
             seo: any;
@@ -72,12 +77,13 @@ export declare class StorefrontController {
         theme_config: import("@prisma/client/runtime/library").JsonValue;
         is_active: boolean;
     }>;
-    getProducts(slug: string, page?: number, limit?: number, category_id?: string, search?: string, locale?: string): Promise<any[]>;
+    getProducts(slug: string, page?: number, limit?: number, category_id?: string, creator_category?: string, search?: string, locale?: string): Promise<any[]>;
     getProduct(slug: string, productSlug: string, locale?: string): Promise<{
         shipping_profile: any;
         base_price: number;
         compare_at_price: number | undefined;
         variants: any[];
+        creator_categories: any;
         promotions: {
             id: string;
             type: import("@prisma/client").$Enums.PromotionType;
@@ -93,6 +99,38 @@ export declare class StorefrontController {
                 promotion_id: string;
             }[];
         }[];
+        bundles: ({
+            translations: {
+                id: string;
+                name: string;
+                locale: string;
+                bundle_id: string;
+            }[];
+            offers: ({
+                translations: {
+                    id: string;
+                    label: string | null;
+                    locale: string;
+                    title: string;
+                    sticker_text: string | null;
+                    offer_id: string;
+                }[];
+            } & {
+                id: string;
+                sort_order: number;
+                quantity: number;
+                discount_type: import("@prisma/client").$Enums.BundleDiscountType;
+                discount_value: import("@prisma/client/runtime/library").Decimal;
+                external_ref: string | null;
+                bundle_id: string;
+            })[];
+        } & {
+            id: string;
+            status: import("@prisma/client").$Enums.BundleStatus;
+            created_at: Date;
+            updated_at: Date;
+            creator_id: string;
+        })[];
         translations: {
             id: string;
             description: string;
@@ -227,8 +265,8 @@ export declare class StorefrontController {
             description: string | null;
             slug: string;
             locale: string;
-            title: string;
             custom_product_id: string;
+            title: string;
         }[];
         images: {
             id: string;
@@ -291,6 +329,7 @@ export declare class StorefrontController {
             parent_id: string | null;
             icon: string | null;
         };
+        creator_categories: any;
         custom_fields: ({
             translations: {
                 id: string;
@@ -362,8 +401,8 @@ export declare class StorefrontController {
             };
         } & {
             id: string;
-            value: string | null;
             custom_product_id: string;
+            value: string | null;
             custom_field_id: string;
             file_url: string | null;
         })[];
@@ -384,6 +423,38 @@ export declare class StorefrontController {
                 promotion_id: string;
             }[];
         }[];
+        bundles: ({
+            translations: {
+                id: string;
+                name: string;
+                locale: string;
+                bundle_id: string;
+            }[];
+            offers: ({
+                translations: {
+                    id: string;
+                    label: string | null;
+                    locale: string;
+                    title: string;
+                    sticker_text: string | null;
+                    offer_id: string;
+                }[];
+            } & {
+                id: string;
+                sort_order: number;
+                quantity: number;
+                discount_type: import("@prisma/client").$Enums.BundleDiscountType;
+                discount_value: import("@prisma/client/runtime/library").Decimal;
+                external_ref: string | null;
+                bundle_id: string;
+            })[];
+        } & {
+            id: string;
+            status: import("@prisma/client").$Enums.BundleStatus;
+            created_at: Date;
+            updated_at: Date;
+            creator_id: string;
+        })[];
         _type: "custom_product";
     }>;
     getCategories(slug: string): Promise<({
@@ -402,6 +473,63 @@ export declare class StorefrontController {
         parent_id: string | null;
         icon: string | null;
     })[]>;
+    getCreatorCategories(slug: string): Promise<({
+        translations: {
+            id: string;
+            name: string;
+            description: string | null;
+            locale: string;
+            creator_category_id: string;
+        }[];
+    } & {
+        id: string;
+        created_at: Date;
+        updated_at: Date;
+        creator_id: string;
+        slug: string;
+        is_active: boolean;
+        sort_order: number;
+        parent_id: string | null;
+        thumbnail_url: string | null;
+        match_rule: import("@prisma/client").$Enums.CreatorCategoryMatchRule;
+        match_tags: string[];
+    } & {
+        children: ({
+            translations: {
+                id: string;
+                name: string;
+                description: string | null;
+                locale: string;
+                creator_category_id: string;
+            }[];
+        } & {
+            id: string;
+            created_at: Date;
+            updated_at: Date;
+            creator_id: string;
+            slug: string;
+            is_active: boolean;
+            sort_order: number;
+            parent_id: string | null;
+            thumbnail_url: string | null;
+            match_rule: import("@prisma/client").$Enums.CreatorCategoryMatchRule;
+            match_tags: string[];
+        } & any)[];
+    })[]>;
+    getMenus(slug: string): Promise<{
+        id: string;
+        key: string;
+        name: string;
+        items: {
+            id: string;
+            label: string;
+            sort_order: number;
+            parent_id: string | null;
+            url: string;
+            label_i18n: import("@prisma/client/runtime/library").JsonValue;
+            open_in_new_tab: boolean;
+        }[];
+    }[]>;
     getPage(slug: string, pageSlug: string): Promise<{
         translations: {
             id: string;
@@ -420,5 +548,100 @@ export declare class StorefrontController {
         is_required: boolean;
         sort_order: number;
         store_id: string;
+    }>;
+    getHome(slug: string): Promise<{
+        id: string;
+        type: import("@prisma/client").$Enums.PageType;
+        slug: string | null;
+        seo: import("@prisma/client/runtime/library").JsonValue;
+        snapshot: import("@prisma/client/runtime/library").JsonValue;
+        published_at: Date | null;
+    } | null>;
+    getProductTemplate(slug: string): Promise<{
+        id: string;
+        type: import("@prisma/client").$Enums.PageType;
+        slug: string | null;
+        seo: import("@prisma/client/runtime/library").JsonValue;
+        snapshot: import("@prisma/client/runtime/library").JsonValue;
+        published_at: Date | null;
+    } | null>;
+    getHeader(slug: string): Promise<{
+        id: string;
+        type: import("@prisma/client").$Enums.PageType;
+        slug: string | null;
+        seo: import("@prisma/client/runtime/library").JsonValue;
+        snapshot: import("@prisma/client/runtime/library").JsonValue;
+        published_at: Date | null;
+    } | null>;
+    getFooter(slug: string): Promise<{
+        id: string;
+        type: import("@prisma/client").$Enums.PageType;
+        slug: string | null;
+        seo: import("@prisma/client/runtime/library").JsonValue;
+        snapshot: import("@prisma/client/runtime/library").JsonValue;
+        published_at: Date | null;
+    } | null>;
+    getSampleProduct(slug: string): Promise<{
+        id: string;
+        slug: string;
+        base_price: number;
+        compare_at_price: number | undefined;
+        translations: {
+            description: string;
+            slug: string;
+            locale: string;
+            title: string;
+        }[];
+        images: {
+            url: string;
+            alt_text: string | null;
+            sort_order: number;
+        }[];
+        variants: {
+            id: string;
+            price: number;
+            stock: number | undefined;
+            sku: string | undefined;
+        }[];
+        faqs: ({
+            translations: {
+                id: string;
+                locale: string;
+                faq_id: string;
+                question: string;
+                answer: string;
+            }[];
+        } & {
+            id: string;
+            sort_order: number;
+            product_id: string;
+        })[];
+    } | null>;
+    getPublishedPage(slug: string, pageSlug: string, type?: 'STATIC' | 'LANDING'): Promise<{
+        id: string;
+        type: import("@prisma/client").$Enums.PageType;
+        slug: string | null;
+        seo: import("@prisma/client/runtime/library").JsonValue;
+        snapshot: import("@prisma/client/runtime/library").JsonValue;
+        published_at: Date | null;
+    } | null>;
+    getSitemapData(slug: string): Promise<{
+        locales: string[];
+        primaryLocale: string;
+        home: {
+            lastmod: Date;
+        } | null;
+        static_pages: {
+            slug: string;
+            lastmod: Date;
+        }[];
+        landing_pages: {
+            slug: string;
+            lastmod: Date;
+        }[];
+        products: {
+            slug: string;
+            lastmod: Date;
+        }[];
     }>;
 }

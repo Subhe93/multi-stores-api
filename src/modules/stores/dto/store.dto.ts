@@ -65,6 +65,21 @@ export class UpdateThemeDto {
   theme_config: Record<string, any>;
 }
 
+export class UpdateThemeSelectionDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(64)
+  @Matches(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, {
+    message: 'theme_key must be lowercase letters, digits, and hyphens',
+  })
+  theme_key?: string;
+
+  @IsOptional()
+  @IsObject()
+  theme_customizations?: Record<string, any>;
+}
+
 export class UpdateLanguageDto {
   @IsOptional()
   @IsString()

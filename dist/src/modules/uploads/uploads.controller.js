@@ -17,6 +17,7 @@ const common_1 = require("@nestjs/common");
 const passport_1 = require("@nestjs/passport");
 const platform_express_1 = require("@nestjs/platform-express");
 const uploads_service_1 = require("./uploads.service");
+const PUBLIC_UPLOAD_FOLDERS = ['custom-fields', 'customer-uploads'];
 let UploadsController = class UploadsController {
     uploadsService;
     constructor(uploadsService) {
@@ -25,6 +26,12 @@ let UploadsController = class UploadsController {
     upload(file, folder) {
         return this.uploadsService.uploadFile(file, folder || 'general');
     }
+    uploadPublic(file, folder) {
+        const safeFolder = PUBLIC_UPLOAD_FOLDERS.includes(folder ?? '')
+            ? folder
+            : 'customer-uploads';
+        return this.uploadsService.uploadFile(file, safeFolder);
+    }
     delete(fileUrl) {
         return this.uploadsService.deleteFile(decodeURIComponent(fileUrl));
     }
@@ -32,6 +39,7 @@ let UploadsController = class UploadsController {
 exports.UploadsController = UploadsController;
 __decorate([
     (0, common_1.Post)(),
+    (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt')),
     (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
     __param(0, (0, common_1.UploadedFile)()),
     __param(1, (0, common_1.Query)('folder')),
@@ -40,7 +48,17 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], UploadsController.prototype, "upload", null);
 __decorate([
+    (0, common_1.Post)('public'),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
+    __param(0, (0, common_1.UploadedFile)()),
+    __param(1, (0, common_1.Query)('folder')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", void 0)
+], UploadsController.prototype, "uploadPublic", null);
+__decorate([
     (0, common_1.Delete)(':fileUrl'),
+    (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt')),
     __param(0, (0, common_1.Param)('fileUrl')),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [String]),
@@ -48,7 +66,6 @@ __decorate([
 ], UploadsController.prototype, "delete", null);
 exports.UploadsController = UploadsController = __decorate([
     (0, common_1.Controller)('uploads'),
-    (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt')),
     __metadata("design:paramtypes", [uploads_service_1.UploadsService])
 ], UploadsController);
 //# sourceMappingURL=uploads.controller.js.map

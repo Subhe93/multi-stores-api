@@ -1,4 +1,11 @@
-import { IsString, IsOptional, IsInt, Min, Allow } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsInt,
+  Min,
+  Allow,
+  ValidateIf,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class AddCartItemDto {
@@ -14,6 +21,10 @@ export class AddCartItemDto {
   @IsString()
   custom_product_id?: string;
 
+  @IsOptional()
+  @IsString()
+  bundle_offer_id?: string;
+
   @IsInt()
   @Min(1)
   @Type(() => Number)
@@ -25,8 +36,15 @@ export class AddCartItemDto {
 }
 
 export class UpdateCartItemDto {
+  @IsOptional()
   @IsInt()
   @Min(1)
   @Type(() => Number)
-  quantity: number;
+  quantity?: number;
+
+  // Pass `null` to clear the bundle on this line.
+  @ValidateIf((_, v) => v !== null)
+  @IsOptional()
+  @IsString()
+  bundle_offer_id?: string | null;
 }

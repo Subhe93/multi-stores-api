@@ -1,9 +1,9 @@
-import { Controller, Get, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { CommissionsService } from './commissions.service';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
-import { UserRole } from '@prisma/client';
+import { CommissionStatus, UserRole } from '@prisma/client';
 
 @Controller('commissions')
 @UseGuards(AuthGuard('jwt'))
@@ -28,6 +28,28 @@ export class CommissionsController {
   @Roles(UserRole.ADMIN)
   getPlatformSummary() {
     return this.commissionsService.getPlatformSummary();
+  }
+
+  // Admin — قائمة عمولات مفصّلة لجميع الطلبات
+  @Get('admin/list')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  getAdminList(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+  ) {
+    const statusEnum =
+      status && (Object.values(CommissionStatus) as string[]).includes(status)
+        ? (status as CommissionStatus)
+        : undefined;
+    return this.commissionsService.getAdminList({
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 20,
+      status: statusEnum,
+      search: search || undefined,
+    });
   }
 
   // تفاصيل عمولة طلب محدد

@@ -25,7 +25,7 @@ let ProductsController = class ProductsController {
     constructor(productsService) {
         this.productsService = productsService;
     }
-    findAll(page, limit, category_id, product_type, status, provider_id, creator_id, search, is_featured) {
+    findAll(page, limit, category_id, product_type, status, provider_id, creator_id, owner_type, search, is_featured) {
         return this.productsService.findAll({
             page: page ? +page : undefined,
             limit: limit ? +limit : undefined,
@@ -34,6 +34,7 @@ let ProductsController = class ProductsController {
             status,
             provider_id,
             creator_id,
+            owner_type,
             search,
             is_featured: is_featured === 'true' ? true : undefined,
         });
@@ -52,6 +53,9 @@ let ProductsController = class ProductsController {
     }
     delete(id, userId, userRole) {
         return this.productsService.delete(id, userId, userRole);
+    }
+    duplicate(id, userId, userRole) {
+        return this.productsService.duplicate(id, userId, userRole);
     }
     updateStatus(id, status, userId, userRole) {
         return this.productsService.updateStatus(id, status, userId, userRole);
@@ -79,10 +83,11 @@ __decorate([
     __param(4, (0, common_1.Query)('status')),
     __param(5, (0, common_1.Query)('provider_id')),
     __param(6, (0, common_1.Query)('creator_id')),
-    __param(7, (0, common_1.Query)('search')),
-    __param(8, (0, common_1.Query)('is_featured')),
+    __param(7, (0, common_1.Query)('owner_type')),
+    __param(8, (0, common_1.Query)('search')),
+    __param(9, (0, common_1.Query)('is_featured')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, Number, String, String, String, String, String, String, String]),
+    __metadata("design:paramtypes", [Number, Number, String, String, String, String, String, String, String, String]),
     __metadata("design:returntype", void 0)
 ], ProductsController.prototype, "findAll", null);
 __decorate([
@@ -135,6 +140,17 @@ __decorate([
     __metadata("design:paramtypes", [String, String, String]),
     __metadata("design:returntype", void 0)
 ], ProductsController.prototype, "delete", null);
+__decorate([
+    (0, common_1.Post)(':id/duplicate'),
+    (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt'), roles_guard_1.RolesGuard),
+    (0, decorators_1.Roles)(client_1.UserRole.PROVIDER, client_1.UserRole.CREATOR, client_1.UserRole.ADMIN),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, decorators_1.CurrentUser)('id')),
+    __param(2, (0, decorators_1.CurrentUser)('role')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", void 0)
+], ProductsController.prototype, "duplicate", null);
 __decorate([
     (0, common_1.Put)(':id/status'),
     (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt'), roles_guard_1.RolesGuard),

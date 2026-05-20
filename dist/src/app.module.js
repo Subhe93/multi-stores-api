@@ -17,6 +17,7 @@ const creators_module_1 = require("./modules/creators/creators.module");
 const customers_module_1 = require("./modules/customers/customers.module");
 const users_module_1 = require("./modules/users/users.module");
 const categories_module_1 = require("./modules/categories/categories.module");
+const creator_categories_module_1 = require("./modules/creator-categories/creator-categories.module");
 const attributes_module_1 = require("./modules/attributes/attributes.module");
 const products_module_1 = require("./modules/products/products.module");
 const variants_module_1 = require("./modules/variants/variants.module");
@@ -31,9 +32,13 @@ const custom_products_module_1 = require("./modules/custom-products/custom-produ
 const custom_fields_module_1 = require("./modules/custom-fields/custom-fields.module");
 const product_faqs_module_1 = require("./modules/product-faqs/product-faqs.module");
 const promotions_module_1 = require("./modules/promotions/promotions.module");
+const bundles_module_1 = require("./modules/bundles/bundles.module");
 const translations_module_1 = require("./modules/translations/translations.module");
 const pages_module_1 = require("./modules/pages/pages.module");
 const page_builder_module_1 = require("./modules/page-builder/page-builder.module");
+const pages_v2_module_1 = require("./modules/pages-v2/pages-v2.module");
+const templates_module_1 = require("./modules/templates/templates.module");
+const menus_module_1 = require("./modules/menus/menus.module");
 const notifications_module_1 = require("./modules/notifications/notifications.module");
 const payments_module_1 = require("./modules/payments/payments.module");
 let AppModule = class AppModule {
@@ -51,6 +56,7 @@ exports.AppModule = AppModule = __decorate([
             creators_module_1.CreatorsModule,
             customers_module_1.CustomersModule,
             categories_module_1.CategoriesModule,
+            creator_categories_module_1.CreatorCategoriesModule,
             attributes_module_1.AttributesModule,
             products_module_1.ProductsModule,
             variants_module_1.VariantsModule,
@@ -65,9 +71,13 @@ exports.AppModule = AppModule = __decorate([
             custom_fields_module_1.CustomFieldsModule,
             product_faqs_module_1.ProductFaqsModule,
             promotions_module_1.PromotionsModule,
+            bundles_module_1.BundlesModule,
             translations_module_1.TranslationsModule,
             pages_module_1.PagesModule,
             page_builder_module_1.PageBuilderModule,
+            pages_v2_module_1.PagesV2Module,
+            templates_module_1.TemplatesModule,
+            menus_module_1.MenusModule,
             notifications_module_1.NotificationsModule,
             payments_module_1.PaymentsModule,
         ],

@@ -12,12 +12,14 @@ import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UploadsService } from './uploads.service';
 
+const PUBLIC_UPLOAD_FOLDERS = ['custom-fields', 'customer-uploads'];
+
 @Controller('uploads')
-@UseGuards(AuthGuard('jwt'))
 export class UploadsController {
   constructor(private uploadsService: UploadsService) {}
 
   @Post()
+  @UseGuards(AuthGuard('jwt'))
   @UseInterceptors(FileInterceptor('file'))
   upload(
     @UploadedFile() file: Express.Multer.File,
@@ -26,7 +28,22 @@ export class UploadsController {
     return this.uploadsService.uploadFile(file, folder || 'general');
   }
 
+  // Unauthenticated uploads from the storefront (e.g. customer customization images).
+  // Folder is restricted to a whitelist so guests can't write to admin-only buckets.
+  @Post('public')
+  @UseInterceptors(FileInterceptor('file'))
+  uploadPublic(
+    @UploadedFile() file: Express.Multer.File,
+    @Query('folder') folder?: string,
+  ) {
+    const safeFolder = PUBLIC_UPLOAD_FOLDERS.includes(folder ?? '')
+      ? folder!
+      : 'customer-uploads';
+    return this.uploadsService.uploadFile(file, safeFolder);
+  }
+
   @Delete(':fileUrl')
+  @UseGuards(AuthGuard('jwt'))
   delete(@Param('fileUrl') fileUrl: string) {
     return this.uploadsService.deleteFile(decodeURIComponent(fileUrl));
   }

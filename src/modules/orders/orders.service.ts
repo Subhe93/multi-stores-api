@@ -2,12 +2,50 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { PricingType, UserRole } from '@prisma/client';
+import {
+  CommissionStatus,
+  FulfillerType,
+  FulfillmentStatus,
+  OrderStatus,
+  PricingType,
+  UserRole,
+} from '@prisma/client';
 import { CreateOrderDto, UpdateOrderStatusDto, UpdateFulfillmentDto } from './dto/order.dto';
 import { PromotionsService } from '../promotions/promotions.service';
 import { ShippingService } from '../shipping/shipping.service';
+import { computeBundlePricing } from '../bundles/bundle-pricing.util';
+
+function deriveCommissionStatus(orderStatus: OrderStatus): CommissionStatus {
+  if (orderStatus === OrderStatus.DELIVERED) return CommissionStatus.COMPLETED;
+  if (
+    orderStatus === OrderStatus.CANCELLED ||
+    orderStatus === OrderStatus.REFUNDED ||
+    orderStatus === OrderStatus.RETURNED
+  ) {
+    return CommissionStatus.FAILED;
+  }
+  return CommissionStatus.PENDING;
+}
+
+// Map the overall order lifecycle onto the smaller per-item FulfillmentStatus enum
+// so item badges don't get stuck on PENDING after the order advances.
+// Terminal failure states (CANCELLED/REFUNDED/RETURNED) return null — we leave items
+// alone there so the UI keeps the historical fulfillment context.
+function deriveFulfillmentStatus(orderStatus: OrderStatus): FulfillmentStatus | null {
+  switch (orderStatus) {
+    case OrderStatus.PENDING:        return FulfillmentStatus.PENDING;
+    case OrderStatus.CONFIRMED:      return FulfillmentStatus.PROCESSING;
+    case OrderStatus.PROCESSING:     return FulfillmentStatus.PROCESSING;
+    case OrderStatus.MANUFACTURING:  return FulfillmentStatus.MANUFACTURING;
+    case OrderStatus.QUALITY_CHECK:  return FulfillmentStatus.MANUFACTURING;
+    case OrderStatus.SHIPPED:        return FulfillmentStatus.SHIPPED;
+    case OrderStatus.DELIVERED:      return FulfillmentStatus.DELIVERED;
+    default:                         return null;
+  }
+}
 
 @Injectable()
 export class OrdersService {
@@ -26,13 +64,23 @@ export class OrdersService {
           images: { take: 1, orderBy: { sort_order: 'asc' as const } },
         },
       },
-      variant: true,
+      variant: {
+        include: {
+          product: {
+            include: {
+              translations: true,
+              images: { take: 1, orderBy: { sort_order: 'asc' as const } },
+            },
+          },
+        },
+      },
       custom_product: {
         include: {
           translations: true,
           mockup_images: { take: 1, orderBy: { sort_order: 'asc' as const } },
           product: {
             include: {
+              translations: true,
               images: { take: 1, orderBy: { sort_order: 'asc' as const } },
             },
           },
@@ -40,6 +88,12 @@ export class OrdersService {
       },
       custom_field_values: {
         include: { custom_field: { include: { translations: true } } },
+      },
+      bundle_offer: {
+        include: {
+          translations: true,
+          bundle: { include: { translations: true } },
+        },
       },
     },
   };
@@ -155,8 +209,48 @@ export class OrdersService {
         fulfillerType = product.provider_id ? 'PROVIDER' : 'CREATOR';
       }
 
+      // Apply bundle pricing if this cart line carries a bundle offer
+      let originalUnitPrice: number | null = null;
+      if (item.bundle_offer_id) {
+        const offer = await this.prisma.bundleOffer.findUnique({
+          where: { id: item.bundle_offer_id },
+          include: { bundle: true },
+        });
+        if (!offer || offer.bundle.status !== 'ACTIVE') {
+          throw new BadRequestException('Bundle offer is no longer available');
+        }
+        const pricing = computeBundlePricing(unitPrice, {
+          quantity: offer.quantity,
+          discount_type: offer.discount_type,
+          discount_value: offer.discount_value as any,
+        });
+        // Quantity must be a positive multiple of the bundle's cart quantity
+        if (
+          pricing.cartQuantity <= 0 ||
+          item.quantity % pricing.cartQuantity !== 0
+        ) {
+          throw new BadRequestException(
+            `Bundle requires quantity in multiples of ${pricing.cartQuantity}`,
+          );
+        }
+        originalUnitPrice = unitPrice;
+        unitPrice = pricing.effectiveUnitPrice;
+
+        // Reject the order outright if the bundle discount would force a
+        // sale below provider cost. The previous behaviour silently capped
+        // the provider's payout — that was unfair to providers. With the
+        // economic guard at attach/cart time this case should only trigger
+        // when provider pricing changed after the line entered the cart.
+        if (providerBasePrice > 0 && unitPrice < providerBasePrice) {
+          throw new BadRequestException(
+            'Bundle pricing would sell this item below provider cost. Remove the bundle or adjust pricing.',
+          );
+        }
+      }
+
       const totalPrice = unitPrice * item.quantity;
-      // Cap provider base at unitPrice so creator margin is never negative
+      // Defensive clamp kept for any non-bundle edge case; the bundle path is
+      // already guaranteed safe above.
       const cappedProviderBase = Math.min(providerBasePrice, unitPrice);
       const providerBaseForItem = cappedProviderBase * item.quantity;
       providerBaseTotal += providerBaseForItem;
@@ -230,8 +324,10 @@ export class OrdersService {
         product_id: item.product_id,
         variant_id: item.variant_id,
         custom_product_id: item.custom_product_id,
+        bundle_offer_id: item.bundle_offer_id || null,
         quantity: item.quantity,
         unit_price: unitPrice,
+        original_unit_price: originalUnitPrice,
         total_price: totalPrice,
         fulfiller_type: fulfillerType,
         fulfiller_id: fulfillerId,
@@ -483,7 +579,12 @@ export class OrdersService {
         where,
         skip,
         take: limit,
-        include: { items: this.itemsWithProduct, address: true, customer: true },
+        include: {
+          items: this.itemsWithProduct,
+          address: true,
+          customer: true,
+          commission: true,
+        },
         orderBy: { created_at: 'desc' },
       }),
       this.prisma.order.count({ where }),
@@ -510,7 +611,12 @@ export class OrdersService {
         where,
         skip,
         take: limit,
-        include: { items: this.itemsWithProduct, address: true, customer: true },
+        include: {
+          items: this.itemsWithProduct,
+          address: true,
+          customer: true,
+          commission: true,
+        },
         orderBy: { created_at: 'desc' },
       }),
       this.prisma.order.count({ where }),
@@ -529,7 +635,12 @@ export class OrdersService {
         where,
         skip,
         take: limit,
-        include: { items: this.itemsWithProduct, address: true, customer: true },
+        include: {
+          items: this.itemsWithProduct,
+          address: true,
+          customer: true,
+          commission: true,
+        },
         orderBy: { created_at: 'desc' },
       }),
       this.prisma.order.count({ where }),
@@ -569,9 +680,64 @@ export class OrdersService {
     return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
-  async updateStatus(id: string, dto: UpdateOrderStatusDto, actorId: string) {
+  /**
+   * Resolve the fulfiller (provider/creator) profile id for a given user.
+   * Returns null when the role doesn't have a fulfiller profile.
+   */
+  private async resolveFulfillerId(userId: string, userRole: UserRole): Promise<string | null> {
+    if (userRole === UserRole.PROVIDER) {
+      const provider = await this.prisma.provider.findUnique({ where: { user_id: userId } });
+      return provider?.id ?? null;
+    }
+    if (userRole === UserRole.CREATOR) {
+      const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
+      return creator?.id ?? null;
+    }
+    return null;
+  }
+
+  /**
+   * A creator/provider can update an order's overall status only when EVERY
+   * item in the order is fulfilled by them. A provider must not be allowed to
+   * touch orders containing creator-fulfilled items, and (per business rule)
+   * a creator must not be allowed to touch orders containing provider items —
+   * the provider is responsible for shipping those.
+   */
+  private async assertOwnsEntireOrder(orderId: string, userId: string, userRole: UserRole) {
+    if (userRole === UserRole.ADMIN) return;
+
+    const expectedType =
+      userRole === UserRole.PROVIDER ? FulfillerType.PROVIDER : FulfillerType.CREATOR;
+    const fulfillerId = await this.resolveFulfillerId(userId, userRole);
+    if (!fulfillerId) {
+      throw new ForbiddenException('Fulfiller profile not found for this user');
+    }
+
+    const items = await this.prisma.orderItem.findMany({
+      where: { order_id: orderId },
+      select: { fulfiller_id: true, fulfiller_type: true },
+    });
+    if (items.length === 0) {
+      throw new NotFoundException('Order has no items');
+    }
+
+    const allOwned = items.every(
+      (it) => it.fulfiller_type === expectedType && it.fulfiller_id === fulfillerId,
+    );
+    if (!allOwned) {
+      throw new ForbiddenException(
+        userRole === UserRole.CREATOR
+          ? 'You can only change the status of orders made entirely of your own products. Provider-fulfilled items are managed by the provider.'
+          : 'You can only change the status of orders made entirely of your own products.',
+      );
+    }
+  }
+
+  async updateStatus(id: string, dto: UpdateOrderStatusDto, actorId: string, actorRole: UserRole) {
     const order = await this.prisma.order.findUnique({ where: { id } });
     if (!order) throw new NotFoundException('Order not found');
+
+    await this.assertOwnsEntireOrder(id, actorId, actorRole);
 
     await this.prisma.order.update({
       where: { id },
@@ -587,6 +753,25 @@ export class OrdersService {
       },
     });
 
+    // Keep commission status in sync with order lifecycle so payout dashboards
+    // reflect reality (commissions are otherwise stuck on the default PENDING).
+    const nextCommissionStatus = deriveCommissionStatus(dto.status);
+    await this.prisma.orderCommission.updateMany({
+      where: { order_id: id },
+      data: { status: nextCommissionStatus },
+    });
+
+    // Cascade the new order status onto each item's fulfillment_status so the
+    // per-item badge in the dashboard matches the order header. assertOwnsEntireOrder
+    // already guarantees this actor owns every item in the order.
+    const nextFulfillment = deriveFulfillmentStatus(dto.status);
+    if (nextFulfillment) {
+      await this.prisma.orderItem.updateMany({
+        where: { order_id: id },
+        data: { fulfillment_status: nextFulfillment },
+      });
+    }
+
     return this.findById(id);
   }
 
@@ -594,7 +779,30 @@ export class OrdersService {
     orderId: string,
     itemId: string,
     dto: UpdateFulfillmentDto,
+    actorId: string,
+    actorRole: UserRole,
   ) {
+    // Per-item check: the actor must be the item's own fulfiller. Mixed orders
+    // are fine here — each side updates only the items they actually fulfill.
+    const item = await this.prisma.orderItem.findFirst({
+      where: { id: itemId, order_id: orderId },
+      select: { id: true, fulfiller_id: true, fulfiller_type: true },
+    });
+    if (!item) throw new NotFoundException('Order item not found');
+
+    if (actorRole !== UserRole.ADMIN) {
+      const expectedType =
+        actorRole === UserRole.PROVIDER ? FulfillerType.PROVIDER : FulfillerType.CREATOR;
+      const fulfillerId = await this.resolveFulfillerId(actorId, actorRole);
+      if (
+        !fulfillerId ||
+        item.fulfiller_type !== expectedType ||
+        item.fulfiller_id !== fulfillerId
+      ) {
+        throw new ForbiddenException('You can only update fulfillment for items you fulfill');
+      }
+    }
+
     return this.prisma.orderItem.update({
       where: { id: itemId, order_id: orderId },
       data: {

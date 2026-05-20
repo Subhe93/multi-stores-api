@@ -1,5 +1,5 @@
 import { PrismaService } from '../../prisma/prisma.service';
-import { CreateStoreDto, UpdateStoreDto, UpdateThemeDto, UpdateLanguageDto } from './dto/store.dto';
+import { CreateStoreDto, UpdateStoreDto, UpdateThemeDto, UpdateThemeSelectionDto, UpdateLanguageDto } from './dto/store.dto';
 export declare class StoresService {
     private prisma;
     constructor(prisma: PrismaService);
@@ -38,6 +38,8 @@ export declare class StoresService {
         slug: string;
         custom_domain: string | null;
         favicon_url: string | null;
+        theme_key: string;
+        theme_customizations: import("@prisma/client/runtime/library").JsonValue;
         theme_config: import("@prisma/client/runtime/library").JsonValue;
         is_active: boolean;
     }>;
@@ -85,6 +87,8 @@ export declare class StoresService {
         slug: string;
         custom_domain: string | null;
         favicon_url: string | null;
+        theme_key: string;
+        theme_customizations: import("@prisma/client/runtime/library").JsonValue;
         theme_config: import("@prisma/client/runtime/library").JsonValue;
         is_active: boolean;
     }>;
@@ -133,6 +137,8 @@ export declare class StoresService {
         slug: string;
         custom_domain: string | null;
         favicon_url: string | null;
+        theme_key: string;
+        theme_customizations: import("@prisma/client/runtime/library").JsonValue;
         theme_config: import("@prisma/client/runtime/library").JsonValue;
         is_active: boolean;
     }>;
@@ -156,6 +162,8 @@ export declare class StoresService {
         slug: string;
         custom_domain: string | null;
         favicon_url: string | null;
+        theme_key: string;
+        theme_customizations: import("@prisma/client/runtime/library").JsonValue;
         theme_config: import("@prisma/client/runtime/library").JsonValue;
         is_active: boolean;
     }>;
@@ -183,6 +191,8 @@ export declare class StoresService {
         slug: string;
         custom_domain: string | null;
         favicon_url: string | null;
+        theme_key: string;
+        theme_customizations: import("@prisma/client/runtime/library").JsonValue;
         theme_config: import("@prisma/client/runtime/library").JsonValue;
         is_active: boolean;
     }>;
@@ -206,6 +216,8 @@ export declare class StoresService {
         slug: string;
         custom_domain: string | null;
         favicon_url: string | null;
+        theme_key: string;
+        theme_customizations: import("@prisma/client/runtime/library").JsonValue;
         theme_config: import("@prisma/client/runtime/library").JsonValue;
         is_active: boolean;
     }>;
@@ -220,6 +232,24 @@ export declare class StoresService {
         slug: string;
         custom_domain: string | null;
         favicon_url: string | null;
+        theme_key: string;
+        theme_customizations: import("@prisma/client/runtime/library").JsonValue;
+        theme_config: import("@prisma/client/runtime/library").JsonValue;
+        is_active: boolean;
+    }>;
+    updateThemeSelection(userId: string, dto: UpdateThemeSelectionDto): Promise<{
+        id: string;
+        created_at: Date;
+        updated_at: Date;
+        name: string;
+        description: string | null;
+        logo_url: string | null;
+        creator_id: string;
+        slug: string;
+        custom_domain: string | null;
+        favicon_url: string | null;
+        theme_key: string;
+        theme_customizations: import("@prisma/client/runtime/library").JsonValue;
         theme_config: import("@prisma/client/runtime/library").JsonValue;
         is_active: boolean;
     }>;

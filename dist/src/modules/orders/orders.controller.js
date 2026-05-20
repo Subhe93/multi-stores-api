@@ -43,11 +43,11 @@ let OrdersController = class OrdersController {
     findById(id) {
         return this.ordersService.findById(id);
     }
-    updateStatus(id, dto, userId) {
-        return this.ordersService.updateStatus(id, dto, userId);
+    updateStatus(id, dto, userId, userRole) {
+        return this.ordersService.updateStatus(id, dto, userId, userRole);
     }
-    updateFulfillment(orderId, itemId, dto) {
-        return this.ordersService.updateFulfillment(orderId, itemId, dto);
+    updateFulfillment(orderId, itemId, dto, userId, userRole) {
+        return this.ordersService.updateFulfillment(orderId, itemId, dto, userId, userRole);
     }
 };
 exports.OrdersController = OrdersController;
@@ -109,8 +109,9 @@ __decorate([
     __param(0, (0, common_1.Param)('id')),
     __param(1, (0, common_1.Body)()),
     __param(2, (0, decorators_1.CurrentUser)('id')),
+    __param(3, (0, decorators_1.CurrentUser)('role')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, order_dto_1.UpdateOrderStatusDto, String]),
+    __metadata("design:paramtypes", [String, order_dto_1.UpdateOrderStatusDto, String, String]),
     __metadata("design:returntype", void 0)
 ], OrdersController.prototype, "updateStatus", null);
 __decorate([
@@ -120,8 +121,10 @@ __decorate([
     __param(0, (0, common_1.Param)('orderId')),
     __param(1, (0, common_1.Param)('itemId')),
     __param(2, (0, common_1.Body)()),
+    __param(3, (0, decorators_1.CurrentUser)('id')),
+    __param(4, (0, decorators_1.CurrentUser)('role')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, String, order_dto_1.UpdateFulfillmentDto]),
+    __metadata("design:paramtypes", [String, String, order_dto_1.UpdateFulfillmentDto, String, String]),
     __metadata("design:returntype", void 0)
 ], OrdersController.prototype, "updateFulfillment", null);
 exports.OrdersController = OrdersController = __decorate([

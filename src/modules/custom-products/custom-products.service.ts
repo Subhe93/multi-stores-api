@@ -11,6 +11,12 @@ import {
   UpdateCustomProductDto,
 } from './dto/custom-product.dto';
 import { NotificationsService } from '../notifications/notifications.service';
+import {
+  validateBundleEconomics,
+  formatViolationsMessage,
+  type ProductForBundleCheck,
+} from '../bundles/bundle-economics.util';
+import { BundleOfferLike } from '../bundles/bundle-pricing.util';
 
 @Injectable()
 export class CustomProductsService {
@@ -18,6 +24,40 @@ export class CustomProductsService {
     private prisma: PrismaService,
     private notificationsService: NotificationsService,
   ) {}
+
+  /**
+   * Same protection as ProductsService: refuse to attach a bundle whose
+   * deepest offer would push this custom product's effective price below the
+   * provider's base cost.
+   */
+  private async assertCustomProductCompatibleWithBundles(
+    productPricing: ProductForBundleCheck,
+    bundleIds: string[],
+  ) {
+    if (bundleIds.length === 0) return;
+    const bundles = await this.prisma.bundle.findMany({
+      where: { id: { in: bundleIds } },
+      select: {
+        id: true,
+        offers: {
+          select: { quantity: true, discount_type: true, discount_value: true },
+        },
+      },
+    });
+    const allViolations = [] as ReturnType<typeof validateBundleEconomics>['violations'];
+    for (const b of bundles) {
+      const offers: BundleOfferLike[] = b.offers.map((o) => ({
+        quantity: o.quantity,
+        discount_type: o.discount_type,
+        discount_value: o.discount_value as unknown as number,
+      }));
+      const result = validateBundleEconomics(offers, [productPricing]);
+      if (!result.valid) allViolations.push(...result.violations);
+    }
+    if (allViolations.length > 0) {
+      throw new BadRequestException(formatViolationsMessage(allViolations));
+    }
+  }
 
   // ── Ownership helpers ────────────────────────────────────
   private async assertCreatorOwns(customProductId: string, userId: string) {
@@ -63,7 +103,161 @@ export class CustomProductsService {
     selected_variants: { include: { variant: true } },
     field_values: { include: { custom_field: true } },
     faqs: { include: { translations: true }, orderBy: { sort_order: 'asc' as const } },
+    bundles: {
+      include: {
+        bundle: {
+          include: {
+            translations: true,
+            offers: {
+              include: { translations: true },
+              orderBy: { sort_order: 'asc' as const },
+            },
+          },
+        },
+      },
+    },
+    creator_categories: {
+      include: { creator_category: { include: { translations: true } } },
+    },
   };
+
+  /**
+   * Attach a custom product to one or more of the creator's own collections.
+   * Silently skips any collection id that doesn't belong to this creator
+   * (defense-in-depth — DTO can't enforce ownership).
+   */
+  private async attachCreatorCategories(
+    customProductId: string,
+    creatorId: string,
+    categoryIds: string[],
+  ) {
+    if (!categoryIds.length) return;
+    const owned = await this.prisma.creatorCategory.findMany({
+      where: { id: { in: categoryIds }, creator_id: creatorId },
+      select: { id: true },
+    });
+    const ownedIds = new Set(owned.map((c) => c.id));
+    const toAttach = categoryIds.filter((id) => ownedIds.has(id));
+    if (!toAttach.length) return;
+    await this.prisma.customProductCreatorCategory.createMany({
+      data: toAttach.map((creator_category_id, sort_order) => ({
+        custom_product_id: customProductId,
+        creator_category_id,
+        sort_order,
+      })),
+      skipDuplicates: true,
+    });
+  }
+
+  /**
+   * Reject any translation whose slug is already in use by this creator's
+   * other products or custom products. Empty slugs are skipped — the caller
+   * should have already filled them in from the title.
+   */
+  private async assertSlugsAvailable(
+    creatorId: string,
+    translations: { slug?: string }[] | undefined,
+    excludeCustomProductId?: string,
+  ) {
+    const slugs = (translations ?? [])
+      .map((t) => (t.slug || '').trim())
+      .filter((s) => s.length > 0);
+    if (!slugs.length) return;
+
+    const [customConflicts, productConflicts] = await Promise.all([
+      this.prisma.customProductTranslation.findMany({
+        where: {
+          slug: { in: slugs },
+          custom_product: {
+            creator_id: creatorId,
+            ...(excludeCustomProductId ? { id: { not: excludeCustomProductId } } : {}),
+          },
+        },
+        select: { slug: true },
+      }),
+      this.prisma.productTranslation.findMany({
+        where: {
+          slug: { in: slugs },
+          product: { creator_id: creatorId },
+        },
+        select: { slug: true },
+      }),
+    ]);
+
+    const taken = new Set([
+      ...customConflicts.map((c) => c.slug),
+      ...productConflicts.map((c) => c.slug),
+    ]);
+    if (taken.size > 0) {
+      throw new BadRequestException(
+        `Slug already in use: ${Array.from(taken).join(', ')}`,
+      );
+    }
+  }
+
+  /**
+   * Check whether a slug is already used by another product or custom product
+   * owned by this creator. Primary-locale slugs share the same URL space, so
+   * a collision in either table would shadow the new product on the storefront.
+   */
+  async checkSlug(userId: string, slug: string, excludeId?: string) {
+    const trimmed = (slug || '').trim();
+    if (!trimmed) return { available: false, reason: 'empty' as const };
+
+    const creator = await this.prisma.creator.findUnique({
+      where: { user_id: userId },
+      select: { id: true },
+    });
+    if (!creator) throw new NotFoundException('Creator not found');
+
+    const [customConflict, productConflict] = await Promise.all([
+      this.prisma.customProduct.findFirst({
+        where: {
+          creator_id: creator.id,
+          ...(excludeId ? { id: { not: excludeId } } : {}),
+          translations: { some: { slug: trimmed } },
+        },
+        select: { id: true },
+      }),
+      this.prisma.product.findFirst({
+        where: {
+          creator_id: creator.id,
+          translations: { some: { slug: trimmed } },
+        },
+        select: { id: true },
+      }),
+    ]);
+
+    return {
+      available: !customConflict && !productConflict,
+      conflictsWith: customConflict
+        ? ('custom_product' as const)
+        : productConflict
+          ? ('product' as const)
+          : null,
+    };
+  }
+
+  private async assertBundlesOwnedByCreator(
+    bundleIds: string[],
+    creatorId: string,
+  ) {
+    if (bundleIds.length === 0) return;
+    const found = await this.prisma.bundle.findMany({
+      where: { id: { in: bundleIds } },
+      select: { id: true, creator_id: true },
+    });
+    if (found.length !== bundleIds.length) {
+      throw new BadRequestException('One or more bundles do not exist');
+    }
+    for (const b of found) {
+      if (b.creator_id !== creatorId) {
+        throw new ForbiddenException(
+          'You can only attach your own bundles',
+        );
+      }
+    }
+  }
 
   async create(userId: string, dto: CreateCustomProductDto) {
     const creator = await this.prisma.creator.findUnique({
@@ -74,7 +268,42 @@ export class CustomProductsService {
     // Validate pricing consistency
     this.validatePricing(dto.pricing_type, dto);
 
-    const { translations, selected_variants, field_values, mockup_image_urls, ...data } = dto;
+    // Reject creating with a slug already taken by this creator's own
+    // products or custom products — slug collisions shadow each other on the
+    // storefront URL space.
+    await this.assertSlugsAvailable(creator.id, dto.translations);
+
+    const { translations, selected_variants, field_values, mockup_image_urls, bundle_ids, creator_category_ids, ...data } = dto;
+
+    if (bundle_ids && bundle_ids.length > 0) {
+      await this.assertBundlesOwnedByCreator(bundle_ids, creator.id);
+
+      // Economic check only meaningful for SINGLE pricing (one fixed price).
+      // PER_VARIANT/MARGIN: the customer price depends on the chosen variant,
+      // so a static pre-check would be misleading — skip it.
+      if (data.pricing_type === PricingType.SINGLE) {
+        const baseProduct = await this.prisma.product.findUnique({
+          where: { id: data.product_id },
+          select: { base_price: true, provider_id: true },
+        });
+        if (baseProduct) {
+          const unitPrice =
+            Number(data.final_price) || Number(baseProduct.base_price);
+          const providerBase = baseProduct.provider_id
+            ? Number(baseProduct.base_price)
+            : 0;
+          await this.assertCustomProductCompatibleWithBundles(
+            {
+              id: 'pending',
+              unitPrice,
+              providerBasePrice: providerBase,
+              title: translations?.[0]?.title,
+            },
+            bundle_ids,
+          );
+        }
+      }
+    }
 
     // Build variant rows based on import mode
     let variantRows: { variant_id: string; custom_price?: number }[] = [];
@@ -128,7 +357,7 @@ export class CustomProductsService {
       // Product has no variants — variantRows stays empty, which is valid
     }
 
-    return this.prisma.customProduct.create({
+    const created = await this.prisma.customProduct.create({
       data: {
         product_id: data.product_id,
         creator_id: creator.id,
@@ -159,9 +388,26 @@ export class CustomProductsService {
               })),
             },
           }),
+        ...(bundle_ids &&
+          bundle_ids.length > 0 && {
+            bundles: {
+              create: bundle_ids.map((bundle_id) => ({ bundle_id })),
+            },
+          }),
       },
       include: this.includes,
     });
+
+    if (creator_category_ids?.length) {
+      await this.attachCreatorCategories(
+        created.id,
+        creator.id,
+        creator_category_ids,
+      );
+      return this.findById(created.id);
+    }
+
+    return created;
   }
 
   async findByCreator(userId: string, page = 1, limit = 20) {
@@ -202,7 +448,10 @@ export class CustomProductsService {
   async update(id: string, dto: UpdateCustomProductDto, userId?: string) {
     const existing = await this.prisma.customProduct.findUnique({
       where: { id },
-      include: { creator: { select: { user_id: true } }, product: { select: { provider_id: true } } },
+      include: {
+        creator: { select: { user_id: true } },
+        product: { select: { provider_id: true, base_price: true } },
+      },
     });
     if (!existing) throw new NotFoundException('Custom product not found');
 
@@ -267,7 +516,83 @@ export class CustomProductsService {
       });
     }
 
-    const { translations, selected_variants, field_values, mockup_image_urls, ...data } = dto;
+    // Reject any slug already in use by another product/custom-product of
+     // this creator (excluding the current custom product being updated).
+    if (dto.translations && dto.translations.length > 0) {
+      await this.assertSlugsAvailable(existing.creator_id, dto.translations, id);
+    }
+
+    const { translations, selected_variants, field_values, mockup_image_urls, bundle_ids, creator_category_ids, ...data } = dto;
+
+    // Cross-check: if the price is changing and the product has SINGLE
+    // pricing, re-validate every already-attached bundle even when bundle_ids
+    // is not in the payload. Catches the case where a creator lowers
+    // final_price below what an existing bundle's discount can sustain.
+    if (
+      pricingType === PricingType.SINGLE &&
+      data.final_price !== undefined &&
+      bundle_ids === undefined
+    ) {
+      const currentAttachments = await this.prisma.bundleCustomProduct.findMany({
+        where: { custom_product_id: id },
+        select: { bundle_id: true },
+      });
+      const currentBundleIds = currentAttachments.map((a) => a.bundle_id);
+      if (currentBundleIds.length > 0) {
+        const nextFinal = Number(data.final_price);
+        const unitPrice = nextFinal || Number(existing.product.base_price);
+        const providerBase = existing.product.provider_id
+          ? Number(existing.product.base_price)
+          : 0;
+        const titleRow = await this.prisma.customProductTranslation.findFirst({
+          where: { custom_product_id: id },
+          select: { title: true },
+        });
+        await this.assertCustomProductCompatibleWithBundles(
+          {
+            id,
+            unitPrice,
+            providerBasePrice: providerBase,
+            title: titleRow?.title,
+          },
+          currentBundleIds,
+        );
+      }
+    }
+
+    if (bundle_ids) {
+      await this.assertBundlesOwnedByCreator(
+        bundle_ids,
+        existing.creator_id,
+      );
+      // Economic check is only meaningful for SINGLE pricing. For
+      // PER_VARIANT/MARGIN the price depends on the chosen variant, so we
+      // accept the attachment and let runtime order validation handle each
+      // line individually.
+      if (bundle_ids.length > 0 && pricingType === PricingType.SINGLE) {
+        const nextFinal = Number(data.final_price ?? existing.final_price);
+        const unitPrice = nextFinal || Number(existing.product.base_price);
+        const providerBase = existing.product.provider_id
+          ? Number(existing.product.base_price)
+          : 0;
+        const titleRow = await this.prisma.customProductTranslation.findFirst({
+          where: { custom_product_id: id },
+          select: { title: true },
+        });
+        await this.assertCustomProductCompatibleWithBundles(
+          {
+            id,
+            unitPrice,
+            providerBasePrice: providerBase,
+            title: titleRow?.title,
+          },
+          bundle_ids,
+        );
+      }
+      await this.prisma.bundleCustomProduct.deleteMany({
+        where: { custom_product_id: id },
+      });
+    }
 
     // Replace selected_variants if provided
     if (selected_variants) {
@@ -330,21 +655,149 @@ export class CustomProductsService {
             })),
           },
         }),
+        ...(bundle_ids &&
+          bundle_ids.length > 0 && {
+            bundles: {
+              create: bundle_ids.map((bundle_id) => ({ bundle_id })),
+            },
+          }),
       },
       include: this.includes,
     });
+
+    // Replace creator collection links if provided. Empty array → detach all.
+    if (creator_category_ids !== undefined) {
+      await this.prisma.customProductCreatorCategory.deleteMany({
+        where: { custom_product_id: id },
+      });
+      if (creator_category_ids.length > 0) {
+        await this.attachCreatorCategories(
+          id,
+          existing.creator_id,
+          creator_category_ids,
+        );
+      }
+    }
 
     // Notify provider if product was auto-reverted to PENDING_REVIEW after edit
     if (autoRevertedToReview && existing.product.provider_id) {
       await this.notifyProviderOfSubmission(updated.id, 'CUSTOM_PRODUCT_RESUBMITTED');
     }
 
-    return updated;
+    return creator_category_ids !== undefined ? this.findById(id) : updated;
   }
 
   async delete(id: string, userId?: string) {
     if (userId) await this.assertCreatorOwns(id, userId);
     return this.prisma.customProduct.delete({ where: { id } });
+  }
+
+  /**
+   * Duplicate a creator's custom product with all its relations. The clone
+   * starts as DRAFT (review state cleared) and titles/slugs are suffixed to
+   * stay distinct. Provider's base product reference (product_id) is kept,
+   * so the clone targets the same upstream product and variants.
+   */
+  async duplicate(id: string, userId: string) {
+    await this.assertCreatorOwns(id, userId);
+
+    const source = await this.prisma.customProduct.findUnique({
+      where: { id },
+      include: {
+        translations: true,
+        mockup_images: true,
+        selected_variants: true,
+        field_values: true,
+        faqs: { include: { translations: true } },
+      },
+    });
+    if (!source) throw new NotFoundException('Custom product not found');
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const newCp = await tx.customProduct.create({
+        data: {
+          product_id: source.product_id,
+          creator_id: source.creator_id,
+          import_mode: source.import_mode,
+          pricing_type: source.pricing_type,
+          final_price: source.final_price,
+          margin_amount: source.margin_amount,
+          // Always reset review state for the duplicate.
+          status: ProductStatus.DRAFT,
+          rejection_reason: null,
+          submitted_at: null,
+          reviewed_at: null,
+          reviewed_by: null,
+        },
+      });
+
+      if (source.translations.length > 0) {
+        await tx.customProductTranslation.createMany({
+          data: source.translations.map((t) => ({
+            custom_product_id: newCp.id,
+            locale: t.locale,
+            title: `${t.title} (Copy)`,
+            description: t.description,
+            slug: `${t.slug}-copy-${newCp.id.slice(0, 6)}`,
+          })),
+        });
+      }
+
+      if (source.mockup_images.length > 0) {
+        await tx.customProductImage.createMany({
+          data: source.mockup_images.map((img) => ({
+            custom_product_id: newCp.id,
+            url: img.url,
+            sort_order: img.sort_order,
+          })),
+        });
+      }
+
+      // Selected variants reference the upstream ProductVariant, which the
+      // clone keeps targeting — same product_id means same variant pool.
+      if (source.selected_variants.length > 0) {
+        await tx.customProductVariant.createMany({
+          data: source.selected_variants.map((sv) => ({
+            custom_product_id: newCp.id,
+            variant_id: sv.variant_id,
+            custom_price: sv.custom_price,
+          })),
+        });
+      }
+
+      // Custom field values — same custom_field_id (lives on the base product).
+      if (source.field_values.length > 0) {
+        await tx.customProductFieldValue.createMany({
+          data: source.field_values.map((fv) => ({
+            custom_product_id: newCp.id,
+            custom_field_id: fv.custom_field_id,
+            value: fv.value,
+            file_url: fv.file_url,
+          })),
+        });
+      }
+
+      // FAQs with their translations.
+      for (const f of source.faqs) {
+        await tx.customProductFaq.create({
+          data: {
+            custom_product_id: newCp.id,
+            sort_order: f.sort_order,
+            translations: {
+              create: f.translations.map((t) => ({
+                locale: t.locale,
+                question: t.question,
+                answer: t.answer,
+              })),
+            },
+          },
+        });
+      }
+
+      return newCp;
+    });
+
+    return this.findById(created.id);
   }
 
   // ── Approval workflow ────────────────────────────────────

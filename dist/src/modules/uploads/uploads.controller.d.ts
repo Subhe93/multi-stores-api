@@ -7,5 +7,10 @@ export declare class UploadsController {
         file_type: string;
         file_size: number;
     }>;
+    uploadPublic(file: Express.Multer.File, folder?: string): Promise<{
+        url: string;
+        file_type: string;
+        file_size: number;
+    }>;
     delete(fileUrl: string): Promise<void>;
 }

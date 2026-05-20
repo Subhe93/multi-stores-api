@@ -123,6 +123,8 @@ export declare class ProvidersService {
             slug: string;
             custom_domain: string | null;
             favicon_url: string | null;
+            theme_key: string;
+            theme_customizations: import("@prisma/client/runtime/library").JsonValue;
             theme_config: import("@prisma/client/runtime/library").JsonValue;
             is_active: boolean;
         }[];
@@ -140,8 +142,8 @@ export declare class ProvidersService {
                 description: string | null;
                 slug: string;
                 locale: string;
-                title: string;
                 custom_product_id: string;
+                title: string;
             }[];
             product: {
                 translations: {
@@ -188,8 +190,14 @@ export declare class ProvidersService {
             mockup_images: {
                 id: string;
                 sort_order: number;
-                url: string;
                 custom_product_id: string;
+                url: string;
+            }[];
+            selected_variants: {
+                custom_price: import("@prisma/client/runtime/library").Decimal | null;
+                variant: {
+                    price_adjustment: import("@prisma/client/runtime/library").Decimal;
+                };
             }[];
         } & {
             id: string;
@@ -251,6 +259,8 @@ export declare class ProvidersService {
         slug: string;
         custom_domain: string | null;
         favicon_url: string | null;
+        theme_key: string;
+        theme_customizations: import("@prisma/client/runtime/library").JsonValue;
         theme_config: import("@prisma/client/runtime/library").JsonValue;
         is_active: boolean;
     }>;

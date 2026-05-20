@@ -27,4 +27,8 @@ export class UpdateCreatorDto {
   @IsOptional()
   @IsString()
   phone?: string;
+
+  @IsOptional()
+  @IsString()
+  avatar_url?: string;
 }

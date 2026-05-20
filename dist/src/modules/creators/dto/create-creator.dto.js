@@ -36,6 +36,7 @@ class UpdateCreatorDto {
     display_name;
     bio;
     phone;
+    avatar_url;
 }
 exports.UpdateCreatorDto = UpdateCreatorDto;
 __decorate([
@@ -54,4 +55,9 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], UpdateCreatorDto.prototype, "phone", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateCreatorDto.prototype, "avatar_url", void 0);
 //# sourceMappingURL=create-creator.dto.js.map

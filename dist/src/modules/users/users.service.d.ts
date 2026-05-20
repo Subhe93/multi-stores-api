@@ -79,7 +79,6 @@ export declare class UsersService {
             id: string;
             created_at: Date;
             updated_at: Date;
-            user_id: string;
             company_name: string;
             description: string | null;
             logo_url: string | null;
@@ -87,26 +86,26 @@ export declare class UsersService {
             country: string;
             stripe_account_id: string | null;
             verified: boolean;
+            user_id: string;
         } | null;
         creator: {
             id: string;
             avatar_url: string | null;
             created_at: Date;
             updated_at: Date;
-            user_id: string;
             phone: string | null;
             stripe_account_id: string | null;
             verified: boolean;
             display_name: string;
             bio: string | null;
             cover_url: string | null;
+            user_id: string;
         } | null;
         customer: ({
             addresses: {
                 id: string;
                 created_at: Date;
                 phone: string | null;
-                customer_id: string;
                 label: string | null;
                 full_name: string;
                 line1: string;
@@ -116,13 +115,14 @@ export declare class UsersService {
                 postal_code: string;
                 country_code: string;
                 is_default: boolean;
+                customer_id: string;
             }[];
         } & {
             id: string;
             created_at: Date;
             updated_at: Date;
-            user_id: string;
             phone: string | null;
+            user_id: string;
             first_name: string;
             last_name: string;
         }) | null;
@@ -139,7 +139,6 @@ export declare class UsersService {
             id: string;
             created_at: Date;
             updated_at: Date;
-            user_id: string;
             company_name: string;
             description: string | null;
             logo_url: string | null;
@@ -147,26 +146,26 @@ export declare class UsersService {
             country: string;
             stripe_account_id: string | null;
             verified: boolean;
+            user_id: string;
         } | null;
         creator: {
             id: string;
             avatar_url: string | null;
             created_at: Date;
             updated_at: Date;
-            user_id: string;
             phone: string | null;
             stripe_account_id: string | null;
             verified: boolean;
             display_name: string;
             bio: string | null;
             cover_url: string | null;
+            user_id: string;
         } | null;
         customer: ({
             addresses: {
                 id: string;
                 created_at: Date;
                 phone: string | null;
-                customer_id: string;
                 label: string | null;
                 full_name: string;
                 line1: string;
@@ -176,13 +175,14 @@ export declare class UsersService {
                 postal_code: string;
                 country_code: string;
                 is_default: boolean;
+                customer_id: string;
             }[];
         } & {
             id: string;
             created_at: Date;
             updated_at: Date;
-            user_id: string;
             phone: string | null;
+            user_id: string;
             first_name: string;
             last_name: string;
         }) | null;
@@ -199,7 +199,6 @@ export declare class UsersService {
             id: string;
             created_at: Date;
             updated_at: Date;
-            user_id: string;
             company_name: string;
             description: string | null;
             logo_url: string | null;
@@ -207,26 +206,26 @@ export declare class UsersService {
             country: string;
             stripe_account_id: string | null;
             verified: boolean;
+            user_id: string;
         } | null;
         creator: {
             id: string;
             avatar_url: string | null;
             created_at: Date;
             updated_at: Date;
-            user_id: string;
             phone: string | null;
             stripe_account_id: string | null;
             verified: boolean;
             display_name: string;
             bio: string | null;
             cover_url: string | null;
+            user_id: string;
         } | null;
         customer: ({
             addresses: {
                 id: string;
                 created_at: Date;
                 phone: string | null;
-                customer_id: string;
                 label: string | null;
                 full_name: string;
                 line1: string;
@@ -236,13 +235,14 @@ export declare class UsersService {
                 postal_code: string;
                 country_code: string;
                 is_default: boolean;
+                customer_id: string;
             }[];
         } & {
             id: string;
             created_at: Date;
             updated_at: Date;
-            user_id: string;
             phone: string | null;
+            user_id: string;
             first_name: string;
             last_name: string;
         }) | null;

@@ -65,6 +65,17 @@ export class CustomProductsController {
     );
   }
 
+  // Slug availability check across this creator's products + custom products.
+  // Must come before @Get(':id') so the static path matches first.
+  @Get('check-slug')
+  checkSlug(
+    @CurrentUser('id') userId: string,
+    @Query('slug') slug: string,
+    @Query('exclude_id') excludeId?: string,
+  ) {
+    return this.customProductsService.checkSlug(userId, slug, excludeId);
+  }
+
   // ── Provider review endpoints (PROVIDER role) ─────────────
   // NOTE: This must come BEFORE @Get(':id') so the static path matches first.
   @Get('pending-reviews')
@@ -99,6 +110,11 @@ export class CustomProductsController {
   @Delete(':id')
   delete(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.customProductsService.delete(id, userId);
+  }
+
+  @Post(':id/duplicate')
+  duplicate(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.customProductsService.duplicate(id, userId);
   }
 
   // Creator submits for review (or auto-publish if no provider)

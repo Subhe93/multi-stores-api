@@ -15,6 +15,29 @@ const prisma_service_1 = require("../../prisma/prisma.service");
 const client_1 = require("@prisma/client");
 const promotions_service_1 = require("../promotions/promotions.service");
 const shipping_service_1 = require("../shipping/shipping.service");
+const bundle_pricing_util_1 = require("../bundles/bundle-pricing.util");
+function deriveCommissionStatus(orderStatus) {
+    if (orderStatus === client_1.OrderStatus.DELIVERED)
+        return client_1.CommissionStatus.COMPLETED;
+    if (orderStatus === client_1.OrderStatus.CANCELLED ||
+        orderStatus === client_1.OrderStatus.REFUNDED ||
+        orderStatus === client_1.OrderStatus.RETURNED) {
+        return client_1.CommissionStatus.FAILED;
+    }
+    return client_1.CommissionStatus.PENDING;
+}
+function deriveFulfillmentStatus(orderStatus) {
+    switch (orderStatus) {
+        case client_1.OrderStatus.PENDING: return client_1.FulfillmentStatus.PENDING;
+        case client_1.OrderStatus.CONFIRMED: return client_1.FulfillmentStatus.PROCESSING;
+        case client_1.OrderStatus.PROCESSING: return client_1.FulfillmentStatus.PROCESSING;
+        case client_1.OrderStatus.MANUFACTURING: return client_1.FulfillmentStatus.MANUFACTURING;
+        case client_1.OrderStatus.QUALITY_CHECK: return client_1.FulfillmentStatus.MANUFACTURING;
+        case client_1.OrderStatus.SHIPPED: return client_1.FulfillmentStatus.SHIPPED;
+        case client_1.OrderStatus.DELIVERED: return client_1.FulfillmentStatus.DELIVERED;
+        default: return null;
+    }
+}
 let OrdersService = class OrdersService {
     prisma;
     promotionsService;
@@ -32,13 +55,23 @@ let OrdersService = class OrdersService {
                     images: { take: 1, orderBy: { sort_order: 'asc' } },
                 },
             },
-            variant: true,
+            variant: {
+                include: {
+                    product: {
+                        include: {
+                            translations: true,
+                            images: { take: 1, orderBy: { sort_order: 'asc' } },
+                        },
+                    },
+                },
+            },
             custom_product: {
                 include: {
                     translations: true,
                     mockup_images: { take: 1, orderBy: { sort_order: 'asc' } },
                     product: {
                         include: {
+                            translations: true,
                             images: { take: 1, orderBy: { sort_order: 'asc' } },
                         },
                     },
@@ -46,6 +79,12 @@ let OrdersService = class OrdersService {
             },
             custom_field_values: {
                 include: { custom_field: { include: { translations: true } } },
+            },
+            bundle_offer: {
+                include: {
+                    translations: true,
+                    bundle: { include: { translations: true } },
+                },
             },
         },
     };
@@ -149,6 +188,30 @@ let OrdersService = class OrdersService {
                 fulfillerId = product.provider_id || product.creator_id || '';
                 fulfillerType = product.provider_id ? 'PROVIDER' : 'CREATOR';
             }
+            let originalUnitPrice = null;
+            if (item.bundle_offer_id) {
+                const offer = await this.prisma.bundleOffer.findUnique({
+                    where: { id: item.bundle_offer_id },
+                    include: { bundle: true },
+                });
+                if (!offer || offer.bundle.status !== 'ACTIVE') {
+                    throw new common_1.BadRequestException('Bundle offer is no longer available');
+                }
+                const pricing = (0, bundle_pricing_util_1.computeBundlePricing)(unitPrice, {
+                    quantity: offer.quantity,
+                    discount_type: offer.discount_type,
+                    discount_value: offer.discount_value,
+                });
+                if (pricing.cartQuantity <= 0 ||
+                    item.quantity % pricing.cartQuantity !== 0) {
+                    throw new common_1.BadRequestException(`Bundle requires quantity in multiples of ${pricing.cartQuantity}`);
+                }
+                originalUnitPrice = unitPrice;
+                unitPrice = pricing.effectiveUnitPrice;
+                if (providerBasePrice > 0 && unitPrice < providerBasePrice) {
+                    throw new common_1.BadRequestException('Bundle pricing would sell this item below provider cost. Remove the bundle or adjust pricing.');
+                }
+            }
             const totalPrice = unitPrice * item.quantity;
             const cappedProviderBase = Math.min(providerBasePrice, unitPrice);
             const providerBaseForItem = cappedProviderBase * item.quantity;
@@ -210,8 +273,10 @@ let OrdersService = class OrdersService {
                 product_id: item.product_id,
                 variant_id: item.variant_id,
                 custom_product_id: item.custom_product_id,
+                bundle_offer_id: item.bundle_offer_id || null,
                 quantity: item.quantity,
                 unit_price: unitPrice,
+                original_unit_price: originalUnitPrice,
                 total_price: totalPrice,
                 fulfiller_type: fulfillerType,
                 fulfiller_id: fulfillerId,
@@ -403,7 +468,12 @@ let OrdersService = class OrdersService {
                 where,
                 skip,
                 take: limit,
-                include: { items: this.itemsWithProduct, address: true, customer: true },
+                include: {
+                    items: this.itemsWithProduct,
+                    address: true,
+                    customer: true,
+                    commission: true,
+                },
                 orderBy: { created_at: 'desc' },
             }),
             this.prisma.order.count({ where }),
@@ -425,7 +495,12 @@ let OrdersService = class OrdersService {
                 where,
                 skip,
                 take: limit,
-                include: { items: this.itemsWithProduct, address: true, customer: true },
+                include: {
+                    items: this.itemsWithProduct,
+                    address: true,
+                    customer: true,
+                    commission: true,
+                },
                 orderBy: { created_at: 'desc' },
             }),
             this.prisma.order.count({ where }),
@@ -440,7 +515,12 @@ let OrdersService = class OrdersService {
                 where,
                 skip,
                 take: limit,
-                include: { items: this.itemsWithProduct, address: true, customer: true },
+                include: {
+                    items: this.itemsWithProduct,
+                    address: true,
+                    customer: true,
+                    commission: true,
+                },
                 orderBy: { created_at: 'desc' },
             }),
             this.prisma.order.count({ where }),
@@ -475,10 +555,44 @@ let OrdersService = class OrdersService {
         ]);
         return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
     }
-    async updateStatus(id, dto, actorId) {
+    async resolveFulfillerId(userId, userRole) {
+        if (userRole === client_1.UserRole.PROVIDER) {
+            const provider = await this.prisma.provider.findUnique({ where: { user_id: userId } });
+            return provider?.id ?? null;
+        }
+        if (userRole === client_1.UserRole.CREATOR) {
+            const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
+            return creator?.id ?? null;
+        }
+        return null;
+    }
+    async assertOwnsEntireOrder(orderId, userId, userRole) {
+        if (userRole === client_1.UserRole.ADMIN)
+            return;
+        const expectedType = userRole === client_1.UserRole.PROVIDER ? client_1.FulfillerType.PROVIDER : client_1.FulfillerType.CREATOR;
+        const fulfillerId = await this.resolveFulfillerId(userId, userRole);
+        if (!fulfillerId) {
+            throw new common_1.ForbiddenException('Fulfiller profile not found for this user');
+        }
+        const items = await this.prisma.orderItem.findMany({
+            where: { order_id: orderId },
+            select: { fulfiller_id: true, fulfiller_type: true },
+        });
+        if (items.length === 0) {
+            throw new common_1.NotFoundException('Order has no items');
+        }
+        const allOwned = items.every((it) => it.fulfiller_type === expectedType && it.fulfiller_id === fulfillerId);
+        if (!allOwned) {
+            throw new common_1.ForbiddenException(userRole === client_1.UserRole.CREATOR
+                ? 'You can only change the status of orders made entirely of your own products. Provider-fulfilled items are managed by the provider.'
+                : 'You can only change the status of orders made entirely of your own products.');
+        }
+    }
+    async updateStatus(id, dto, actorId, actorRole) {
         const order = await this.prisma.order.findUnique({ where: { id } });
         if (!order)
             throw new common_1.NotFoundException('Order not found');
+        await this.assertOwnsEntireOrder(id, actorId, actorRole);
         await this.prisma.order.update({
             where: { id },
             data: { status: dto.status },
@@ -491,9 +605,36 @@ let OrdersService = class OrdersService {
                 actor: actorId,
             },
         });
+        const nextCommissionStatus = deriveCommissionStatus(dto.status);
+        await this.prisma.orderCommission.updateMany({
+            where: { order_id: id },
+            data: { status: nextCommissionStatus },
+        });
+        const nextFulfillment = deriveFulfillmentStatus(dto.status);
+        if (nextFulfillment) {
+            await this.prisma.orderItem.updateMany({
+                where: { order_id: id },
+                data: { fulfillment_status: nextFulfillment },
+            });
+        }
         return this.findById(id);
     }
-    async updateFulfillment(orderId, itemId, dto) {
+    async updateFulfillment(orderId, itemId, dto, actorId, actorRole) {
+        const item = await this.prisma.orderItem.findFirst({
+            where: { id: itemId, order_id: orderId },
+            select: { id: true, fulfiller_id: true, fulfiller_type: true },
+        });
+        if (!item)
+            throw new common_1.NotFoundException('Order item not found');
+        if (actorRole !== client_1.UserRole.ADMIN) {
+            const expectedType = actorRole === client_1.UserRole.PROVIDER ? client_1.FulfillerType.PROVIDER : client_1.FulfillerType.CREATOR;
+            const fulfillerId = await this.resolveFulfillerId(actorId, actorRole);
+            if (!fulfillerId ||
+                item.fulfiller_type !== expectedType ||
+                item.fulfiller_id !== fulfillerId) {
+                throw new common_1.ForbiddenException('You can only update fulfillment for items you fulfill');
+            }
+        }
         return this.prisma.orderItem.update({
             where: { id: itemId, order_id: orderId },
             data: {

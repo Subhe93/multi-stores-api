@@ -83,6 +83,8 @@ class CreateCustomProductDto {
     field_values;
     mockup_image_urls;
     translations;
+    bundle_ids;
+    creator_category_ids;
 }
 exports.CreateCustomProductDto = CreateCustomProductDto;
 __decorate([
@@ -137,6 +139,18 @@ __decorate([
     (0, class_transformer_1.Type)(() => CustomProductTranslationDto),
     __metadata("design:type", Array)
 ], CreateCustomProductDto.prototype, "translations", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.IsString)({ each: true }),
+    __metadata("design:type", Array)
+], CreateCustomProductDto.prototype, "bundle_ids", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.IsString)({ each: true }),
+    __metadata("design:type", Array)
+], CreateCustomProductDto.prototype, "creator_category_ids", void 0);
 class UpdateCustomProductDto {
     pricing_type;
     final_price;
@@ -146,6 +160,8 @@ class UpdateCustomProductDto {
     field_values;
     mockup_image_urls;
     translations;
+    bundle_ids;
+    creator_category_ids;
 }
 exports.UpdateCustomProductDto = UpdateCustomProductDto;
 __decorate([
@@ -199,4 +215,16 @@ __decorate([
     (0, class_transformer_1.Type)(() => CustomProductTranslationDto),
     __metadata("design:type", Array)
 ], UpdateCustomProductDto.prototype, "translations", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.IsString)({ each: true }),
+    __metadata("design:type", Array)
+], UpdateCustomProductDto.prototype, "bundle_ids", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.IsString)({ each: true }),
+    __metadata("design:type", Array)
+], UpdateCustomProductDto.prototype, "creator_category_ids", void 0);
 //# sourceMappingURL=custom-product.dto.js.map

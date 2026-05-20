@@ -4,20 +4,23 @@ export declare class CartService {
     private prisma;
     constructor(prisma: PrismaService);
     private getOrCreateCart;
+    private pickTranslation;
     private enrichCartItems;
-    getCart(userId: string): Promise<{
+    private validateBundleOffer;
+    private assertBundleQuantityValid;
+    getCart(userId: string, locale?: string): Promise<{
         id: string | undefined;
         items: any[];
     }>;
-    addItem(userId: string, dto: AddCartItemDto): Promise<{
+    addItem(userId: string, dto: AddCartItemDto, locale?: string): Promise<{
         id: string | undefined;
         items: any[];
     }>;
-    updateItem(userId: string, itemId: string, dto: UpdateCartItemDto): Promise<{
+    updateItem(userId: string, itemId: string, dto: UpdateCartItemDto, locale?: string): Promise<{
         id: string | undefined;
         items: any[];
     }>;
-    removeItem(userId: string, itemId: string): Promise<{
+    removeItem(userId: string, itemId: string, locale?: string): Promise<{
         id: string | undefined;
         items: any[];
     }>;

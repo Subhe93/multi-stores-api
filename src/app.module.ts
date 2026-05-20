@@ -8,6 +8,7 @@ import { CreatorsModule } from './modules/creators/creators.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { UsersModule } from './modules/users/users.module';
 import { CategoriesModule } from './modules/categories/categories.module';
+import { CreatorCategoriesModule } from './modules/creator-categories/creator-categories.module';
 import { AttributesModule } from './modules/attributes/attributes.module';
 import { ProductsModule } from './modules/products/products.module';
 import { VariantsModule } from './modules/variants/variants.module';
@@ -22,9 +23,13 @@ import { CustomProductsModule } from './modules/custom-products/custom-products.
 import { CustomFieldsModule } from './modules/custom-fields/custom-fields.module';
 import { ProductFaqsModule } from './modules/product-faqs/product-faqs.module';
 import { PromotionsModule } from './modules/promotions/promotions.module';
+import { BundlesModule } from './modules/bundles/bundles.module';
 import { TranslationsModule } from './modules/translations/translations.module';
 import { PagesModule } from './modules/pages/pages.module';
 import { PageBuilderModule } from './modules/page-builder/page-builder.module';
+import { PagesV2Module } from './modules/pages-v2/pages-v2.module';
+import { TemplatesModule } from './modules/templates/templates.module';
+import { MenusModule } from './modules/menus/menus.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 
@@ -39,6 +44,7 @@ import { PaymentsModule } from './modules/payments/payments.module';
     CreatorsModule,
     CustomersModule,
     CategoriesModule,
+    CreatorCategoriesModule,
     AttributesModule,
     ProductsModule,
     VariantsModule,
@@ -53,9 +59,13 @@ import { PaymentsModule } from './modules/payments/payments.module';
     CustomFieldsModule,
     ProductFaqsModule,
     PromotionsModule,
+    BundlesModule,
     TranslationsModule,
     PagesModule,
     PageBuilderModule,
+    PagesV2Module,
+    TemplatesModule,
+    MenusModule,
     NotificationsModule,
     PaymentsModule,
   ],
