@@ -5,7 +5,8 @@ import { substituteAssets } from './asset-substitution';
 // (multi-stores-web/src/themes/minimal/theme.ts). Kits may only reference
 // these. Kept here as the API's contract with the theme; update both together.
 const VALID_SECTION_KEYS = new Set([
-  'hero-banner', 'hero-slider', 'rich-text', 'image-gallery', 'gallery-slider',
+  'hero-banner', 'hero-slider', 'aurora-hero', 'bento-grid', 'animated-features',
+  'marquee-text', 'rich-text', 'image-gallery', 'gallery-slider',
   'image-with-text', 'faq-list', 'call-to-action', 'trust-badges', 'testimonials',
   'logo-list', 'logo-marquee', 'sticky-cta-bar', 'stats-bar', 'feature-grid', 'steps',
   'comparison-table', 'countdown', 'video', 'spacer',
