@@ -72,8 +72,8 @@ let StorefrontService = class StorefrontService {
             theme_key: store.theme_key || 'minimal',
             theme_customizations: store.theme_customizations || {},
             theme: {
-                primaryColor: themeConfig.primaryColor || '#2563eb',
-                secondaryColor: themeConfig.secondaryColor || '#1e40af',
+                primaryColor: themeConfig.primaryColor || null,
+                secondaryColor: themeConfig.secondaryColor || null,
                 fontFamily: themeConfig.fontFamily || undefined,
                 typography: themeConfig.typography || {},
                 header: themeConfig.header || {},

@@ -52,6 +52,9 @@ let StoresController = class StoresController {
     updateLanguages(userId, dto) {
         return this.storesService.updateLanguages(userId, dto);
     }
+    flushCache(userId) {
+        return this.storesService.flushCache(userId);
+    }
 };
 exports.StoresController = StoresController;
 __decorate([
@@ -139,6 +142,15 @@ __decorate([
     __metadata("design:paramtypes", [String, store_dto_1.UpdateLanguageDto]),
     __metadata("design:returntype", void 0)
 ], StoresController.prototype, "updateLanguages", null);
+__decorate([
+    (0, common_1.Post)('my/cache/flush'),
+    (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt'), roles_guard_1.RolesGuard),
+    (0, decorators_1.Roles)(client_1.UserRole.CREATOR),
+    __param(0, (0, decorators_1.CurrentUser)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", void 0)
+], StoresController.prototype, "flushCache", null);
 exports.StoresController = StoresController = __decorate([
     (0, common_1.Controller)('stores'),
     __metadata("design:paramtypes", [stores_service_1.StoresService])

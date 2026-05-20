@@ -1,11 +1,14 @@
 import { PrismaService } from '../../prisma/prisma.service';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { UserRole, ProductStatus } from '@prisma/client';
 import { BundlesService } from '../bundles/bundles.service';
 export declare class ProductsService {
     private prisma;
     private bundlesService;
-    constructor(prisma: PrismaService, bundlesService: BundlesService);
+    private readonly revalidation;
+    constructor(prisma: PrismaService, bundlesService: BundlesService, revalidation: RevalidationService);
+    private revalidateForCreator;
     private assertProductCompatibleWithBundles;
     private readonly productIncludes;
     private attachCreatorCategories;

@@ -261,4 +261,8 @@ export declare class StoresController {
         fallback_locale: string;
         store_id: string;
     }>;
+    flushCache(userId: string): Promise<{
+        flushed: boolean;
+        slug: string;
+    }>;
 }

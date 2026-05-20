@@ -12,10 +12,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.StoresService = void 0;
 const common_1 = require("@nestjs/common");
 const prisma_service_1 = require("../../prisma/prisma.service");
+const revalidation_service_1 = require("../../common/revalidation/revalidation.service");
 let StoresService = class StoresService {
     prisma;
-    constructor(prisma) {
+    revalidation;
+    constructor(prisma, revalidation) {
         this.prisma = prisma;
+        this.revalidation = revalidation;
     }
     async create(userId, dto) {
         const creator = await this.prisma.creator.findUnique({
@@ -104,11 +107,13 @@ let StoresService = class StoresService {
             if (conflict)
                 throw new common_1.ConflictException('Store slug already taken');
         }
-        return this.prisma.store.update({
+        const store = await this.prisma.store.update({
             where: { creator_id: creator.id },
             data: dto,
             include: { language_config: true },
         });
+        await this.revalidation.revalidateStoreBySlug(store.slug);
+        return store;
     }
     async findByCreatorId(creatorId) {
         const store = await this.prisma.store.findUnique({
@@ -137,20 +142,24 @@ let StoresService = class StoresService {
             if (conflict)
                 throw new common_1.ConflictException('Store slug already taken');
         }
-        return this.prisma.store.update({
+        const updated = await this.prisma.store.update({
             where: { id: store.id },
             data: dto,
             include: { language_config: true },
         });
+        await this.revalidation.revalidateStoreBySlug(updated.slug);
+        return updated;
     }
     async updateTheme(userId, dto) {
         const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
         if (!creator)
             throw new common_1.NotFoundException('Creator not found');
-        return this.prisma.store.update({
+        const store = await this.prisma.store.update({
             where: { creator_id: creator.id },
             data: { theme_config: dto.theme_config },
         });
+        await this.revalidation.revalidateStoreBySlug(store.slug);
+        return store;
     }
     async updateThemeSelection(userId, dto) {
         const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
@@ -161,10 +170,36 @@ let StoresService = class StoresService {
             data.theme_key = dto.theme_key;
         if (dto.theme_customizations !== undefined)
             data.theme_customizations = dto.theme_customizations;
-        return this.prisma.store.update({
+        if (dto.reset_customizations) {
+            data.theme_customizations = {};
+            const store = await this.prisma.store.findUnique({ where: { creator_id: creator.id } });
+            const cfg = (store?.theme_config || {});
+            const { primaryColor, secondaryColor, fontFamily, typography, ...rest } = cfg;
+            void primaryColor;
+            void secondaryColor;
+            void fontFamily;
+            void typography;
+            data.theme_config = rest;
+        }
+        const store = await this.prisma.store.update({
             where: { creator_id: creator.id },
             data,
         });
+        await this.revalidation.revalidateStoreBySlug(store.slug);
+        return store;
+    }
+    async flushCache(userId) {
+        const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
+        if (!creator)
+            throw new common_1.NotFoundException('Creator not found');
+        const store = await this.prisma.store.findUnique({
+            where: { creator_id: creator.id },
+            select: { slug: true },
+        });
+        if (!store)
+            throw new common_1.NotFoundException('Store not found');
+        await this.revalidation.revalidateStoreBySlug(store.slug);
+        return { flushed: true, slug: store.slug };
     }
     async updateLanguages(userId, dto) {
         const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
@@ -173,16 +208,19 @@ let StoresService = class StoresService {
         const store = await this.prisma.store.findUnique({ where: { creator_id: creator.id } });
         if (!store)
             throw new common_1.NotFoundException('Store not found');
-        return this.prisma.storeLanguageConfig.upsert({
+        const config = await this.prisma.storeLanguageConfig.upsert({
             where: { store_id: store.id },
             update: dto,
             create: { store_id: store.id, ...dto },
         });
+        await this.revalidation.revalidateStoreById(store.id);
+        return config;
     }
 };
 exports.StoresService = StoresService;
 exports.StoresService = StoresService = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [prisma_service_1.PrismaService])
+    __metadata("design:paramtypes", [prisma_service_1.PrismaService,
+        revalidation_service_1.RevalidationService])
 ], StoresService);
 //# sourceMappingURL=stores.service.js.map

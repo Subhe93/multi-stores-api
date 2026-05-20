@@ -5,6 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { UserRole, ProductStatus } from '@prisma/client';
 import { BundlesService } from '../bundles/bundles.service';
@@ -20,7 +21,17 @@ export class ProductsService {
   constructor(
     private prisma: PrismaService,
     private bundlesService: BundlesService,
+    private readonly revalidation: RevalidationService,
   ) {}
+
+  // Refresh the creator's storefront cache after a product mutation. Provider
+  // products can appear across many stores, so those rely on the time-based
+  // revalidate fallback instead.
+  private async revalidateForCreator(creatorId?: string | null): Promise<void> {
+    if (creatorId) {
+      await this.revalidation.revalidateStoreByCreatorId(creatorId);
+    }
+  }
 
   /**
    * For each bundle the product is being attached to, verify the product's
@@ -221,6 +232,8 @@ export class ProductsService {
       });
     }
 
+    await this.revalidateForCreator(productData.creator_id);
+
     return this.findById(product.id);
   }
 
@@ -394,6 +407,8 @@ export class ProductsService {
       });
     }
 
+    await this.revalidateForCreator(product.creator_id);
+
     return this.findById(id);
   }
 
@@ -403,7 +418,11 @@ export class ProductsService {
 
     await this.checkOwnership(product, userId, userRole);
 
-    return this.prisma.product.delete({ where: { id } });
+    const deleted = await this.prisma.product.delete({ where: { id } });
+
+    await this.revalidateForCreator(product.creator_id);
+
+    return deleted;
   }
 
   /**

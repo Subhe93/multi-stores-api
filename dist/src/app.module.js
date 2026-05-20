@@ -11,6 +11,7 @@ const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const throttler_1 = require("@nestjs/throttler");
 const prisma_module_1 = require("./prisma/prisma.module");
+const revalidation_module_1 = require("./common/revalidation/revalidation.module");
 const auth_module_1 = require("./modules/auth/auth.module");
 const providers_module_1 = require("./modules/providers/providers.module");
 const creators_module_1 = require("./modules/creators/creators.module");
@@ -50,6 +51,7 @@ exports.AppModule = AppModule = __decorate([
             config_1.ConfigModule.forRoot({ isGlobal: true }),
             throttler_1.ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
             prisma_module_1.PrismaModule,
+            revalidation_module_1.RevalidationModule,
             auth_module_1.AuthModule,
             users_module_1.UsersModule,
             providers_module_1.ProvidersModule,

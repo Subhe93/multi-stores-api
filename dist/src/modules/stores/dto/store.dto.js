@@ -107,6 +107,7 @@ __decorate([
 class UpdateThemeSelectionDto {
     theme_key;
     theme_customizations;
+    reset_customizations;
 }
 exports.UpdateThemeSelectionDto = UpdateThemeSelectionDto;
 __decorate([
@@ -124,6 +125,11 @@ __decorate([
     (0, class_validator_1.IsObject)(),
     __metadata("design:type", Object)
 ], UpdateThemeSelectionDto.prototype, "theme_customizations", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], UpdateThemeSelectionDto.prototype, "reset_customizations", void 0);
 class UpdateLanguageDto {
     primary_locale;
     secondary_locales;

@@ -12,15 +12,23 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ProductsService = void 0;
 const common_1 = require("@nestjs/common");
 const prisma_service_1 = require("../../prisma/prisma.service");
+const revalidation_service_1 = require("../../common/revalidation/revalidation.service");
 const client_1 = require("@prisma/client");
 const bundles_service_1 = require("../bundles/bundles.service");
 const bundle_economics_util_1 = require("../bundles/bundle-economics.util");
 let ProductsService = class ProductsService {
     prisma;
     bundlesService;
-    constructor(prisma, bundlesService) {
+    revalidation;
+    constructor(prisma, bundlesService, revalidation) {
         this.prisma = prisma;
         this.bundlesService = bundlesService;
+        this.revalidation = revalidation;
+    }
+    async revalidateForCreator(creatorId) {
+        if (creatorId) {
+            await this.revalidation.revalidateStoreByCreatorId(creatorId);
+        }
     }
     async assertProductCompatibleWithBundles(productPricing, bundleIds) {
         if (bundleIds.length === 0)
@@ -179,6 +187,7 @@ let ProductsService = class ProductsService {
                 })),
             });
         }
+        await this.revalidateForCreator(productData.creator_id);
         return this.findById(product.id);
     }
     async findAll(filters) {
@@ -313,6 +322,7 @@ let ProductsService = class ProductsService {
                 data: tags.map((tag) => ({ product_id: id, tag })),
             });
         }
+        await this.revalidateForCreator(product.creator_id);
         return this.findById(id);
     }
     async delete(id, userId, userRole) {
@@ -320,7 +330,9 @@ let ProductsService = class ProductsService {
         if (!product)
             throw new common_1.NotFoundException('Product not found');
         await this.checkOwnership(product, userId, userRole);
-        return this.prisma.product.delete({ where: { id } });
+        const deleted = await this.prisma.product.delete({ where: { id } });
+        await this.revalidateForCreator(product.creator_id);
+        return deleted;
     }
     async duplicate(id, userId, userRole) {
         const source = await this.prisma.product.findUnique({
@@ -553,6 +565,7 @@ exports.ProductsService = ProductsService;
 exports.ProductsService = ProductsService = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_1.PrismaService,
-        bundles_service_1.BundlesService])
+        bundles_service_1.BundlesService,
+        revalidation_service_1.RevalidationService])
 ], ProductsService);
 //# sourceMappingURL=products.service.js.map

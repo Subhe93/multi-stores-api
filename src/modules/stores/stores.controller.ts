@@ -96,4 +96,12 @@ export class StoresController {
   updateLanguages(@CurrentUser('id') userId: string, @Body() dto: UpdateLanguageDto) {
     return this.storesService.updateLanguages(userId, dto);
   }
+
+  // Creator — manually flush the storefront cache for their own store
+  @Post('my/cache/flush')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.CREATOR)
+  flushCache(@CurrentUser('id') userId: string) {
+    return this.storesService.flushCache(userId);
+  }
 }

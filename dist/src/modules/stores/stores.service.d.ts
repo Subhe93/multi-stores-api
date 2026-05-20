@@ -1,8 +1,10 @@
 import { PrismaService } from '../../prisma/prisma.service';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { CreateStoreDto, UpdateStoreDto, UpdateThemeDto, UpdateThemeSelectionDto, UpdateLanguageDto } from './dto/store.dto';
 export declare class StoresService {
     private prisma;
-    constructor(prisma: PrismaService);
+    private readonly revalidation;
+    constructor(prisma: PrismaService, revalidation: RevalidationService);
     create(userId: string, dto: CreateStoreDto): Promise<{
         creator: {
             avatar_url: string | null;
@@ -252,6 +254,10 @@ export declare class StoresService {
         theme_customizations: import("@prisma/client/runtime/library").JsonValue;
         theme_config: import("@prisma/client/runtime/library").JsonValue;
         is_active: boolean;
+    }>;
+    flushCache(userId: string): Promise<{
+        flushed: boolean;
+        slug: string;
     }>;
     updateLanguages(userId: string, dto: UpdateLanguageDto): Promise<{
         id: string;

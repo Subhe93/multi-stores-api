@@ -41,12 +41,20 @@ var __importStar = (this && this.__importStar) || (function () {
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.UploadsService = void 0;
 const common_1 = require("@nestjs/common");
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const crypto_1 = require("crypto");
+const sharp_1 = __importDefault(require("sharp"));
+const RASTER_EXTS = ['.png', '.jpg', '.jpeg', '.webp'];
+const PASSTHROUGH_EXTS = ['.svg', '.pdf', '.ai'];
+const MAX_DIMENSION = 2000;
+const WEBP_QUALITY = 80;
 let UploadsService = class UploadsService {
     uploadDir = path.join(process.cwd(), 'uploads');
     constructor() {
@@ -59,7 +67,7 @@ let UploadsService = class UploadsService {
             throw new common_1.BadRequestException('No file provided');
         }
         const ext = path.extname(file.originalname).toLowerCase();
-        const allowedExts = ['.png', '.jpg', '.jpeg', '.svg', '.pdf', '.ai', '.webp'];
+        const allowedExts = [...RASTER_EXTS, ...PASSTHROUGH_EXTS];
         if (!allowedExts.includes(ext)) {
             throw new common_1.BadRequestException(`File type ${ext} not allowed`);
         }
@@ -71,15 +79,40 @@ let UploadsService = class UploadsService {
         if (!fs.existsSync(folderPath)) {
             fs.mkdirSync(folderPath, { recursive: true });
         }
-        const filename = `${(0, crypto_1.randomUUID)()}${ext}`;
+        const isRaster = RASTER_EXTS.includes(ext);
+        const outExt = isRaster ? '.webp' : ext;
+        const filename = `${(0, crypto_1.randomUUID)()}${outExt}`;
         const filePath = path.join(folderPath, filename);
-        fs.writeFileSync(filePath, file.buffer);
+        let bytesWritten = file.size;
+        if (isRaster) {
+            const buffer = await this.processImage(file.buffer, ext);
+            fs.writeFileSync(filePath, buffer);
+            bytesWritten = buffer.length;
+        }
+        else {
+            fs.writeFileSync(filePath, file.buffer);
+        }
         const url = `/uploads/${folder}/${filename}`;
         return {
             url,
-            file_type: ext.replace('.', ''),
-            file_size: file.size,
+            file_type: outExt.replace('.', ''),
+            file_size: bytesWritten,
         };
+    }
+    async processImage(buffer, ext) {
+        try {
+            return await (0, sharp_1.default)(buffer, { animated: ext === '.webp' })
+                .rotate()
+                .resize(MAX_DIMENSION, MAX_DIMENSION, {
+                fit: 'inside',
+                withoutEnlargement: true,
+            })
+                .webp({ quality: WEBP_QUALITY })
+                .toBuffer();
+        }
+        catch {
+            throw new common_1.BadRequestException('Could not process image — file may be corrupt');
+        }
     }
     async deleteFile(fileUrl) {
         const filePath = path.join(process.cwd(), fileUrl);

@@ -72,8 +72,11 @@ export class StorefrontService {
       // Legacy theme object — retained until the storefront fully migrates to
       // the registry-based system. Reads from theme_config (the old freeform JSON).
       theme: {
-        primaryColor: themeConfig.primaryColor || '#2563eb',
-        secondaryColor: themeConfig.secondaryColor || '#1e40af',
+        // Null when the creator hasn't set an explicit brand colour, so the
+        // storefront can fall back to the active theme's tokens (driven by
+        // theme_key) instead of a hard-coded blue that masks theme switches.
+        primaryColor: themeConfig.primaryColor || null,
+        secondaryColor: themeConfig.secondaryColor || null,
         fontFamily: themeConfig.fontFamily || undefined,
         typography: themeConfig.typography || {},
         header: themeConfig.header || {},

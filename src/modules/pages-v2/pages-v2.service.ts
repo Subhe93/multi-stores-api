@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { PageType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import {
   CreatePageDto,
   CreateSectionDto,
@@ -18,7 +19,10 @@ import {
 
 @Injectable()
 export class PagesV2Service {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly revalidation: RevalidationService,
+  ) {}
 
   // ── Helpers ─────────────────────────────────────────────
 
@@ -486,7 +490,7 @@ export class PagesV2Service {
       })),
     };
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const version = await tx.pageVersion.create({
         data: {
           page_id: pageId,
@@ -504,6 +508,11 @@ export class PagesV2Service {
         include: { published_version: true, translations: true },
       });
     });
+
+    // Refresh the storefront cache so the publish is visible within seconds.
+    await this.revalidation.revalidateStoreById(storeId);
+
+    return result;
   }
 
   async listVersions(userId: string, pageId: string) {

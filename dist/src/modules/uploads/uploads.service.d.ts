@@ -6,5 +6,6 @@ export declare class UploadsService {
         file_type: string;
         file_size: number;
     }>;
+    private processImage;
     deleteFile(fileUrl: string): Promise<void>;
 }

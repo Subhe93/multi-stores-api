@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import {
   CreateStoreDto,
   UpdateStoreDto,
@@ -10,7 +11,10 @@ import {
 
 @Injectable()
 export class StoresService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly revalidation: RevalidationService,
+  ) {}
 
   async create(userId: string, dto: CreateStoreDto) {
     const creator = await this.prisma.creator.findUnique({
@@ -103,11 +107,15 @@ export class StoresService {
       if (conflict) throw new ConflictException('Store slug already taken');
     }
 
-    return this.prisma.store.update({
+    const store = await this.prisma.store.update({
       where: { creator_id: creator.id },
       data: dto,
       include: { language_config: true },
     });
+
+    await this.revalidation.revalidateStoreBySlug(store.slug);
+
+    return store;
   }
 
   async findByCreatorId(creatorId: string) {
@@ -137,35 +145,75 @@ export class StoresService {
       if (conflict) throw new ConflictException('Store slug already taken');
     }
 
-    return this.prisma.store.update({
+    const updated = await this.prisma.store.update({
       where: { id: store.id },
       data: dto,
       include: { language_config: true },
     });
+
+    await this.revalidation.revalidateStoreBySlug(updated.slug);
+
+    return updated;
   }
 
   async updateTheme(userId: string, dto: UpdateThemeDto) {
     const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
     if (!creator) throw new NotFoundException('Creator not found');
 
-    return this.prisma.store.update({
+    const store = await this.prisma.store.update({
       where: { creator_id: creator.id },
       data: { theme_config: dto.theme_config },
     });
+
+    await this.revalidation.revalidateStoreBySlug(store.slug);
+
+    return store;
   }
 
   async updateThemeSelection(userId: string, dto: UpdateThemeSelectionDto) {
     const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
     if (!creator) throw new NotFoundException('Creator not found');
 
-    const data: { theme_key?: string; theme_customizations?: Record<string, any> } = {};
+    const data: { theme_key?: string; theme_customizations?: Record<string, any>; theme_config?: Record<string, any> } = {};
     if (dto.theme_key !== undefined) data.theme_key = dto.theme_key;
     if (dto.theme_customizations !== undefined) data.theme_customizations = dto.theme_customizations;
 
-    return this.prisma.store.update({
+    // Applying a theme as a fresh preset: drop token overrides and strip brand
+    // fields from theme_config so the chosen theme's colours/fonts take effect,
+    // while keeping non-brand config (socials, contact, SEO, translations, header).
+    if (dto.reset_customizations) {
+      data.theme_customizations = {};
+      const store = await this.prisma.store.findUnique({ where: { creator_id: creator.id } });
+      const cfg = ((store?.theme_config as Record<string, any>) || {});
+      const { primaryColor, secondaryColor, fontFamily, typography, ...rest } = cfg;
+      void primaryColor; void secondaryColor; void fontFamily; void typography;
+      data.theme_config = rest;
+    }
+
+    const store = await this.prisma.store.update({
       where: { creator_id: creator.id },
       data,
     });
+
+    await this.revalidation.revalidateStoreBySlug(store.slug);
+
+    return store;
+  }
+
+  // Creator-triggered manual cache flush from the dashboard. Reuses the same
+  // revalidation path as automatic triggers, scoped to the caller's own store.
+  async flushCache(userId: string): Promise<{ flushed: boolean; slug: string }> {
+    const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
+    if (!creator) throw new NotFoundException('Creator not found');
+
+    const store = await this.prisma.store.findUnique({
+      where: { creator_id: creator.id },
+      select: { slug: true },
+    });
+    if (!store) throw new NotFoundException('Store not found');
+
+    await this.revalidation.revalidateStoreBySlug(store.slug);
+    return { flushed: true, slug: store.slug };
   }
 
   async updateLanguages(userId: string, dto: UpdateLanguageDto) {
@@ -175,10 +223,14 @@ export class StoresService {
     const store = await this.prisma.store.findUnique({ where: { creator_id: creator.id } });
     if (!store) throw new NotFoundException('Store not found');
 
-    return this.prisma.storeLanguageConfig.upsert({
+    const config = await this.prisma.storeLanguageConfig.upsert({
       where: { store_id: store.id },
       update: dto,
       create: { store_id: store.id, ...dto },
     });
+
+    await this.revalidation.revalidateStoreById(store.id);
+
+    return config;
   }
 }

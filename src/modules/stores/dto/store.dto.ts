@@ -78,6 +78,14 @@ export class UpdateThemeSelectionDto {
   @IsOptional()
   @IsObject()
   theme_customizations?: Record<string, any>;
+
+  // When true, applying the theme resets the store to the theme's defaults:
+  // clears theme_customizations and strips brand overrides (colours, fonts,
+  // typography) from theme_config, while preserving non-brand config such as
+  // socials, contact, SEO and translations.
+  @IsOptional()
+  @IsBoolean()
+  reset_customizations?: boolean;
 }
 
 export class UpdateLanguageDto {

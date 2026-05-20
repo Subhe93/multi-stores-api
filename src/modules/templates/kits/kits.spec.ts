@@ -9,7 +9,7 @@ const VALID_SECTION_KEYS = new Set([
   'marquee-text', 'rich-text', 'image-gallery', 'gallery-slider',
   'image-with-text', 'faq-list', 'call-to-action', 'trust-badges', 'testimonials',
   'logo-list', 'logo-marquee', 'sticky-cta-bar', 'stats-bar', 'feature-grid', 'steps',
-  'comparison-table', 'countdown', 'video', 'spacer',
+  'comparison-table', 'countdown', 'video', 'spacer', 'embed-code', 'map',
   'layout-columns', 'newsletter-signup', 'social-icons', 'featured-products',
   'product-slider', 'collection-products', 'product-page', 'product-gallery',
   'product-details', 'product-tabs', 'add-to-cart', 'header-bar', 'footer-columns',

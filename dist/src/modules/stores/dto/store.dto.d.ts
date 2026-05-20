@@ -20,6 +20,7 @@ export declare class UpdateThemeDto {
 export declare class UpdateThemeSelectionDto {
     theme_key?: string;
     theme_customizations?: Record<string, any>;
+    reset_customizations?: boolean;
 }
 export declare class UpdateLanguageDto {
     primary_locale?: string;
