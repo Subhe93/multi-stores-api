@@ -46,6 +46,13 @@ let StorefrontService = class StorefrontService {
             orderBy: { updated_at: 'desc' },
         });
     }
+    async getCacheConfig(slug) {
+        const store = await this.prisma.store.findUnique({
+            where: { slug },
+            select: { cache_enabled: true },
+        });
+        return { enabled: store?.cache_enabled ?? true };
+    }
     async getStore(slug) {
         const store = await this.prisma.store.findUnique({
             where: { slug, is_active: true },

@@ -48,6 +48,31 @@ export class ProductsController {
     });
   }
 
+  // Provider — list only the authenticated provider's own products
+  @Get('mine')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.PROVIDER)
+  findMine(
+    @CurrentUser('id') userId: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('category_id') category_id?: string,
+    @Query('product_type') product_type?: string,
+    @Query('status') status?: ProductStatus,
+    @Query('search') search?: string,
+    @Query('is_featured') is_featured?: string,
+  ) {
+    return this.productsService.findMine(userId, {
+      page: page ? +page : undefined,
+      limit: limit ? +limit : undefined,
+      category_id,
+      product_type,
+      status,
+      search,
+      is_featured: is_featured === 'true' ? true : undefined,
+    });
+  }
+
   @Get(':id/import-details')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.CREATOR)

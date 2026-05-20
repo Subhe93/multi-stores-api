@@ -43,6 +43,16 @@ export class StorefrontService {
     });
   }
 
+  // Lightweight read so the storefront can decide caching without pulling the
+  // full store payload. Defaults to enabled when the store isn't found.
+  async getCacheConfig(slug: string): Promise<{ enabled: boolean }> {
+    const store = await this.prisma.store.findUnique({
+      where: { slug },
+      select: { cache_enabled: true },
+    });
+    return { enabled: store?.cache_enabled ?? true };
+  }
+
   async getStore(slug: string) {
     const store = await this.prisma.store.findUnique({
       where: { slug, is_active: true },

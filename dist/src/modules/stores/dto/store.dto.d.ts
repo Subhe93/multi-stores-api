@@ -13,6 +13,7 @@ export declare class UpdateStoreDto {
     favicon_url?: string;
     custom_domain?: string;
     is_active?: boolean;
+    cache_enabled?: boolean;
 }
 export declare class UpdateThemeDto {
     theme_config: Record<string, any>;

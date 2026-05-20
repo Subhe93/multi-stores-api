@@ -56,6 +56,7 @@ class UpdateStoreDto {
     favicon_url;
     custom_domain;
     is_active;
+    cache_enabled;
 }
 exports.UpdateStoreDto = UpdateStoreDto;
 __decorate([
@@ -96,6 +97,11 @@ __decorate([
     (0, class_validator_1.IsBoolean)(),
     __metadata("design:type", Boolean)
 ], UpdateStoreDto.prototype, "is_active", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], UpdateStoreDto.prototype, "cache_enabled", void 0);
 class UpdateThemeDto {
     theme_config;
 }

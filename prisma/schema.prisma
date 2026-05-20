@@ -685,6 +685,8 @@ model Store {
   theme_customizations Json     @default("{}")
   theme_config         Json     @default("{}")
   is_active            Boolean  @default(true)
+  // When false, the storefront serves this store uncached (always fresh).
+  cache_enabled        Boolean  @default(true)
   created_at           DateTime @default(now())
   updated_at           DateTime @updatedAt
 

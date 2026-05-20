@@ -23,6 +23,9 @@ let StorefrontController = class StorefrontController {
     getStore(slug) {
         return this.storefrontService.getStore(slug);
     }
+    getCacheConfig(slug) {
+        return this.storefrontService.getCacheConfig(slug);
+    }
     getProducts(slug, page, limit, category_id, creator_category, search, locale) {
         return this.storefrontService.getProducts(slug, {
             page: page ? +page : undefined,
@@ -81,6 +84,13 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", void 0)
 ], StorefrontController.prototype, "getStore", null);
+__decorate([
+    (0, common_1.Get)(':slug/cache-config'),
+    __param(0, (0, common_1.Param)('slug')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", void 0)
+], StorefrontController.prototype, "getCacheConfig", null);
 __decorate([
     (0, common_1.Get)(':slug/products'),
     __param(0, (0, common_1.Param)('slug')),

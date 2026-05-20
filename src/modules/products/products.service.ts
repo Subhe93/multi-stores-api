@@ -292,6 +292,27 @@ export class ProductsService {
     };
   }
 
+  // Provider dashboard listing — only the authenticated provider's own products.
+  async findMine(
+    userId: string,
+    filters: {
+      page?: number;
+      limit?: number;
+      category_id?: string;
+      product_type?: string;
+      status?: ProductStatus;
+      search?: string;
+      is_featured?: boolean;
+    },
+  ) {
+    const provider = await this.prisma.provider.findUnique({
+      where: { user_id: userId },
+    });
+    if (!provider) throw new NotFoundException('Provider profile not found');
+
+    return this.findAll({ ...filters, provider_id: provider.id });
+  }
+
   async findById(id: string) {
     const product = await this.prisma.product.findUnique({
       where: { id },

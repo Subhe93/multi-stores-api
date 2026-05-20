@@ -127,6 +127,7 @@ export declare class ProvidersService {
             theme_customizations: import("@prisma/client/runtime/library").JsonValue;
             theme_config: import("@prisma/client/runtime/library").JsonValue;
             is_active: boolean;
+            cache_enabled: boolean;
         }[];
         meta: {
             total: number;
@@ -263,5 +264,6 @@ export declare class ProvidersService {
         theme_customizations: import("@prisma/client/runtime/library").JsonValue;
         theme_config: import("@prisma/client/runtime/library").JsonValue;
         is_active: boolean;
+        cache_enabled: boolean;
     }>;
 }

@@ -39,6 +39,17 @@ let ProductsController = class ProductsController {
             is_featured: is_featured === 'true' ? true : undefined,
         });
     }
+    findMine(userId, page, limit, category_id, product_type, status, search, is_featured) {
+        return this.productsService.findMine(userId, {
+            page: page ? +page : undefined,
+            limit: limit ? +limit : undefined,
+            category_id,
+            product_type,
+            status,
+            search,
+            is_featured: is_featured === 'true' ? true : undefined,
+        });
+    }
     getImportDetails(id) {
         return this.productsService.getImportDetails(id);
     }
@@ -90,6 +101,22 @@ __decorate([
     __metadata("design:paramtypes", [Number, Number, String, String, String, String, String, String, String, String]),
     __metadata("design:returntype", void 0)
 ], ProductsController.prototype, "findAll", null);
+__decorate([
+    (0, common_1.Get)('mine'),
+    (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt'), roles_guard_1.RolesGuard),
+    (0, decorators_1.Roles)(client_1.UserRole.PROVIDER),
+    __param(0, (0, decorators_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Query)('page')),
+    __param(2, (0, common_1.Query)('limit')),
+    __param(3, (0, common_1.Query)('category_id')),
+    __param(4, (0, common_1.Query)('product_type')),
+    __param(5, (0, common_1.Query)('status')),
+    __param(6, (0, common_1.Query)('search')),
+    __param(7, (0, common_1.Query)('is_featured')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Number, Number, String, String, String, String, String]),
+    __metadata("design:returntype", void 0)
+], ProductsController.prototype, "findMine", null);
 __decorate([
     (0, common_1.Get)(':id/import-details'),
     (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt'), roles_guard_1.RolesGuard),

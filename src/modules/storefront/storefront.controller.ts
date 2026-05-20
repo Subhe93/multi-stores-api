@@ -10,6 +10,12 @@ export class StorefrontController {
     return this.storefrontService.getStore(slug);
   }
 
+  // Tiny endpoint the storefront reads to decide whether to cache this store.
+  @Get(':slug/cache-config')
+  getCacheConfig(@Param('slug') slug: string) {
+    return this.storefrontService.getCacheConfig(slug);
+  }
+
   @Get(':slug/products')
   getProducts(
     @Param('slug') slug: string,

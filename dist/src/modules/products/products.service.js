@@ -238,6 +238,14 @@ let ProductsService = class ProductsService {
             meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
         };
     }
+    async findMine(userId, filters) {
+        const provider = await this.prisma.provider.findUnique({
+            where: { user_id: userId },
+        });
+        if (!provider)
+            throw new common_1.NotFoundException('Provider profile not found');
+        return this.findAll({ ...filters, provider_id: provider.id });
+    }
     async findById(id) {
         const product = await this.prisma.product.findUnique({
             where: { id },

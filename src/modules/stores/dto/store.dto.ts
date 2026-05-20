@@ -58,6 +58,12 @@ export class UpdateStoreDto {
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;
+
+  // Toggle storefront caching for this store. When false the storefront is
+  // served always-fresh (uncached).
+  @IsOptional()
+  @IsBoolean()
+  cache_enabled?: boolean;
 }
 
 export class UpdateThemeDto {
