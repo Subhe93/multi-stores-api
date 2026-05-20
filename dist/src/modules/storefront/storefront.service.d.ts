@@ -37,6 +37,7 @@ export declare class StorefrontService {
             contact: any;
             seo: any;
             translations: any;
+            hero: any;
         };
         creator: {
             display_name: string;

@@ -89,6 +89,7 @@ let StorefrontService = class StorefrontService {
                 contact: themeConfig.contact || {},
                 seo: themeConfig.seo || {},
                 translations: themeConfig.translations || {},
+                hero: themeConfig.hero || {},
             },
         };
     }

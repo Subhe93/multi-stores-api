@@ -33,6 +33,7 @@ export declare class StorefrontController {
             contact: any;
             seo: any;
             translations: any;
+            hero: any;
         };
         creator: {
             display_name: string;

@@ -95,6 +95,10 @@ export class StorefrontService {
         contact: themeConfig.contact || {},
         seo: themeConfig.seo || {},
         translations: themeConfig.translations || {},
+        // Per-page hero/banner settings for the products listing and collection
+        // pages. Freeform config — the storefront reads `products` / `collections`
+        // sub-objects (enabled, image_url, height, overlay, show_count).
+        hero: themeConfig.hero || {},
       },
     };
   }
