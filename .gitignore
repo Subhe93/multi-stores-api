@@ -5,3 +5,6 @@ node_modules
 /generated/prisma
 /dist
 dist
+
+# User-uploaded files (served at runtime, not source)
+uploads/
