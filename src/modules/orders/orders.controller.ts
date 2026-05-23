@@ -70,8 +70,12 @@ export class OrdersController {
   }
 
   @Get(':id')
-  findById(@Param('id') id: string) {
-    return this.ordersService.findById(id);
+  findById(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.ordersService.findById(id, userId, role);
   }
 
   // Provider/Creator/Admin — تحديث حالة الطلب

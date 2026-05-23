@@ -19,7 +19,7 @@ export class ProvidersService {
     const provider = await this.prisma.provider.findUnique({
       where: { user_id: userId },
     });
-    if (!provider) throw new NotFoundException('Provider profile not found');
+    if (!provider) throw new NotFoundException({ code: 'PROVIDER_PROFILE_NOT_FOUND', message: 'Provider profile not found' });
     return provider;
   }
 
@@ -28,7 +28,7 @@ export class ProvidersService {
       where: { id },
       include: { user: { select: { email: true, status: true } } },
     });
-    if (!provider) throw new NotFoundException('Provider not found');
+    if (!provider) throw new NotFoundException({ code: 'PROVIDER_NOT_FOUND', message: 'Provider not found' });
     return provider;
   }
 
@@ -69,7 +69,7 @@ export class ProvidersService {
       where: { user_id: userId },
       select: { id: true },
     });
-    if (!provider) throw new NotFoundException('Provider profile not found');
+    if (!provider) throw new NotFoundException({ code: 'PROVIDER_PROFILE_NOT_FOUND', message: 'Provider profile not found' });
 
     const skip = (page - 1) * limit;
 
@@ -120,7 +120,7 @@ export class ProvidersService {
       where: { user_id: userId },
       select: { id: true },
     });
-    if (!provider) throw new NotFoundException('Provider profile not found');
+    if (!provider) throw new NotFoundException({ code: 'PROVIDER_PROFILE_NOT_FOUND', message: 'Provider profile not found' });
 
     const store = await this.prisma.store.findUnique({
       where: { id: storeId },
@@ -142,7 +142,7 @@ export class ProvidersService {
         },
       },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'PROVIDER_STORE_NOT_FOUND', message: 'Store not found' });
 
     const usesProvider = await this.prisma.customProduct.findFirst({
       where: {
@@ -152,7 +152,7 @@ export class ProvidersService {
       select: { id: true },
     });
     if (!usesProvider) {
-      throw new NotFoundException('Store does not use your products');
+      throw new NotFoundException({ code: 'PROVIDER_STORE_NOT_USING_PRODUCTS', message: 'Store does not use your products' });
     }
 
     const customProducts = await this.prisma.customProduct.findMany({

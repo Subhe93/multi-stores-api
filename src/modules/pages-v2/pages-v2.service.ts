@@ -36,12 +36,12 @@ export class PagesV2Service {
       where: { user_id: userId },
       select: { id: true },
     });
-    if (!creator) throw new NotFoundException('Creator not found');
+    if (!creator) throw new NotFoundException({ code: 'PAGE_CREATOR_NOT_FOUND', message: 'Creator not found' });
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creator.id },
       select: { id: true },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'PAGE_STORE_NOT_FOUND', message: 'Store not found' });
     return store.id;
   }
 
@@ -50,8 +50,8 @@ export class PagesV2Service {
       where: { id: pageId },
       select: { id: true, store_id: true },
     });
-    if (!page) throw new NotFoundException('Page not found');
-    if (page.store_id !== storeId) throw new ForbiddenException('Not your page');
+    if (!page) throw new NotFoundException({ code: 'PAGE_NOT_FOUND', message: 'Page not found' });
+    if (page.store_id !== storeId) throw new ForbiddenException({ code: 'PAGE_FORBIDDEN', message: 'Not your page' });
   }
 
   private async assertSectionBelongsToStore(sectionId: string, storeId: string): Promise<{ pageId: string }> {
@@ -59,8 +59,8 @@ export class PagesV2Service {
       where: { id: sectionId },
       select: { id: true, page_id: true, page: { select: { store_id: true } } },
     });
-    if (!section) throw new NotFoundException('Section not found');
-    if (section.page.store_id !== storeId) throw new ForbiddenException('Not your section');
+    if (!section) throw new NotFoundException({ code: 'PAGE_SECTION_NOT_FOUND', message: 'Section not found' });
+    if (section.page.store_id !== storeId) throw new ForbiddenException({ code: 'PAGE_SECTION_FORBIDDEN', message: 'Not your section' });
     return { pageId: section.page_id };
   }
 
@@ -106,10 +106,10 @@ export class PagesV2Service {
       throw new BadRequestException(`${dto.type} page cannot have a slug`);
     }
     if (!slugless && !dto.slug) {
-      throw new BadRequestException('slug is required for this page type');
+      throw new BadRequestException({ code: 'PAGE_SLUG_REQUIRED', message: 'slug is required for this page type' });
     }
     if (dto.type === PageType.STATIC && !dto.static_kind) {
-      throw new BadRequestException('static_kind is required for STATIC pages');
+      throw new BadRequestException({ code: 'PAGE_STATIC_KIND_REQUIRED', message: 'static_kind is required for STATIC pages' });
     }
 
     // (store_id, type, static_kind) is unique — catch duplicate singletons early.
@@ -137,7 +137,7 @@ export class PagesV2Service {
       });
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        throw new ConflictException('A page with this slug or kind already exists');
+        throw new ConflictException({ code: 'PAGE_SLUG_OR_KIND_EXISTS', message: 'A page with this slug or kind already exists' });
       }
       throw err;
     }
@@ -196,7 +196,7 @@ export class PagesV2Service {
       page?.type === PageType.HEADER ||
       page?.type === PageType.FOOTER
     ) {
-      throw new BadRequestException('This page cannot be deleted');
+      throw new BadRequestException({ code: 'PAGE_CANNOT_BE_DELETED', message: 'This page cannot be deleted' });
     }
     return this.prisma.page.delete({ where: { id: pageId } });
   }
@@ -436,7 +436,7 @@ export class PagesV2Service {
       select: { id: true },
     });
     if (owned.length !== dto.section_ids.length) {
-      throw new BadRequestException('section_ids contains entries not on this page');
+      throw new BadRequestException({ code: 'PAGE_SECTION_IDS_INVALID', message: 'section_ids contains entries not on this page' });
     }
 
     await this.prisma.$transaction(
@@ -471,7 +471,7 @@ export class PagesV2Service {
         },
       },
     });
-    if (!page) throw new NotFoundException('Page not found');
+    if (!page) throw new NotFoundException({ code: 'PAGE_NOT_FOUND', message: 'Page not found' });
 
     const snapshot = {
       page: {
@@ -544,7 +544,7 @@ export class PagesV2Service {
       select: { page_id: true, snapshot: true },
     });
     if (!version || version.page_id !== pageId) {
-      throw new NotFoundException('Version not found');
+      throw new NotFoundException({ code: 'PAGE_VERSION_NOT_FOUND', message: 'Version not found' });
     }
 
     const snapshot = version.snapshot as {

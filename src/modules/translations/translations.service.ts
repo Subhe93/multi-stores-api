@@ -20,7 +20,7 @@ export class TranslationsService {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
     });
-    if (!creator) throw new NotFoundException('Creator not found');
+    if (!creator) throw new NotFoundException({ code: 'TRANSLATION_CREATOR_NOT_FOUND', message: 'Creator not found' });
 
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creator.id },
@@ -107,7 +107,7 @@ export class TranslationsService {
       where: { id: dto.store_id },
       include: { language_config: true, creator: true },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'TRANSLATION_STORE_NOT_FOUND', message: 'Store not found' });
 
     const sourceLocale = dto.source_locale || store.language_config?.primary_locale || 'en';
     const entityTypes = dto.entity_types ?? ['products'];

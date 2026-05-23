@@ -19,7 +19,7 @@ export class PagesService {
       where: { id },
       include: { translations: true, blocks: { include: { translations: true }, orderBy: { sort_order: 'asc' } } },
     });
-    if (!page) throw new NotFoundException('Page not found');
+    if (!page) throw new NotFoundException({ code: 'PAGE_LEGACY_NOT_FOUND', message: 'Page not found' });
     return page;
   }
 
@@ -55,8 +55,8 @@ export class PagesService {
 
   async delete(id: string) {
     const page = await this.prisma.staticPage.findUnique({ where: { id } });
-    if (!page) throw new NotFoundException('Page not found');
-    if (page.is_required) throw new NotFoundException('Cannot delete required page');
+    if (!page) throw new NotFoundException({ code: 'PAGE_LEGACY_NOT_FOUND', message: 'Page not found' });
+    if (page.is_required) throw new NotFoundException({ code: 'PAGE_LEGACY_CANNOT_DELETE_REQUIRED', message: 'Cannot delete required page' });
 
     return this.prisma.staticPage.delete({ where: { id } });
   }

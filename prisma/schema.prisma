@@ -70,6 +70,10 @@ model Provider {
   phone             String?
   country           String
   stripe_account_id String?
+  // Stripe Connect onboarding state, kept in sync via the account.updated webhook.
+  stripe_charges_enabled         Boolean   @default(false)
+  stripe_payouts_enabled         Boolean   @default(false)
+  stripe_onboarding_completed_at DateTime?
   verified          Boolean  @default(false)
   created_at        DateTime @default(now())
   updated_at        DateTime @updatedAt
@@ -92,6 +96,10 @@ model Creator {
   cover_url         String?
   phone             String?
   stripe_account_id String?
+  // Stripe Connect onboarding state, kept in sync via the account.updated webhook.
+  stripe_charges_enabled        Boolean   @default(false)
+  stripe_payouts_enabled        Boolean   @default(false)
+  stripe_onboarding_completed_at DateTime?
   verified          Boolean  @default(false)
   created_at        DateTime @default(now())
   updated_at        DateTime @updatedAt
@@ -527,6 +535,14 @@ model Order {
   payment_method  PaymentMethod @default(COD)
   payment_status  String?
   stripe_payment_id String?
+  // Stripe payment details captured from the webhook for tracking/reconciliation.
+  stripe_charge_id        String?
+  card_brand              String?
+  card_last4              String?   @db.VarChar(4)
+  receipt_url             String?
+  paid_at                 DateTime?
+  payment_failure_code    String?
+  payment_failure_message String?
   notes           String?
   created_at      DateTime    @default(now())
   updated_at      DateTime    @updatedAt
@@ -537,10 +553,34 @@ model Order {
   commission      OrderCommission?
   timeline        OrderTimeline[]
   promotion_usage PromotionUsage[]
+  payouts         OrderPayout[]
 
   @@index([customer_id])
   @@index([order_number])
   @@index([status])
+}
+
+// Per-recipient payout (Stripe transfer) for an order — lets each provider /
+// creator track what they were paid, and the admin see the full split.
+model OrderPayout {
+  id                String        @id @default(uuid())
+  order_id          String
+  recipient_type    FulfillerType
+  recipient_id      String
+  stripe_account_id String?
+  stripe_transfer_id String?
+  amount            Decimal       @db.Decimal(10, 2)
+  currency          String        @default("EUR") @db.VarChar(3)
+  status            String        @default("paid")
+  error             String?
+  created_at        DateTime      @default(now())
+  updated_at        DateTime      @updatedAt
+
+  order Order @relation(fields: [order_id], references: [id], onDelete: Cascade)
+
+  @@unique([order_id, recipient_type, recipient_id])
+  @@index([recipient_id])
+  @@index([order_id])
 }
 
 enum PaymentMethod {
@@ -572,6 +612,9 @@ model OrderItem {
   unit_price         Decimal           @db.Decimal(10, 2)
   original_unit_price Decimal?         @db.Decimal(10, 2)
   total_price        Decimal           @db.Decimal(10, 2)
+  // Unscaled base price owed to this item's provider (0 for creator-only items).
+  // Used to split Connect payout transfers per provider after payment succeeds.
+  provider_base_amount Decimal         @default(0) @db.Decimal(10, 2)
   customer_design_url String?
   design_notes       String?
   fulfiller_type     FulfillerType
@@ -665,7 +708,49 @@ model PlatformConfig {
   require_provider_approval Boolean @default(true)
   require_creator_approval  Boolean @default(true)
 
+  // Platform Stripe account (managed from the admin dashboard). These override
+  // the STRIPE_* environment variables when set. Secrets are never returned by
+  // the shared platform-config endpoint — only via the admin-only payments API.
+  stripe_secret_key      String?
+  stripe_publishable_key String?
+  stripe_webhook_secret  String?
+
+  // Platform SMTP email settings (managed from the admin dashboard). Override
+  // the SMTP_*/MAIL_FROM environment variables when set. Credentials are never
+  // returned by the shared platform-config endpoint — only via the admin mail API.
+  smtp_host   String?
+  smtp_port   Int?
+  smtp_secure Boolean  @default(false)
+  smtp_user   String?
+  smtp_pass   String?
+  mail_from   String?
+
   updated_at       DateTime @updatedAt
+}
+
+// Platform-level legal pages (privacy, terms, refund policy, shipping policy).
+// Admin-managed; per-locale title + content stored as JSON so a single row
+// holds all translations for one slug.
+model LegalPage {
+  id         String   @id @default(uuid())
+  slug       String   @unique
+  title      Json     @default("{}")   // { en: "Privacy Policy", ar: "سياسة الخصوصية", ... }
+  content    Json     @default("{}")   // { en: "<html>...</html>", ar: "...", ... }
+  updated_at DateTime @updatedAt
+}
+
+// Admin-managed transactional notification templates. One row per `event`
+// (order_confirmation, password_reset, …). Subject + HTML/text bodies are
+// per-locale JSON. `enabled=false` suppresses sending for that event entirely.
+// Bodies use `{{var}}` placeholders the MailService substitutes at send time.
+model NotificationTemplate {
+  id         String   @id @default(uuid())
+  event      String   @unique
+  subject    Json     @default("{}")   // per-locale
+  body_html  Json     @default("{}")   // per-locale (HTML)
+  body_text  Json     @default("{}")   // per-locale (plain text)
+  enabled    Boolean  @default(true)
+  updated_at DateTime @updatedAt
 }
 
 // ==========================================

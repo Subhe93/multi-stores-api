@@ -50,7 +50,7 @@ export class BundlesService {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
     });
-    if (!creator) throw new NotFoundException('Creator profile not found');
+    if (!creator) throw new NotFoundException({ code: 'BUNDLE_CREATOR_PROFILE_NOT_FOUND', message: 'Creator profile not found' });
     return creator.id;
   }
 
@@ -231,9 +231,9 @@ export class BundlesService {
       where: { id },
       include: bundleInclude,
     });
-    if (!bundle) throw new NotFoundException('Bundle not found');
+    if (!bundle) throw new NotFoundException({ code: 'BUNDLE_NOT_FOUND', message: 'Bundle not found' });
     if (bundle.creator_id !== creatorId) {
-      throw new ForbiddenException('You can only access your own bundles');
+      throw new ForbiddenException({ code: 'BUNDLE_ACCESS_NOT_OWNED', message: 'You can only access your own bundles' });
     }
     return bundle;
   }
@@ -250,9 +250,9 @@ export class BundlesService {
         custom_products: { select: { custom_product_id: true } },
       },
     });
-    if (!existing) throw new NotFoundException('Bundle not found');
+    if (!existing) throw new NotFoundException({ code: 'BUNDLE_NOT_FOUND', message: 'Bundle not found' });
     if (existing.creator_id !== creatorId) {
-      throw new ForbiddenException('You can only edit your own bundles');
+      throw new ForbiddenException({ code: 'BUNDLE_EDIT_NOT_OWNED', message: 'You can only edit your own bundles' });
     }
 
     // Economic check uses incoming changes where provided, otherwise falls back
@@ -376,9 +376,9 @@ export class BundlesService {
       where: { id },
       select: { creator_id: true },
     });
-    if (!existing) throw new NotFoundException('Bundle not found');
+    if (!existing) throw new NotFoundException({ code: 'BUNDLE_NOT_FOUND', message: 'Bundle not found' });
     if (existing.creator_id !== creatorId) {
-      throw new ForbiddenException('You can only delete your own bundles');
+      throw new ForbiddenException({ code: 'BUNDLE_DELETE_NOT_OWNED', message: 'You can only delete your own bundles' });
     }
 
     // Preserve historical attribution: if any order item references one of this
@@ -387,9 +387,11 @@ export class BundlesService {
       where: { bundle_offer: { bundle_id: id } },
     });
     if (orderRefs > 0) {
-      throw new BadRequestException(
-        'This bundle is referenced by existing orders. Disable it instead of deleting to keep historical records.',
-      );
+      throw new BadRequestException({
+        code: 'BUNDLE_REFERENCED_BY_ORDERS',
+        message:
+          'This bundle is referenced by existing orders. Disable it instead of deleting to keep historical records.',
+      });
     }
 
     await this.prisma.bundle.delete({ where: { id } });

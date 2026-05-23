@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import {
@@ -8,6 +9,25 @@ import {
   UpdateThemeSelectionDto,
   UpdateLanguageDto,
 } from './dto/store.dto';
+
+// Hosts a creator cannot claim as their custom_domain. Mirrors the storefront
+// proxy's PLATFORM_HOSTNAMES so an attacker can't register e.g.
+// "admin.iwings-digital.com" and intercept platform traffic. Both an exact
+// match and any subdomain (`.endsWith('.' + host)`) are blocked.
+const RESERVED_HOSTS = (
+  process.env.PLATFORM_HOSTS ||
+  process.env.NEXT_PUBLIC_PLATFORM_HOSTS ||
+  'localhost,iwings-digital.com,www.iwings-digital.com'
+)
+  .split(',')
+  .map((h) => h.trim().toLowerCase())
+  .filter(Boolean);
+
+function isReservedDomain(domain: string): boolean {
+  return RESERVED_HOSTS.some(
+    (host) => domain === host || domain.endsWith('.' + host),
+  );
+}
 
 @Injectable()
 export class StoresService {
@@ -20,12 +40,12 @@ export class StoresService {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
     });
-    if (!creator) throw new NotFoundException('Creator profile not found');
+    if (!creator) throw new NotFoundException({ code: 'STORE_CREATOR_PROFILE_NOT_FOUND', message: 'Creator profile not found' });
 
     const existing = await this.prisma.store.findUnique({
       where: { slug: dto.slug },
     });
-    if (existing) throw new ConflictException('Store slug already taken');
+    if (existing) throw new ConflictException({ code: 'STORE_SLUG_TAKEN', message: 'Store slug already taken' });
 
     const { primary_locale, secondary_locales, ...storeData } = dto;
 
@@ -65,7 +85,7 @@ export class StoresService {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
     });
-    if (!creator) throw new NotFoundException('Creator not found');
+    if (!creator) throw new NotFoundException({ code: 'STORE_CREATOR_NOT_FOUND', message: 'Creator not found' });
 
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creator.id },
@@ -75,7 +95,7 @@ export class StoresService {
         creator: { select: { display_name: true, avatar_url: true, bio: true } },
       },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STORE_NOT_FOUND', message: 'Store not found' });
     return store;
   }
 
@@ -91,27 +111,60 @@ export class StoresService {
         creator: { select: { display_name: true, avatar_url: true, bio: true, cover_url: true } },
       },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STORE_NOT_FOUND', message: 'Store not found' });
     return store;
+  }
+
+  // Lightweight lookup used by the storefront proxy to resolve a custom CNAME
+  // (e.g. shop.merchant.com) to its store slug. Returns only the slug so the
+  // proxy can rewrite without pulling the full store payload.
+  async findSlugByCustomDomain(host: string): Promise<{ slug: string }> {
+    const normalized = host.trim().toLowerCase().split(':')[0]!;
+    const store = await this.prisma.store.findUnique({
+      where: { custom_domain: normalized },
+      select: { slug: true, is_active: true },
+    });
+    if (!store || !store.is_active) {
+      throw new NotFoundException({ code: 'STORE_NOT_FOUND', message: 'Store not found' });
+    }
+    return { slug: store.slug };
   }
 
   async update(userId: string, dto: UpdateStoreDto) {
     const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
-    if (!creator) throw new NotFoundException('Creator not found');
+    if (!creator) throw new NotFoundException({ code: 'STORE_CREATOR_NOT_FOUND', message: 'Creator not found' });
 
     if (dto.slug) {
       const conflict = await this.prisma.store.findFirst({
         where: { slug: dto.slug, creator_id: { not: creator.id } },
         select: { id: true },
       });
-      if (conflict) throw new ConflictException('Store slug already taken');
+      if (conflict) throw new ConflictException({ code: 'STORE_SLUG_TAKEN', message: 'Store slug already taken' });
     }
 
-    const store = await this.prisma.store.update({
-      where: { creator_id: creator.id },
-      data: dto,
-      include: { language_config: true },
-    });
+    const data = normalizeStoreUpdate(dto);
+
+    if (data.custom_domain) {
+      if (isReservedDomain(data.custom_domain)) {
+        throw new BadRequestException({
+          code: 'STORE_CUSTOM_DOMAIN_RESERVED',
+          message: 'This domain is reserved by the platform',
+        });
+      }
+      const conflict = await this.prisma.store.findFirst({
+        where: { custom_domain: data.custom_domain, creator_id: { not: creator.id } },
+        select: { id: true },
+      });
+      if (conflict) throw new ConflictException({ code: 'STORE_CUSTOM_DOMAIN_TAKEN', message: 'Custom domain already in use' });
+    }
+
+    const store = await this.runStoreUpdate(() =>
+      this.prisma.store.update({
+        where: { creator_id: creator.id },
+        data,
+        include: { language_config: true },
+      }),
+    );
 
     await this.revalidation.revalidateStoreBySlug(store.slug);
 
@@ -126,7 +179,7 @@ export class StoresService {
         creator: { select: { display_name: true, avatar_url: true } },
       },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STORE_NOT_FOUND', message: 'Store not found' });
     return store;
   }
 
@@ -135,21 +188,39 @@ export class StoresService {
       where: { creator_id: creatorId },
       select: { id: true },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STORE_NOT_FOUND', message: 'Store not found' });
 
     if (dto.slug) {
       const conflict = await this.prisma.store.findFirst({
         where: { slug: dto.slug, id: { not: store.id } },
         select: { id: true },
       });
-      if (conflict) throw new ConflictException('Store slug already taken');
+      if (conflict) throw new ConflictException({ code: 'STORE_SLUG_TAKEN', message: 'Store slug already taken' });
     }
 
-    const updated = await this.prisma.store.update({
-      where: { id: store.id },
-      data: dto,
-      include: { language_config: true },
-    });
+    const data = normalizeStoreUpdate(dto);
+
+    if (data.custom_domain) {
+      if (isReservedDomain(data.custom_domain)) {
+        throw new BadRequestException({
+          code: 'STORE_CUSTOM_DOMAIN_RESERVED',
+          message: 'This domain is reserved by the platform',
+        });
+      }
+      const conflict = await this.prisma.store.findFirst({
+        where: { custom_domain: data.custom_domain, id: { not: store.id } },
+        select: { id: true },
+      });
+      if (conflict) throw new ConflictException({ code: 'STORE_CUSTOM_DOMAIN_TAKEN', message: 'Custom domain already in use' });
+    }
+
+    const updated = await this.runStoreUpdate(() =>
+      this.prisma.store.update({
+        where: { id: store.id },
+        data,
+        include: { language_config: true },
+      }),
+    );
 
     await this.revalidation.revalidateStoreBySlug(updated.slug);
 
@@ -158,7 +229,7 @@ export class StoresService {
 
   async updateTheme(userId: string, dto: UpdateThemeDto) {
     const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
-    if (!creator) throw new NotFoundException('Creator not found');
+    if (!creator) throw new NotFoundException({ code: 'STORE_CREATOR_NOT_FOUND', message: 'Creator not found' });
 
     const store = await this.prisma.store.update({
       where: { creator_id: creator.id },
@@ -172,7 +243,7 @@ export class StoresService {
 
   async updateThemeSelection(userId: string, dto: UpdateThemeSelectionDto) {
     const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
-    if (!creator) throw new NotFoundException('Creator not found');
+    if (!creator) throw new NotFoundException({ code: 'STORE_CREATOR_NOT_FOUND', message: 'Creator not found' });
 
     const data: { theme_key?: string; theme_customizations?: Record<string, any>; theme_config?: Record<string, any> } = {};
     if (dto.theme_key !== undefined) data.theme_key = dto.theme_key;
@@ -204,24 +275,51 @@ export class StoresService {
   // revalidation path as automatic triggers, scoped to the caller's own store.
   async flushCache(userId: string): Promise<{ flushed: boolean; slug: string }> {
     const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
-    if (!creator) throw new NotFoundException('Creator not found');
+    if (!creator) throw new NotFoundException({ code: 'STORE_CREATOR_NOT_FOUND', message: 'Creator not found' });
 
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creator.id },
       select: { slug: true },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STORE_NOT_FOUND', message: 'Store not found' });
 
     await this.revalidation.revalidateStoreBySlug(store.slug);
     return { flushed: true, slug: store.slug };
   }
 
+  // Wraps Prisma.store.update so a unique-constraint race (P2002) on slug or
+  // custom_domain is surfaced as a clean ConflictException instead of a 500.
+  // The pre-flight findFirst checks above narrow the common case, but two
+  // concurrent updates can still slip past them and hit the DB constraint.
+  private async runStoreUpdate<T>(op: () => Promise<T>): Promise<T> {
+    try {
+      return await op();
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const target = Array.isArray(err.meta?.target)
+          ? (err.meta?.target as string[]).join(',')
+          : String(err.meta?.target ?? '');
+        const isDomain = target.includes('custom_domain');
+        throw new ConflictException({
+          code: isDomain ? 'STORE_CUSTOM_DOMAIN_TAKEN' : 'STORE_SLUG_TAKEN',
+          message: isDomain
+            ? 'Custom domain already in use'
+            : 'Store slug already taken',
+        });
+      }
+      throw err;
+    }
+  }
+
   async updateLanguages(userId: string, dto: UpdateLanguageDto) {
     const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
-    if (!creator) throw new NotFoundException('Creator not found');
+    if (!creator) throw new NotFoundException({ code: 'STORE_CREATOR_NOT_FOUND', message: 'Creator not found' });
 
     const store = await this.prisma.store.findUnique({ where: { creator_id: creator.id } });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STORE_NOT_FOUND', message: 'Store not found' });
 
     const config = await this.prisma.storeLanguageConfig.upsert({
       where: { store_id: store.id },
@@ -233,4 +331,13 @@ export class StoresService {
 
     return config;
   }
+}
+
+// Convert a custom_domain submitted from the dashboard into the canonical form
+// stored in DB: trimmed/lowercased, with an empty string treated as "clear it"
+// so Prisma stores NULL (the @unique index disallows duplicate empty strings).
+function normalizeStoreUpdate(dto: UpdateStoreDto): UpdateStoreDto {
+  if (!Object.prototype.hasOwnProperty.call(dto, 'custom_domain')) return dto;
+  const raw = (dto.custom_domain ?? '').trim().toLowerCase();
+  return { ...dto, custom_domain: raw || null } as UpdateStoreDto;
 }

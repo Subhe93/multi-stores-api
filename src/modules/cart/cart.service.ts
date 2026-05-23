@@ -16,7 +16,7 @@ export class CartService {
     const customer = await this.prisma.customer.findUnique({
       where: { user_id: userId },
     });
-    if (!customer) throw new NotFoundException('Customer not found');
+    if (!customer) throw new NotFoundException({ code: 'CART_CUSTOMER_NOT_FOUND', message: 'Customer not found' });
 
     let cart = await this.prisma.cart.findUnique({
       where: { customer_id: customer.id },
@@ -260,24 +260,24 @@ export class CartService {
       },
     });
     if (!offer) {
-      throw new BadRequestException('Bundle offer not found');
+      throw new BadRequestException({ code: 'CART_BUNDLE_OFFER_NOT_FOUND', message: 'Bundle offer not found' });
     }
     if (offer.bundle.status !== 'ACTIVE') {
-      throw new BadRequestException('Bundle is not active');
+      throw new BadRequestException({ code: 'CART_BUNDLE_NOT_ACTIVE', message: 'Bundle is not active' });
     }
     if (productId) {
       const linked = offer.bundle.products.some(
         (p) => p.product_id === productId,
       );
       if (!linked) {
-        throw new BadRequestException('Bundle is not available for this product');
+        throw new BadRequestException({ code: 'CART_BUNDLE_NOT_AVAILABLE_FOR_PRODUCT', message: 'Bundle is not available for this product' });
       }
     } else if (customProductId) {
       const linked = offer.bundle.custom_products.some(
         (p) => p.custom_product_id === customProductId,
       );
       if (!linked) {
-        throw new BadRequestException('Bundle is not available for this product');
+        throw new BadRequestException({ code: 'CART_BUNDLE_NOT_AVAILABLE_FOR_PRODUCT', message: 'Bundle is not available for this product' });
       }
     }
 
@@ -369,9 +369,11 @@ export class CartService {
         [{ id: 'cart-line', unitPrice, providerBasePrice: providerBase }],
       );
       if (!check.valid) {
-        throw new BadRequestException(
-          'This bundle offer is no longer profitable for this product and cannot be applied',
-        );
+        throw new BadRequestException({
+          code: 'CART_BUNDLE_NOT_PROFITABLE',
+          message:
+            'This bundle offer is no longer profitable for this product and cannot be applied',
+        });
       }
     }
 
@@ -483,7 +485,7 @@ export class CartService {
     const item = await this.prisma.cartItem.findFirst({
       where: { id: itemId, cart_id: cart.id },
     });
-    if (!item) throw new NotFoundException('Cart item not found');
+    if (!item) throw new NotFoundException({ code: 'CART_ITEM_NOT_FOUND', message: 'Cart item not found' });
 
     const data: { quantity?: number; bundle_offer_id?: string | null } = {};
     if (typeof dto.quantity === 'number') {

@@ -65,9 +65,9 @@ export class CustomProductsService {
       where: { id: customProductId },
       include: { creator: { select: { user_id: true } } },
     });
-    if (!cp) throw new NotFoundException('Custom product not found');
+    if (!cp) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_NOT_FOUND', message: 'Custom product not found' });
     if (cp.creator.user_id !== userId) {
-      throw new ForbiddenException('You do not own this custom product');
+      throw new ForbiddenException({ code: 'CUSTOM_PRODUCT_NOT_OWNED', message: 'You do not own this custom product' });
     }
     return cp;
   }
@@ -81,9 +81,9 @@ export class CustomProductsService {
         translations: true,
       },
     });
-    if (!cp) throw new NotFoundException('Custom product not found');
+    if (!cp) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_NOT_FOUND', message: 'Custom product not found' });
     if (!cp.product.provider || cp.product.provider.user_id !== userId) {
-      throw new ForbiddenException('You do not own this base product');
+      throw new ForbiddenException({ code: 'CUSTOM_PRODUCT_BASE_NOT_OWNED', message: 'You do not own this base product' });
     }
     return cp;
   }
@@ -208,7 +208,7 @@ export class CustomProductsService {
       where: { user_id: userId },
       select: { id: true },
     });
-    if (!creator) throw new NotFoundException('Creator not found');
+    if (!creator) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_CREATOR_NOT_FOUND', message: 'Creator not found' });
 
     const [customConflict, productConflict] = await Promise.all([
       this.prisma.customProduct.findFirst({
@@ -248,12 +248,12 @@ export class CustomProductsService {
       select: { id: true, creator_id: true },
     });
     if (found.length !== bundleIds.length) {
-      throw new BadRequestException('One or more bundles do not exist');
+      throw new BadRequestException({ code: 'CUSTOM_PRODUCT_BUNDLE_NOT_EXIST', message: 'One or more bundles do not exist' });
     }
     for (const b of found) {
       if (b.creator_id !== creatorId) {
         throw new ForbiddenException(
-          'You can only attach your own bundles',
+          { code: 'CUSTOM_PRODUCT_BUNDLE_NOT_OWNED', message: 'You can only attach your own bundles' },
         );
       }
     }
@@ -263,7 +263,7 @@ export class CustomProductsService {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
     });
-    if (!creator) throw new NotFoundException('Creator not found');
+    if (!creator) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_CREATOR_NOT_FOUND', message: 'Creator not found' });
 
     // Validate pricing consistency
     this.validatePricing(dto.pricing_type, dto);
@@ -314,7 +314,7 @@ export class CustomProductsService {
         where: { id: dto.product_id },
         include: { variants: { where: { is_active: true } } },
       });
-      if (!product) throw new NotFoundException('Product not found');
+      if (!product) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_BASE_PRODUCT_NOT_FOUND', message: 'Product not found' });
 
       variantRows = product.variants.map((v) => ({
         variant_id: v.id,
@@ -330,13 +330,13 @@ export class CustomProductsService {
         where: { id: dto.product_id },
         include: { variants: { where: { is_active: true } } },
       });
-      if (!product) throw new NotFoundException('Product not found');
+      if (!product) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_BASE_PRODUCT_NOT_FOUND', message: 'Product not found' });
 
       if (product.variants.length > 0) {
         // Product has variants — require at least one selected
         if (!selected_variants || selected_variants.length === 0) {
           throw new BadRequestException(
-            'At least one variant must be selected in CUSTOMIZE mode',
+            { code: 'CUSTOM_PRODUCT_VARIANT_REQUIRED', message: 'At least one variant must be selected in CUSTOMIZE mode' },
           );
         }
 
@@ -414,7 +414,7 @@ export class CustomProductsService {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
     });
-    if (!creator) throw new NotFoundException('Creator not found');
+    if (!creator) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_CREATOR_NOT_FOUND', message: 'Creator not found' });
 
     const skip = (page - 1) * limit;
     const [data, total] = await Promise.all([
@@ -441,7 +441,7 @@ export class CustomProductsService {
       where: { id },
       include: this.includes,
     });
-    if (!cp) throw new NotFoundException('Custom product not found');
+    if (!cp) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_NOT_FOUND', message: 'Custom product not found' });
     return cp;
   }
 
@@ -453,11 +453,11 @@ export class CustomProductsService {
         product: { select: { provider_id: true, base_price: true } },
       },
     });
-    if (!existing) throw new NotFoundException('Custom product not found');
+    if (!existing) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_NOT_FOUND', message: 'Custom product not found' });
 
     // Ownership check
     if (userId && existing.creator.user_id !== userId) {
-      throw new ForbiddenException('You do not own this custom product');
+      throw new ForbiddenException({ code: 'CUSTOM_PRODUCT_NOT_OWNED', message: 'You do not own this custom product' });
     }
 
     // Auto-revert to PENDING_REVIEW if a content edit happens on a PUBLISHED product with a provider.
@@ -489,7 +489,7 @@ export class CustomProductsService {
       dto.status === ProductStatus.PUBLISHED &&
       existing.product.provider_id
     ) {
-      throw new ForbiddenException('Cannot publish a product that is awaiting provider review');
+      throw new ForbiddenException({ code: 'CUSTOM_PRODUCT_PUBLISH_AWAITING_REVIEW', message: 'Cannot publish a product that is awaiting provider review' });
     }
 
     // If product is REJECTED, content edits should go to DRAFT (not stay rejected) so the
@@ -501,7 +501,7 @@ export class CustomProductsService {
       existing.product.provider_id &&
       dto.status === ProductStatus.PUBLISHED
     ) {
-      throw new ForbiddenException('Cannot publish a rejected product without resubmitting for review');
+      throw new ForbiddenException({ code: 'CUSTOM_PRODUCT_PUBLISH_REJECTED', message: 'Cannot publish a rejected product without resubmitting for review' });
     }
 
     const pricingType = dto.pricing_type ?? existing.pricing_type;
@@ -711,7 +711,7 @@ export class CustomProductsService {
         faqs: { include: { translations: true } },
       },
     });
-    if (!source) throw new NotFoundException('Custom product not found');
+    if (!source) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_NOT_FOUND', message: 'Custom product not found' });
 
     const created = await this.prisma.$transaction(async (tx) => {
       const newCp = await tx.customProduct.create({
@@ -882,7 +882,7 @@ export class CustomProductsService {
   /** Provider rejects a custom product with a reason → REJECTED. */
   async reject(id: string, userId: string, reason: string) {
     if (!reason || !reason.trim()) {
-      throw new BadRequestException('Rejection reason is required');
+      throw new BadRequestException({ code: 'CUSTOM_PRODUCT_REJECTION_REASON_REQUIRED', message: 'Rejection reason is required' });
     }
 
     const cp = await this.assertProviderOwnsBase(id, userId);
@@ -922,7 +922,7 @@ export class CustomProductsService {
     const provider = await this.prisma.provider.findUnique({
       where: { user_id: userId },
     });
-    if (!provider) throw new NotFoundException('Provider not found');
+    if (!provider) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_PROVIDER_NOT_FOUND', message: 'Provider not found' });
 
     const skip = (page - 1) * limit;
     const where = {
@@ -998,7 +998,7 @@ export class CustomProductsService {
 
   async updateFaq(faqId: string, dto: { sort_order?: number; translations?: { locale: string; question: string; answer: string }[] }) {
     const faq = await this.prisma.customProductFaq.findUnique({ where: { id: faqId } });
-    if (!faq) throw new NotFoundException('FAQ not found');
+    if (!faq) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_FAQ_NOT_FOUND', message: 'FAQ not found' });
 
     if (dto.translations && dto.translations.length > 0) {
       await this.prisma.customProductFaqTranslation.deleteMany({ where: { faq_id: faqId } });
@@ -1033,14 +1033,14 @@ export class CustomProductsService {
       case PricingType.SINGLE:
         if (data.final_price === undefined || data.final_price === null) {
           throw new BadRequestException(
-            'final_price is required when pricing_type is SINGLE',
+            { code: 'CUSTOM_PRODUCT_FINAL_PRICE_REQUIRED', message: 'final_price is required when pricing_type is SINGLE' },
           );
         }
         break;
       case PricingType.MARGIN:
         if (data.margin_amount === undefined || data.margin_amount === null) {
           throw new BadRequestException(
-            'margin_amount is required when pricing_type is MARGIN',
+            { code: 'CUSTOM_PRODUCT_MARGIN_AMOUNT_REQUIRED', message: 'margin_amount is required when pricing_type is MARGIN' },
           );
         }
         break;
@@ -1051,7 +1051,7 @@ export class CustomProductsService {
           );
           if (missing.length > 0) {
             throw new BadRequestException(
-              'custom_price is required for each variant when pricing_type is PER_VARIANT',
+              { code: 'CUSTOM_PRODUCT_VARIANT_PRICE_REQUIRED', message: 'custom_price is required for each variant when pricing_type is PER_VARIANT' },
             );
           }
         }

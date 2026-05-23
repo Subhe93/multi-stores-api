@@ -33,6 +33,9 @@ import { TemplatesModule } from './modules/templates/templates.module';
 import { MenusModule } from './modules/menus/menus.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { PaymentsModule } from './modules/payments/payments.module';
+import { MailModule } from './modules/mail/mail.module';
+import { LegalModule } from './modules/legal/legal.module';
+import { NotificationTemplatesModule } from './modules/notification-templates/notification-templates.module';
 
 @Module({
   imports: [
@@ -70,6 +73,9 @@ import { PaymentsModule } from './modules/payments/payments.module';
     MenusModule,
     NotificationsModule,
     PaymentsModule,
+    MailModule,
+    LegalModule,
+    NotificationTemplatesModule,
   ],
 })
 export class AppModule {}

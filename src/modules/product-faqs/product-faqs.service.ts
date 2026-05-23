@@ -27,7 +27,7 @@ export class ProductFaqsService {
 
   async update(id: string, dto: UpdateProductFaqDto) {
     const faq = await this.prisma.productFaq.findUnique({ where: { id } });
-    if (!faq) throw new NotFoundException('FAQ not found');
+    if (!faq) throw new NotFoundException({ code: 'PRODUCT_FAQ_NOT_FOUND', message: 'FAQ not found' });
 
     if (dto.translations && dto.translations.length > 0) {
       await this.prisma.productFaqTranslation.deleteMany({

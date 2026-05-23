@@ -16,7 +16,7 @@ export class PageBuilderService {
 
   async addBlock(pageId: string, dto: CreateBlockDto) {
     const page = await this.prisma.staticPage.findUnique({ where: { id: pageId } });
-    if (!page) throw new NotFoundException('Page not found');
+    if (!page) throw new NotFoundException({ code: 'PAGE_BUILDER_PAGE_NOT_FOUND', message: 'Page not found' });
 
     const { translations, ...data } = dto;
 

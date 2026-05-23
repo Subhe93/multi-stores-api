@@ -135,11 +135,11 @@ export class ProductsService {
       select: { id: true, creator_id: true },
     });
     if (found.length !== bundleIds.length) {
-      throw new NotFoundException('One or more bundles do not exist');
+      throw new NotFoundException({ code: 'PRODUCT_BUNDLES_NOT_FOUND', message: 'One or more bundles do not exist' });
     }
     for (const b of found) {
       if (b.creator_id !== creatorId) {
-        throw new ForbiddenException('You can only attach your own bundles');
+        throw new ForbiddenException({ code: 'PRODUCT_BUNDLES_NOT_OWNED', message: 'You can only attach your own bundles' });
       }
     }
   }
@@ -157,13 +157,13 @@ export class ProductsService {
       const provider = await this.prisma.provider.findUnique({
         where: { user_id: userId },
       });
-      if (!provider) throw new NotFoundException('Provider profile not found');
+      if (!provider) throw new NotFoundException({ code: 'PRODUCT_PROVIDER_PROFILE_NOT_FOUND', message: 'Provider profile not found' });
       productData.provider_id = provider.id;
     } else if (userRole === UserRole.CREATOR) {
       const creator = await this.prisma.creator.findUnique({
         where: { user_id: userId },
       });
-      if (!creator) throw new NotFoundException('Creator profile not found');
+      if (!creator) throw new NotFoundException({ code: 'PRODUCT_CREATOR_PROFILE_NOT_FOUND', message: 'Creator profile not found' });
       productData.creator_id = creator.id;
     }
 
@@ -308,7 +308,7 @@ export class ProductsService {
     const provider = await this.prisma.provider.findUnique({
       where: { user_id: userId },
     });
-    if (!provider) throw new NotFoundException('Provider profile not found');
+    if (!provider) throw new NotFoundException({ code: 'PRODUCT_PROVIDER_PROFILE_NOT_FOUND', message: 'Provider profile not found' });
 
     return this.findAll({ ...filters, provider_id: provider.id });
   }
@@ -319,7 +319,7 @@ export class ProductsService {
       include: this.productIncludes,
     });
 
-    if (!product) throw new NotFoundException('Product not found');
+    if (!product) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
     return product;
   }
 
@@ -330,7 +330,7 @@ export class ProductsService {
     dto: UpdateProductDto,
   ) {
     const product = await this.prisma.product.findUnique({ where: { id } });
-    if (!product) throw new NotFoundException('Product not found');
+    if (!product) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
 
     // التحقق من الملكية
     await this.checkOwnership(product, userId, userRole);
@@ -435,7 +435,7 @@ export class ProductsService {
 
   async delete(id: string, userId: string, userRole: UserRole) {
     const product = await this.prisma.product.findUnique({ where: { id } });
-    if (!product) throw new NotFoundException('Product not found');
+    if (!product) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
 
     await this.checkOwnership(product, userId, userRole);
 
@@ -466,7 +466,7 @@ export class ProductsService {
         faqs: { include: { translations: true } },
       },
     });
-    if (!source) throw new NotFoundException('Product not found');
+    if (!source) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
 
     await this.checkOwnership(source, userId, userRole);
 
@@ -616,7 +616,7 @@ export class ProductsService {
     userRole: UserRole,
   ) {
     const product = await this.prisma.product.findUnique({ where: { id } });
-    if (!product) throw new NotFoundException('Product not found');
+    if (!product) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
 
     await this.checkOwnership(product, userId, userRole);
 
@@ -684,7 +684,7 @@ export class ProductsService {
       },
     });
 
-    if (!product) throw new NotFoundException('Product not found');
+    if (!product) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
 
     // Fallback to provider's default shipping profile if none assigned
     if (!(product as any).shipping_profile && product.provider_id) {
@@ -712,7 +712,7 @@ export class ProductsService {
         where: { user_id: userId },
       });
       if (product.provider_id !== provider?.id) {
-        throw new ForbiddenException('Not your product');
+        throw new ForbiddenException({ code: 'PRODUCT_FORBIDDEN', message: 'Not your product' });
       }
     }
 
@@ -721,7 +721,7 @@ export class ProductsService {
         where: { user_id: userId },
       });
       if (product.creator_id !== creator?.id) {
-        throw new ForbiddenException('Not your product');
+        throw new ForbiddenException({ code: 'PRODUCT_FORBIDDEN', message: 'Not your product' });
       }
     }
   }

@@ -19,7 +19,7 @@ export class CreatorsService {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
     });
-    if (!creator) throw new NotFoundException('Creator profile not found');
+    if (!creator) throw new NotFoundException({ code: 'CREATOR_PROFILE_NOT_FOUND', message: 'Creator profile not found' });
     return creator;
   }
 
@@ -28,7 +28,7 @@ export class CreatorsService {
       where: { id },
       include: { user: { select: { email: true, status: true } } },
     });
-    if (!creator) throw new NotFoundException('Creator not found');
+    if (!creator) throw new NotFoundException({ code: 'CREATOR_NOT_FOUND', message: 'Creator not found' });
     return creator;
   }
 

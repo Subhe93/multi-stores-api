@@ -3,6 +3,12 @@ import { IsString, IsOptional, IsBoolean, IsArray, IsObject, Matches, MinLength,
 const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const SLUG_MESSAGE = 'slug must be lowercase letters, digits, and hyphens (no leading/trailing hyphen)';
 
+// Accepts an empty string (means "clear the domain") OR a valid hostname like
+// shop.example.com. Apex domains (example.com) are allowed too, but the user
+// must point a CNAME to the platform — they're responsible for DNS setup.
+const DOMAIN_REGEX = /^$|^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
+const DOMAIN_MESSAGE = 'custom_domain must be a valid domain like shop.example.com';
+
 export class CreateStoreDto {
   @IsString()
   @MinLength(2)
@@ -53,6 +59,8 @@ export class UpdateStoreDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(253)
+  @Matches(DOMAIN_REGEX, { message: DOMAIN_MESSAGE })
   custom_domain?: string;
 
   @IsOptional()

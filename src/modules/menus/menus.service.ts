@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import {
   CreateMenuDto,
   SetMenuItemsDto,
@@ -14,19 +15,22 @@ import {
 
 @Injectable()
 export class MenusService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private revalidation: RevalidationService,
+  ) {}
 
   private async resolveCreatorStoreId(userId: string): Promise<string> {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
       select: { id: true },
     });
-    if (!creator) throw new NotFoundException('Creator not found');
+    if (!creator) throw new NotFoundException({ code: 'MENU_CREATOR_NOT_FOUND', message: 'Creator not found' });
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creator.id },
       select: { id: true },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'MENU_STORE_NOT_FOUND', message: 'Store not found' });
     return store.id;
   }
 
@@ -35,8 +39,8 @@ export class MenusService {
       where: { id: menuId },
       select: { id: true, store_id: true },
     });
-    if (!menu) throw new NotFoundException('Menu not found');
-    if (menu.store_id !== storeId) throw new ForbiddenException('Not your menu');
+    if (!menu) throw new NotFoundException({ code: 'MENU_NOT_FOUND', message: 'Menu not found' });
+    if (menu.store_id !== storeId) throw new ForbiddenException({ code: 'MENU_NOT_OWNED', message: 'Not your menu' });
   }
 
   // ── Menu CRUD ───────────────────────────────────────────
@@ -68,7 +72,7 @@ export class MenusService {
       });
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        throw new ConflictException('A menu with this key already exists');
+        throw new ConflictException({ code: 'MENU_KEY_ALREADY_EXISTS', message: 'A menu with this key already exists' });
       }
       throw err;
     }
@@ -81,14 +85,16 @@ export class MenusService {
     if (dto.key !== undefined) data.key = dto.key;
     if (dto.name !== undefined) data.name = dto.name;
     try {
-      return await this.prisma.menu.update({
+      const updated = await this.prisma.menu.update({
         where: { id: menuId },
         data,
         include: { items: { orderBy: { sort_order: 'asc' } } },
       });
+      await this.revalidation.revalidateStoreById(storeId);
+      return updated;
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        throw new ConflictException('A menu with this key already exists');
+        throw new ConflictException({ code: 'MENU_KEY_ALREADY_EXISTS', message: 'A menu with this key already exists' });
       }
       throw err;
     }
@@ -97,44 +103,63 @@ export class MenusService {
   async delete(userId: string, menuId: string) {
     const storeId = await this.resolveCreatorStoreId(userId);
     await this.assertMenuBelongsToStore(menuId, storeId);
-    return this.prisma.menu.delete({ where: { id: menuId } });
+    const deleted = await this.prisma.menu.delete({ where: { id: menuId } });
+    await this.revalidation.revalidateStoreById(storeId);
+    return deleted;
   }
 
   // ── Items ───────────────────────────────────────────────
 
   /**
-   * Replace a menu's items wholesale with the editor's ordered list. We
+   * Replace a menu's items wholesale with the editor's ordered tree. We
    * wipe + recreate inside a transaction: simpler than diffing, and the
    * menu item count is small (a nav list), so the churn is negligible.
-   * sort_order is derived from array position. parent_id references are
-   * resolved client-side via the existing item ids the editor passes back.
+   * sort_order is derived from array position within each level; nested
+   * `children` are created recursively with parent_id set to the row just
+   * created for them.
    */
   async setItems(userId: string, menuId: string, dto: SetMenuItemsDto) {
     const storeId = await this.resolveCreatorStoreId(userId);
     await this.assertMenuBelongsToStore(menuId, storeId);
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       await tx.menuItem.deleteMany({ where: { menu_id: menuId } });
-      // Recreate top-level first so nested parent_id references resolve.
-      // v1 editor only sends a flat list, so parent_id is typically null.
-      for (let i = 0; i < dto.items.length; i++) {
-        const item = dto.items[i];
-        await tx.menuItem.create({
-          data: {
-            menu_id: menuId,
-            parent_id: null, // flat in v1 — nesting handled in a later phase
-            sort_order: i,
-            label: item.label,
-            label_i18n: (item.label_i18n ?? {}) as Prisma.InputJsonValue,
-            url: item.url,
-            open_in_new_tab: item.open_in_new_tab ?? false,
-          },
-        });
-      }
+
+      const createLevel = async (
+        nodes: SetMenuItemsDto['items'],
+        parentId: string | null,
+      ) => {
+        for (let i = 0; i < nodes.length; i++) {
+          const item = nodes[i];
+          const created = await tx.menuItem.create({
+            data: {
+              menu_id: menuId,
+              parent_id: parentId,
+              sort_order: i,
+              label: item.label,
+              label_i18n: (item.label_i18n ?? {}) as Prisma.InputJsonValue,
+              url: item.url,
+              open_in_new_tab: item.open_in_new_tab ?? false,
+            },
+          });
+          if (item.children?.length) {
+            await createLevel(item.children, created.id);
+          }
+        }
+      };
+
+      await createLevel(dto.items, null);
+
       return tx.menu.findUnique({
         where: { id: menuId },
         include: { items: { orderBy: { sort_order: 'asc' } } },
       });
     });
+
+    // Header/footer chrome reads menus from the cached store layout — flush it
+    // so the new nav (and its sub-items) show up immediately.
+    await this.revalidation.revalidateStoreById(storeId);
+
+    return result;
   }
 }

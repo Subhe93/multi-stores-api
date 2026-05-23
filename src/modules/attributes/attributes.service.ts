@@ -36,7 +36,7 @@ export class AttributesService {
       include: { translations: true },
     });
 
-    if (!template) throw new NotFoundException('Attribute template not found');
+    if (!template) throw new NotFoundException({ code: 'ATTRIBUTE_TEMPLATE_NOT_FOUND', message: 'Attribute template not found' });
     return template;
   }
 

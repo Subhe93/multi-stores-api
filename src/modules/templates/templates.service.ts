@@ -33,7 +33,7 @@ export class TemplatesService {
 
   getKit(id: string) {
     const kit = findKit(id);
-    if (!kit) throw new NotFoundException('Template not found');
+    if (!kit) throw new NotFoundException({ code: 'TEMPLATE_NOT_FOUND', message: 'Template not found' });
     return {
       id: kit.id,
       name: kit.name,
@@ -56,7 +56,7 @@ export class TemplatesService {
    */
   async importKit(userId: string, kitId: string, opts: { withDemoData?: boolean }): Promise<ImportKitResult> {
     const kit = findKit(kitId);
-    if (!kit) throw new NotFoundException('Template not found');
+    if (!kit) throw new NotFoundException({ code: 'TEMPLATE_NOT_FOUND', message: 'Template not found' });
 
     const storeId = await this.resolveCreatorStoreId(userId);
     const store = await this.prisma.store.findUnique({
@@ -329,12 +329,12 @@ export class TemplatesService {
       where: { user_id: userId },
       select: { id: true },
     });
-    if (!creator) throw new NotFoundException('Creator not found');
+    if (!creator) throw new NotFoundException({ code: 'TEMPLATE_CREATOR_NOT_FOUND', message: 'Creator not found' });
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creator.id },
       select: { id: true },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'TEMPLATE_STORE_NOT_FOUND', message: 'Store not found' });
     return store.id;
   }
 }

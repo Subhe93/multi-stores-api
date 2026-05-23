@@ -10,6 +10,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RegisterDto, LoginDto } from './dto';
 import { UserRole } from '@prisma/client';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class AuthService {
@@ -17,6 +18,7 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private mail: MailService,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -24,11 +26,11 @@ export class AuthService {
       where: { email: dto.email },
     });
     if (existing) {
-      throw new ConflictException('Email already registered');
+      throw new ConflictException({ code: 'AUTH_EMAIL_EXISTS', message: 'Email already registered' });
     }
 
     if (dto.role === UserRole.ADMIN) {
-      throw new ForbiddenException('Cannot register as admin');
+      throw new ForbiddenException({ code: 'AUTH_CANNOT_REGISTER_ADMIN', message: 'Cannot register as admin' });
     }
 
     const password_hash = await bcrypt.hash(dto.password, 12);
@@ -80,16 +82,16 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException({ code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid credentials' });
     }
 
     const passwordValid = await bcrypt.compare(dto.password, user.password_hash);
     if (!passwordValid) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException({ code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid credentials' });
     }
 
     if (user.status !== 'ACTIVE') {
-      throw new ForbiddenException('Account is not active');
+      throw new ForbiddenException({ code: 'AUTH_ACCOUNT_NOT_ACTIVE', message: 'Account is not active' });
     }
 
     const tokens = await this.generateTokens(user.id, user.email, user.role);
@@ -121,7 +123,7 @@ export class AuthService {
 
       return this.generateTokens(user.id, user.email, user.role);
     } catch {
-      throw new UnauthorizedException('Invalid refresh token');
+      throw new UnauthorizedException({ code: 'AUTH_INVALID_REFRESH_TOKEN', message: 'Invalid refresh token' });
     }
   }
 
@@ -143,17 +145,17 @@ export class AuthService {
     return { message: 'Logged out successfully' };
   }
 
-  async forgotPassword(email: string) {
+  async forgotPassword(email: string, storeSlug?: string) {
     const user = await this.prisma.user.findUnique({
       where: { email },
     });
 
-    // لا نكشف إذا كان الإيميل موجود أم لا — لأسباب أمنية
+    // Never reveal whether the email exists — always return the same message.
     if (!user) {
       return { message: 'If the email exists, a reset link will be sent' };
     }
 
-    // إنشاء توكن إعادة تعيين (صالح 1 ساعة)
+    // Create a reset token (valid for 1 hour).
     const resetToken = await this.jwtService.signAsync(
       { sub: user.id, type: 'password_reset' },
       {
@@ -162,19 +164,65 @@ export class AuthService {
       },
     );
 
-    // حفظ التوكن في الـ sessions
+    // Persist the token in sessions so it can be used exactly once.
     await this.prisma.session.create({
       data: {
         user_id: user.id,
         token: resetToken,
-        expires_at: new Date(Date.now() + 60 * 60 * 1000), // ساعة
+        expires_at: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
       },
     });
 
-    // TODO: إرسال إيميل مع رابط إعادة التعيين
-    // await this.mailService.sendResetEmail(user.email, resetToken);
+    // Email the reset link (best-effort — never blocks or reveals existence).
+    // When the request came from a store, use that store's primary locale so
+    // the email body matches the storefront language.
+    const resetUrl = await this.buildResetUrl(resetToken, storeSlug);
+    let mailLocale: string | undefined;
+    if (storeSlug) {
+      const store = await this.prisma.store.findUnique({
+        where: { slug: storeSlug },
+        select: { language_config: { select: { primary_locale: true } } },
+      });
+      mailLocale = store?.language_config?.primary_locale;
+    }
+    await this.mail.sendPasswordReset(user.email, resetUrl, mailLocale);
 
     return { message: 'If the email exists, a reset link will be sent' };
+  }
+
+  /**
+   * Build the password-reset link. When the request came from a store
+   * storefront (store_slug), the link points back at that store's own domain
+   * (custom domain or {slug}.{platform-host}) so the customer stays in the same
+   * storefront. Otherwise it points at the platform storefront ([locale] tree).
+   * The store domain is derived server-side from the DB — never from raw client
+   * input — so this can't be turned into an open redirect.
+   */
+  private async buildResetUrl(token: string, storeSlug?: string): Promise<string> {
+    const platformBase =
+      this.configService.get<string>('STOREFRONT_URL') ||
+      'http://localhost:3003';
+    const q = `token=${encodeURIComponent(token)}`;
+
+    if (storeSlug) {
+      const store = await this.prisma.store.findUnique({
+        where: { slug: storeSlug },
+        select: { slug: true, custom_domain: true, is_active: true },
+      });
+      if (store?.is_active) {
+        if (store.custom_domain) {
+          return `https://${store.custom_domain}/auth/reset-password?${q}`;
+        }
+        try {
+          const url = new URL(platformBase);
+          return `${url.protocol}//${store.slug}.${url.host}/auth/reset-password?${q}`;
+        } catch {
+          // Fall through to the platform link on a malformed base URL.
+        }
+      }
+    }
+
+    return `${platformBase}/en/auth/reset-password?${q}`;
   }
 
   async resetPassword(token: string, newPassword: string) {
@@ -184,16 +232,16 @@ export class AuthService {
       });
 
       if (payload.type !== 'password_reset') {
-        throw new UnauthorizedException('Invalid reset token');
+        throw new UnauthorizedException({ code: 'AUTH_INVALID_RESET_TOKEN', message: 'Invalid reset token' });
       }
 
-      // التأكد أن التوكن موجود في الـ sessions (لم يُستخدم سابقاً)
+      // Ensure the token still exists in sessions (i.e. wasn't already used).
       const session = await this.prisma.session.findUnique({
         where: { token },
       });
 
       if (!session || session.expires_at < new Date()) {
-        throw new UnauthorizedException('Reset token expired or already used');
+        throw new UnauthorizedException({ code: 'AUTH_RESET_TOKEN_EXPIRED', message: 'Reset token expired or already used' });
       }
 
       const password_hash = await bcrypt.hash(newPassword, 12);
@@ -203,21 +251,22 @@ export class AuthService {
         data: { password_hash },
       });
 
-      // حذف التوكن بعد الاستخدام
-      await this.prisma.session.delete({ where: { token } });
+      // Revoke ALL of the user's sessions: consumes this reset token, drops any
+      // other outstanding reset links, and logs the user out everywhere.
+      await this.prisma.session.deleteMany({ where: { user_id: payload.sub } });
 
       return { message: 'Password reset successfully' };
     } catch {
-      throw new UnauthorizedException('Invalid or expired reset token');
+      throw new UnauthorizedException({ code: 'AUTH_INVALID_OR_EXPIRED_RESET_TOKEN', message: 'Invalid or expired reset token' });
     }
   }
 
   async changePassword(userId: string, currentPassword: string, newPassword: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new UnauthorizedException('User not found');
+    if (!user) throw new UnauthorizedException({ code: 'AUTH_USER_NOT_FOUND', message: 'User not found' });
 
     const valid = await bcrypt.compare(currentPassword, user.password_hash);
-    if (!valid) throw new UnauthorizedException('Current password is incorrect');
+    if (!valid) throw new UnauthorizedException({ code: 'AUTH_CURRENT_PASSWORD_INCORRECT', message: 'Current password is incorrect' });
 
     const password_hash = await bcrypt.hash(newPassword, 12);
     await this.prisma.user.update({

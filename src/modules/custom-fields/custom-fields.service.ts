@@ -10,7 +10,7 @@ export class CustomFieldsService {
     const product = await this.prisma.product.findUnique({
       where: { id: productId },
     });
-    if (!product) throw new NotFoundException('Product not found');
+    if (!product) throw new NotFoundException({ code: 'CUSTOM_FIELD_PRODUCT_NOT_FOUND', message: 'Product not found' });
 
     const { translations, ...data } = dto;
 

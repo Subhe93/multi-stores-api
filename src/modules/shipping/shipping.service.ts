@@ -51,7 +51,7 @@ export class ShippingService {
   async deleteProfile(id: string, ownerId: string, ownerType: 'provider' | 'creator') {
     const where = ownerType === 'provider' ? { provider_id: ownerId } : { creator_id: ownerId };
     const profile = await this.prisma.shippingProfile.findFirst({ where: { id, ...where } });
-    if (!profile) throw new NotFoundException('Shipping profile not found');
+    if (!profile) throw new NotFoundException({ code: 'SHIPPING_PROFILE_NOT_FOUND', message: 'Shipping profile not found' });
     // Delete all zones first, then the profile
     await this.prisma.shippingZone.deleteMany({ where: { profile_id: id } });
     return this.prisma.shippingProfile.delete({ where: { id } });
@@ -74,7 +74,7 @@ export class ShippingService {
       include: { zones: true },
     });
 
-    if (!profile) throw new NotFoundException('Shipping profile not found');
+    if (!profile) throw new NotFoundException({ code: 'SHIPPING_PROFILE_NOT_FOUND', message: 'Shipping profile not found' });
 
     // إيجاد المنطقة التي تحتوي على دولة العميل
     const zone = profile.zones.find((z) =>
@@ -109,7 +109,7 @@ export class ShippingService {
     // Resolve shipping profiles for all product IDs
     const products = await this.prisma.product.findMany({
       where: { id: { in: dto.product_ids } },
-      select: { id: true, shipping_profile_id: true, provider_id: true },
+      select: { id: true, shipping_profile_id: true, provider_id: true, creator_id: true },
     });
 
     // Also check for custom products whose underlying product might not be in the list
@@ -119,7 +119,7 @@ export class ShippingService {
     if (missingIds.length > 0) {
       const customProducts = await this.prisma.customProduct.findMany({
         where: { id: { in: missingIds } },
-        select: { product: { select: { id: true, shipping_profile_id: true, provider_id: true } } },
+        select: { product: { select: { id: true, shipping_profile_id: true, provider_id: true, creator_id: true } } },
       });
       for (const cp of customProducts) {
         if (cp.product && !products.find((p) => p.id === cp.product.id)) {
@@ -137,6 +137,12 @@ export class ShippingService {
       } else if (prod.provider_id) {
         const defaultProfile = await this.prisma.shippingProfile.findFirst({
           where: { provider_id: prod.provider_id, is_default: true },
+        });
+        if (defaultProfile) profileIds.add(defaultProfile.id);
+      } else if (prod.creator_id) {
+        // Creator-only product: fall back to the creator's default profile.
+        const defaultProfile = await this.prisma.shippingProfile.findFirst({
+          where: { creator_id: prod.creator_id, is_default: true },
         });
         if (defaultProfile) profileIds.add(defaultProfile.id);
       }

@@ -7,6 +7,7 @@ import {
   Body,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { AuthGuard } from '@nestjs/passport';
 import { StoresService } from './stores.service';
 import {
@@ -38,6 +39,17 @@ export class StoresController {
   @Roles(UserRole.ADMIN)
   adminUpdate(@Param('creatorId') creatorId: string, @Body() dto: UpdateStoreDto) {
     return this.storesService.adminUpdateByCreatorId(creatorId, dto);
+  }
+
+  // Public — Resolve a custom CNAME (e.g. shop.merchant.com) to its store slug.
+  // Used by the storefront proxy on incoming requests; returns only the slug.
+  // Declared before :slug so the path segment doesn't get swallowed.
+  // Rate-limited per IP to deter enumeration of registered custom domains.
+  @Get('by-domain/:host')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  findByDomain(@Param('host') host: string) {
+    return this.storesService.findSlugByCustomDomain(host);
   }
 
   // Public — Get a store by its slug

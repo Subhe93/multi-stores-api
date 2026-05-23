@@ -1,14 +1,25 @@
-import { IsNumber, IsString, IsOptional } from 'class-validator';
+import { IsString, IsOptional } from 'class-validator';
 
+// Order-first flow: the client only sends the order id. The server derives the
+// charge amount, currency, and Connect destination from the order itself, so a
+// tampered client cannot pay less than the order total.
 export class CreatePaymentIntentDto {
-  @IsNumber()
-  amount: number;
+  @IsString()
+  order_id: string;
+}
+
+// Admin-managed platform Stripe credentials. All optional so the admin can
+// update one field at a time; an empty string clears that value.
+export class UpdateStripeSettingsDto {
+  @IsOptional()
+  @IsString()
+  secret_key?: string;
 
   @IsOptional()
   @IsString()
-  currency?: string;
+  publishable_key?: string;
 
   @IsOptional()
   @IsString()
-  order_id?: string;
+  webhook_secret?: string;
 }

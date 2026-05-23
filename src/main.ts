@@ -8,7 +8,11 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // rawBody keeps the unparsed request body available (req.rawBody) so the
+  // Stripe webhook can verify its signature against the exact bytes.
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
 
   // Serve uploaded files as static
   app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });

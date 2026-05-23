@@ -9,8 +9,15 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
-import { RegisterDto, LoginDto, ChangePasswordDto } from './dto';
+import {
+  RegisterDto,
+  LoginDto,
+  ChangePasswordDto,
+  ForgotPasswordDto,
+  ResetPasswordDto,
+} from './dto';
 import { CurrentUser } from '../../common/decorators';
 
 @Controller('auth')
@@ -44,19 +51,21 @@ export class AuthController {
     return this.authService.logout(userId, refreshToken);
   }
 
+  // Rate-limited to curb user-enumeration timing probes and email-bombing.
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
-  forgotPassword(@Body('email') email: string) {
-    return this.authService.forgotPassword(email);
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto.email, dto.store_slug);
   }
 
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
-  resetPassword(
-    @Body('token') token: string,
-    @Body('password') password: string,
-  ) {
-    return this.authService.resetPassword(token, password);
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto.token, dto.password);
   }
 
   @Put('change-password')

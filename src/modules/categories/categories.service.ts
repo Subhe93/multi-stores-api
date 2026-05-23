@@ -56,7 +56,7 @@ export class CategoriesService {
       },
     });
 
-    if (!category) throw new NotFoundException('Category not found');
+    if (!category) throw new NotFoundException({ code: 'CATEGORY_NOT_FOUND', message: 'Category not found' });
     return category;
   }
 
@@ -74,7 +74,7 @@ export class CategoriesService {
       },
     });
 
-    if (!category) throw new NotFoundException('Category not found');
+    if (!category) throw new NotFoundException({ code: 'CATEGORY_NOT_FOUND', message: 'Category not found' });
     return category;
   }
 
@@ -117,7 +117,7 @@ export class CategoriesService {
       },
     });
 
-    if (!category) throw new NotFoundException('Category not found');
+    if (!category) throw new NotFoundException({ code: 'CATEGORY_NOT_FOUND', message: 'Category not found' });
     return category.attribute_templates.map((cat) => cat.template);
   }
 

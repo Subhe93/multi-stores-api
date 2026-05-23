@@ -21,7 +21,7 @@ export class CreatorCategoriesService {
       where: { user_id: userId },
       select: { id: true },
     });
-    if (!creator) throw new NotFoundException('Creator profile not found');
+    if (!creator) throw new NotFoundException({ code: 'CREATOR_CATEGORY_CREATOR_PROFILE_NOT_FOUND', message: 'Creator profile not found' });
     return creator.id;
   }
 
@@ -30,9 +30,9 @@ export class CreatorCategoriesService {
       where: { id },
       select: { creator_id: true },
     });
-    if (!found) throw new NotFoundException('Collection not found');
+    if (!found) throw new NotFoundException({ code: 'CREATOR_CATEGORY_NOT_FOUND', message: 'Collection not found' });
     if (found.creator_id !== creatorId) {
-      throw new ForbiddenException('Not your collection');
+      throw new ForbiddenException({ code: 'CREATOR_CATEGORY_NOT_OWNED', message: 'Not your collection' });
     }
   }
 
@@ -40,7 +40,7 @@ export class CreatorCategoriesService {
   private async assertNoCycle(id: string, parentId: string | null | undefined) {
     if (!parentId || parentId === id) {
       if (parentId === id) {
-        throw new BadRequestException('A collection cannot be its own parent');
+        throw new BadRequestException({ code: 'CREATOR_CATEGORY_SELF_PARENT', message: 'A collection cannot be its own parent' });
       }
       return;
     }
@@ -48,7 +48,7 @@ export class CreatorCategoriesService {
     const seen = new Set<string>();
     while (cursor) {
       if (cursor === id) {
-        throw new BadRequestException('Cycle detected in collection hierarchy');
+        throw new BadRequestException({ code: 'CREATOR_CATEGORY_CYCLE_DETECTED', message: 'Cycle detected in collection hierarchy' });
       }
       if (seen.has(cursor)) break;
       seen.add(cursor);
@@ -78,7 +78,7 @@ export class CreatorCategoriesService {
         select: { creator_id: true },
       });
       if (!parent || parent.creator_id !== creatorId) {
-        throw new BadRequestException('Invalid parent collection');
+        throw new BadRequestException({ code: 'CREATOR_CATEGORY_INVALID_PARENT', message: 'Invalid parent collection' });
       }
     }
 
@@ -171,7 +171,7 @@ export class CreatorCategoriesService {
         },
       },
     });
-    if (!cc) throw new NotFoundException('Collection not found');
+    if (!cc) throw new NotFoundException({ code: 'CREATOR_CATEGORY_NOT_FOUND', message: 'Collection not found' });
     return cc;
   }
 
@@ -195,7 +195,7 @@ export class CreatorCategoriesService {
           select: { creator_id: true },
         });
         if (!parent || parent.creator_id !== creatorId) {
-          throw new BadRequestException('Invalid parent collection');
+          throw new BadRequestException({ code: 'CREATOR_CATEGORY_INVALID_PARENT', message: 'Invalid parent collection' });
         }
         await this.assertNoCycle(id, parent_id);
       }
@@ -257,7 +257,7 @@ export class CreatorCategoriesService {
       select: { id: true },
     });
     if (owned.length !== dto.ids.length) {
-      throw new ForbiddenException('Cannot reorder collections you do not own');
+      throw new ForbiddenException({ code: 'CREATOR_CATEGORY_REORDER_NOT_OWNED', message: 'Cannot reorder collections you do not own' });
     }
     await this.prisma.$transaction(
       dto.ids.map((id, idx) =>
@@ -283,7 +283,7 @@ export class CreatorCategoriesService {
       where: { id },
       select: { match_rule: true, match_tags: true },
     });
-    if (!cc) throw new NotFoundException('Collection not found');
+    if (!cc) throw new NotFoundException({ code: 'CREATOR_CATEGORY_NOT_FOUND', message: 'Collection not found' });
 
     if (cc.match_rule === CreatorCategoryMatchRule.TAGS) {
       if (!cc.match_tags?.length) return [];

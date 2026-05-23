@@ -64,16 +64,26 @@ export class StorefrontService {
           orderBy: { sort_order: 'asc' },
         },
         creator: {
-          select: { display_name: true, avatar_url: true, bio: true, cover_url: true },
+          select: {
+            display_name: true,
+            avatar_url: true,
+            bio: true,
+            cover_url: true,
+            stripe_payouts_enabled: true,
+          },
         },
       },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
     const themeConfig = (store.theme_config as any) || {};
     const platformConfig = await this.prisma.platformConfig.findFirst();
     return {
       ...store,
       currency: platformConfig?.default_currency || 'EUR',
+      // Card checkout is only offered when the store creator has completed
+      // Stripe Connect onboarding (can receive payout transfers). Note: the
+      // checkout still re-checks every involved provider at payment time.
+      card_payments_enabled: store.creator.stripe_payouts_enabled,
       pages: store.static_pages,
       // New theme system: storefront resolves the registry by theme_key and
       // merges theme_customizations on top.
@@ -115,7 +125,7 @@ export class StorefrontService {
       where: { slug },
       include: { creator: true },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
 
     // If a creator-category slug is requested, resolve it to an id + match rule
     // up front so we can apply the same filter to both own and custom queries.
@@ -336,7 +346,7 @@ export class StorefrontService {
       where: { slug },
       include: { creator: true },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
 
     // Try creator's own product first. Order by updated_at so duplicate-slug
     // collisions resolve to the most recently edited product instead of an
@@ -437,7 +447,7 @@ export class StorefrontService {
       },
     });
 
-    if (!customProduct) throw new NotFoundException('Product not found');
+    if (!customProduct) throw new NotFoundException({ code: 'STOREFRONT_PRODUCT_NOT_FOUND', message: 'Product not found' });
 
     const variants = this.computeVariants(customProduct);
     const displayPrice = this.computeDisplayPrice(customProduct, variants);
@@ -502,7 +512,7 @@ export class StorefrontService {
       where: { slug },
       include: { creator: true },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
 
     // Categories that have published own products or published custom products for this creator
     const [ownCategories, customCategories] = await Promise.all([
@@ -550,7 +560,7 @@ export class StorefrontService {
       where: { slug },
       include: { creator: true },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
 
     const rows = await this.prisma.creatorCategory.findMany({
       where: { creator_id: store.creator.id, is_active: true },
@@ -574,7 +584,7 @@ export class StorefrontService {
 
   async getPage(slug: string, pageSlug: string) {
     const store = await this.prisma.store.findUnique({ where: { slug } });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
 
     const page = await this.prisma.staticPage.findUnique({
       where: {
@@ -584,7 +594,7 @@ export class StorefrontService {
     });
 
     if (!page || page.status !== 'PUBLISHED') {
-      throw new NotFoundException('Page not found');
+      throw new NotFoundException({ code: 'STOREFRONT_PAGE_NOT_FOUND', message: 'Page not found' });
     }
 
     return page;
@@ -611,7 +621,7 @@ export class StorefrontService {
         language_config: true,
       },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
 
     const primaryLocale = store.language_config?.primary_locale || 'en';
     const secondaryLocales = store.language_config?.secondary_locales || [];
@@ -686,7 +696,7 @@ export class StorefrontService {
       where: { slug: storeSlug },
       include: { creator: true },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
 
     const own = await this.prisma.product.findFirst({
       where: { creator_id: store.creator.id, status: 'PUBLISHED' },
@@ -735,7 +745,7 @@ export class StorefrontService {
       where: { slug: storeSlug },
       select: { id: true },
     });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
     const menus = await this.prisma.menu.findMany({
       where: { store_id: store.id },
       include: {
@@ -765,7 +775,7 @@ export class StorefrontService {
       | { type: 'STATIC' | 'LANDING'; slug: string },
   ) {
     const store = await this.prisma.store.findUnique({ where: { slug: storeSlug } });
-    if (!store) throw new NotFoundException('Store not found');
+    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
 
     const whereType: any = { store_id: store.id, type: opts.type };
     if (opts.type === 'STATIC' || opts.type === 'LANDING') whereType.slug = opts.slug;

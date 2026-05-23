@@ -70,6 +70,14 @@ export class MenuItemInputDto {
   @IsOptional()
   @IsBoolean()
   open_in_new_tab?: boolean;
+
+  // Nested sub-items (dropdowns). The editor sends the full tree; the service
+  // creates children recursively, deriving parent_id from the created parent.
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => MenuItemInputDto)
+  children?: MenuItemInputDto[];
 }
 
 // Full replace of a menu's items in one call. The editor sends the entire

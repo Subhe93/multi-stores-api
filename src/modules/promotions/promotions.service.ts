@@ -30,13 +30,13 @@ export class PromotionsService {
       const provider = await this.prisma.provider.findUnique({
         where: { user_id: userId },
       });
-      if (!provider) throw new NotFoundException('Provider not found');
+      if (!provider) throw new NotFoundException({ code: 'PROMOTION_PROVIDER_NOT_FOUND', message: 'Provider not found' });
       promotionData.provider_id = provider.id;
     } else if (userRole === UserRole.CREATOR) {
       const creator = await this.prisma.creator.findUnique({
         where: { user_id: userId },
       });
-      if (!creator) throw new NotFoundException('Creator not found');
+      if (!creator) throw new NotFoundException({ code: 'PROMOTION_CREATOR_NOT_FOUND', message: 'Creator not found' });
       promotionData.creator_id = creator.id;
     }
 
@@ -54,13 +54,13 @@ export class PromotionsService {
       const provider = await this.prisma.provider.findUnique({
         where: { user_id: userId },
       });
-      if (!provider) throw new NotFoundException('Provider not found');
+      if (!provider) throw new NotFoundException({ code: 'PROMOTION_PROVIDER_NOT_FOUND', message: 'Provider not found' });
       where.provider_id = provider.id;
     } else if (userRole === UserRole.CREATOR) {
       const creator = await this.prisma.creator.findUnique({
         where: { user_id: userId },
       });
-      if (!creator) throw new NotFoundException('Creator not found');
+      if (!creator) throw new NotFoundException({ code: 'PROMOTION_CREATOR_NOT_FOUND', message: 'Creator not found' });
       where.creator_id = creator.id;
     }
 
@@ -83,25 +83,25 @@ export class PromotionsService {
       where: { id },
       include: { translations: true, usages: { take: 20 } },
     });
-    if (!promo) throw new NotFoundException('Promotion not found');
+    if (!promo) throw new NotFoundException({ code: 'PROMOTION_NOT_FOUND', message: 'Promotion not found' });
     return promo;
   }
 
   async update(id: string, dto: UpdatePromotionDto, userId?: string, role?: UserRole) {
     const promo = await this.prisma.promotion.findUnique({ where: { id } });
-    if (!promo) throw new NotFoundException('Promotion not found');
+    if (!promo) throw new NotFoundException({ code: 'PROMOTION_NOT_FOUND', message: 'Promotion not found' });
 
     // Ownership check
     if (userId && role) {
       if (role === UserRole.CREATOR) {
         const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
         if (!creator || promo.creator_id !== creator.id) {
-          throw new BadRequestException('You can only edit your own promotions');
+          throw new BadRequestException({ code: 'PROMOTION_EDIT_NOT_OWNED', message: 'You can only edit your own promotions' });
         }
       } else if (role === UserRole.PROVIDER) {
         const provider = await this.prisma.provider.findUnique({ where: { user_id: userId } });
         if (!provider || promo.provider_id !== provider.id) {
-          throw new BadRequestException('You can only edit your own promotions');
+          throw new BadRequestException({ code: 'PROMOTION_EDIT_NOT_OWNED', message: 'You can only edit your own promotions' });
         }
       }
     }
@@ -127,18 +127,18 @@ export class PromotionsService {
 
   async delete(id: string, userId?: string, role?: UserRole) {
     const promo = await this.prisma.promotion.findUnique({ where: { id } });
-    if (!promo) throw new NotFoundException('Promotion not found');
+    if (!promo) throw new NotFoundException({ code: 'PROMOTION_NOT_FOUND', message: 'Promotion not found' });
 
     if (userId && role) {
       if (role === UserRole.CREATOR) {
         const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
         if (!creator || promo.creator_id !== creator.id) {
-          throw new BadRequestException('You can only delete your own promotions');
+          throw new BadRequestException({ code: 'PROMOTION_DELETE_NOT_OWNED', message: 'You can only delete your own promotions' });
         }
       } else if (role === UserRole.PROVIDER) {
         const provider = await this.prisma.provider.findUnique({ where: { user_id: userId } });
         if (!provider || promo.provider_id !== provider.id) {
-          throw new BadRequestException('You can only delete your own promotions');
+          throw new BadRequestException({ code: 'PROMOTION_DELETE_NOT_OWNED', message: 'You can only delete your own promotions' });
         }
       }
     }
@@ -152,26 +152,26 @@ export class PromotionsService {
     });
 
     if (!promo) {
-      throw new BadRequestException('Invalid coupon code');
+      throw new BadRequestException({ code: 'PROMOTION_COUPON_INVALID', message: 'Invalid coupon code' });
     }
 
     // Check if active
     if (promo.status !== 'ACTIVE') {
-      throw new BadRequestException('Coupon is not active');
+      throw new BadRequestException({ code: 'PROMOTION_COUPON_NOT_ACTIVE', message: 'Coupon is not active' });
     }
 
     // Check dates
     const now = new Date();
     if (promo.starts_at > now) {
-      throw new BadRequestException('Coupon not yet valid');
+      throw new BadRequestException({ code: 'PROMOTION_COUPON_NOT_YET_VALID', message: 'Coupon not yet valid' });
     }
     if (promo.expires_at && promo.expires_at < now) {
-      throw new BadRequestException('Coupon has expired');
+      throw new BadRequestException({ code: 'PROMOTION_COUPON_EXPIRED', message: 'Coupon has expired' });
     }
 
     // Check usage limit
     if (promo.usage_limit && promo.usage_count >= promo.usage_limit) {
-      throw new BadRequestException('Coupon usage limit reached');
+      throw new BadRequestException({ code: 'PROMOTION_COUPON_USAGE_LIMIT_REACHED', message: 'Coupon usage limit reached' });
     }
 
     // Check conditions
@@ -194,7 +194,7 @@ export class PromotionsService {
       );
       if (!hasMatch) {
         throw new BadRequestException(
-          'This coupon does not apply to the products in your cart',
+          { code: 'PROMOTION_COUPON_NOT_APPLICABLE', message: 'This coupon does not apply to the products in your cart' },
         );
       }
     }

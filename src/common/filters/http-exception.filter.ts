@@ -14,15 +14,22 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const response = ctx.getResponse<Response>();
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
-    let message = 'Internal server error';
+    let message: unknown = 'Internal server error';
+    // Stable machine-readable error code (when a thrower provides one). Clients
+    // translate `errors.<code>` and fall back to `message`.
+    let code: string | undefined;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       const res = exception.getResponse();
-      message =
-        typeof res === 'string'
-          ? res
-          : (res as Record<string, unknown>).message as string;
+      if (typeof res === 'string') {
+        message = res;
+      } else {
+        const r = res as Record<string, unknown>;
+        // `message` may be a string or an array (class-validator) — preserve it.
+        if (r.message !== undefined) message = r.message;
+        if (typeof r.code === 'string') code = r.code;
+      }
     } else {
       // Log unexpected errors for debugging
       console.error('[UnhandledException]', exception);
@@ -32,6 +39,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       success: false,
       statusCode: status,
       message,
+      code,
       timestamp: new Date().toISOString(),
     });
   }

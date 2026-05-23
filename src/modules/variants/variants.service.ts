@@ -10,7 +10,7 @@ export class VariantsService {
     const product = await this.prisma.product.findUnique({
       where: { id: productId },
     });
-    if (!product) throw new NotFoundException('Product not found');
+    if (!product) throw new NotFoundException({ code: 'VARIANT_PRODUCT_NOT_FOUND', message: 'Product not found' });
 
     return this.prisma.productVariant.create({
       data: {
@@ -35,7 +35,7 @@ export class VariantsService {
       include: { images: true },
     });
 
-    if (!variant) throw new NotFoundException('Variant not found');
+    if (!variant) throw new NotFoundException({ code: 'VARIANT_NOT_FOUND', message: 'Variant not found' });
     return variant;
   }
 

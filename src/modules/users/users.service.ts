@@ -111,22 +111,22 @@ export class UsersService {
       },
     });
 
-    if (!user) throw new NotFoundException('User not found');
+    if (!user) throw new NotFoundException({ code: 'USER_NOT_FOUND', message: 'User not found' });
     return user;
   }
 
   async create(dto: CreateUserPayload) {
     if (!dto.email || !dto.password || !dto.role) {
-      throw new BadRequestException('email, password and role are required');
+      throw new BadRequestException({ code: 'USER_MISSING_REQUIRED_FIELDS', message: 'email, password and role are required' });
     }
     if (dto.password.length < 8) {
-      throw new BadRequestException('Password must be at least 8 characters');
+      throw new BadRequestException({ code: 'USER_PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters' });
     }
 
     const existing = await this.prisma.user.findUnique({
       where: { email: dto.email },
     });
-    if (existing) throw new ConflictException('Email already registered');
+    if (existing) throw new ConflictException({ code: 'USER_EMAIL_EXISTS', message: 'Email already registered' });
 
     const password_hash = await bcrypt.hash(dto.password, 12);
 
@@ -188,13 +188,13 @@ export class UsersService {
       where: { id },
       include: { provider: true, creator: true, customer: true },
     });
-    if (!user) throw new NotFoundException('User not found');
+    if (!user) throw new NotFoundException({ code: 'USER_NOT_FOUND', message: 'User not found' });
 
     if (dto.email && dto.email !== user.email) {
       const conflict = await this.prisma.user.findUnique({
         where: { email: dto.email },
       });
-      if (conflict) throw new ConflictException('Email already in use');
+      if (conflict) throw new ConflictException({ code: 'USER_EMAIL_IN_USE', message: 'Email already in use' });
     }
 
     const userUpdate: Record<string, any> = {};
@@ -252,7 +252,7 @@ export class UsersService {
 
   async updateStatus(id: string, status: UserStatus) {
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) throw new NotFoundException('User not found');
+    if (!user) throw new NotFoundException({ code: 'USER_NOT_FOUND', message: 'User not found' });
 
     return this.prisma.user.update({
       where: { id },
@@ -268,10 +268,10 @@ export class UsersService {
 
   async resetPassword(id: string, newPassword: string) {
     if (!newPassword || newPassword.length < 8) {
-      throw new BadRequestException('Password must be at least 8 characters');
+      throw new BadRequestException({ code: 'USER_PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters' });
     }
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) throw new NotFoundException('User not found');
+    if (!user) throw new NotFoundException({ code: 'USER_NOT_FOUND', message: 'User not found' });
 
     const password_hash = await bcrypt.hash(newPassword, 12);
 
@@ -288,17 +288,17 @@ export class UsersService {
 
   async remove(id: string, actingUserId: string) {
     if (id === actingUserId) {
-      throw new ForbiddenException('You cannot delete your own account');
+      throw new ForbiddenException({ code: 'USER_CANNOT_DELETE_SELF', message: 'You cannot delete your own account' });
     }
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) throw new NotFoundException('User not found');
+    if (!user) throw new NotFoundException({ code: 'USER_NOT_FOUND', message: 'User not found' });
 
     if (user.role === UserRole.ADMIN) {
       const adminCount = await this.prisma.user.count({
         where: { role: UserRole.ADMIN },
       });
       if (adminCount <= 1) {
-        throw new ForbiddenException('Cannot delete the last admin account');
+        throw new ForbiddenException({ code: 'USER_CANNOT_DELETE_LAST_ADMIN', message: 'Cannot delete the last admin account' });
       }
     }
 
@@ -333,7 +333,31 @@ export class UsersService {
     if (!config) {
       config = await this.prisma.platformConfig.create({ data: {} });
     }
-    return config;
+    // This endpoint is readable by providers/creators, so never expose the
+    // platform Stripe/SMTP credentials here. They are managed via the admin-only
+    // payments / mail settings APIs instead.
+    const {
+      stripe_secret_key: _s,
+      stripe_publishable_key: _p,
+      stripe_webhook_secret: _w,
+      smtp_host: _sh,
+      smtp_port: _sp,
+      smtp_secure: _ss,
+      smtp_user: _su,
+      smtp_pass: _spw,
+      mail_from: _mf,
+      ...safe
+    } = config;
+    void _s;
+    void _p;
+    void _w;
+    void _sh;
+    void _sp;
+    void _ss;
+    void _su;
+    void _spw;
+    void _mf;
+    return safe;
   }
 
   async updatePlatformConfig(data: {
