@@ -14,8 +14,15 @@ async function bootstrap() {
     rawBody: true,
   });
 
-  // Serve uploaded files as static
-  app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });
+  // Serve uploaded files as static. Filenames are UUIDs, so the content at any
+  // given URL never changes — mark them long-lived + immutable so browsers
+  // and the CDN can cache aggressively (Lighthouse flagged the previous 4h
+  // TTL as wasted bandwidth on repeat visits).
+  app.useStaticAssets(join(process.cwd(), 'uploads'), {
+    prefix: '/uploads/',
+    maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year in ms
+    immutable: true,
+  });
 
   app.setGlobalPrefix('api');
 
