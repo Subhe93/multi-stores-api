@@ -340,7 +340,123 @@ async function main() {
   });
 
   console.log('Category-Attribute links created');
+
+  await seedLegalPages();
+  await seedNotificationTemplates();
+
   console.log('Seed completed!');
+}
+
+// ── Legal pages (privacy / terms / refund / shipping) ────────────────────────
+// Idempotent: upsert with `update: {}` so the admin's edits in production are
+// never overwritten by re-running the seed.
+async function seedLegalPages() {
+  const TITLES: Record<string, Record<string, string>> = {
+    privacy:  { en: 'Privacy Policy',   ar: 'سياسة الخصوصية', tr: 'Gizlilik Politikası', de: 'Datenschutzerklärung', fr: 'Politique de confidentialité', sv: 'Integritetspolicy' },
+    terms:    { en: 'Terms of Service', ar: 'الشروط والأحكام', tr: 'Hizmet Şartları',     de: 'Nutzungsbedingungen',  fr: "Conditions d'utilisation",     sv: 'Användarvillkor' },
+    refund:   { en: 'Refund Policy',    ar: 'سياسة الاسترجاع', tr: 'İade Politikası',     de: 'Rückerstattungsrichtlinie', fr: 'Politique de remboursement', sv: 'Återbetalningspolicy' },
+    shipping: { en: 'Shipping Policy',  ar: 'سياسة الشحن',    tr: 'Kargo Politikası',    de: 'Versandrichtlinie',    fr: "Politique d'expédition",       sv: 'Fraktpolicy' },
+  };
+  const placeholder = (title: string) =>
+    `<p><em>This is a placeholder for the ${title}. Edit it from the admin dashboard.</em></p>`;
+
+  let created = 0;
+  for (const [slug, titles] of Object.entries(TITLES)) {
+    const content: Record<string, string> = {};
+    for (const [loc, t] of Object.entries(titles)) content[loc] = placeholder(t);
+    const res = await prisma.legalPage.upsert({
+      where: { slug },
+      update: {}, // never overwrite admin edits
+      create: { slug, title: titles, content },
+    });
+    if (res) created++;
+  }
+  console.log(`Legal pages ensured (${created}/${Object.keys(TITLES).length})`);
+}
+
+// ── Notification templates (order_confirmation / password_reset) ─────────────
+// Idempotent (upsert with `update: {}`). Bodies use {{var}} placeholders the
+// MailService substitutes at send time.
+async function seedNotificationTemplates() {
+  const BRAND = 'Multi Stores';
+  const layout = (title: string, body: string) => `<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,Helvetica,sans-serif;color:#18181b;">
+    <div style="max-width:480px;margin:0 auto;padding:24px;">
+      <div style="background:#ffffff;border:1px solid #e4e4e7;border-radius:12px;padding:28px;">
+        <h1 style="font-size:18px;margin:0 0 16px;">${title}</h1>
+        ${body}
+      </div>
+      <p style="font-size:11px;color:#a1a1aa;text-align:center;margin-top:16px;">${BRAND}</p>
+    </div>
+  </body>
+</html>`;
+
+  const TEMPLATES: Record<string, Record<string, { subject: string; body_html: string; body_text: string }>> = {
+    password_reset: {
+      en: {
+        subject: `Reset your ${BRAND} password`,
+        body_html: layout(
+          'Reset your password',
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">We received a request to reset your password. Click the button below to choose a new one. This link expires in 1 hour.</p>
+           <p style="margin:20px 0;"><a href="{{reset_url}}" style="display:inline-block;background:#18181b;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 20px;border-radius:8px;">Reset password</a></p>
+           <p style="font-size:12px;color:#71717a;">If you didn't request this, you can safely ignore this email.</p>`,
+        ),
+        body_text: `Reset your ${BRAND} password.\n\nOpen this link to choose a new password (expires in 1 hour):\n{{reset_url}}\n\nIf you didn't request this, ignore this email.`,
+      },
+      ar: {
+        subject: `إعادة تعيين كلمة المرور — ${BRAND}`,
+        body_html: layout(
+          'إعادة تعيين كلمة المرور',
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">تلقّينا طلباً لإعادة تعيين كلمة مرورك. اضغط الزر أدناه لاختيار كلمة جديدة. الرابط صالح لمدة ساعة.</p>
+           <p style="margin:20px 0;"><a href="{{reset_url}}" style="display:inline-block;background:#18181b;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 20px;border-radius:8px;">إعادة التعيين</a></p>
+           <p style="font-size:12px;color:#71717a;">إن لم تكن أنت من طلب ذلك، يمكنك تجاهل هذه الرسالة.</p>`,
+        ),
+        body_text: `إعادة تعيين كلمة مرورك في ${BRAND}.\n\nافتح هذا الرابط لاختيار كلمة مرور جديدة (صالح ساعة واحدة):\n{{reset_url}}\n\nإن لم تكن أنت، تجاهل هذه الرسالة.`,
+      },
+    },
+    order_confirmation: {
+      en: {
+        subject: `Order {{order_number}} confirmed`,
+        body_html: layout(
+          'Thanks for your order!',
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">Your order <strong>{{order_number}}</strong> has been placed. {{payment_line}}</p>
+           <p style="font-size:14px;color:#3f3f46;">Total: <strong>{{total}}</strong></p>
+           {{order_button}}`,
+        ),
+        body_text: `Thanks for your order!\n\nOrder {{order_number}} has been placed. {{payment_line}}\nTotal: {{total}}{{order_url_text}}`,
+      },
+      ar: {
+        subject: `تمّ تأكيد الطلب {{order_number}}`,
+        body_html: layout(
+          'شكراً لطلبك!',
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">تمّ استلام طلبك <strong>{{order_number}}</strong>. {{payment_line}}</p>
+           <p style="font-size:14px;color:#3f3f46;">الإجمالي: <strong>{{total}}</strong></p>
+           {{order_button}}`,
+        ),
+        body_text: `شكراً لطلبك!\n\nالطلب {{order_number}} تمّ استلامه. {{payment_line}}\nالإجمالي: {{total}}{{order_url_text}}`,
+      },
+    },
+  };
+
+  let created = 0;
+  for (const [event, perLocale] of Object.entries(TEMPLATES)) {
+    const subject: Record<string, string> = {};
+    const body_html: Record<string, string> = {};
+    const body_text: Record<string, string> = {};
+    for (const [loc, t] of Object.entries(perLocale)) {
+      subject[loc] = t.subject;
+      body_html[loc] = t.body_html;
+      body_text[loc] = t.body_text;
+    }
+    const res = await prisma.notificationTemplate.upsert({
+      where: { event },
+      update: {}, // never overwrite admin edits
+      create: { event, subject, body_html, body_text, enabled: true },
+    });
+    if (res) created++;
+  }
+  console.log(`Notification templates ensured (${created}/${Object.keys(TEMPLATES).length})`);
 }
 
 main()
