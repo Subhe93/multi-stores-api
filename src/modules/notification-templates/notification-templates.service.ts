@@ -49,46 +49,185 @@ export class NotificationTemplatesService {
 
   // ── Admin ────────────────────────────────────────────────────────────────
 
+  /**
+   * Catalog of supported events with the placeholder variables each one
+   * receives at send time. The dashboard reads this so adding a new event
+   * doesn't require shipping a UI change.
+   */
+  static readonly EVENT_CATALOG: Array<{ event: string; variables: string[] }> = [
+    {
+      event: 'order_confirmation',
+      variables: [
+        'order_number',
+        'total',
+        'payment_line',
+        'order_button',
+        'order_url_text',
+        'items_html',
+        'items_text',
+      ],
+    },
+    {
+      event: 'order_shipped',
+      variables: [
+        'order_number',
+        'tracking_number',
+        'tracking_url',
+        'order_button',
+        'order_url_text',
+        'items_html',
+        'items_text',
+      ],
+    },
+    {
+      event: 'order_delivered',
+      variables: [
+        'order_number',
+        'order_button',
+        'order_url_text',
+        'items_html',
+        'items_text',
+      ],
+    },
+    {
+      event: 'order_cancelled',
+      variables: [
+        'order_number',
+        'reason',
+        'order_button',
+        'order_url_text',
+        'items_html',
+        'items_text',
+      ],
+    },
+    {
+      event: 'order_refunded',
+      variables: [
+        'order_number',
+        'refund_amount',
+        'order_button',
+        'order_url_text',
+        'items_html',
+        'items_text',
+      ],
+    },
+    {
+      event: 'new_order_owner',
+      variables: [
+        'order_number',
+        'total',
+        'store_name',
+        'customer_name',
+        'order_button',
+        'order_url_text',
+        'items_html',
+        'items_text',
+      ],
+    },
+    {
+      event: 'welcome',
+      variables: ['name', 'login_url'],
+    },
+    {
+      event: 'password_reset',
+      variables: ['reset_url'],
+    },
+  ];
+
+  events() {
+    return NotificationTemplatesService.EVENT_CATALOG;
+  }
+
+  /**
+   * Catalog-driven list: every event in EVENT_CATALOG appears in the response,
+   * even if no DB row exists yet. Events without a row show up as disabled
+   * placeholders so the admin can open them and start editing — the editor's
+   * update path upserts on save. Order matches the catalog for stable UI.
+   */
   async list() {
-    return this.prisma.notificationTemplate.findMany({
-      orderBy: { event: 'asc' },
+    const rows = await this.prisma.notificationTemplate.findMany();
+    const byEvent = new Map(rows.map((r) => [r.event, r]));
+    return NotificationTemplatesService.EVENT_CATALOG.map(({ event }) => {
+      const row = byEvent.get(event);
+      if (row) return row;
+      return {
+        id: '',
+        event,
+        subject: {},
+        body_html: {},
+        body_text: {},
+        enabled: false,
+        created_at: new Date(0),
+        updated_at: new Date(0),
+      };
     });
   }
 
+  /**
+   * Returns the existing row OR a transient placeholder when the event is in
+   * the catalog but hasn't been created yet. The editor opens placeholders so
+   * the admin can start composing; the first save creates the real row.
+   */
   async getByEvent(event: string) {
     const t = await this.prisma.notificationTemplate.findUnique({
       where: { event },
     });
-    if (!t) throw new NotFoundException('Template not found');
-    return t;
+    if (t) return t;
+    const known = NotificationTemplatesService.EVENT_CATALOG.some((e) => e.event === event);
+    if (!known) throw new NotFoundException('Template not found');
+    return {
+      id: '',
+      event,
+      subject: {},
+      body_html: {},
+      body_text: {},
+      enabled: false,
+      created_at: new Date(0),
+      updated_at: new Date(0),
+    };
   }
 
+  /**
+   * Upsert: the first save for an event creates the row, subsequent saves
+   * merge per-locale fields into the stored JSON.
+   */
   async update(event: string, dto: UpdateNotificationTemplateDto) {
+    const known = NotificationTemplatesService.EVENT_CATALOG.some((e) => e.event === event);
+    if (!known) throw new NotFoundException('Unknown event');
+
     const existing = await this.prisma.notificationTemplate.findUnique({
       where: { event },
     });
-    if (!existing) throw new NotFoundException('Template not found');
 
-    const data: {
-      subject?: object;
-      body_html?: object;
-      body_text?: object;
-      enabled?: boolean;
-    } = {};
-    if (dto.subject) {
-      data.subject = { ...(existing.subject as Localized), ...dto.subject };
-    }
-    if (dto.body_html) {
-      data.body_html = { ...(existing.body_html as Localized), ...dto.body_html };
-    }
-    if (dto.body_text) {
-      data.body_text = { ...(existing.body_text as Localized), ...dto.body_text };
-    }
-    if (dto.enabled !== undefined) data.enabled = dto.enabled;
+    const mergedSubject = {
+      ...((existing?.subject as Localized) || {}),
+      ...(dto.subject || {}),
+    };
+    const mergedHtml = {
+      ...((existing?.body_html as Localized) || {}),
+      ...(dto.body_html || {}),
+    };
+    const mergedText = {
+      ...((existing?.body_text as Localized) || {}),
+      ...(dto.body_text || {}),
+    };
+    const enabled = dto.enabled !== undefined ? dto.enabled : existing?.enabled ?? true;
 
-    return this.prisma.notificationTemplate.update({
+    return this.prisma.notificationTemplate.upsert({
       where: { event },
-      data,
+      create: {
+        event,
+        subject: mergedSubject,
+        body_html: mergedHtml,
+        body_text: mergedText,
+        enabled,
+      },
+      update: {
+        subject: mergedSubject,
+        body_html: mergedHtml,
+        body_text: mergedText,
+        enabled,
+      },
     });
   }
 }

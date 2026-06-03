@@ -616,33 +616,14 @@ export class OrdersService {
       where: { cart_id: cart.id },
     });
 
-    // Send the order confirmation email for COD now (card orders are confirmed
-    // by email only once payment succeeds — see PaymentsService). Best-effort.
+    // Order-related emails — best-effort, never blocks the order flow.
+    // COD orders are real at creation, so we notify the customer and the
+    // store owner now. Card orders wait for payment success (PaymentsService
+    // dispatches both events once the Stripe payment is confirmed) so we
+    // don't spam the owner about orders that may end up failing.
     if (paymentMethod === 'COD') {
-      const user = await this.prisma.user.findUnique({
-        where: { id: userId },
-        select: { email: true },
-      });
-      if (user?.email) {
-        // Use the store's primary locale so the email matches the storefront.
-        let mailLocale: string | undefined;
-        if (dto.store_id) {
-          const store = await this.prisma.store.findUnique({
-            where: { id: dto.store_id },
-            select: { language_config: { select: { primary_locale: true } } },
-          });
-          mailLocale = store?.language_config?.primary_locale;
-        }
-        await this.mail.sendOrderConfirmation(
-          user.email,
-          {
-            orderNumber: order.order_number,
-            total: `${currency} ${Number(order.total).toFixed(2)}`,
-            paid: false,
-          },
-          mailLocale,
-        );
-      }
+      await this.mail.dispatchOrderEmail(order.id, 'order_confirmation');
+      await this.mail.dispatchOrderEmail(order.id, 'new_order_owner');
     }
 
     return order;
@@ -847,33 +828,35 @@ export class OrdersService {
    * Advance-only — never rolls a status backward — and leaves terminal states
    * (CANCELLED/REFUNDED/RETURNED) untouched.
    */
-  private async recomputeOrderStatusFromItems(orderId: string) {
+  private async recomputeOrderStatusFromItems(
+    orderId: string,
+  ): Promise<{ from: OrderStatus; to: OrderStatus } | null> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       select: { status: true },
     });
-    if (!order) return;
+    if (!order) return null;
     const terminal: OrderStatus[] = [
       OrderStatus.CANCELLED,
       OrderStatus.REFUNDED,
       OrderStatus.RETURNED,
     ];
-    if (terminal.includes(order.status)) return;
+    if (terminal.includes(order.status)) return null;
 
     const items = await this.prisma.orderItem.findMany({
       where: { order_id: orderId },
       select: { fulfillment_status: true },
     });
-    if (items.length === 0) return;
+    if (items.length === 0) return null;
 
     const minRank = Math.min(
       ...items.map((i) => FULFILLMENT_RANK[i.fulfillment_status] ?? 0),
     );
     const candidate = fulfillmentStageToOrderStatus(minRank);
-    if (!candidate) return;
+    if (!candidate) return null;
     // Advance only.
     if ((ORDER_STATUS_RANK[candidate] ?? 0) <= (ORDER_STATUS_RANK[order.status] ?? 0)) {
-      return;
+      return null;
     }
 
     await this.prisma.order.update({
@@ -892,6 +875,53 @@ export class OrdersService {
       where: { order_id: orderId },
       data: { status: deriveCommissionStatus(candidate) },
     });
+    return { from: order.status, to: candidate };
+  }
+
+  /**
+   * Map a status transition to the matching customer email. Best-effort and
+   * triggered ONLY when the status actually changes; no-ops for intermediate
+   * states like PROCESSING/CONFIRMED where we don't want to spam the inbox.
+   */
+  private async dispatchStatusEmail(
+    orderId: string,
+    from: OrderStatus,
+    to: OrderStatus,
+    note?: string,
+  ): Promise<void> {
+    if (from === to) return;
+    switch (to) {
+      case OrderStatus.SHIPPED: {
+        // Use the first non-empty tracking number found on any item.
+        const item = await this.prisma.orderItem.findFirst({
+          where: { order_id: orderId, tracking_number: { not: null } },
+          select: { tracking_number: true, tracking_url: true },
+        });
+        await this.mail.dispatchOrderEmail(orderId, 'order_shipped', {
+          trackingNumber: item?.tracking_number ?? undefined,
+          trackingUrl: item?.tracking_url ?? undefined,
+        });
+        return;
+      }
+      case OrderStatus.DELIVERED:
+        await this.mail.dispatchOrderEmail(orderId, 'order_delivered');
+        return;
+      case OrderStatus.CANCELLED:
+        await this.mail.dispatchOrderEmail(orderId, 'order_cancelled', { reason: note });
+        return;
+      case OrderStatus.REFUNDED: {
+        const o = await this.prisma.order.findUnique({
+          where: { id: orderId },
+          select: { total: true },
+        });
+        await this.mail.dispatchOrderEmail(orderId, 'order_refunded', {
+          refundAmount: o ? Number(o.total) : undefined,
+        });
+        return;
+      }
+      default:
+        return;
+    }
   }
 
   /**
@@ -922,6 +952,7 @@ export class OrdersService {
           data: { fulfillment_status: nextFulfillment },
         });
       }
+      await this.dispatchStatusEmail(id, order.status, dto.status, dto.note);
       return this.findById(id, actorId, actorRole);
     }
 
@@ -955,7 +986,10 @@ export class OrdersService {
       },
     });
 
-    await this.recomputeOrderStatusFromItems(id);
+    const transition = await this.recomputeOrderStatusFromItems(id);
+    if (transition) {
+      await this.dispatchStatusEmail(id, transition.from, transition.to, dto.note);
+    }
     return this.findById(id, actorId, actorRole);
   }
 
@@ -997,7 +1031,10 @@ export class OrdersService {
     });
 
     // Re-derive the overall order status from all items (slowest item wins).
-    await this.recomputeOrderStatusFromItems(orderId);
+    const transition = await this.recomputeOrderStatusFromItems(orderId);
+    if (transition) {
+      await this.dispatchStatusEmail(orderId, transition.from, transition.to);
+    }
     return updated;
   }
 

@@ -17,6 +17,13 @@ export class NotificationTemplatesController {
     return this.templates.list();
   }
 
+  // Event catalog (event keys + variables) — used by the dashboard to render
+  // the available events list and per-event variable hints dynamically.
+  @Get('events')
+  events() {
+    return this.templates.events();
+  }
+
   @Get(':event')
   getByEvent(@Param('event') event: string) {
     return this.templates.getByEvent(event);

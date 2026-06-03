@@ -421,20 +421,160 @@ async function seedNotificationTemplates() {
         body_html: layout(
           'Thanks for your order!',
           `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">Your order <strong>{{order_number}}</strong> has been placed. {{payment_line}}</p>
+           {{items_html}}
            <p style="font-size:14px;color:#3f3f46;">Total: <strong>{{total}}</strong></p>
            {{order_button}}`,
         ),
-        body_text: `Thanks for your order!\n\nOrder {{order_number}} has been placed. {{payment_line}}\nTotal: {{total}}{{order_url_text}}`,
+        body_text: `Thanks for your order!\n\nOrder {{order_number}} has been placed. {{payment_line}}\n{{items_text}}\nTotal: {{total}}{{order_url_text}}`,
       },
       ar: {
         subject: `تمّ تأكيد الطلب {{order_number}}`,
         body_html: layout(
           'شكراً لطلبك!',
           `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">تمّ استلام طلبك <strong>{{order_number}}</strong>. {{payment_line}}</p>
+           {{items_html}}
            <p style="font-size:14px;color:#3f3f46;">الإجمالي: <strong>{{total}}</strong></p>
            {{order_button}}`,
         ),
-        body_text: `شكراً لطلبك!\n\nالطلب {{order_number}} تمّ استلامه. {{payment_line}}\nالإجمالي: {{total}}{{order_url_text}}`,
+        body_text: `شكراً لطلبك!\n\nالطلب {{order_number}} تمّ استلامه. {{payment_line}}\n{{items_text}}\nالإجمالي: {{total}}{{order_url_text}}`,
+      },
+    },
+    order_shipped: {
+      en: {
+        subject: `Your order {{order_number}} is on the way`,
+        body_html: layout(
+          'Your order has shipped',
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">Good news — your order <strong>{{order_number}}</strong> has been shipped.</p>
+           {{items_html}}
+           <p style="font-size:14px;color:#3f3f46;">Tracking: <strong>{{tracking_number}}</strong></p>
+           {{order_button}}`,
+        ),
+        body_text: `Your order {{order_number}} has shipped.\n{{items_text}}\nTracking: {{tracking_number}}\n{{tracking_url}}{{order_url_text}}`,
+      },
+      ar: {
+        subject: `طلبك {{order_number}} في طريقه إليك`,
+        body_html: layout(
+          'تمّ شحن طلبك',
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">خبر سار — تمّ شحن طلبك <strong>{{order_number}}</strong>.</p>
+           {{items_html}}
+           <p style="font-size:14px;color:#3f3f46;">رقم التتبّع: <strong>{{tracking_number}}</strong></p>
+           {{order_button}}`,
+        ),
+        body_text: `تمّ شحن طلبك {{order_number}}.\n{{items_text}}\nرقم التتبّع: {{tracking_number}}\n{{tracking_url}}{{order_url_text}}`,
+      },
+    },
+    order_delivered: {
+      en: {
+        subject: `Your order {{order_number}} has been delivered`,
+        body_html: layout(
+          'Delivered!',
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">Your order <strong>{{order_number}}</strong> has been marked as delivered. We hope you love it.</p>
+           {{items_html}}
+           {{order_button}}`,
+        ),
+        body_text: `Your order {{order_number}} has been delivered.\n{{items_text}}{{order_url_text}}`,
+      },
+      ar: {
+        subject: `تمّ توصيل طلبك {{order_number}}`,
+        body_html: layout(
+          'تمّ التوصيل!',
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">تمّ تسليم طلبك <strong>{{order_number}}</strong>. نأمل أن ينال إعجابك.</p>
+           {{items_html}}
+           {{order_button}}`,
+        ),
+        body_text: `تمّ توصيل طلبك {{order_number}}.\n{{items_text}}{{order_url_text}}`,
+      },
+    },
+    order_cancelled: {
+      en: {
+        subject: `Order {{order_number}} cancelled`,
+        body_html: layout(
+          'Your order has been cancelled',
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">Order <strong>{{order_number}}</strong> was cancelled. If you were charged, the refund is being processed.</p>
+           <p style="font-size:13px;color:#71717a;">Reason: {{reason}}</p>
+           {{items_html}}
+           {{order_button}}`,
+        ),
+        body_text: `Order {{order_number}} has been cancelled.\nReason: {{reason}}\n{{items_text}}{{order_url_text}}`,
+      },
+      ar: {
+        subject: `تمّ إلغاء الطلب {{order_number}}`,
+        body_html: layout(
+          'تمّ إلغاء طلبك',
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">تمّ إلغاء الطلب <strong>{{order_number}}</strong>. إن كنتَ قد دفعت، يجري الآن استرداد المبلغ.</p>
+           <p style="font-size:13px;color:#71717a;">السبب: {{reason}}</p>
+           {{items_html}}
+           {{order_button}}`,
+        ),
+        body_text: `تمّ إلغاء الطلب {{order_number}}.\nالسبب: {{reason}}\n{{items_text}}{{order_url_text}}`,
+      },
+    },
+    order_refunded: {
+      en: {
+        subject: `Refund processed for order {{order_number}}`,
+        body_html: layout(
+          'Refund processed',
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">A refund has been processed for order <strong>{{order_number}}</strong>. It may take a few business days to appear on your statement.</p>
+           <p style="font-size:14px;color:#3f3f46;">Refunded amount: <strong>{{refund_amount}}</strong></p>
+           {{items_html}}
+           {{order_button}}`,
+        ),
+        body_text: `Refund processed for order {{order_number}}.\nAmount: {{refund_amount}}\n{{items_text}}{{order_url_text}}`,
+      },
+      ar: {
+        subject: `تمّ استرداد المبلغ للطلب {{order_number}}`,
+        body_html: layout(
+          'تمّ الاسترداد',
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">تمّ استرداد مبلغ الطلب <strong>{{order_number}}</strong>. قد يستغرق ظهوره في كشف حسابك بضعة أيام عمل.</p>
+           <p style="font-size:14px;color:#3f3f46;">المبلغ المُعاد: <strong>{{refund_amount}}</strong></p>
+           {{items_html}}
+           {{order_button}}`,
+        ),
+        body_text: `تمّ استرداد مبلغ الطلب {{order_number}}.\nالمبلغ: {{refund_amount}}\n{{items_text}}{{order_url_text}}`,
+      },
+    },
+    new_order_owner: {
+      en: {
+        subject: `New order {{order_number}} — {{store_name}}`,
+        body_html: layout(
+          'New order received',
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">You have a new order <strong>{{order_number}}</strong> totalling <strong>{{total}}</strong>.</p>
+           <p style="font-size:13px;color:#71717a;">Customer: {{customer_name}}</p>
+           {{items_html}}
+           {{order_button}}`,
+        ),
+        body_text: `New order {{order_number}} for {{store_name}}. Total: {{total}}.\nCustomer: {{customer_name}}\n{{items_text}}{{order_url_text}}`,
+      },
+      ar: {
+        subject: `طلب جديد {{order_number}} — {{store_name}}`,
+        body_html: layout(
+          'تمّ استلام طلب جديد',
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">لديك طلب جديد <strong>{{order_number}}</strong> بإجمالي <strong>{{total}}</strong>.</p>
+           <p style="font-size:13px;color:#71717a;">العميل: {{customer_name}}</p>
+           {{items_html}}
+           {{order_button}}`,
+        ),
+        body_text: `طلب جديد {{order_number}} لمتجر {{store_name}}. الإجمالي: {{total}}.\nالعميل: {{customer_name}}\n{{items_text}}{{order_url_text}}`,
+      },
+    },
+    welcome: {
+      en: {
+        subject: `Welcome to ${BRAND}`,
+        body_html: layout(
+          `Welcome to ${BRAND}`,
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">Hi {{name}}, we're glad you're here. Your account is ready — start exploring stores and products built by independent creators.</p>
+           <p style="margin:20px 0;"><a href="{{login_url}}" style="display:inline-block;background:#18181b;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 20px;border-radius:8px;">Sign in</a></p>`,
+        ),
+        body_text: `Welcome to ${BRAND}!\n\nHi {{name}}, your account is ready.\n\nSign in: {{login_url}}`,
+      },
+      ar: {
+        subject: `أهلاً بك في ${BRAND}`,
+        body_html: layout(
+          `أهلاً بك في ${BRAND}`,
+          `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">مرحباً {{name}}، يسعدنا انضمامك. حسابك جاهز — استكشف المتاجر والمنتجات التي يصنعها مبدعون مستقلون.</p>
+           <p style="margin:20px 0;"><a href="{{login_url}}" style="display:inline-block;background:#18181b;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 20px;border-radius:8px;">تسجيل الدخول</a></p>`,
+        ),
+        body_text: `أهلاً بك في ${BRAND}!\n\nمرحباً {{name}}، حسابك جاهز.\n\nسجّل الدخول: {{login_url}}`,
       },
     },
   };

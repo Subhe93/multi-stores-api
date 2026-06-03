@@ -73,6 +73,16 @@ export class AuthService {
 
     const tokens = await this.generateTokens(user.id, user.email, user.role);
 
+    // Welcome email — best-effort, never blocks signup. Locale falls back to
+    // the request's Accept-Language path via MailService → DB template lookup.
+    const loginUrl =
+      (this.configService.get<string>('STOREFRONT_URL') || 'http://localhost:3003') +
+      '/auth/login';
+    void this.mail.sendWelcome(user.email, {
+      name: dto.first_name,
+      loginUrl,
+    });
+
     return { user, ...tokens };
   }
 

@@ -620,31 +620,11 @@ export class PaymentsService {
         { order_id: orderId },
       );
 
-      // Send the paid order confirmation email (best-effort). Locale comes
-      // from the order's store so the email matches the storefront.
-      const user = await this.prisma.user.findUnique({
-        where: { id: result.order.customer.user_id },
-        select: { email: true },
-      });
-      if (user?.email) {
-        let mailLocale: string | undefined;
-        if (result.order.store_id) {
-          const store = await this.prisma.store.findUnique({
-            where: { id: result.order.store_id },
-            select: { language_config: { select: { primary_locale: true } } },
-          });
-          mailLocale = store?.language_config?.primary_locale;
-        }
-        await this.mail.sendOrderConfirmation(
-          user.email,
-          {
-            orderNumber: result.order.order_number,
-            total: `${result.order.currency} ${Number(result.order.total).toFixed(2)}`,
-            paid: true,
-          },
-          mailLocale,
-        );
-      }
+      // Send the paid order confirmation email + notify the owner (best-effort).
+      // The dispatcher loads the order with items and resolves locale from the
+      // store, so this stays a one-liner per event.
+      await this.mail.dispatchOrderEmail(orderId, 'order_confirmation');
+      await this.mail.dispatchOrderEmail(orderId, 'new_order_owner');
     }
   }
 
