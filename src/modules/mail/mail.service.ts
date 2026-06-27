@@ -2,6 +2,7 @@ import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CryptoService } from '../../common/crypto/crypto.service';
 import { NotificationTemplatesService } from '../notification-templates/notification-templates.service';
 import {
   passwordResetEmail,
@@ -55,6 +56,7 @@ export class MailService {
   constructor(
     private config: ConfigService,
     private prisma: PrismaService,
+    private crypto: CryptoService,
     private templates: NotificationTemplatesService,
   ) {}
 
@@ -85,7 +87,8 @@ export class MailService {
         port: cfg.smtp_port ?? 587,
         secure: cfg.smtp_secure,
         user: cfg.smtp_user || undefined,
-        pass: cfg.smtp_pass || undefined,
+        // Password is encrypted at rest; decrypt before handing it to nodemailer.
+        pass: this.crypto.decrypt(cfg.smtp_pass) || undefined,
         from,
       };
     }
@@ -502,8 +505,9 @@ export class MailService {
     if (dto.port !== undefined) data.smtp_port = dto.port ?? null;
     if (dto.secure !== undefined) data.smtp_secure = dto.secure;
     if (dto.user !== undefined) data.smtp_user = dto.user.trim() || null;
-    // Only overwrite the password when a non-empty value is provided.
-    if (dto.password) data.smtp_pass = dto.password;
+    // Only overwrite the password when a non-empty value is provided. Encrypt
+    // it at rest so the DB never holds the plaintext SMTP password.
+    if (dto.password) data.smtp_pass = this.crypto.encrypt(dto.password);
     if (dto.from !== undefined) data.mail_from = dto.from.trim() || null;
 
     await this.prisma.platformConfig.update({

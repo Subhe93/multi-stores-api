@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
 import { UserRole, FulfillerType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CryptoService } from '../../common/crypto/crypto.service';
 import { OrdersService } from '../orders/orders.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
@@ -38,6 +39,7 @@ export class PaymentsService {
   constructor(
     private config: ConfigService,
     private prisma: PrismaService,
+    private crypto: CryptoService,
     private orders: OrdersService,
     private notifications: NotificationsService,
     private mail: MailService,
@@ -49,8 +51,9 @@ export class PaymentsService {
     const cfg = await this.prisma.platformConfig.findFirst({
       select: { stripe_secret_key: true },
     });
+    // DB value is encrypted at rest; decrypt before use. Env fallback is plain.
     return (
-      cfg?.stripe_secret_key ||
+      this.crypto.decrypt(cfg?.stripe_secret_key) ||
       this.config.get<string>('STRIPE_SECRET_KEY') ||
       null
     );
@@ -96,8 +99,9 @@ export class PaymentsService {
     const cfg = await this.prisma.platformConfig.findFirst({
       select: { stripe_webhook_secret: true },
     });
+    // DB value is encrypted at rest; decrypt before use. Env fallback is plain.
     return (
-      cfg?.stripe_webhook_secret ||
+      this.crypto.decrypt(cfg?.stripe_webhook_secret) ||
       this.config.get<string>('STRIPE_WEBHOOK_SECRET') ||
       null
     );
@@ -138,12 +142,14 @@ export class PaymentsService {
       stripe_publishable_key?: string | null;
       stripe_webhook_secret?: string | null;
     } = {};
+    // Secret key and webhook secret are encrypted at rest; the publishable key
+    // is a public value and stays plaintext.
     if (dto.secret_key !== undefined)
-      data.stripe_secret_key = dto.secret_key.trim() || null;
+      data.stripe_secret_key = this.crypto.encrypt(dto.secret_key.trim());
     if (dto.publishable_key !== undefined)
       data.stripe_publishable_key = dto.publishable_key.trim() || null;
     if (dto.webhook_secret !== undefined)
-      data.stripe_webhook_secret = dto.webhook_secret.trim() || null;
+      data.stripe_webhook_secret = this.crypto.encrypt(dto.webhook_secret.trim());
 
     await this.prisma.platformConfig.update({
       where: { id: config.id },

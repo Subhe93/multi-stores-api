@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule } from './prisma/prisma.module';
+import { CryptoModule } from './common/crypto/crypto.module';
 import { RevalidationModule } from './common/revalidation/revalidation.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ProvidersModule } from './modules/providers/providers.module';
@@ -42,6 +43,7 @@ import { NotificationTemplatesModule } from './modules/notification-templates/no
     ConfigModule.forRoot({ isGlobal: true }),
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
     PrismaModule,
+    CryptoModule,
     RevalidationModule,
     AuthModule,
     UsersModule,
