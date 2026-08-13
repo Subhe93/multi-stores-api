@@ -451,6 +451,14 @@ export class PaymentsService {
       charges_enabled: party.chargesEnabled,
       payouts_enabled: party.payoutsEnabled,
       onboarding_completed: party.onboardingCompleted,
+      account_type: party.accountType,
+      // An independent store cannot charge on a legacy Express account. The
+      // dashboard uses this to show a "reconnect required" state; the next
+      // onboarding-link request replaces the account with a Standard one.
+      requires_relink:
+        party.independentStore &&
+        Boolean(party.stripeAccountId) &&
+        party.accountType !== 'standard',
     };
   }
 
