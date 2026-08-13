@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
-import { UserRole, FulfillerType } from '@prisma/client';
+import { UserRole, FulfillerType, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CryptoService } from '../../common/crypto/crypto.service';
 import { OrdersService } from '../orders/orders.service';
@@ -23,6 +23,7 @@ type StripePaymentIntent = Awaited<
   ReturnType<StripeClient['paymentIntents']['retrieve']>
 >;
 type StripeAccount = Awaited<ReturnType<StripeClient['accounts']['retrieve']>>;
+type StripeCharge = Awaited<ReturnType<StripeClient['charges']['retrieve']>>;
 type PaymentIntentCreateParams = Parameters<
   StripeClient['paymentIntents']['create']
 >[0];
@@ -95,6 +96,53 @@ export class PaymentsService {
     );
   }
 
+  /**
+   * Public payment config for the storefront. Without a store slug (or for a
+   * MARKETPLACE store) this is the platform config with stripeAccount: null.
+   * For an INDEPENDENT store, stripeAccount is the creator's Standard connected
+   * account (so Stripe.js can confirm the direct-charge PaymentIntent on it) —
+   * and the store only counts as configured once that account is ready.
+   */
+  async getPublicConfig(storeSlug?: string) {
+    const stripeConfigured = await this.isStripeConfigured();
+    const publishableKey = await this.getPublishableKey();
+
+    // Inactive stores get platform defaults, mirroring storefront.getStore's
+    // is_active handling — an unpublished store must not leak its account.
+    const store = storeSlug
+      ? await this.prisma.store.findUnique({
+          where: { slug: storeSlug, is_active: true },
+          select: {
+            store_type: true,
+            creator: {
+              select: {
+                stripe_account_id: true,
+                stripe_account_type: true,
+                stripe_charges_enabled: true,
+              },
+            },
+          },
+        })
+      : null;
+
+    if (!store || store.store_type !== StoreType.INDEPENDENT) {
+      return { stripeConfigured, publishableKey, stripeAccount: null };
+    }
+
+    const creator = store.creator;
+    const stripeAccount =
+      creator.stripe_account_type === 'standard' &&
+      creator.stripe_charges_enabled
+        ? creator.stripe_account_id
+        : null;
+    return {
+      stripeConfigured:
+        Boolean(publishableKey) && stripeConfigured && stripeAccount != null,
+      publishableKey,
+      stripeAccount,
+    };
+  }
+
   private async resolveWebhookSecret(): Promise<string | null> {
     const cfg = await this.prisma.platformConfig.findFirst({
       select: { stripe_webhook_secret: true },
@@ -107,6 +155,20 @@ export class PaymentsService {
     );
   }
 
+  // Signing secret of the Connect (connected accounts) webhook endpoint, which
+  // receives direct-charge events from independent stores' Standard accounts.
+  private async resolveConnectWebhookSecret(): Promise<string | null> {
+    const cfg = await this.prisma.platformConfig.findFirst({
+      select: { stripe_connect_webhook_secret: true },
+    });
+    // DB value is encrypted at rest; decrypt before use. Env fallback is plain.
+    return (
+      this.crypto.decrypt(cfg?.stripe_connect_webhook_secret) ||
+      this.config.get<string>('STRIPE_CONNECT_WEBHOOK_SECRET') ||
+      null
+    );
+  }
+
   // ── Admin platform settings (ADMIN only; never returns secrets) ─────────────
 
   async getAdminSettings() {
@@ -115,14 +177,20 @@ export class PaymentsService {
         stripe_publishable_key: true,
         stripe_secret_key: true,
         stripe_webhook_secret: true,
+        stripe_connect_webhook_secret: true,
       },
     });
     const envSecret = Boolean(this.config.get<string>('STRIPE_SECRET_KEY'));
     const envWebhook = Boolean(this.config.get<string>('STRIPE_WEBHOOK_SECRET'));
+    const envConnectWebhook = Boolean(
+      this.config.get<string>('STRIPE_CONNECT_WEBHOOK_SECRET'),
+    );
     return {
       publishableKey: cfg?.stripe_publishable_key || null,
       secretKeyConfigured: Boolean(cfg?.stripe_secret_key) || envSecret,
       webhookSecretConfigured: Boolean(cfg?.stripe_webhook_secret) || envWebhook,
+      connectWebhookSecretConfigured:
+        Boolean(cfg?.stripe_connect_webhook_secret) || envConnectWebhook,
       // True when no DB secret is set but an env key is in use (legacy fallback).
       usingEnvFallback: !cfg?.stripe_secret_key && envSecret,
     };
@@ -132,6 +200,7 @@ export class PaymentsService {
     secret_key?: string;
     publishable_key?: string;
     webhook_secret?: string;
+    connect_webhook_secret?: string;
   }) {
     let config = await this.prisma.platformConfig.findFirst();
     if (!config) config = await this.prisma.platformConfig.create({ data: {} });
@@ -141,8 +210,9 @@ export class PaymentsService {
       stripe_secret_key?: string | null;
       stripe_publishable_key?: string | null;
       stripe_webhook_secret?: string | null;
+      stripe_connect_webhook_secret?: string | null;
     } = {};
-    // Secret key and webhook secret are encrypted at rest; the publishable key
+    // Secret key and webhook secrets are encrypted at rest; the publishable key
     // is a public value and stays plaintext.
     if (dto.secret_key !== undefined)
       data.stripe_secret_key = this.crypto.encrypt(dto.secret_key.trim());
@@ -150,6 +220,10 @@ export class PaymentsService {
       data.stripe_publishable_key = dto.publishable_key.trim() || null;
     if (dto.webhook_secret !== undefined)
       data.stripe_webhook_secret = this.crypto.encrypt(dto.webhook_secret.trim());
+    if (dto.connect_webhook_secret !== undefined)
+      data.stripe_connect_webhook_secret = this.crypto.encrypt(
+        dto.connect_webhook_secret.trim(),
+      );
 
     await this.prisma.platformConfig.update({
       where: { id: config.id },
@@ -193,6 +267,9 @@ export class PaymentsService {
         id: p.id,
         email: p.user.email,
         stripeAccountId: p.stripe_account_id,
+        // Providers are always payout recipients — Express + transfers only.
+        accountType: 'express' as string | null,
+        independentStore: false,
         chargesEnabled: p.stripe_charges_enabled,
         payoutsEnabled: p.stripe_payouts_enabled,
         onboardingCompleted: Boolean(p.stripe_onboarding_completed_at),
@@ -201,7 +278,10 @@ export class PaymentsService {
     }
     const c = await this.prisma.creator.findUnique({
       where: { user_id: userId },
-      include: { user: { select: { email: true } } },
+      include: {
+        user: { select: { email: true } },
+        store: { select: { store_type: true } },
+      },
     });
     if (!c) throw new NotFoundException('Creator profile not found');
     return {
@@ -209,6 +289,10 @@ export class PaymentsService {
       id: c.id,
       email: c.user.email,
       stripeAccountId: c.stripe_account_id,
+      accountType: c.stripe_account_type,
+      // Independent-store creators charge directly on a Standard account, so
+      // their "ready" signal is charges_enabled rather than payouts_enabled.
+      independentStore: c.store?.store_type === StoreType.INDEPENDENT,
       chargesEnabled: c.stripe_charges_enabled,
       payoutsEnabled: c.stripe_payouts_enabled,
       onboardingCompleted: Boolean(c.stripe_onboarding_completed_at),
@@ -220,8 +304,10 @@ export class PaymentsService {
     kind: 'creator' | 'provider',
     id: string,
     accountId: string,
+    accountType: 'express' | 'standard',
   ) {
     if (kind === 'provider') {
+      // Providers only ever get Express accounts; no type column needed.
       await this.prisma.provider.update({
         where: { id },
         data: { stripe_account_id: accountId },
@@ -229,14 +315,20 @@ export class PaymentsService {
     } else {
       await this.prisma.creator.update({
         where: { id },
-        data: { stripe_account_id: accountId },
+        data: { stripe_account_id: accountId, stripe_account_type: accountType },
       });
     }
   }
 
   /**
-   * Ensure the party has a Stripe Express connected account, creating one on
-   * first call. Returns the connected account id.
+   * Ensure the party has a Stripe connected account, creating one on first
+   * call. Payout recipients (providers, marketplace creators) get an Express
+   * account with the `transfers` capability; creators of INDEPENDENT stores
+   * get a Standard account so their store can charge cards directly.
+   * Returns the connected account id. An existing account is returned as-is,
+   * except for an independent-store creator stuck on a non-Standard account,
+   * which is replaced (see below) — converting account types in place is not
+   * possible in Stripe.
    */
   async getOrCreateConnectedAccount(
     userId: string,
@@ -244,20 +336,58 @@ export class PaymentsService {
   ): Promise<string> {
     const stripe = await this.requireStripe();
     const party = await this.resolveParty(userId, role);
-    if (party.stripeAccountId) return party.stripeAccountId;
+
+    const useStandard = party.kind === 'creator' && party.independentStore;
+    // Independent-store creators must charge cards directly on a Standard
+    // account, but an Express account cannot become Standard. If such a
+    // creator still holds a non-Standard account (e.g. onboarded as Express
+    // before the store became independent), create a brand-new Standard
+    // account and point our records at it. The old account is left intact in
+    // Stripe — its historic transfers remain attached — we simply stop
+    // referencing it.
+    const replaceWithStandard =
+      Boolean(party.stripeAccountId) &&
+      useStandard &&
+      party.accountType !== 'standard';
+    if (party.stripeAccountId && !replaceWithStandard) {
+      return party.stripeAccountId;
+    }
 
     const account = await this.runStripe(
       () =>
-        stripe.accounts.create({
-          type: 'express',
-          email: party.email,
-          metadata: { party_kind: party.kind, party_id: party.id },
-          capabilities: { transfers: { requested: true } },
-        }),
+        useStandard
+          ? stripe.accounts.create({
+              type: 'standard',
+              email: party.email,
+              metadata: { party_kind: party.kind, party_id: party.id },
+            })
+          : stripe.accounts.create({
+              type: 'express',
+              email: party.email,
+              metadata: { party_kind: party.kind, party_id: party.id },
+              capabilities: { transfers: { requested: true } },
+            }),
       'create connected account',
     );
 
-    await this.saveAccountId(party.kind, party.id, account.id);
+    await this.saveAccountId(
+      party.kind,
+      party.id,
+      account.id,
+      useStandard ? 'standard' : 'express',
+    );
+    if (replaceWithStandard) {
+      // The stored flags described the OLD account — reset them so onboarding
+      // status reflects the brand-new (not yet onboarded) Standard account.
+      await this.prisma.creator.update({
+        where: { id: party.id },
+        data: {
+          stripe_charges_enabled: false,
+          stripe_payouts_enabled: false,
+          stripe_onboarding_completed_at: null,
+        },
+      });
+    }
     return account.id;
   }
 
@@ -294,8 +424,12 @@ export class PaymentsService {
 
     // If the account exists but isn't enabled yet, reconcile live from Stripe.
     // The account.updated webhook may not have arrived (or isn't configured),
-    // e.g. immediately after the user returns from onboarding.
-    if (party.stripeAccountId && !party.payoutsEnabled) {
+    // e.g. immediately after the user returns from onboarding. Independent
+    // stores charge directly, so their "enabled" signal is charges_enabled.
+    const needsRefresh = party.independentStore
+      ? !party.chargesEnabled
+      : !party.payoutsEnabled;
+    if (party.stripeAccountId && needsRefresh) {
       const stripe = await this.resolveStripe();
       if (stripe) {
         try {
@@ -323,23 +457,34 @@ export class PaymentsService {
   /**
    * Sync local onboarding flags from a Stripe account (account.updated webhook).
    * The event doesn't say whether the account belongs to a creator or provider,
-   * so we try both. Completion is keyed on payouts_enabled (transfers model).
+   * so we try both. Completion is keyed on payouts_enabled (transfers model),
+   * except for Standard accounts (direct charges) which key on charges_enabled.
    */
   private async syncConnectAccount(account: StripeAccount) {
     const completedAt = account.payouts_enabled ? new Date() : null;
 
     const creator = await this.prisma.creator.findFirst({
       where: { stripe_account_id: account.id },
-      select: { id: true, stripe_onboarding_completed_at: true },
+      select: {
+        id: true,
+        stripe_onboarding_completed_at: true,
+        stripe_account_type: true,
+      },
     });
     if (creator) {
+      const creatorCompletedAt =
+        creator.stripe_account_type === 'standard'
+          ? account.charges_enabled
+            ? new Date()
+            : null
+          : completedAt;
       await this.prisma.creator.update({
         where: { id: creator.id },
         data: {
           stripe_charges_enabled: account.charges_enabled,
           stripe_payouts_enabled: account.payouts_enabled,
           stripe_onboarding_completed_at:
-            creator.stripe_onboarding_completed_at ?? completedAt,
+            creator.stripe_onboarding_completed_at ?? creatorCompletedAt,
         },
       });
       return;
@@ -399,9 +544,67 @@ export class PaymentsService {
       throw new BadRequestException('Order is already paid');
     }
 
-    // Every payout recipient must be able to receive transfers before we take
-    // the customer's money, otherwise the funds could not be split out.
-    await this.assertRecipientsOnboarded(order.store_id, order.items);
+    // Best-effort: re-derive the commission split from the store's CURRENT
+    // store_type before charging, so an admin flipping the type while this
+    // order sat unpaid can't leave a stale ledger driving the wrong payouts.
+    // Never blocks payment — a failure here just keeps the existing row.
+    try {
+      await this.orders.recomputeCommissionForOrder(order.id);
+    } catch (err) {
+      this.logger.warn(
+        `Could not recompute commission for order ${order.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    // Independent stores charge the customer DIRECTLY on the creator's Standard
+    // connected account (direct charge) — no platform commission, no transfers.
+    const store = order.store_id
+      ? await this.prisma.store.findUnique({
+          where: { id: order.store_id },
+          select: {
+            store_type: true,
+            creator: {
+              select: {
+                stripe_account_id: true,
+                stripe_account_type: true,
+                stripe_charges_enabled: true,
+              },
+            },
+          },
+        })
+      : null;
+    const isIndependent = store?.store_type === StoreType.INDEPENDENT;
+
+    let directAccountId: string | null = null;
+    if (isIndependent) {
+      // Defense in depth — order creation already rejects provider items for
+      // independent stores, but never charge a mixed order directly.
+      const allCreatorItems = order.items.every(
+        (i) => i.fulfiller_type === FulfillerType.CREATOR,
+      );
+      if (!allCreatorItems) {
+        throw new BadRequestException(
+          'This store can only sell its own products.',
+        );
+      }
+      const creator = store!.creator;
+      if (
+        !creator?.stripe_account_id ||
+        !creator.stripe_charges_enabled ||
+        creator.stripe_account_type !== 'standard'
+      ) {
+        throw new BadRequestException(
+          'This store cannot accept card payments yet. Please choose cash on delivery.',
+        );
+      }
+      directAccountId = creator.stripe_account_id;
+    } else {
+      // Every payout recipient must be able to receive transfers before we take
+      // the customer's money, otherwise the funds could not be split out.
+      await this.assertRecipientsOnboarded(order.store_id, order.items);
+    }
 
     // The PaymentIntent carries the total (line-item detail isn't supported by
     // PaymentIntents — the itemized invoice lives in our order). We still attach
@@ -409,31 +612,42 @@ export class PaymentsService {
     const lineCount = order.items.length;
     const unitCount = order.items.reduce((s, i) => s + i.quantity, 0);
 
+    const params: PaymentIntentCreateParams = {
+      amount: Math.round(Number(order.total) * 100),
+      currency: order.currency.toLowerCase(),
+      description: `Order ${order.order_number} — ${unitCount} item(s)`,
+      metadata: {
+        order_id: order.id,
+        order_number: order.order_number,
+        line_items: String(lineCount),
+        unit_count: String(unitCount),
+        ...(order.store_id ? { store_id: order.store_id } : {}),
+      },
+      automatic_payment_methods: {
+        enabled: true,
+        allow_redirects: 'never',
+      },
+    };
+
     const intent = await this.runStripe(
       () =>
-        stripe.paymentIntents.create({
-          amount: Math.round(Number(order.total) * 100),
-          currency: order.currency.toLowerCase(),
-          description: `Order ${order.order_number} — ${unitCount} item(s)`,
-          metadata: {
-            order_id: order.id,
-            order_number: order.order_number,
-            line_items: String(lineCount),
-            unit_count: String(unitCount),
-            ...(order.store_id ? { store_id: order.store_id } : {}),
-          },
-          automatic_payment_methods: {
-            enabled: true,
-            allow_redirects: 'never',
-          },
-        }),
+        directAccountId
+          ? stripe.paymentIntents.create(params, {
+              stripeAccount: directAccountId,
+            })
+          : stripe.paymentIntents.create(params),
       'create payment intent',
     );
 
-    // Record the intent id on the order up front to aid reconciliation.
+    // Record the intent id on the order up front to aid reconciliation, plus
+    // the connected account it lives on when this was a direct charge — every
+    // later retrieval of this PaymentIntent/charge must target that account.
     await this.prisma.order.update({
       where: { id: order.id },
-      data: { stripe_payment_id: intent.id },
+      data: {
+        stripe_payment_id: intent.id,
+        stripe_account_id: directAccountId,
+      },
     });
 
     return { clientSecret: intent.client_secret!, paymentIntentId: intent.id };
@@ -499,7 +713,11 @@ export class PaymentsService {
   async reconcilePayment(orderId: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      select: { payment_status: true, stripe_payment_id: true },
+      select: {
+        payment_status: true,
+        stripe_payment_id: true,
+        stripe_account_id: true,
+      },
     });
     if (!order) throw new NotFoundException('Order not found');
     // Already paid: still re-attempt payouts so a previously failed transfer can
@@ -514,8 +732,16 @@ export class PaymentsService {
     }
 
     const stripe = await this.requireStripe();
+    // Direct-charge intents live on the connected account, not the platform.
     const pi = await this.runStripe(
-      () => stripe.paymentIntents.retrieve(order.stripe_payment_id!),
+      () =>
+        stripe.paymentIntents.retrieve(
+          order.stripe_payment_id!,
+          undefined,
+          order.stripe_account_id
+            ? { stripeAccount: order.stripe_account_id }
+            : undefined,
+        ),
       'retrieve payment intent',
     );
 
@@ -557,6 +783,23 @@ export class PaymentsService {
     return stripe.webhooks.constructEvent(rawBody, signature, secret);
   }
 
+  // Same as above, but verified with the Connect endpoint's own signing secret.
+  // Connect events carry `event.account` (the connected account they occurred
+  // on); order resolution still goes through the PaymentIntent metadata.
+  async constructConnectWebhookEvent(
+    rawBody: Buffer,
+    signature: string,
+  ): Promise<StripeEvent> {
+    const stripe = await this.requireStripe();
+    const secret = await this.resolveConnectWebhookSecret();
+    if (!secret) {
+      throw new BadRequestException(
+        'Stripe Connect webhook secret is not configured',
+      );
+    }
+    return stripe.webhooks.constructEvent(rawBody, signature, secret);
+  }
+
   /**
    * Dispatch a verified Stripe event. Errors are logged and rethrown so the
    * controller returns 5xx and Stripe retries the delivery — important because
@@ -574,6 +817,11 @@ export class PaymentsService {
         case 'payment_intent.payment_failed': {
           const pi = event.data.object as StripePaymentIntent;
           await this.onPaymentFailed(pi);
+          break;
+        }
+        case 'charge.refunded': {
+          const charge = event.data.object as StripeCharge;
+          await this.onChargeRefunded(charge);
           break;
         }
         case 'account.updated': {
@@ -600,12 +848,44 @@ export class PaymentsService {
   ) {
     const orderId = pi.metadata?.order_id;
     if (!orderId) return;
-    const result = await this.orders.markOrderPaid(orderId, pi.id);
+
+    const orderRow = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { stripe_account_id: true },
+    });
+    if (!orderRow) return;
+
+    // SECURITY: never trust the (possibly replayed/forged-metadata) event
+    // payload alone — re-read the PaymentIntent live from Stripe and only mark
+    // the order paid when Stripe itself says it succeeded. A retrieval failure
+    // propagates (the webhook handler logs + rethrows so Stripe retries).
+    const stripe = await this.requireStripe();
+    const live = await stripe.paymentIntents.retrieve(
+      pi.id,
+      undefined,
+      orderRow.stripe_account_id
+        ? { stripeAccount: orderRow.stripe_account_id }
+        : undefined,
+    );
+    if (live.status !== 'succeeded') {
+      this.logger.warn(
+        `Ignoring payment_intent.succeeded for order ${orderId}: live status is ${live.status}`,
+      );
+      return;
+    }
+    if (live.metadata?.order_id !== orderId) {
+      this.logger.warn(
+        `Ignoring payment_intent.succeeded for order ${orderId}: live intent belongs to a different order`,
+      );
+      return;
+    }
+
+    const result = await this.orders.markOrderPaid(orderId, live.id);
 
     const chargeId =
-      typeof pi.latest_charge === 'string'
-        ? pi.latest_charge
-        : pi.latest_charge?.id;
+      typeof live.latest_charge === 'string'
+        ? live.latest_charge
+        : live.latest_charge?.id;
 
     // Capture the card/receipt details for tracking (best-effort, non-fatal).
     await this.captureChargeDetails(orderId, chargeId);
@@ -671,6 +951,10 @@ export class PaymentsService {
       },
     });
     if (!order || !order.commission) return;
+
+    // Direct charge (independent store): the money was captured straight on the
+    // creator's own connected account — nothing to split, no payout ledger rows.
+    if (order.stripe_account_id) return;
 
     // Resolve the charge and its settlement currency/FX rate.
     let chargeId = order.stripe_charge_id;
@@ -876,13 +1160,112 @@ export class PaymentsService {
     }
   }
 
+  /**
+   * A charge was refunded (from the Stripe dashboard of the platform OR of an
+   * independent store's own account). When the charge is FULLY refunded, mark
+   * the order's payment as refunded, record it on the timeline and notify the
+   * store creator. The fulfillment status is left alone — the admin manages it.
+   */
+  private async onChargeRefunded(charge: StripeCharge) {
+    // Only act on full refunds; partial refunds keep the order payable state.
+    if (!charge.refunded) return;
+
+    // Resolve the order: by charge id first, then by the PaymentIntent's
+    // metadata (charges inherit the PI metadata), then by the PI id itself.
+    const piId =
+      typeof charge.payment_intent === 'string'
+        ? charge.payment_intent
+        : charge.payment_intent?.id;
+    let order = await this.prisma.order.findFirst({
+      where: { stripe_charge_id: charge.id },
+      select: { id: true, order_number: true, payment_status: true, store_id: true, stripe_account_id: true },
+    });
+    if (!order && charge.metadata?.order_id) {
+      order = await this.prisma.order.findUnique({
+        where: { id: charge.metadata.order_id },
+        select: { id: true, order_number: true, payment_status: true, store_id: true, stripe_account_id: true },
+      });
+    }
+    if (!order && piId) {
+      order = await this.prisma.order.findFirst({
+        where: { stripe_payment_id: piId },
+        select: { id: true, order_number: true, payment_status: true, store_id: true, stripe_account_id: true },
+      });
+    }
+    if (!order) return;
+
+    // SECURITY: mirror onPaymentSucceeded — never trust the event payload
+    // alone. Re-read the charge live from Stripe (from the connected account
+    // for direct charges) and only proceed when Stripe itself says it is
+    // fully refunded. A retrieval failure propagates (the webhook handler
+    // logs + rethrows so Stripe retries the delivery).
+    const stripe = await this.requireStripe();
+    const live = await stripe.charges.retrieve(
+      charge.id,
+      undefined,
+      order.stripe_account_id
+        ? { stripeAccount: order.stripe_account_id }
+        : undefined,
+    );
+    if (!live.refunded) {
+      this.logger.warn(
+        `Ignoring charge.refunded for order ${order.id}: live charge is not fully refunded`,
+      );
+      return;
+    }
+
+    // Idempotent: replaying the event leaves an already-refunded order alone.
+    const flip = await this.prisma.order.updateMany({
+      where: { id: order.id, payment_status: { not: 'refunded' } },
+      data: { payment_status: 'refunded' },
+    });
+    if (flip.count === 0) return;
+
+    await this.prisma.orderTimeline.create({
+      data: {
+        order_id: order.id,
+        status: 'REFUNDED',
+        note: 'Payment fully refunded via Stripe',
+        actor: 'system',
+      },
+    });
+
+    // Notify the store creator so they know money went back to the customer.
+    if (order.store_id) {
+      const store = await this.prisma.store.findUnique({
+        where: { id: order.store_id },
+        select: { creator: { select: { user_id: true } } },
+      });
+      if (store?.creator) {
+        await this.notifications.create(
+          store.creator.user_id,
+          'order_refunded',
+          'Order refunded',
+          `The payment for order ${order.order_number} was fully refunded.`,
+          { order_id: order.id },
+        );
+      }
+    }
+  }
+
   /** Store the charge's card brand/last4 + receipt URL on the order. */
   private async captureChargeDetails(orderId: string, chargeId?: string) {
     if (!chargeId) return;
     const stripe = await this.resolveStripe();
     if (!stripe) return;
     try {
-      const charge = await stripe.charges.retrieve(chargeId);
+      // Direct-charge orders keep their charge on the connected account.
+      const orderRow = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: { stripe_account_id: true },
+      });
+      const charge = await stripe.charges.retrieve(
+        chargeId,
+        undefined,
+        orderRow?.stripe_account_id
+          ? { stripeAccount: orderRow.stripe_account_id }
+          : undefined,
+      );
       const card = charge.payment_method_details?.card;
       await this.prisma.order.update({
         where: { id: orderId },

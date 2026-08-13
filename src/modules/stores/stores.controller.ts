@@ -13,6 +13,7 @@ import { StoresService } from './stores.service';
 import {
   CreateStoreDto,
   UpdateStoreDto,
+  AdminUpdateStoreDto,
   UpdateThemeDto,
   UpdateThemeSelectionDto,
   UpdateLanguageDto,
@@ -33,11 +34,11 @@ export class StoresController {
     return this.storesService.findByCreatorId(creatorId);
   }
 
-  // Admin — Update a creator's store (including slug)
+  // Admin — Update a creator's store (including slug and store_type)
   @Put('by-creator/:creatorId')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
-  adminUpdate(@Param('creatorId') creatorId: string, @Body() dto: UpdateStoreDto) {
+  adminUpdate(@Param('creatorId') creatorId: string, @Body() dto: AdminUpdateStoreDto) {
     return this.storesService.adminUpdateByCreatorId(creatorId, dto);
   }
 
@@ -58,7 +59,7 @@ export class StoresController {
     return this.storesService.findBySlug(slug);
   }
 
-  // Creator — إنشاء متجر
+  // Creator — Create a store
   @Post()
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.CREATOR)
@@ -66,7 +67,7 @@ export class StoresController {
     return this.storesService.create(userId, dto);
   }
 
-  // Creator — متجري
+  // Creator — My store
   @Get('my/store')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.CREATOR)
@@ -74,7 +75,7 @@ export class StoresController {
     return this.storesService.findByCreator(userId);
   }
 
-  // Creator — تحديث المتجر
+  // Creator — Update the store
   @Put('my/store')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.CREATOR)
@@ -82,7 +83,7 @@ export class StoresController {
     return this.storesService.update(userId, dto);
   }
 
-  // Creator — تحديث الثيم
+  // Creator — Update the theme
   @Put('my/theme')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.CREATOR)
@@ -101,7 +102,7 @@ export class StoresController {
     return this.storesService.updateThemeSelection(userId, dto);
   }
 
-  // Creator — تحديث اللغات
+  // Creator — Update languages
   @Put('my/languages')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.CREATOR)

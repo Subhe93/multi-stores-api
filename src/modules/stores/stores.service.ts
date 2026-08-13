@@ -5,6 +5,7 @@ import { RevalidationService } from '../../common/revalidation/revalidation.serv
 import {
   CreateStoreDto,
   UpdateStoreDto,
+  AdminUpdateStoreDto,
   UpdateThemeDto,
   UpdateThemeSelectionDto,
   UpdateLanguageDto,
@@ -59,7 +60,7 @@ export class StoresService {
             secondary_locales: secondary_locales || [],
           },
         },
-        // إنشاء الصفحات الثابتة الإلزامية تلقائياً
+        // Automatically create the mandatory static pages
         static_pages: {
           create: [
             { type: 'ABOUT', slug: 'about', is_required: true, sort_order: 1, status: 'DRAFT' },
@@ -183,7 +184,8 @@ export class StoresService {
     return store;
   }
 
-  async adminUpdateByCreatorId(creatorId: string, dto: UpdateStoreDto) {
+  // Admin variant: may also change store_type (creators pick it only at creation).
+  async adminUpdateByCreatorId(creatorId: string, dto: AdminUpdateStoreDto) {
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creatorId },
       select: { id: true },

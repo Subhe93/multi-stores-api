@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { PricingType } from '@prisma/client';
+import { PricingType, StoreType } from '@prisma/client';
 
 @Injectable()
 export class StorefrontService {
@@ -70,6 +70,8 @@ export class StorefrontService {
             bio: true,
             cover_url: true,
             stripe_payouts_enabled: true,
+            stripe_charges_enabled: true,
+            stripe_account_type: true,
           },
         },
       },
@@ -80,10 +82,17 @@ export class StorefrontService {
     return {
       ...store,
       currency: platformConfig?.default_currency || 'EUR',
-      // Card checkout is only offered when the store creator has completed
-      // Stripe Connect onboarding (can receive payout transfers). Note: the
-      // checkout still re-checks every involved provider at payment time.
-      card_payments_enabled: store.creator.stripe_payouts_enabled,
+      // Store type drives the storefront's product mix and checkout flow.
+      store_type: store.store_type,
+      // Card checkout availability. Marketplace stores need the creator able
+      // to receive payout transfers (Express onboarding complete); independent
+      // stores charge directly, so they need a Standard account that can take
+      // charges. Note: checkout still re-checks the recipients at payment time.
+      card_payments_enabled:
+        store.store_type === StoreType.INDEPENDENT
+          ? store.creator.stripe_account_type === 'standard' &&
+            store.creator.stripe_charges_enabled
+          : store.creator.stripe_payouts_enabled,
       pages: store.static_pages,
       // New theme system: storefront resolves the registry by theme_key and
       // merges theme_customizations on top.
@@ -209,6 +218,10 @@ export class StorefrontService {
       }
     }
 
+    // Independent stores sell the creator's own products only — never list
+    // custom products (provider resells) on their storefront.
+    const isIndependent = store.store_type === StoreType.INDEPENDENT;
+
     const [ownProducts, customProducts] = await Promise.all([
       this.prisma.product.findMany({
         where: ownWhere,
@@ -220,22 +233,24 @@ export class StorefrontService {
         },
         orderBy: { created_at: 'desc' },
       }),
-      this.prisma.customProduct.findMany({
-        where: customWhere,
-        include: {
-          translations: true,
-          mockup_images: { take: 1, orderBy: { sort_order: 'asc' } },
-          selected_variants: { include: { variant: true } },
-          product: {
+      isIndependent
+        ? []
+        : this.prisma.customProduct.findMany({
+            where: customWhere,
             include: {
-              images: { take: 1, orderBy: { sort_order: 'asc' } },
-              variants: { where: { is_active: true } },
-              category: { include: { translations: true } },
+              translations: true,
+              mockup_images: { take: 1, orderBy: { sort_order: 'asc' } },
+              selected_variants: { include: { variant: true } },
+              product: {
+                include: {
+                  images: { take: 1, orderBy: { sort_order: 'asc' } },
+                  variants: { where: { is_active: true } },
+                  category: { include: { translations: true } },
+                },
+              },
             },
-          },
-        },
-        orderBy: { created_at: 'desc' },
-      }),
+            orderBy: { created_at: 'desc' },
+          }),
     ]);
 
     const mappedCustom = customProducts.map((cp) => {
@@ -414,6 +429,13 @@ export class StorefrontService {
       };
     }
 
+    // Independent stores sell the creator's own products only — never serve
+    // custom products (provider resells), so skip the fallback and 404 as if
+    // the product doesn't exist.
+    if (store.store_type === StoreType.INDEPENDENT) {
+      throw new NotFoundException({ code: 'STOREFRONT_PRODUCT_NOT_FOUND', message: 'Product not found' });
+    }
+
     // Fall back to custom product. Same ordering rationale as above.
     const customProduct = await this.prisma.customProduct.findFirst({
       where: {
@@ -514,6 +536,10 @@ export class StorefrontService {
     });
     if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
 
+    // Independent stores never expose custom products, so their categories
+    // come from the creator's own products only (mirrors getProducts).
+    const isIndependent = store.store_type === StoreType.INDEPENDENT;
+
     // Categories that have published own products or published custom products for this creator
     const [ownCategories, customCategories] = await Promise.all([
       this.prisma.category.findMany({
@@ -525,19 +551,21 @@ export class StorefrontService {
         include: { translations: true },
         orderBy: { sort_order: 'asc' },
       }),
-      this.prisma.category.findMany({
-        where: {
-          products: {
-            some: {
-              custom_products: {
-                some: { creator_id: store.creator.id, status: 'PUBLISHED' },
+      isIndependent
+        ? []
+        : this.prisma.category.findMany({
+            where: {
+              products: {
+                some: {
+                  custom_products: {
+                    some: { creator_id: store.creator.id, status: 'PUBLISHED' },
+                  },
+                },
               },
             },
-          },
-        },
-        include: { translations: true },
-        orderBy: { sort_order: 'asc' },
-      }),
+            include: { translations: true },
+            orderBy: { sort_order: 'asc' },
+          }),
     ]);
 
     // Merge deduplicating by id
@@ -645,7 +673,9 @@ export class StorefrontService {
     });
 
     // Published own products + custom products. For sitemap we only need slug
-    // + lastmod, so we project a thin shape.
+    // + lastmod, so we project a thin shape. Independent stores never expose
+    // custom products, so their sitemap lists own products only (mirrors
+    // getProducts).
     const [ownProducts, customProducts] = await Promise.all([
       this.prisma.product.findMany({
         where: { creator_id: store.creator.id, status: 'PUBLISHED' },
@@ -654,13 +684,15 @@ export class StorefrontService {
           translations: { select: { locale: true, slug: true } },
         },
       }),
-      this.prisma.customProduct.findMany({
-        where: { creator_id: store.creator.id, status: 'PUBLISHED' },
-        select: {
-          updated_at: true,
-          translations: { select: { locale: true, slug: true } },
-        },
-      }),
+      store.store_type === StoreType.INDEPENDENT
+        ? []
+        : this.prisma.customProduct.findMany({
+            where: { creator_id: store.creator.id, status: 'PUBLISHED' },
+            select: {
+              updated_at: true,
+              translations: { select: { locale: true, slug: true } },
+            },
+          }),
     ]);
 
     return {

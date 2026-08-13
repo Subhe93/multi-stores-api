@@ -1,4 +1,5 @@
-import { IsString, IsOptional, IsBoolean, IsArray, IsObject, Matches, MinLength, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsArray, IsEnum, IsObject, Matches, MinLength, MaxLength } from 'class-validator';
+import { StoreType } from '@prisma/client';
 
 const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const SLUG_MESSAGE = 'slug must be lowercase letters, digits, and hyphens (no leading/trailing hyphen)';
@@ -31,6 +32,13 @@ export class CreateStoreDto {
   @IsArray()
   @IsString({ each: true })
   secondary_locales?: string[];
+
+  // MARKETPLACE (default) or INDEPENDENT (creator-only products, direct
+  // charges). Chosen once at creation — creators cannot change it afterwards;
+  // only an admin can via PUT /stores/by-creator/:creatorId.
+  @IsOptional()
+  @IsEnum(StoreType)
+  store_type?: StoreType;
 }
 
 export class UpdateStoreDto {
@@ -72,6 +80,15 @@ export class UpdateStoreDto {
   @IsOptional()
   @IsBoolean()
   cache_enabled?: boolean;
+}
+
+// Admin-only store update: also allows switching the store type. The creator
+// update endpoint keeps using UpdateStoreDto, where store_type is rejected by
+// the global forbidNonWhitelisted validation.
+export class AdminUpdateStoreDto extends UpdateStoreDto {
+  @IsOptional()
+  @IsEnum(StoreType)
+  store_type?: StoreType;
 }
 
 export class UpdateThemeDto {

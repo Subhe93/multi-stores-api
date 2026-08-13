@@ -8,8 +8,9 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 
 async function bootstrap() {
-  // rawBody keeps the unparsed request body available (req.rawBody) so the
-  // Stripe webhook can verify its signature against the exact bytes.
+  // rawBody keeps the unparsed request body available (req.rawBody) on every
+  // route, so the Stripe webhooks (platform /payments/webhook and Connect
+  // /payments/webhook/connect) can verify signatures against the exact bytes.
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,
   });

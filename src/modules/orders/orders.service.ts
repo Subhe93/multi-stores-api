@@ -11,6 +11,7 @@ import {
   FulfillmentStatus,
   OrderStatus,
   PricingType,
+  StoreType,
   UserRole,
 } from '@prisma/client';
 import { CreateOrderDto, UpdateOrderStatusDto, UpdateFulfillmentDto } from './dto/order.dto';
@@ -144,7 +145,7 @@ export class OrdersService {
     });
     if (!customer) throw new NotFoundException({ code: 'ORDER_CUSTOMER_NOT_FOUND', message: 'Customer not found' });
 
-    // جلب السلة
+    // Load the cart
     const cart = await this.prisma.cart.findUnique({
       where: { customer_id: customer.id },
       include: { items: true },
@@ -154,7 +155,7 @@ export class OrdersService {
       throw new BadRequestException({ code: 'ORDER_CART_EMPTY', message: 'Cart is empty' });
     }
 
-    // حساب الأسعار
+    // Calculate prices
     let subtotal = 0;
     let providerBaseTotal = 0; // what providers are owed (their base prices)
     let creatorMarginTotal = 0; // what creators are owed (their markup or creator-only revenue)
@@ -164,6 +165,16 @@ export class OrdersService {
     // Only items whose product/variant tracks inventory go in here — others are
     // treated as unlimited (consistent with track_inventory=false / null stock).
     const stockOps: { kind: 'product' | 'variant'; id: string; qty: number }[] = [];
+
+    // Independent stores sell only the creator's own products — resolve the
+    // store type up front so provider-fulfilled lines are rejected below.
+    const orderStore = dto.store_id
+      ? await this.prisma.store.findUnique({
+          where: { id: dto.store_id },
+          select: { store_type: true },
+        })
+      : null;
+    const isIndependentStore = orderStore?.store_type === StoreType.INDEPENDENT;
 
     for (const item of cart.items) {
       let unitPrice = 0;
@@ -253,6 +264,25 @@ export class OrdersService {
         if (product.track_inventory && product.stock_quantity != null) {
           stockOps.push({ kind: 'product', id: product.id, qty: item.quantity });
         }
+      }
+
+      // Independent stores never sell custom products (provider resells) — not
+      // even creator-only ones (base product without a provider), which would
+      // otherwise slip past the PROVIDER check below.
+      if (isIndependentStore && item.custom_product_id) {
+        throw new BadRequestException({
+          code: 'ORDER_INDEPENDENT_STORE_CUSTOM_ITEM',
+          message: 'This store can only sell its own products. Please remove unavailable items from your cart.',
+        });
+      }
+
+      // Independent stores are creator-only: reject any line fulfilled by a
+      // provider (provider products, or custom products backed by a provider).
+      if (isIndependentStore && fulfillerType === 'PROVIDER') {
+        throw new BadRequestException({
+          code: 'ORDER_INDEPENDENT_STORE_PROVIDER_ITEM',
+          message: 'This store can only sell its own products. Please remove supplier items from your cart.',
+        });
       }
 
       // Apply bundle pricing if this cart line carries a bundle offer
@@ -570,30 +600,29 @@ export class OrdersService {
       }
     }
 
-    // Commission split: platform takes %, rest split between provider (base) and creator (margin)
-    const commissionPercent = platformConfig
-      ? Number(platformConfig.commission_value)
-      : 15;
-
-    const commissionBase = subtotal - discountAmount;
-    const platformAmount = Math.round(commissionBase * (commissionPercent / 100) * 100) / 100;
-
-    // Scale provider/creator by discount factor to reflect discounted revenue
-    const discountFactor = subtotal > 0 ? commissionBase / subtotal : 1;
-    const payoutPool = commissionBase - platformAmount;
-
-    // Distribute payoutPool proportionally between provider base and creator margin
-    const scaledProviderBase = providerBaseTotal * discountFactor;
-    const scaledCreatorMargin = creatorMarginTotal * discountFactor;
-    const totalScaled = scaledProviderBase + scaledCreatorMargin;
-
+    // Commission split. Independent stores take no platform commission and
+    // have no provider share — the creator keeps the full order total
+    // (subtotal - discount + shipping). Marketplace stores: platform takes %,
+    // rest split between provider (base) and creator (margin).
+    let platformAmount = 0;
     let providerAmount = 0;
     let creatorAmount = 0;
-    if (totalScaled > 0 && payoutPool > 0) {
-      providerAmount = Math.round((payoutPool * scaledProviderBase / totalScaled) * 100) / 100;
-      // Ensure providerAmount never exceeds payoutPool due to rounding
-      if (providerAmount > payoutPool) providerAmount = payoutPool;
-      creatorAmount = Math.max(0, Math.round((payoutPool - providerAmount) * 100) / 100);
+    if (isIndependentStore) {
+      creatorAmount = total;
+    } else {
+      const commissionPercent = platformConfig
+        ? Number(platformConfig.commission_value)
+        : 15;
+      const split = this.computeMarketplaceCommission({
+        subtotal,
+        discountAmount,
+        providerBaseTotal,
+        creatorMarginTotal,
+        commissionPercent,
+      });
+      platformAmount = split.platformAmount;
+      providerAmount = split.providerAmount;
+      creatorAmount = split.creatorAmount;
     }
 
     try {
@@ -627,6 +656,133 @@ export class OrdersService {
     }
 
     return order;
+  }
+
+  /**
+   * Marketplace commission split: the platform takes a percentage of
+   * (subtotal - discount); the remaining payout pool is distributed pro-rata
+   * between the aggregate provider base and the creator margin, both scaled by
+   * the discount factor. Shared by create() and recomputeCommissionForOrder()
+   * so the two can never drift apart.
+   */
+  private computeMarketplaceCommission(input: {
+    subtotal: number;
+    discountAmount: number;
+    providerBaseTotal: number;
+    creatorMarginTotal: number;
+    commissionPercent: number;
+  }): { platformAmount: number; providerAmount: number; creatorAmount: number } {
+    const {
+      subtotal,
+      discountAmount,
+      providerBaseTotal,
+      creatorMarginTotal,
+      commissionPercent,
+    } = input;
+
+    const commissionBase = subtotal - discountAmount;
+    const platformAmount =
+      Math.round(commissionBase * (commissionPercent / 100) * 100) / 100;
+
+    // Scale provider/creator by discount factor to reflect discounted revenue
+    const discountFactor = subtotal > 0 ? commissionBase / subtotal : 1;
+    const payoutPool = commissionBase - platformAmount;
+
+    // Distribute payoutPool proportionally between provider base and creator margin
+    const scaledProviderBase = providerBaseTotal * discountFactor;
+    const scaledCreatorMargin = creatorMarginTotal * discountFactor;
+    const totalScaled = scaledProviderBase + scaledCreatorMargin;
+
+    let providerAmount = 0;
+    let creatorAmount = 0;
+    if (totalScaled > 0 && payoutPool > 0) {
+      providerAmount =
+        Math.round((payoutPool * scaledProviderBase / totalScaled) * 100) / 100;
+      // Ensure providerAmount never exceeds payoutPool due to rounding
+      if (providerAmount > payoutPool) providerAmount = payoutPool;
+      creatorAmount = Math.max(
+        0,
+        Math.round((payoutPool - providerAmount) * 100) / 100,
+      );
+    }
+
+    return { platformAmount, providerAmount, creatorAmount };
+  }
+
+  /**
+   * Re-derive an unpaid order's commission split from the store's CURRENT
+   * store_type. An admin can flip a store between MARKETPLACE and INDEPENDENT
+   * while unpaid orders exist; without this, the commission row created at
+   * order time would drive the wrong payout behaviour at payment time.
+   * Paid orders are never touched — their ledger is settled history.
+   */
+  async recomputeCommissionForOrder(orderId: string): Promise<void> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        items: {
+          select: { provider_base_amount: true, fulfiller_type: true },
+        },
+        commission: true,
+      },
+    });
+    if (!order) return;
+    if (order.payment_status === 'paid') return;
+
+    const store = order.store_id
+      ? await this.prisma.store.findUnique({
+          where: { id: order.store_id },
+          select: { store_type: true },
+        })
+      : null;
+    const isIndependentStore = store?.store_type === StoreType.INDEPENDENT;
+
+    let platformAmount = 0;
+    let providerAmount = 0;
+    let creatorAmount = 0;
+    if (isIndependentStore) {
+      // Independent stores: no platform cut, no provider share — the creator
+      // keeps the full order total (charged directly on their own account).
+      creatorAmount = Number(order.total);
+    } else {
+      const platformConfig = await this.prisma.platformConfig.findFirst();
+      const commissionPercent = platformConfig
+        ? Number(platformConfig.commission_value)
+        : 15;
+      const subtotal = Number(order.subtotal);
+      const providerBaseTotal = order.items.reduce(
+        (sum, i) => sum + Number(i.provider_base_amount),
+        0,
+      );
+      const split = this.computeMarketplaceCommission({
+        subtotal,
+        discountAmount: Number(order.discount_amount),
+        providerBaseTotal,
+        creatorMarginTotal: subtotal - providerBaseTotal,
+        commissionPercent,
+      });
+      platformAmount = split.platformAmount;
+      providerAmount = split.providerAmount;
+      creatorAmount = split.creatorAmount;
+    }
+
+    // Upsert: the row can legitimately be missing because commission creation
+    // at order time is best-effort (failures are swallowed).
+    await this.prisma.orderCommission.upsert({
+      where: { order_id: order.id },
+      create: {
+        order_id: order.id,
+        platform_amount: platformAmount,
+        provider_amount: providerAmount,
+        creator_amount: creatorAmount,
+        currency: order.currency,
+      },
+      update: {
+        platform_amount: platformAmount,
+        provider_amount: providerAmount,
+        creator_amount: creatorAmount,
+      },
+    });
   }
 
   async findByCustomer(userId: string, page = 1, limit = 20) {

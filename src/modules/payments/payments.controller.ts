@@ -5,6 +5,7 @@ import {
   Put,
   Body,
   Param,
+  Query,
   Req,
   Headers,
   UseGuards,
@@ -26,13 +27,12 @@ import { UserRole } from '@prisma/client';
 export class PaymentsController {
   constructor(private paymentsService: PaymentsService) {}
 
-  // Public — frontend checks if Stripe is available.
+  // Public — frontend checks if Stripe is available. With ?store=<slug>, the
+  // config is store-aware: independent stores also return the connected
+  // account Stripe.js must target for their direct charges.
   @Get('config')
-  async getConfig() {
-    return {
-      stripeConfigured: await this.paymentsService.isStripeConfigured(),
-      publishableKey: await this.paymentsService.getPublishableKey(),
-    };
+  getConfig(@Query('store') store?: string) {
+    return this.paymentsService.getPublicConfig(store);
   }
 
   // ── Admin platform Stripe settings ──────────────────────────────────────────
@@ -134,6 +134,32 @@ export class PaymentsController {
     let event;
     try {
       event = await this.paymentsService.constructWebhookEvent(
+        req.rawBody,
+        signature,
+      );
+    } catch {
+      // Bad signature or malformed payload — reject so Stripe surfaces the error.
+      throw new BadRequestException('Invalid webhook signature');
+    }
+    await this.paymentsService.handleWebhookEvent(event);
+    return { received: true };
+  }
+
+  // ── Stripe Connect webhook ──────────────────────────────────────────────────
+  // Public + signature-verified with its OWN signing secret. Receives events
+  // that occurred on connected accounts (independent stores' direct charges);
+  // event handling is shared with the platform endpoint.
+  @Post('webhook/connect')
+  async connectWebhook(
+    @Req() req: RawBodyRequest<Request>,
+    @Headers('stripe-signature') signature: string,
+  ) {
+    if (!req.rawBody) {
+      throw new BadRequestException('Missing request body');
+    }
+    let event;
+    try {
+      event = await this.paymentsService.constructConnectWebhookEvent(
         req.rawBody,
         signature,
       );

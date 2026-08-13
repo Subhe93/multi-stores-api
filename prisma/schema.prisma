@@ -96,6 +96,9 @@ model Creator {
   cover_url         String?
   phone             String?
   stripe_account_id String?
+  // Connected account type: 'express' (marketplace transfers model) or
+  // 'standard' (independent stores charging directly on their own account).
+  stripe_account_type String?
   // Stripe Connect onboarding state, kept in sync via the account.updated webhook.
   stripe_charges_enabled        Boolean   @default(false)
   stripe_payouts_enabled        Boolean   @default(false)
@@ -535,6 +538,9 @@ model Order {
   payment_method  PaymentMethod @default(COD)
   payment_status  String?
   stripe_payment_id String?
+  // Snapshot of the connected account a direct-charge PaymentIntent was created
+  // on (independent stores). Null = the payment was charged on the platform.
+  stripe_account_id String?
   // Stripe payment details captured from the webhook for tracking/reconciliation.
   stripe_charge_id        String?
   card_brand              String?
@@ -714,6 +720,9 @@ model PlatformConfig {
   stripe_secret_key      String?
   stripe_publishable_key String?
   stripe_webhook_secret  String?
+  // Signing secret of the Connect (connected accounts) webhook endpoint,
+  // used to verify direct-charge events from independent stores.
+  stripe_connect_webhook_secret String?
 
   // Platform SMTP email settings (managed from the admin dashboard). Override
   // the SMTP_*/MAIL_FROM environment variables when set. Credentials are never
@@ -757,6 +766,15 @@ model NotificationTemplate {
 // 13. المتجر (Store)
 // ==========================================
 
+// MARKETPLACE stores sell provider products (and custom products) with the
+// platform commission + transfers model. INDEPENDENT stores sell only the
+// creator's own products, charge directly on the creator's Standard Stripe
+// account, and pay no platform commission.
+enum StoreType {
+  MARKETPLACE
+  INDEPENDENT
+}
+
 model Store {
   id                   String   @id @default(uuid())
   creator_id           String   @unique
@@ -766,6 +784,7 @@ model Store {
   description          String?
   logo_url             String?
   favicon_url          String?
+  store_type           StoreType @default(MARKETPLACE)
   theme_key            String   @default("minimal")
   theme_customizations Json     @default("{}")
   theme_config         Json     @default("{}")

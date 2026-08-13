@@ -22,4 +22,9 @@ export class UpdateStripeSettingsDto {
   @IsOptional()
   @IsString()
   webhook_secret?: string;
+
+  // Signing secret of the Connect (connected accounts) webhook endpoint.
+  @IsOptional()
+  @IsString()
+  connect_webhook_secret?: string;
 }

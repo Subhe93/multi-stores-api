@@ -5,7 +5,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { ImportMode, PricingType, ProductStatus } from '@prisma/client';
+import { ImportMode, PricingType, ProductStatus, StoreType } from '@prisma/client';
 import {
   CreateCustomProductDto,
   UpdateCustomProductDto,
@@ -56,6 +56,24 @@ export class CustomProductsService {
     }
     if (allViolations.length > 0) {
       throw new BadRequestException(formatViolationsMessage(allViolations));
+    }
+  }
+
+  /**
+   * Custom products resell provider products, which independent stores are not
+   * allowed to do — they sell the creator's own products only. A creator with
+   * no store yet is allowed through (existing behavior).
+   */
+  private async assertStoreAllowsCustomProducts(creatorId: string) {
+    const store = await this.prisma.store.findUnique({
+      where: { creator_id: creatorId },
+      select: { store_type: true },
+    });
+    if (store?.store_type === StoreType.INDEPENDENT) {
+      throw new BadRequestException({
+        code: 'CUSTOM_PRODUCT_INDEPENDENT_STORE',
+        message: 'Independent stores sell their own products only, so custom products are not available.',
+      });
     }
   }
 
@@ -264,6 +282,9 @@ export class CustomProductsService {
       where: { user_id: userId },
     });
     if (!creator) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_CREATOR_NOT_FOUND', message: 'Creator not found' });
+
+    // Independent stores cannot create custom products (own products only).
+    await this.assertStoreAllowsCustomProducts(creator.id);
 
     // Validate pricing consistency
     this.validatePricing(dto.pricing_type, dto);
@@ -805,6 +826,9 @@ export class CustomProductsService {
   /** Creator submits a custom product for provider review (or auto-publishes if no provider). */
   async submitForReview(id: string, userId: string) {
     const cp = await this.assertCreatorOwns(id, userId);
+
+    // Independent stores cannot publish custom products (own products only).
+    await this.assertStoreAllowsCustomProducts(cp.creator_id);
 
     if (cp.status !== ProductStatus.DRAFT && cp.status !== ProductStatus.REJECTED) {
       throw new BadRequestException(
