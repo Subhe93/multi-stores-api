@@ -292,9 +292,10 @@ export class ProductsService {
     };
   }
 
-  // Provider dashboard listing — only the authenticated provider's own products.
+  // Dashboard listing — only the authenticated provider's/creator's own products.
   async findMine(
     userId: string,
+    userRole: UserRole,
     filters: {
       page?: number;
       limit?: number;
@@ -305,6 +306,15 @@ export class ProductsService {
       is_featured?: boolean;
     },
   ) {
+    if (userRole === UserRole.CREATOR) {
+      const creator = await this.prisma.creator.findUnique({
+        where: { user_id: userId },
+      });
+      if (!creator) throw new NotFoundException({ code: 'PRODUCT_CREATOR_PROFILE_NOT_FOUND', message: 'Creator profile not found' });
+
+      return this.findAll({ ...filters, creator_id: creator.id });
+    }
+
     const provider = await this.prisma.provider.findUnique({
       where: { user_id: userId },
     });
@@ -685,6 +695,15 @@ export class ProductsService {
     });
 
     if (!product) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
+
+    // Only published provider products can be imported into a creator store —
+    // drafts, archived items, and creator-own products are not importable.
+    if (!product.provider_id || product.status !== ProductStatus.PUBLISHED) {
+      throw new BadRequestException({
+        code: 'PRODUCT_NOT_IMPORTABLE',
+        message: 'This product cannot be imported — only published provider products are available for import.',
+      });
+    }
 
     // Fallback to provider's default shipping profile if none assigned
     if (!(product as any).shipping_profile && product.provider_id) {

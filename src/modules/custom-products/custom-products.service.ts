@@ -286,6 +286,20 @@ export class CustomProductsService {
     // Independent stores cannot create custom products (own products only).
     await this.assertStoreAllowsCustomProducts(creator.id);
 
+    // The base product must be a published provider product — drafts, archived
+    // items, and other creators' own products cannot be imported.
+    const baseProduct = await this.prisma.product.findUnique({
+      where: { id: dto.product_id },
+      select: { status: true, provider_id: true },
+    });
+    if (!baseProduct) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_BASE_PRODUCT_NOT_FOUND', message: 'Product not found' });
+    if (!baseProduct.provider_id || baseProduct.status !== ProductStatus.PUBLISHED) {
+      throw new BadRequestException({
+        code: 'CUSTOM_PRODUCT_BASE_NOT_IMPORTABLE',
+        message: 'This product cannot be imported — only published provider products are available for import.',
+      });
+    }
+
     // Validate pricing consistency
     this.validatePricing(dto.pricing_type, dto);
 
@@ -480,6 +494,10 @@ export class CustomProductsService {
     if (userId && existing.creator.user_id !== userId) {
       throw new ForbiddenException({ code: 'CUSTOM_PRODUCT_NOT_OWNED', message: 'You do not own this custom product' });
     }
+
+    // Independent stores cannot edit custom products (own products only) —
+    // legacy custom products stay frozen after a store converts.
+    await this.assertStoreAllowsCustomProducts(existing.creator_id);
 
     // Auto-revert to PENDING_REVIEW if a content edit happens on a PUBLISHED product with a provider.
     // We FORCE this regardless of what dto.status says — the creator cannot bypass review by
@@ -720,7 +738,10 @@ export class CustomProductsService {
    * so the clone targets the same upstream product and variants.
    */
   async duplicate(id: string, userId: string) {
-    await this.assertCreatorOwns(id, userId);
+    const cp = await this.assertCreatorOwns(id, userId);
+
+    // Independent stores cannot duplicate custom products (own products only).
+    await this.assertStoreAllowsCustomProducts(cp.creator_id);
 
     const source = await this.prisma.customProduct.findUnique({
       where: { id },

@@ -48,12 +48,13 @@ export class ProductsController {
     });
   }
 
-  // Provider — list only the authenticated provider's own products
+  // Provider/Creator — list only the authenticated user's own products
   @Get('mine')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.PROVIDER)
+  @Roles(UserRole.PROVIDER, UserRole.CREATOR)
   findMine(
     @CurrentUser('id') userId: string,
+    @CurrentUser('role') userRole: UserRole,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('category_id') category_id?: string,
@@ -62,7 +63,7 @@ export class ProductsController {
     @Query('search') search?: string,
     @Query('is_featured') is_featured?: string,
   ) {
-    return this.productsService.findMine(userId, {
+    return this.productsService.findMine(userId, userRole, {
       page: page ? +page : undefined,
       limit: limit ? +limit : undefined,
       category_id,

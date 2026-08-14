@@ -46,6 +46,49 @@ export class CreateShippingZoneDto {
   estimated_days_max: number;
 }
 
+export class UpdateShippingZoneDto {
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  countries?: string[]; // ISO codes
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  base_cost?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  per_item_cost?: number;
+
+  // Nullable on purpose: sending null clears the free-shipping threshold.
+  // @IsOptional also skips validation for null, so null passes through as-is.
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  free_threshold?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Type(() => Number)
+  estimated_days_min?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Type(() => Number)
+  estimated_days_max?: number;
+}
+
 export class CreateShippingProfileDto {
   @IsString()
   name: string;

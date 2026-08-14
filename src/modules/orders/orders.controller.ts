@@ -7,13 +7,14 @@ import {
   Body,
   Query,
   UseGuards,
+  BadRequestException,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto, UpdateOrderStatusDto, UpdateFulfillmentDto } from './dto/order.dto';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
-import { UserRole } from '@prisma/client';
+import { OrderStatus, UserRole } from '@prisma/client';
 
 @Controller('orders')
 @UseGuards(AuthGuard('jwt'))
@@ -49,12 +50,26 @@ export class OrdersController {
     @CurrentUser('role') role: UserRole,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('status') status?: string,
   ) {
+    // Validate the optional status filter against the OrderStatus enum so an
+    // unknown value gets a friendly 400 instead of a database error.
+    let statusFilter: OrderStatus | undefined;
+    if (status) {
+      if (!Object.values(OrderStatus).includes(status as OrderStatus)) {
+        throw new BadRequestException({
+          code: 'ORDER_INVALID_STATUS_FILTER',
+          message: `"${status}" is not a valid order status. Allowed values: ${Object.values(OrderStatus).join(', ')}.`,
+        });
+      }
+      statusFilter = status as OrderStatus;
+    }
+
     if (role === UserRole.ADMIN) {
-      return this.ordersService.findAll(page ? +page : undefined, limit ? +limit : undefined);
+      return this.ordersService.findAll(page ? +page : undefined, limit ? +limit : undefined, statusFilter);
     }
     // Provider/Creator — find relevant orders
-    return this.ordersService.findByRole(userId, role, page ? +page : undefined, limit ? +limit : undefined);
+    return this.ordersService.findByRole(userId, role, page ? +page : undefined, limit ? +limit : undefined, statusFilter);
   }
 
   // Provider/Creator — الطلبات الواردة

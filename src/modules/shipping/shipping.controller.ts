@@ -13,6 +13,7 @@ import { ShippingService } from './shipping.service';
 import {
   CreateShippingProfileDto,
   CreateShippingZoneDto,
+  UpdateShippingZoneDto,
   CalculateShippingDto,
   EstimateShippingDto,
 } from './dto/shipping.dto';
@@ -23,6 +24,14 @@ import { UserRole } from '@prisma/client';
 @Controller('shipping')
 export class ShippingController {
   constructor(private shippingService: ShippingService) {}
+
+  // Map the requester's role to the profile owner column used for scoping.
+  // Admin gets no owner type — ownership checks are bypassed for them.
+  private ownerTypeFor(role: UserRole): 'provider' | 'creator' | undefined {
+    if (role === UserRole.PROVIDER) return 'provider';
+    if (role === UserRole.CREATOR) return 'creator';
+    return undefined;
+  }
 
   @Post('profiles')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -49,22 +58,26 @@ export class ShippingController {
 
   @Post('profiles/:profileId/zones')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.PROVIDER, UserRole.CREATOR)
+  @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
   addZone(
     @Param('profileId') profileId: string,
     @Body() dto: CreateShippingZoneDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
   ) {
-    return this.shippingService.addZone(profileId, dto);
+    return this.shippingService.addZone(profileId, dto, userId, this.ownerTypeFor(role));
   }
 
   @Put('zones/:id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.PROVIDER, UserRole.CREATOR)
+  @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
   updateZone(
     @Param('id') id: string,
-    @Body() dto: Partial<CreateShippingZoneDto>,
+    @Body() dto: UpdateShippingZoneDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
   ) {
-    return this.shippingService.updateZone(id, dto);
+    return this.shippingService.updateZone(id, dto, userId, this.ownerTypeFor(role));
   }
 
   @Put('profiles/:id/default')
@@ -93,9 +106,13 @@ export class ShippingController {
 
   @Delete('zones/:id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.PROVIDER, UserRole.CREATOR)
-  deleteZone(@Param('id') id: string) {
-    return this.shippingService.deleteZone(id);
+  @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
+  deleteZone(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.shippingService.deleteZone(id, userId, this.ownerTypeFor(role));
   }
 
   // عام — حساب تكلفة الشحن

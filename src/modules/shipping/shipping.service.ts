@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import {
   CreateShippingProfileDto,
   CreateShippingZoneDto,
+  UpdateShippingZoneDto,
   CalculateShippingDto,
   EstimateShippingDto,
 } from './dto/shipping.dto';
@@ -35,13 +36,68 @@ export class ShippingService {
     });
   }
 
-  async addZone(profileId: string, dto: CreateShippingZoneDto) {
+  /**
+   * Assert the profile belongs to the requester. No owner type means the
+   * requester is an admin — only existence is checked. Foreign profiles get
+   * a 404 (not 403) so profile ids are not enumerable.
+   */
+  private async assertProfileOwned(
+    profileId: string,
+    ownerId?: string,
+    ownerType?: 'provider' | 'creator',
+  ) {
+    const ownerWhere = ownerType
+      ? ownerType === 'provider'
+        ? { provider_id: ownerId }
+        : { creator_id: ownerId }
+      : {};
+    const profile = await this.prisma.shippingProfile.findFirst({
+      where: { id: profileId, ...ownerWhere },
+    });
+    if (!profile) throw new NotFoundException({ code: 'SHIPPING_PROFILE_NOT_FOUND', message: 'Shipping profile not found' });
+    return profile;
+  }
+
+  /** Assert the zone's parent profile belongs to the requester (admin skips). */
+  private async assertZoneOwned(
+    zoneId: string,
+    ownerId?: string,
+    ownerType?: 'provider' | 'creator',
+  ) {
+    const zone = await this.prisma.shippingZone.findUnique({
+      where: { id: zoneId },
+      include: { profile: { select: { provider_id: true, creator_id: true } } },
+    });
+    if (!zone) throw new NotFoundException({ code: 'SHIPPING_ZONE_NOT_FOUND', message: 'Shipping zone not found' });
+    if (ownerType) {
+      const profileOwnerId =
+        ownerType === 'provider' ? zone.profile.provider_id : zone.profile.creator_id;
+      if (profileOwnerId !== ownerId) {
+        throw new NotFoundException({ code: 'SHIPPING_ZONE_NOT_FOUND', message: 'Shipping zone not found' });
+      }
+    }
+    return zone;
+  }
+
+  async addZone(
+    profileId: string,
+    dto: CreateShippingZoneDto,
+    ownerId?: string,
+    ownerType?: 'provider' | 'creator',
+  ) {
+    await this.assertProfileOwned(profileId, ownerId, ownerType);
     return this.prisma.shippingZone.create({
       data: { profile_id: profileId, ...dto },
     });
   }
 
-  async updateZone(id: string, dto: Partial<CreateShippingZoneDto>) {
+  async updateZone(
+    id: string,
+    dto: UpdateShippingZoneDto,
+    ownerId?: string,
+    ownerType?: 'provider' | 'creator',
+  ) {
+    await this.assertZoneOwned(id, ownerId, ownerType);
     return this.prisma.shippingZone.update({
       where: { id },
       data: dto,
@@ -64,7 +120,8 @@ export class ShippingService {
     return this.prisma.shippingProfile.update({ where: { id }, data: { is_default: true }, include: { zones: true } });
   }
 
-  async deleteZone(id: string) {
+  async deleteZone(id: string, ownerId?: string, ownerType?: 'provider' | 'creator') {
+    await this.assertZoneOwned(id, ownerId, ownerType);
     return this.prisma.shippingZone.delete({ where: { id } });
   }
 

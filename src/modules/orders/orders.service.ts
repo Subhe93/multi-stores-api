@@ -806,25 +806,28 @@ export class OrdersService {
     return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
-  async findByRole(userId: string, role: UserRole, page = 1, limit = 20) {
+  async findByRole(userId: string, role: UserRole, page = 1, limit = 20, status?: OrderStatus) {
     if (role === UserRole.PROVIDER) {
-      return this.findByProvider(userId, page, limit);
+      return this.findByProvider(userId, page, limit, status);
     }
     if (role === UserRole.CREATOR) {
-      return this.findByCreator(userId, page, limit);
+      return this.findByCreator(userId, page, limit, status);
     }
     return { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
   }
 
   // Provider sees orders where their products are being fulfilled
-  private async findByProvider(userId: string, page = 1, limit = 20) {
+  private async findByProvider(userId: string, page = 1, limit = 20, status?: OrderStatus) {
     const provider = await this.prisma.provider.findUnique({ where: { user_id: userId } });
     if (!provider) {
       return { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
     }
 
     const skip = (page - 1) * limit;
-    const where = { items: { some: { fulfiller_id: provider.id } } };
+    const where = {
+      items: { some: { fulfiller_id: provider.id } },
+      ...(status ? { status } : {}),
+    };
 
     const [data, total] = await Promise.all([
       this.prisma.order.findMany({
@@ -846,7 +849,7 @@ export class OrdersService {
   }
 
   // Creator sees orders placed through their store
-  private async findByCreator(userId: string, page = 1, limit = 20) {
+  private async findByCreator(userId: string, page = 1, limit = 20, status?: OrderStatus) {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
       include: { store: true },
@@ -856,7 +859,10 @@ export class OrdersService {
     }
 
     const skip = (page - 1) * limit;
-    const where = { store_id: creator.store.id };
+    const where = {
+      store_id: creator.store.id,
+      ...(status ? { status } : {}),
+    };
 
     const [data, total] = await Promise.all([
       this.prisma.order.findMany({
@@ -919,6 +925,14 @@ export class OrdersService {
     // Admin sees everything (full payment details + all payouts).
     if (role === UserRole.ADMIN) return order;
 
+    // Everyone else must be part of the order: the owning customer, a
+    // provider fulfilling one of its items, or the creator of its store.
+    // Foreign orders get a 404 (not 403) so order ids are not enumerable.
+    const canRead = await this.userCanReadOrder(order, userId, role);
+    if (!canRead) {
+      throw new NotFoundException({ code: 'ORDER_NOT_FOUND', message: 'Order not found' });
+    }
+
     // Everyone else: hide the customer's card/charge/receipt details, and scope
     // payouts to the requesting fulfiller (a provider/creator sees only theirs).
     const {
@@ -947,19 +961,59 @@ export class OrdersService {
     return { ...safe, payouts: scopedPayouts };
   }
 
-  async findAll(page = 1, limit = 20) {
+  async findAll(page = 1, limit = 20, status?: OrderStatus) {
     const skip = (page - 1) * limit;
+    const where = status ? { status } : {};
     const [data, total] = await Promise.all([
       this.prisma.order.findMany({
         skip,
         take: limit,
+        where,
         include: { items: this.itemsWithProduct, customer: true },
         orderBy: { created_at: 'desc' },
       }),
-      this.prisma.order.count(),
+      this.prisma.order.count({ where }),
     ]);
 
     return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+  }
+
+  /**
+   * Ownership check for reading a single order:
+   * - CUSTOMER: only their own orders.
+   * - PROVIDER: only orders containing items they fulfill.
+   * - CREATOR: orders of their own store, or orders where they fulfill an item.
+   * Admin is handled by the caller; any other case is denied.
+   */
+  private async userCanReadOrder(
+    order: { customer: { user_id: string } | null; items: { fulfiller_id: string | null }[]; store_id: string | null },
+    userId?: string,
+    role?: UserRole,
+  ): Promise<boolean> {
+    if (!userId || !role) return false;
+
+    if (role === UserRole.CUSTOMER) {
+      return order.customer?.user_id === userId;
+    }
+
+    if (role === UserRole.PROVIDER) {
+      const providerId = await this.resolveFulfillerId(userId, role);
+      return !!providerId && order.items.some((i) => i.fulfiller_id === providerId);
+    }
+
+    if (role === UserRole.CREATOR) {
+      const creator = await this.prisma.creator.findUnique({
+        where: { user_id: userId },
+        include: { store: true },
+      });
+      if (!creator) return false;
+      if (creator.store && order.store_id === creator.store.id) return true;
+      // Fallback: a creator fulfilling an item keeps access even when the
+      // order was not placed through their store.
+      return order.items.some((i) => i.fulfiller_id === creator.id);
+    }
+
+    return false;
   }
 
   /**
