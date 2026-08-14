@@ -4,6 +4,8 @@ import {
   IsBoolean,
   IsEnum,
   IsNumber,
+  IsInt,
+  IsObject,
   IsArray,
   Allow,
   ValidateNested,
@@ -40,6 +42,60 @@ export class ProductAttributeValueDto {
 
   @Allow()
   value: any;
+}
+
+// One variant in the product save payload. Carrying the existing `id` lets the
+// server update in place instead of delete+recreate, which keeps variant ids
+// stable (order items, carts, and custom-product links reference them).
+export class ProductVariantSyncDto {
+  @IsOptional()
+  @IsString()
+  id?: string;
+
+  @IsOptional()
+  @IsString()
+  sku?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  price_adjustment?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  compare_at_price?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Type(() => Number)
+  stock_quantity?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  is_active?: boolean;
+
+  @IsObject()
+  options: Record<string, string>;
+
+  @IsOptional()
+  @IsString()
+  image_url?: string;
+}
+
+export class ProductImageSyncDto {
+  @IsString()
+  url: string;
+
+  @IsOptional()
+  @IsString()
+  alt_text?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  is_featured?: boolean;
 }
 
 export class CreateProductDto {
@@ -130,6 +186,18 @@ export class CreateProductDto {
   @IsArray()
   @IsString({ each: true })
   creator_category_ids?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ProductVariantSyncDto)
+  variants?: ProductVariantSyncDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ProductImageSyncDto)
+  images?: ProductImageSyncDto[];
 }
 
 export class UpdateProductDto {
@@ -227,4 +295,16 @@ export class UpdateProductDto {
   @IsArray()
   @IsString({ each: true })
   creator_category_ids?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ProductVariantSyncDto)
+  variants?: ProductVariantSyncDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ProductImageSyncDto)
+  images?: ProductImageSyncDto[];
 }

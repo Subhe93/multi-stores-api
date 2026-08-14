@@ -6,7 +6,12 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
-import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
+import {
+  CreateProductDto,
+  UpdateProductDto,
+  ProductVariantSyncDto,
+  ProductImageSyncDto,
+} from './dto/product.dto';
 import { UserRole, ProductStatus } from '@prisma/client';
 import { BundlesService } from '../bundles/bundles.service';
 import {
@@ -144,8 +149,107 @@ export class ProductsService {
     }
   }
 
+  /**
+   * Sync variants and images from the product save payload in one transaction.
+   *
+   * Variants are diffed by id: existing ones are updated in place (keeping
+   * their ids stable — order items, carts, and custom-product selections
+   * reference them, and CustomProductVariant rows cascade-delete when a
+   * variant is removed), new ones are created, and missing ones are deleted.
+   *
+   * Image rows are rebuilt: product-level rows from `images` (sort_order =
+   * array index), variant rows from each variant's `image_url`.
+   */
+  private async syncVariantsAndImages(
+    productId: string,
+    variants?: ProductVariantSyncDto[],
+    images?: ProductImageSyncDto[],
+  ) {
+    if (variants === undefined && images === undefined) return;
+
+    await this.prisma.$transaction(async (tx) => {
+      // Final DB id per variant payload entry — needed to link variant images.
+      const variantIds: string[] = [];
+
+      if (variants !== undefined) {
+        // Drop variant-linked image rows first: deleting a variant would only
+        // null out variant_id (SetNull), leaving orphan rows behind.
+        await tx.productImage.deleteMany({
+          where: { product_id: productId, variant_id: { not: null } },
+        });
+
+        const existing = await tx.productVariant.findMany({
+          where: { product_id: productId },
+          select: { id: true },
+        });
+        const existingIds = new Set(existing.map((v) => v.id));
+        const keepIds = variants
+          .map((v) => v.id)
+          .filter((vid): vid is string => !!vid && existingIds.has(vid));
+
+        await tx.productVariant.deleteMany({
+          where: { product_id: productId, id: { notIn: keepIds } },
+        });
+
+        for (const v of variants) {
+          const data = {
+            sku: v.sku || null,
+            price_adjustment: v.price_adjustment ?? 0,
+            compare_at_price: v.compare_at_price ?? null,
+            stock_quantity: v.stock_quantity ?? null,
+            is_active: v.is_active ?? true,
+            options: v.options,
+          };
+          if (v.id && existingIds.has(v.id)) {
+            await tx.productVariant.update({ where: { id: v.id }, data });
+            variantIds.push(v.id);
+          } else {
+            const created = await tx.productVariant.create({
+              data: { ...data, product_id: productId },
+            });
+            variantIds.push(created.id);
+          }
+        }
+      }
+
+      if (images !== undefined) {
+        await tx.productImage.deleteMany({
+          where: { product_id: productId, variant_id: null },
+        });
+        if (images.length > 0) {
+          await tx.productImage.createMany({
+            data: images.map((img, i) => ({
+              product_id: productId,
+              url: img.url,
+              alt_text: img.alt_text ?? null,
+              sort_order: i,
+              is_featured: img.is_featured ?? false,
+            })),
+          });
+        }
+      }
+
+      if (variants !== undefined) {
+        const variantImageRows = variants.flatMap((v, i) =>
+          v.image_url
+            ? [{
+                product_id: productId,
+                variant_id: variantIds[i]!,
+                url: v.image_url,
+                sort_order: 1000 + i,
+                is_featured: false,
+              }]
+            : [],
+        );
+        if (variantImageRows.length > 0) {
+          await tx.productImage.createMany({ data: variantImageRows });
+        }
+      }
+    });
+  }
+
   async create(userId: string, userRole: UserRole, dto: CreateProductDto) {
-    const { translations, attributes, tags, bundle_ids, creator_category_ids, ...data } = dto;
+    const { translations, attributes, tags, bundle_ids, creator_category_ids, variants, images, ...data } = dto;
 
     const productData: any = {
       ...data,
@@ -231,6 +335,8 @@ export class ProductsService {
         })),
       });
     }
+
+    await this.syncVariantsAndImages(product.id, variants, images);
 
     await this.revalidateForCreator(productData.creator_id);
 
@@ -345,13 +451,15 @@ export class ProductsService {
     // التحقق من الملكية
     await this.checkOwnership(product, userId, userRole);
 
-    const { translations, attributes, tags, bundle_ids, creator_category_ids, ...data } = dto;
+    const { translations, attributes, tags, bundle_ids, creator_category_ids, variants, images, ...data } = dto;
 
     // تحديث المنتج
     await this.prisma.product.update({
       where: { id },
       data,
     });
+
+    await this.syncVariantsAndImages(id, variants, images);
 
     // Replace creator-collection attachments (creator-owned products only)
     if (
