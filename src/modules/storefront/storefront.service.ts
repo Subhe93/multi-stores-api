@@ -375,7 +375,9 @@ export class StorefrontService {
       orderBy: { updated_at: 'desc' },
       include: {
         translations: true,
-        images: { orderBy: { sort_order: 'asc' } },
+        // Product-level gallery only — variant-linked rows would flood the
+        // gallery with one duplicate per size/color combination.
+        images: { where: { variant_id: null }, orderBy: { sort_order: 'asc' } },
         attributes: {
           include: { template: { include: { translations: true } } },
         },
@@ -456,7 +458,8 @@ export class StorefrontService {
         },
         product: {
           include: {
-            images: { orderBy: { sort_order: 'asc' } },
+            // Product-level gallery only (see creator-product include above).
+            images: { where: { variant_id: null }, orderBy: { sort_order: 'asc' } },
             attributes: { include: { template: { include: { translations: true } } } },
             variants: { where: { is_active: true }, include: { images: true } },
             tags: true,
