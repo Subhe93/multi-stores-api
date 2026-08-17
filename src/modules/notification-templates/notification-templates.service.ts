@@ -51,7 +51,12 @@ export class NotificationTemplatesService {
         const own = await this.prisma.storeNotificationTemplate.findUnique({
           where: { store_id_event: { store_id: storeId, event } },
         });
-        if (own?.enabled) return this.compose(own, locale, vars);
+        if (own?.enabled) {
+          const rendered = this.compose(own, locale, vars);
+          // A saved-but-empty override would otherwise send the customer a
+          // blank email. Treat it as "not customised" and use the platform's.
+          if (rendered.subject.trim() && rendered.html.trim()) return rendered;
+        }
       }
     }
 
@@ -59,7 +64,11 @@ export class NotificationTemplatesService {
       where: { event },
     });
     if (!tpl || !tpl.enabled) return null;
-    return this.compose(tpl, locale, vars);
+    const rendered = this.compose(tpl, locale, vars);
+    // Same guard for the platform template: an empty row falls through to the
+    // bundled builder rather than mailing an empty message.
+    if (!rendered.subject.trim() && !rendered.html.trim()) return null;
+    return rendered;
   }
 
   private compose(
