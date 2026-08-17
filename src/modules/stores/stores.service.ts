@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import {
@@ -144,6 +144,24 @@ export class StoresService {
     }
 
     const data = normalizeStoreUpdate(dto);
+
+    // Only an independent store owns its presentment currency: it charges on
+    // the creator's own connected account. A marketplace order is charged on
+    // the platform account and split with transfers, so its currency has to
+    // stay the platform's.
+    if (data.currency) {
+      const current = await this.prisma.store.findUnique({
+        where: { creator_id: creator.id },
+        select: { store_type: true },
+      });
+      if (current?.store_type !== StoreType.INDEPENDENT) {
+        throw new BadRequestException({
+          code: 'STORE_CURRENCY_MARKETPLACE_ONLY',
+          message:
+            'Only independent stores can set their own currency. Marketplace stores use the platform currency.',
+        });
+      }
+    }
 
     if (data.custom_domain) {
       if (isReservedDomain(data.custom_domain)) {
@@ -339,7 +357,15 @@ export class StoresService {
 // stored in DB: trimmed/lowercased, with an empty string treated as "clear it"
 // so Prisma stores NULL (the @unique index disallows duplicate empty strings).
 function normalizeStoreUpdate(dto: UpdateStoreDto): UpdateStoreDto {
-  if (!Object.prototype.hasOwnProperty.call(dto, 'custom_domain')) return dto;
-  const raw = (dto.custom_domain ?? '').trim().toLowerCase();
-  return { ...dto, custom_domain: raw || null } as UpdateStoreDto;
+  let out = dto;
+  if (Object.prototype.hasOwnProperty.call(dto, 'custom_domain')) {
+    const raw = (dto.custom_domain ?? '').trim().toLowerCase();
+    out = { ...out, custom_domain: raw || null } as UpdateStoreDto;
+  }
+  // An empty currency means "go back to the platform default", which is NULL.
+  if (Object.prototype.hasOwnProperty.call(dto, 'currency')) {
+    const raw = (dto.currency ?? '').trim().toUpperCase();
+    out = { ...out, currency: raw || null } as UpdateStoreDto;
+  }
+  return out;
 }

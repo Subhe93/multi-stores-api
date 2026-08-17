@@ -10,6 +10,7 @@ import Stripe from 'stripe';
 import { UserRole, FulfillerType, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CryptoService } from '../../common/crypto/crypto.service';
+import { toStripeAmount, fromStripeAmount } from '../../common/money/currency.util';
 import { OrdersService } from '../orders/orders.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
@@ -657,7 +658,9 @@ export class PaymentsService {
     const unitCount = order.items.reduce((s, i) => s + i.quantity, 0);
 
     const params: PaymentIntentCreateParams = {
-      amount: Math.round(Number(order.total) * 100),
+      // Not a plain ×100: zero-decimal currencies (JPY, KRW…) are already in
+      // their smallest unit, so multiplying would charge 100× the total.
+      amount: toStripeAmount(Number(order.total), order.currency),
       currency: order.currency.toLowerCase(),
       description: `Order ${order.order_number} — ${unitCount} item(s)`,
       metadata: {
@@ -1042,7 +1045,10 @@ export class PaymentsService {
       return;
     }
 
-    const toCents = (n: unknown) => Math.round(Number(n) * 100);
+    // Minor units differ per currency, and the two sides of a transfer can be
+    // in different currencies: amounts go out in the order's presentment
+    // currency, the transfer itself in the account's settlement currency.
+    const toCents = (n: unknown) => toStripeAmount(Number(n), order.currency);
     const finalChargeId = chargeId;
 
     // Create one transfer per recipient and record it in the payout ledger.
@@ -1065,7 +1071,10 @@ export class PaymentsService {
       const existing = await this.prisma.orderPayout.findUnique({ where: key });
       if (existing?.status === 'paid') return;
 
-      const ledgerAmount = presentmentCents / 100; // order (presentment) currency
+      const ledgerAmount = fromStripeAmount(presentmentCents, order.currency);
+      // fxRate is derived from the charge's balance transaction, so both sides
+      // are already in their own smallest unit — a plain multiply is correct
+      // even when the two currencies have different minor units.
       const settlementCents = Math.round(presentmentCents * fxRate);
       try {
         const tr = await stripe.transfers.create(

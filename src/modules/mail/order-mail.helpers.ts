@@ -1,4 +1,5 @@
 import { Prisma, PrismaClient } from '@prisma/client';
+import { currencyDecimals } from '../../common/money/currency.util';
 
 // Per-locale phrasing used inside order emails. The admin can edit the
 // surrounding template body in NotificationTemplate, but list headers/labels
@@ -125,8 +126,25 @@ function esc(s: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
+/**
+ * Amounts in emails follow the order's currency. `toFixed(2)` was wrong for
+ * currencies with no minor unit (JPY 1200 is not "1200.00"), so the decimals
+ * come from the currency itself. Falls back to the plain code + amount if the
+ * runtime rejects the currency, since an email must never fail to render.
+ */
 export function formatMoney(amount: number, currency: string): string {
-  return `${currency} ${Number(amount).toFixed(2)}`;
+  const value = Number(amount);
+  const digits = currencyDecimals(currency);
+  try {
+    return new Intl.NumberFormat('en', {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(value);
+  } catch {
+    return `${currency} ${value.toFixed(digits)}`;
+  }
 }
 
 // Eager-include shape matching OrdersService.itemsWithProduct, sufficient for

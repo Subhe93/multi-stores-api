@@ -1,5 +1,6 @@
-import { IsString, IsOptional, IsBoolean, IsArray, IsEnum, IsObject, Matches, MinLength, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsArray, IsEnum, IsIn, IsObject, Matches, MinLength, MaxLength } from 'class-validator';
 import { StoreType } from '@prisma/client';
+import { SUPPORTED_CURRENCIES } from '../../../common/money/currency.util';
 
 const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const SLUG_MESSAGE = 'slug must be lowercase letters, digits, and hyphens (no leading/trailing hyphen)';
@@ -85,6 +86,16 @@ export class UpdateStoreDto {
   @IsOptional()
   @IsBoolean()
   cod_enabled?: boolean;
+
+  // Presentment currency. Independent stores only — the service rejects it for
+  // marketplace stores, which are charged on the platform account. Null/empty
+  // clears it back to the platform default.
+  @IsOptional()
+  @IsString()
+  @IsIn([...SUPPORTED_CURRENCIES, ''], {
+    message: 'currency must be a supported ISO-4217 code',
+  })
+  currency?: string;
 }
 
 // Admin-only store update: also allows switching the store type. The creator

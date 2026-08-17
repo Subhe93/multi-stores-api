@@ -20,6 +20,7 @@ import { PromotionsService } from '../promotions/promotions.service';
 import { ShippingService } from '../shipping/shipping.service';
 import { MailService } from '../mail/mail.service';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
+import { resolveStoreCurrency } from '../../common/money/currency.util';
 
 function deriveCommissionStatus(orderStatus: OrderStatus): CommissionStatus {
   if (orderStatus === OrderStatus.DELIVERED) return CommissionStatus.COMPLETED;
@@ -189,6 +190,7 @@ export class OrdersService {
         id: true,
         creator_id: true,
         store_type: true,
+        currency: true,
         cod_enabled: true,
         is_active: true,
       },
@@ -616,9 +618,12 @@ export class OrdersService {
     const paymentMethod = dto.payment_method || 'COD';
     const paymentStatus = paymentMethod === 'COD' ? 'pending' : 'awaiting_payment';
 
-    // Platform currency
+    // Order currency: an independent store may price in its own currency
+    // (it charges on its own connected account); everything else uses the
+    // platform default. Snapshotted onto the order so a later change to the
+    // store never rewrites settled history.
     const platformConfig = await this.prisma.platformConfig.findFirst();
-    const currency = platformConfig?.default_currency || 'EUR';
+    const currency = resolveStoreCurrency(orderStore, platformConfig?.default_currency);
 
     // ── Stock: atomically decrement before creating the order. The conditional
     // updateMany (where stock_quantity >= qty) is race-safe — if two buyers

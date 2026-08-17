@@ -785,6 +785,12 @@ model Store {
   logo_url             String?
   favicon_url          String?
   store_type           StoreType @default(MARKETPLACE)
+  // Presentment currency for this store. Null means "inherit the platform
+  // default". Only INDEPENDENT stores may set it: they charge directly on the
+  // creator's own connected account, so the currency is theirs to choose.
+  // Marketplace orders are charged on the platform account and split with
+  // transfers, so they stay on the platform currency.
+  currency             String?   @db.VarChar(3)
   theme_key            String   @default("minimal")
   theme_customizations Json     @default("{}")
   theme_config         Json     @default("{}")

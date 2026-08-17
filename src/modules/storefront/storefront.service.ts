@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PricingType, StoreType } from '@prisma/client';
+import { resolveStoreCurrency } from '../../common/money/currency.util';
 
 @Injectable()
 export class StorefrontService {
@@ -81,7 +82,9 @@ export class StorefrontService {
     const platformConfig = await this.prisma.platformConfig.findFirst();
     return {
       ...store,
-      currency: platformConfig?.default_currency || 'EUR',
+      // Independent stores may price in their own currency; everyone else
+      // shows the platform default.
+      currency: resolveStoreCurrency(store, platformConfig?.default_currency),
       // Store type drives the storefront's product mix and checkout flow.
       store_type: store.store_type,
       // Card checkout availability. Marketplace stores need the creator able
