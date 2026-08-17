@@ -43,7 +43,8 @@ export class UploadsService {
       throw new BadRequestException({ code: 'UPLOAD_FILE_TOO_LARGE', message: 'File too large (max 50MB)' });
     }
 
-    const folderPath = path.join(this.uploadDir, folder);
+    const safeFolder = this.sanitizeFolder(folder);
+    const folderPath = path.join(this.uploadDir, safeFolder);
     if (!fs.existsSync(folderPath)) {
       fs.mkdirSync(folderPath, { recursive: true });
     }
@@ -65,7 +66,7 @@ export class UploadsService {
     }
 
     // In production, replace with S3/R2 URL
-    const url = `/uploads/${folder}/${filename}`;
+    const url = `/uploads/${safeFolder}/${filename}`;
 
     return {
       url,
@@ -94,8 +95,31 @@ export class UploadsService {
     }
   }
 
+  /**
+   * Reduce a caller-supplied folder to a single safe path segment. Without this
+   * a `folder` of `../../etc` wrote files outside the uploads tree entirely.
+   */
+  private sanitizeFolder(folder: string): string {
+    const segment = (folder || '').trim().replace(/[^a-zA-Z0-9._-]/g, '');
+    // Reject empties and anything that is only dots (`.`, `..`).
+    if (!segment || /^\.+$/.test(segment)) return 'general';
+    return segment;
+  }
+
+  /**
+   * Delete an uploaded file. The url arrives from the client, so the resolved
+   * path is checked to still be inside the uploads directory — previously
+   * `../../` in the url escaped it and could unlink any file the process owns.
+   */
   async deleteFile(fileUrl: string): Promise<void> {
-    const filePath = path.join(process.cwd(), fileUrl);
+    const filePath = path.resolve(process.cwd(), '.' + path.sep + fileUrl);
+    const root = path.resolve(this.uploadDir);
+    if (filePath !== root && !filePath.startsWith(root + path.sep)) {
+      throw new BadRequestException({
+        code: 'UPLOAD_INVALID_PATH',
+        message: 'Invalid file path',
+      });
+    }
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }

@@ -429,14 +429,49 @@ export class ProductsService {
     return this.findAll({ ...filters, provider_id: provider.id });
   }
 
-  async findById(id: string) {
+  async findById(id: string, userId?: string, userRole?: UserRole) {
     const product = await this.prisma.product.findUnique({
       where: { id },
       include: this.productIncludes,
     });
 
     if (!product) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
+
+    // cost_price is the provider's confidential margin input — a creator
+    // browsing the catalogue to import must never see it.
+    if (userRole !== UserRole.ADMIN) {
+      const owns = userId
+        ? await this.userOwnsProduct(product, userId, userRole)
+        : false;
+      if (!owns) {
+        const { cost_price: _cost, ...rest } = product;
+        void _cost;
+        return rest;
+      }
+    }
     return product;
+  }
+
+  private async userOwnsProduct(
+    product: { provider_id: string | null; creator_id: string | null },
+    userId: string,
+    userRole?: UserRole,
+  ): Promise<boolean> {
+    if (userRole === UserRole.PROVIDER) {
+      const provider = await this.prisma.provider.findUnique({
+        where: { user_id: userId },
+        select: { id: true },
+      });
+      return !!provider && product.provider_id === provider.id;
+    }
+    if (userRole === UserRole.CREATOR) {
+      const creator = await this.prisma.creator.findUnique({
+        where: { user_id: userId },
+        select: { id: true },
+      });
+      return !!creator && product.creator_id === creator.id;
+    }
+    return false;
   }
 
   async update(
@@ -745,7 +780,17 @@ export class ProductsService {
   }
 
   // Image management
-  async addImage(productId: string, url: string, altText?: string, sortOrder?: number, isFeatured?: boolean, variantId?: string) {
+  async addImage(
+    productId: string,
+    userId: string,
+    userRole: UserRole,
+    url: string,
+    altText?: string,
+    sortOrder?: number,
+    isFeatured?: boolean,
+    variantId?: string,
+  ) {
+    await this.assertOwnsProductById(productId, userId, userRole);
     // If setting as featured, unset others
     if (isFeatured) {
       await this.prisma.productImage.updateMany({
@@ -765,16 +810,57 @@ export class ProductsService {
     });
   }
 
-  async deleteImage(imageId: string) {
+  async deleteImage(imageId: string, userId: string, userRole: UserRole) {
+    const image = await this.prisma.productImage.findUnique({
+      where: { id: imageId },
+      select: { product_id: true },
+    });
+    if (!image) throw new NotFoundException({ code: 'PRODUCT_IMAGE_NOT_FOUND', message: 'Image not found' });
+    await this.assertOwnsProductById(image.product_id, userId, userRole);
     return this.prisma.productImage.delete({ where: { id: imageId } });
   }
 
-  async reorderImages(productId: string, imageIds: string[]) {
-    const updates = imageIds.map((id, i) =>
-      this.prisma.productImage.update({ where: { id }, data: { sort_order: i } }),
+  async reorderImages(
+    productId: string,
+    imageIds: string[],
+    userId: string,
+    userRole: UserRole,
+  ) {
+    await this.assertOwnsProductById(productId, userId, userRole);
+    // Ignore ids that don't belong to this product, so a foreign image can't be
+    // pulled into someone else's ordering.
+    const owned = await this.prisma.productImage.findMany({
+      where: { product_id: productId, id: { in: imageIds } },
+      select: { id: true },
+    });
+    const ownedIds = new Set(owned.map((img) => img.id));
+
+    await Promise.all(
+      imageIds
+        .filter((id) => ownedIds.has(id))
+        .map((id, i) =>
+          this.prisma.productImage.update({ where: { id }, data: { sort_order: i } }),
+        ),
     );
-    await Promise.all(updates);
     return this.getImages(productId);
+  }
+
+  /**
+   * Load a product by id and run the same ownership check the update/delete
+   * paths use. Image endpoints previously took a bare id and skipped it, so any
+   * seller could add, replace or strip a competitor's product imagery.
+   */
+  private async assertOwnsProductById(
+    productId: string,
+    userId: string,
+    userRole: UserRole,
+  ) {
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+      select: { provider_id: true, creator_id: true },
+    });
+    if (!product) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
+    await this.checkOwnership(product, userId, userRole);
   }
 
   async getImportDetails(id: string) {

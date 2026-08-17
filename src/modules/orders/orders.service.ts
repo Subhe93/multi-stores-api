@@ -11,6 +11,7 @@ import {
   FulfillmentStatus,
   OrderStatus,
   PricingType,
+  ProductStatus,
   StoreType,
   UserRole,
 } from '@prisma/client';
@@ -58,6 +59,11 @@ const FULFILLMENT_RANK: Record<FulfillmentStatus, number> = {
   [FulfillmentStatus.SHIPPED]: 3,
   [FulfillmentStatus.DELIVERED]: 4,
 };
+
+// How long a card order may hold its stock reservation while unpaid. Stripe
+// PaymentIntents are long-lived, so this is generous — it only has to be long
+// enough that a genuine checkout (including 3-D Secure) can never hit it.
+const ABANDONED_PAYMENT_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 const ORDER_STATUS_RANK: Record<string, number> = {
   PENDING: 0,
@@ -140,6 +146,12 @@ export class OrdersService {
   }
 
   async create(userId: string, dto: CreateOrderDto) {
+    // Card orders reserve stock while they wait for payment. Nothing releases
+    // that reservation when the buyer simply walks away — Stripe only reports
+    // explicit failures — so sweep expired ones here. Doing it on the order
+    // path keeps cleanup proportional to traffic without adding a scheduler.
+    await this.releaseExpiredAwaitingPaymentOrders();
+
     const customer = await this.prisma.customer.findUnique({
       where: { user_id: userId },
     });
@@ -166,24 +178,54 @@ export class OrdersService {
     // treated as unlimited (consistent with track_inventory=false / null stock).
     const stockOps: { kind: 'product' | 'variant'; id: string; qty: number }[] = [];
 
-    // Independent stores sell only the creator's own products — resolve the
-    // store type up front so provider-fulfilled lines are rejected below.
-    const orderStore = dto.store_id
-      ? await this.prisma.store.findUnique({
-          where: { id: dto.store_id },
-          select: { store_type: true, cod_enabled: true },
-        })
-      : null;
-    const isIndependentStore = orderStore?.store_type === StoreType.INDEPENDENT;
+    // The store drives the commission model, the COD gate and — for independent
+    // stores — which Stripe account the customer's card is charged on. It must
+    // be resolved (and every cart line verified against it) before any pricing
+    // happens, otherwise a client could attribute this order to a store that
+    // sells none of these items.
+    const orderStore = await this.prisma.store.findUnique({
+      where: { id: dto.store_id },
+      select: {
+        id: true,
+        creator_id: true,
+        store_type: true,
+        cod_enabled: true,
+        is_active: true,
+      },
+    });
+    if (!orderStore) {
+      throw new NotFoundException({
+        code: 'ORDER_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
+    }
+    if (!orderStore.is_active) {
+      throw new BadRequestException({
+        code: 'ORDER_STORE_INACTIVE',
+        message: 'This store is not accepting orders right now.',
+      });
+    }
+    const isIndependentStore = orderStore.store_type === StoreType.INDEPENDENT;
 
     // Cash on delivery is opt-in per store (off by default) — reject COD
     // orders for stores that haven't enabled it.
-    if (orderStore && (dto.payment_method || 'COD') !== 'STRIPE' && !orderStore.cod_enabled) {
+    if ((dto.payment_method || 'COD') !== 'STRIPE' && !orderStore.cod_enabled) {
       throw new BadRequestException({
         code: 'ORDER_COD_DISABLED',
         message: 'Cash on delivery is not available for this store. Please pay by card.',
       });
     }
+
+    // Thrown for every line that isn't part of this store's catalogue. The
+    // message is deliberately generic — item ids are not echoed back, and a
+    // foreign product is indistinguishable from an unpublished one.
+    const rejectForeignItem = (): never => {
+      throw new BadRequestException({
+        code: 'ORDER_ITEM_NOT_SOLD_BY_STORE',
+        message:
+          'One of the items in your cart is not available in this store. Please refresh your cart and try again.',
+      });
+    };
 
     for (const item of cart.items) {
       let unitPrice = 0;
@@ -204,12 +246,23 @@ export class OrdersService {
         });
         if (!cp) throw new NotFoundException(`Custom product ${item.custom_product_id} not found`);
 
+        // The storefront lists a custom product only when it belongs to this
+        // store's creator and is published — enforce the same rule here.
+        if (cp.creator_id !== orderStore.creator_id || cp.status !== ProductStatus.PUBLISHED) {
+          rejectForeignItem();
+        }
+
         let variant: { price_adjustment: any } | null = null;
         if (item.variant_id) {
-          variant = await this.prisma.productVariant.findUnique({
+          const variantRow = await this.prisma.productVariant.findUnique({
             where: { id: item.variant_id },
+            select: { price_adjustment: true, product_id: true },
           });
-          if (!variant) throw new NotFoundException(`Variant ${item.variant_id} not found`);
+          if (!variantRow) throw new NotFoundException(`Variant ${item.variant_id} not found`);
+          // The variant must belong to the custom product's base product,
+          // otherwise its price adjustment would be borrowed from elsewhere.
+          if (variantRow.product_id !== cp.product_id) rejectForeignItem();
+          variant = variantRow;
         }
         const variantAdjustment = variant ? Number(variant.price_adjustment || 0) : 0;
 
@@ -251,6 +304,22 @@ export class OrdersService {
         });
         if (!variant) throw new NotFoundException(`Variant ${item.variant_id} not found`);
 
+        // A bare variant line sells the creator's own product: it must belong
+        // to this store's creator and be published. This is what stops another
+        // creator's product being checked out here — and, on an independent
+        // store, charged to this store owner's Stripe account.
+        if (
+          variant.product.creator_id !== orderStore.creator_id ||
+          variant.product.status !== ProductStatus.PUBLISHED ||
+          !variant.is_active
+        ) {
+          rejectForeignItem();
+        }
+        // Guard against a variant borrowed from a different product.
+        if (item.product_id && variant.product_id !== item.product_id) {
+          rejectForeignItem();
+        }
+
         unitPrice = Number(variant.product.base_price) + Number(variant.price_adjustment);
         if (variant.product.provider_id) providerBasePrice = unitPrice;
         fulfillerId = variant.product.provider_id || variant.product.creator_id || '';
@@ -265,6 +334,17 @@ export class OrdersService {
         });
         if (!product) throw new NotFoundException(`Product ${item.product_id} not found`);
 
+        // Same rule as the variant branch: only this store creator's own
+        // published products are sellable here. Provider catalogue products
+        // (creator_id null) are never sold directly — they reach a storefront
+        // as a CustomProduct.
+        if (
+          product.creator_id !== orderStore.creator_id ||
+          product.status !== ProductStatus.PUBLISHED
+        ) {
+          rejectForeignItem();
+        }
+
         unitPrice = Number(product.base_price);
         if (product.provider_id) providerBasePrice = unitPrice;
         fulfillerId = product.provider_id || product.creator_id || '';
@@ -273,6 +353,10 @@ export class OrdersService {
         if (product.track_inventory && product.stock_quantity != null) {
           stockOps.push({ kind: 'product', id: product.id, qty: item.quantity });
         }
+      } else {
+        // No product, variant or custom product on the line — nothing to price
+        // or attribute. Never let it through as a free item with no fulfiller.
+        rejectForeignItem();
       }
 
       // Independent stores never sell custom products (provider resells) — not
@@ -304,6 +388,9 @@ export class OrdersService {
         if (!offer || offer.bundle.status !== 'ACTIVE') {
           throw new BadRequestException({ code: 'ORDER_BUNDLE_OFFER_UNAVAILABLE', message: 'Bundle offer is no longer available' });
         }
+        // A bundle offer only ever lowers the price, so an offer belonging to
+        // another creator would be a straight discount on this store's goods.
+        if (offer.bundle.creator_id !== orderStore.creator_id) rejectForeignItem();
         const pricing = computeBundlePricing(unitPrice, {
           quantity: offer.quantity,
           discount_type: offer.discount_type,
@@ -452,6 +539,10 @@ export class OrdersService {
 
     // Apply coupon discount
     let discountAmount = 0;
+    // Set once a redemption slot has been reserved, so every failure path
+    // below can hand it back instead of burning it on an order that never
+    // came into existence.
+    let redemptionClaimed: string | null = null;
     let couponValidation: {
       promotion_id: string;
       type: string;
@@ -467,6 +558,7 @@ export class OrdersService {
         .filter(Boolean) as string[];
       couponValidation = await this.promotionsService.validateCoupon({
         coupon_code: dto.coupon_code,
+        store_id: orderStore.id,
         subtotal,
         item_count: itemCount,
         product_ids: cartProductIds,
@@ -482,6 +574,33 @@ export class OrdersService {
       if (discountAmount > subtotal) {
         discountAmount = subtotal;
       }
+
+      // Reject rather than sell below provider cost — the same economic guard
+      // the bundle path applies. Without it a percentage coupon silently
+      // scales the provider's payout below the base price they are owed.
+      if (!isIndependentStore && subtotal - discountAmount < providerBaseTotal) {
+        throw new BadRequestException({
+          code: 'ORDER_DISCOUNT_BELOW_PROVIDER_COST',
+          message:
+            'This coupon cannot be applied to the items in your cart. Please remove it and try again.',
+        });
+      }
+
+      // Claim the redemption now, atomically. validateCoupon only reads the
+      // counter, so without this two concurrent checkouts both pass its limit
+      // check and both redeem the last slot.
+      const claim = await this.promotionsService.claimRedemption(
+        couponValidation.promotion_id,
+      );
+      if (claim === 'exhausted') {
+        throw new BadRequestException({
+          code: 'PROMOTION_COUPON_USAGE_LIMIT_REACHED',
+          message: 'Coupon usage limit reached',
+        });
+      }
+      // Only a real reservation is releasable — unlimited coupons were never
+      // incremented, so handing one back would corrupt the counter.
+      if (claim === 'reserved') redemptionClaimed = couponValidation.promotion_id;
     }
 
     const total = subtotal + shippingCost - discountAmount;
@@ -534,6 +653,7 @@ export class OrdersService {
       }
     } catch (err) {
       await this.restoreStock(decrementedStock);
+      if (redemptionClaimed) await this.promotionsService.releaseRedemption(redemptionClaimed);
       throw err;
     }
 
@@ -575,6 +695,7 @@ export class OrdersService {
       // Order creation failed AFTER stock was decremented — restore so the
       // sold-out signal doesn't stick to a non-existent order.
       await this.restoreStock(decrementedStock);
+      if (redemptionClaimed) await this.promotionsService.releaseRedemption(redemptionClaimed);
       throw new BadRequestException(
         err instanceof Error ? err.message : 'Failed to create order',
       );
@@ -603,6 +724,7 @@ export class OrdersService {
           order.id,
           userId,
           discountAmount,
+          redemptionClaimed === couponValidation.promotion_id,
         );
       } catch (err) {
         console.error('[OrderCreate] Failed to record promotion usage:', err);
@@ -690,8 +812,21 @@ export class OrdersService {
     } = input;
 
     const commissionBase = subtotal - discountAmount;
-    const platformAmount =
+    let platformAmount =
       Math.round(commissionBase * (commissionPercent / 100) * 100) / 100;
+
+    // A coupon is offered by the creator (or the platform) — the provider never
+    // agreed to it, so it must not come out of their share. The floor is what
+    // the provider would have received on an undiscounted order, which is their
+    // base minus the platform's percentage: with no discount it equals the
+    // pro-rata result exactly, so the split below is unchanged for those orders.
+    // Anything the discount takes is absorbed by the creator's margin first,
+    // then by the platform's commission.
+    const providerFloor =
+      Math.round(providerBaseTotal * (1 - commissionPercent / 100) * 100) / 100;
+    if (platformAmount > commissionBase - providerFloor) {
+      platformAmount = Math.max(0, Math.round((commissionBase - providerFloor) * 100) / 100);
+    }
 
     // Scale provider/creator by discount factor to reflect discounted revenue
     const discountFactor = subtotal > 0 ? commissionBase / subtotal : 1;
@@ -707,7 +842,8 @@ export class OrdersService {
     if (totalScaled > 0 && payoutPool > 0) {
       providerAmount =
         Math.round((payoutPool * scaledProviderBase / totalScaled) * 100) / 100;
-      // Ensure providerAmount never exceeds payoutPool due to rounding
+      // Never below the provider's base cost, never above what was collected.
+      if (providerAmount < providerFloor) providerAmount = providerFloor;
       if (providerAmount > payoutPool) providerAmount = payoutPool;
       creatorAmount = Math.max(
         0,
@@ -892,8 +1028,27 @@ export class OrdersService {
     return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
-  // Generic fulfiller lookup (used by /orders/fulfiller/:id endpoint)
-  async findByFulfiller(fulfillerId: string, page = 1, limit = 20) {
+  // Generic fulfiller lookup (used by /orders/fulfiller/:id endpoint).
+  // The id comes from the URL, so a provider/creator may only ask for their
+  // own — otherwise this returns a competitor's orders with full customer PII
+  // and commission amounts. Admins may query any fulfiller.
+  async findByFulfiller(
+    fulfillerId: string,
+    userId: string,
+    role: UserRole,
+    page = 1,
+    limit = 20,
+  ) {
+    if (role !== UserRole.ADMIN) {
+      const ownId = await this.resolveFulfillerId(userId, role);
+      if (!ownId || ownId !== fulfillerId) {
+        throw new ForbiddenException({
+          code: 'ORDER_FULFILLER_FORBIDDEN',
+          message: 'You can only view your own incoming orders',
+        });
+      }
+    }
+
     const skip = (page - 1) * limit;
     const where = { items: { some: { fulfiller_id: fulfillerId } } };
 
@@ -1287,6 +1442,14 @@ export class OrdersService {
     });
     if (flip.count === 0) return { order, changed: false };
 
+    // A previously-failed order had its stock restored (by the abandonment
+    // sweep or a failure webhook). Payment landing afterwards means those units
+    // really did sell, so take them back out — unguarded, so the count can go
+    // negative and honestly block further sales instead of hiding an oversell.
+    if (order.payment_status === 'failed') {
+      await this.decrementOrderItemsStock(orderId);
+    }
+
     await this.prisma.orderTimeline.create({
       data: {
         order_id: orderId,
@@ -1328,6 +1491,37 @@ export class OrdersService {
     // markOrderFailed only runs the flip once per order (guarded payment_status).
     await this.restoreOrderItemsStock(orderId);
     return { order, changed: true };
+  }
+
+  /**
+   * Cancel card orders that reserved stock and were never paid for, restoring
+   * their inventory. A Stripe PaymentIntent cannot be confirmed anywhere near
+   * this far after creation, so an order still `awaiting_payment` past the
+   * window was abandoned — the buyer closed the tab, or the client failed
+   * between creating the order and confirming the card.
+   *
+   * Deliberately bounded and best-effort: it runs inside a checkout request, so
+   * it must never slow that request down or fail it. `markOrderFailed` does the
+   * actual work and is idempotent, so a concurrent webhook cannot double-restock.
+   */
+  private async releaseExpiredAwaitingPaymentOrders(): Promise<void> {
+    try {
+      const cutoff = new Date(Date.now() - ABANDONED_PAYMENT_TTL_MS);
+      const stale = await this.prisma.order.findMany({
+        where: {
+          payment_status: 'awaiting_payment',
+          created_at: { lt: cutoff },
+        },
+        select: { id: true },
+        orderBy: { created_at: 'asc' },
+        take: 20,
+      });
+      for (const order of stale) {
+        await this.markOrderFailed(order.id);
+      }
+    } catch (err) {
+      console.error('[OrderSweep] Failed to release abandoned orders', err);
+    }
   }
 
   /**
@@ -1387,6 +1581,40 @@ export class OrdersService {
         }
       } catch (err) {
         console.error('[StockRestore] order item restore failed', it, err);
+      }
+    }
+  }
+
+  /**
+   * Inverse of restoreOrderItemsStock, for an order whose payment landed after
+   * it had already been written off. There is no `gte` guard here on purpose:
+   * the goods are sold either way, and letting the count go negative surfaces
+   * the shortfall and stops further sales rather than silently overselling.
+   */
+  private async decrementOrderItemsStock(orderId: string) {
+    const items = await this.prisma.orderItem.findMany({
+      where: { order_id: orderId },
+      select: { product_id: true, variant_id: true, quantity: true },
+    });
+    for (const it of items) {
+      try {
+        if (it.variant_id) {
+          await this.prisma.productVariant.updateMany({
+            where: { id: it.variant_id, stock_quantity: { not: null } },
+            data: { stock_quantity: { decrement: it.quantity } },
+          });
+        } else if (it.product_id) {
+          await this.prisma.product.updateMany({
+            where: {
+              id: it.product_id,
+              track_inventory: true,
+              stock_quantity: { not: null },
+            },
+            data: { stock_quantity: { decrement: it.quantity } },
+          });
+        }
+      } catch (err) {
+        console.error('[StockRestore] order item re-decrement failed', it, err);
       }
     }
   }

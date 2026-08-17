@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { Throttle } from '@nestjs/throttler';
 import { PromotionsService } from './promotions.service';
 import {
   CreatePromotionDto,
@@ -53,9 +54,14 @@ export class PromotionsController {
   }
 
   @Get(':id')
-  @UseGuards(AuthGuard('jwt'))
-  findById(@Param('id') id: string) {
-    return this.promotionsService.findById(id);
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
+  findById(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.promotionsService.findById(id, userId, role);
   }
 
   @Put(':id')
@@ -81,8 +87,10 @@ export class PromotionsController {
     return this.promotionsService.delete(id, userId, role);
   }
 
-  // Public — validate coupon code
+  // Public — validate coupon code. Throttled so the endpoint can't be used to
+  // enumerate valid coupon codes (they are globally unique strings).
   @Post('validate-coupon')
+  @Throttle({ default: { limit: 15, ttl: 60000 } })
   validateCoupon(@Body() dto: ValidateCouponDto) {
     return this.promotionsService.validateCoupon(dto);
   }

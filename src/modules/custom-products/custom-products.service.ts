@@ -5,7 +5,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { ImportMode, PricingType, ProductStatus, StoreType } from '@prisma/client';
+import { ImportMode, PricingType, ProductStatus, StoreType, UserRole } from '@prisma/client';
 import {
   CreateCustomProductDto,
   UpdateCustomProductDto,
@@ -439,7 +439,7 @@ export class CustomProductsService {
         creator.id,
         creator_category_ids,
       );
-      return this.findById(created.id);
+      return this.loadById(created.id);
     }
 
     return created;
@@ -471,7 +471,41 @@ export class CustomProductsService {
     };
   }
 
-  async findById(id: string) {
+  /**
+   * Readable by the owning creator, or by the provider whose base product it
+   * builds on (they review submissions). Anyone else gets a 404 — the record
+   * carries the creator's margin and their unpublished drafts.
+   */
+  async findById(id: string, userId: string, role: UserRole) {
+    const cp = await this.loadById(id);
+
+    if (role !== UserRole.ADMIN) {
+      let allowed = false;
+      if (role === UserRole.CREATOR) {
+        const creator = await this.prisma.creator.findUnique({
+          where: { user_id: userId },
+          select: { id: true },
+        });
+        allowed = !!creator && cp.creator_id === creator.id;
+      } else if (role === UserRole.PROVIDER) {
+        const provider = await this.prisma.provider.findUnique({
+          where: { user_id: userId },
+          select: { id: true },
+        });
+        allowed = !!provider && cp.product?.provider_id === provider.id;
+      }
+      if (!allowed) {
+        throw new NotFoundException({ code: 'CUSTOM_PRODUCT_NOT_FOUND', message: 'Custom product not found' });
+      }
+    }
+    return cp;
+  }
+
+  /**
+   * Reload without an ownership check — for internal use right after a mutation
+   * whose own guard already established the caller owns the record.
+   */
+  private async loadById(id: string) {
     const cp = await this.prisma.customProduct.findUnique({
       where: { id },
       include: this.includes,
@@ -723,7 +757,7 @@ export class CustomProductsService {
       await this.notifyProviderOfSubmission(updated.id, 'CUSTOM_PRODUCT_RESUBMITTED');
     }
 
-    return creator_category_ids !== undefined ? this.findById(id) : updated;
+    return creator_category_ids !== undefined ? this.loadById(id) : updated;
   }
 
   async delete(id: string, userId?: string) {
@@ -839,7 +873,7 @@ export class CustomProductsService {
       return newCp;
     });
 
-    return this.findById(created.id);
+    return this.loadById(created.id);
   }
 
   // ── Approval workflow ────────────────────────────────────
@@ -1022,7 +1056,10 @@ export class CustomProductsService {
 
   // ── FAQ management ────────────────────────────────────────
 
-  async createFaq(customProductId: string, dto: { sort_order?: number; translations: { locale: string; question: string; answer: string }[] }) {
+  // FAQ answers render on the storefront via dangerouslySetInnerHTML, so an
+  // unchecked id let any creator inject content onto another creator's product.
+  async createFaq(customProductId: string, userId: string, dto: { sort_order?: number; translations: { locale: string; question: string; answer: string }[] }) {
+    await this.assertCreatorOwns(customProductId, userId);
     return this.prisma.customProductFaq.create({
       data: {
         custom_product_id: customProductId,
@@ -1041,9 +1078,10 @@ export class CustomProductsService {
     });
   }
 
-  async updateFaq(faqId: string, dto: { sort_order?: number; translations?: { locale: string; question: string; answer: string }[] }) {
+  async updateFaq(faqId: string, userId: string, dto: { sort_order?: number; translations?: { locale: string; question: string; answer: string }[] }) {
     const faq = await this.prisma.customProductFaq.findUnique({ where: { id: faqId } });
     if (!faq) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_FAQ_NOT_FOUND', message: 'FAQ not found' });
+    await this.assertCreatorOwns(faq.custom_product_id, userId);
 
     if (dto.translations && dto.translations.length > 0) {
       await this.prisma.customProductFaqTranslation.deleteMany({ where: { faq_id: faqId } });
@@ -1061,7 +1099,10 @@ export class CustomProductsService {
     });
   }
 
-  async deleteFaq(faqId: string) {
+  async deleteFaq(faqId: string, userId: string) {
+    const faq = await this.prisma.customProductFaq.findUnique({ where: { id: faqId } });
+    if (!faq) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_FAQ_NOT_FOUND', message: 'FAQ not found' });
+    await this.assertCreatorOwns(faq.custom_product_id, userId);
     return this.prisma.customProductFaq.delete({ where: { id: faqId } });
   }
 

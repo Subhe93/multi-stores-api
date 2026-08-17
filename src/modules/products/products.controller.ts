@@ -81,9 +81,16 @@ export class ProductsController {
     return this.productsService.getImportDetails(id);
   }
 
+  // Authenticated: this returns the seller-facing record. The storefront reads
+  // products through /storefront/:slug/... instead, so nothing public needs it.
   @Get(':id')
-  findById(@Param('id') id: string) {
-    return this.productsService.findById(id);
+  @UseGuards(AuthGuard('jwt'))
+  findById(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') userRole: UserRole,
+  ) {
+    return this.productsService.findById(id, userId, userRole);
   }
 
   // Provider أو Creator — إنشاء منتج
@@ -150,9 +157,20 @@ export class ProductsController {
   @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
   addImage(
     @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') userRole: UserRole,
     @Body() body: { url: string; alt_text?: string; sort_order?: number; is_featured?: boolean; variant_id?: string },
   ) {
-    return this.productsService.addImage(id, body.url, body.alt_text, body.sort_order, body.is_featured, body.variant_id);
+    return this.productsService.addImage(
+      id,
+      userId,
+      userRole,
+      body.url,
+      body.alt_text,
+      body.sort_order,
+      body.is_featured,
+      body.variant_id,
+    );
   }
 
   @Get(':id/images')
@@ -163,8 +181,12 @@ export class ProductsController {
   @Delete('images/:imageId')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
-  deleteImage(@Param('imageId') imageId: string) {
-    return this.productsService.deleteImage(imageId);
+  deleteImage(
+    @Param('imageId') imageId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') userRole: UserRole,
+  ) {
+    return this.productsService.deleteImage(imageId, userId, userRole);
   }
 
   @Put(':id/images/reorder')
@@ -172,8 +194,10 @@ export class ProductsController {
   @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
   reorderImages(
     @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') userRole: UserRole,
     @Body('image_ids') imageIds: string[],
   ) {
-    return this.productsService.reorderImages(id, imageIds);
+    return this.productsService.reorderImages(id, imageIds, userId, userRole);
   }
 }

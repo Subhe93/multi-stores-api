@@ -98,6 +98,10 @@ export class ValidateCouponDto {
   @IsString()
   coupon_code: string;
 
+  // Required: a coupon is only valid on the store whose owner issued it.
+  @IsString()
+  store_id: string;
+
   @IsOptional()
   @IsNumber()
   @Type(() => Number)

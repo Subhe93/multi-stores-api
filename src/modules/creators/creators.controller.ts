@@ -51,7 +51,12 @@ export class CreatorsController {
     return this.creatorsService.findAll(page, limit);
   }
 
+  // Admin-only: the Creator row carries the connected Stripe account id and
+  // onboarding flags, plus the owner's email. Without a role gate any logged-in
+  // user could read another creator's payout identity.
   @Get(':id')
+  @Roles(UserRole.ADMIN)
+  @UseGuards(RolesGuard)
   findById(@Param('id') id: string) {
     return this.creatorsService.findById(id);
   }

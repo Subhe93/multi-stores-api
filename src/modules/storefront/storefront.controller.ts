@@ -1,6 +1,11 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { StorefrontService } from './storefront.service';
 
+// Read-only public catalogue data, fetched server-side by the Next.js
+// storefront — every request arrives from that one server IP, so a per-IP
+// rate limit here would throttle the whole shop rather than any one visitor.
+@SkipThrottle()
 @Controller('storefront')
 export class StorefrontController {
   constructor(private storefrontService: StorefrontService) {}

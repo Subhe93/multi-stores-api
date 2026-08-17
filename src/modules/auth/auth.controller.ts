@@ -24,13 +24,17 @@ import { CurrentUser } from '../../common/decorators';
 export class AuthController {
   constructor(private authService: AuthService) {}
 
+  // Tighter than the global default: these are the credential-stuffing and
+  // mass-signup targets, and the checkout auto-registers guests through them.
   @Post('register')
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
   }
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
   }

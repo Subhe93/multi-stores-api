@@ -78,10 +78,18 @@ export class OrdersController {
   @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
   findByFulfiller(
     @Param('fulfillerId') fulfillerId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
-    return this.ordersService.findByFulfiller(fulfillerId, page ? +page : undefined, limit ? +limit : undefined);
+    return this.ordersService.findByFulfiller(
+      fulfillerId,
+      userId,
+      role,
+      page ? +page : undefined,
+      limit ? +limit : undefined,
+    );
   }
 
   @Get(':id')

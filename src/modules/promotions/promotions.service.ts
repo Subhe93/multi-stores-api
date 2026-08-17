@@ -78,12 +78,31 @@ export class PromotionsService {
     return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
-  async findById(id: string) {
+  async findById(id: string, userId?: string, role?: UserRole) {
     const promo = await this.prisma.promotion.findUnique({
       where: { id },
       include: { translations: true, usages: { take: 20 } },
     });
     if (!promo) throw new NotFoundException({ code: 'PROMOTION_NOT_FOUND', message: 'Promotion not found' });
+
+    // Same ownership rule the update/delete paths already enforce — the read
+    // exposes the promotion's terms and its redemption history.
+    if (role !== UserRole.ADMIN) {
+      const owner =
+        role === UserRole.CREATOR
+          ? (await this.prisma.creator.findUnique({ where: { user_id: userId! } }))?.id
+          : role === UserRole.PROVIDER
+            ? (await this.prisma.provider.findUnique({ where: { user_id: userId! } }))?.id
+            : undefined;
+      const owns =
+        !!owner &&
+        (role === UserRole.CREATOR
+          ? promo.creator_id === owner
+          : promo.provider_id === owner);
+      if (!owns) {
+        throw new NotFoundException({ code: 'PROMOTION_NOT_FOUND', message: 'Promotion not found' });
+      }
+    }
     return promo;
   }
 
@@ -155,6 +174,13 @@ export class PromotionsService {
       throw new BadRequestException({ code: 'PROMOTION_COUPON_INVALID', message: 'Invalid coupon code' });
     }
 
+    // Scope the coupon to its owner. `coupon_code` is globally unique, so
+    // without this any store's code would discount every other store's orders —
+    // and on an independent store the creator would eat a discount they never
+    // issued. A promotion with no owner is a platform-wide campaign and stays
+    // valid everywhere.
+    await this.assertCouponAppliesToStore(promo, dto);
+
     // Check if active
     if (promo.status !== 'ACTIVE') {
       throw new BadRequestException({ code: 'PROMOTION_COUPON_NOT_ACTIVE', message: 'Coupon is not active' });
@@ -219,11 +245,97 @@ export class PromotionsService {
     };
   }
 
+  /**
+   * A creator's coupon is valid only on that creator's own store. A provider's
+   * coupon is valid only when the cart actually contains an item that provider
+   * fulfils (providers have no storefront of their own). Ownerless promotions
+   * are platform campaigns and apply everywhere.
+   */
+  private async assertCouponAppliesToStore(
+    promo: { creator_id: string | null; provider_id: string | null },
+    dto: ValidateCouponDto,
+  ): Promise<void> {
+    const notApplicable = () => {
+      throw new BadRequestException({
+        code: 'PROMOTION_COUPON_NOT_APPLICABLE',
+        message: 'This coupon does not apply to the products in your cart',
+      });
+    };
+
+    if (promo.creator_id) {
+      const store = await this.prisma.store.findUnique({
+        where: { id: dto.store_id },
+        select: { creator_id: true },
+      });
+      if (!store || store.creator_id !== promo.creator_id) notApplicable();
+      return;
+    }
+
+    if (promo.provider_id) {
+      // Cart ids are a mix of Product and CustomProduct ids — check both.
+      const ids = dto.product_ids ?? [];
+      if (!ids.length) notApplicable();
+      const [ownCount, customCount] = await Promise.all([
+        this.prisma.product.count({
+          where: { id: { in: ids }, provider_id: promo.provider_id },
+        }),
+        this.prisma.customProduct.count({
+          where: { id: { in: ids }, product: { provider_id: promo.provider_id } },
+        }),
+      ]);
+      if (ownCount === 0 && customCount === 0) notApplicable();
+    }
+  }
+
+  /**
+   * Claim one redemption before the order is created. `validateCoupon` only
+   * reads `usage_count`, so concurrent checkouts could all pass that check and
+   * blow past a limited-redemption coupon — the increment used to happen after
+   * the order existed, and its failure was swallowed. The conditional
+   * updateMany makes the claim atomic: exactly one caller wins the last slot.
+   * Returns false when the coupon is exhausted; release it with
+   * `releaseRedemption` if the order then fails to be created.
+   */
+  async claimRedemption(
+    promotionId: string,
+  ): Promise<'reserved' | 'unlimited' | 'exhausted'> {
+    const promo = await this.prisma.promotion.findUnique({
+      where: { id: promotionId },
+      select: { usage_limit: true },
+    });
+    if (!promo) return 'exhausted';
+    // Unlimited coupons have nothing to reserve — recordUsage does the counting.
+    if (promo.usage_limit == null) return 'unlimited';
+
+    const claimed = await this.prisma.promotion.updateMany({
+      where: { id: promotionId, usage_count: { lt: promo.usage_limit } },
+      data: { usage_count: { increment: 1 } },
+    });
+    return claimed.count === 1 ? 'reserved' : 'exhausted';
+  }
+
+  async releaseRedemption(promotionId: string): Promise<void> {
+    try {
+      await this.prisma.promotion.updateMany({
+        where: { id: promotionId, usage_count: { gt: 0 } },
+        data: { usage_count: { decrement: 1 } },
+      });
+    } catch (err) {
+      console.error('[Promotion] Failed to release redemption', promotionId, err);
+    }
+  }
+
+  /**
+   * Record who redeemed the coupon. The count itself was already claimed by
+   * `claimRedemption`, so this only writes the audit row — and increments the
+   * count for unlimited coupons, which skip the reservation.
+   */
   async recordUsage(
     promotionId: string,
     orderId: string,
     userId: string,
     discountAmount: number,
+    countAlreadyClaimed = false,
   ) {
     await this.prisma.promotionUsage.create({
       data: {
@@ -234,10 +346,11 @@ export class PromotionsService {
       },
     });
 
-    // Increment usage count
-    await this.prisma.promotion.update({
-      where: { id: promotionId },
-      data: { usage_count: { increment: 1 } },
-    });
+    if (!countAlreadyClaimed) {
+      await this.prisma.promotion.update({
+        where: { id: promotionId },
+        data: { usage_count: { increment: 1 } },
+      });
+    }
   }
 }

@@ -14,6 +14,7 @@ import {
 import type { RawBodyRequest } from '@nestjs/common';
 import type { Request } from 'express';
 import { AuthGuard } from '@nestjs/passport';
+import { SkipThrottle } from '@nestjs/throttler';
 import { PaymentsService } from './payments.service';
 import {
   CreatePaymentIntentDto,
@@ -133,6 +134,10 @@ export class PaymentsController {
   // ── Stripe webhook ──────────────────────────────────────────────────────────
   // Public + signature-verified. Reads the raw request body (enabled in main.ts
   // via rawBody) so the Stripe signature check works on the exact bytes.
+  // Never rate-limited: Stripe delivers bursts from its own IPs and a dropped
+  // event would desynchronise order state. Authenticity is enforced by the
+  // signature check, not by throttling.
+  @SkipThrottle()
   @Post('webhook')
   async webhook(
     @Req() req: RawBodyRequest<Request>,
@@ -159,6 +164,7 @@ export class PaymentsController {
   // Public + signature-verified with its OWN signing secret. Receives events
   // that occurred on connected accounts (independent stores' direct charges);
   // event handling is shared with the platform endpoint.
+  @SkipThrottle()
   @Post('webhook/connect')
   async connectWebhook(
     @Req() req: RawBodyRequest<Request>,

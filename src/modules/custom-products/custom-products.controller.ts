@@ -94,8 +94,12 @@ export class CustomProductsController {
 
   @Get(':id')
   @Roles(UserRole.CREATOR, UserRole.PROVIDER)
-  findById(@Param('id') id: string) {
-    return this.customProductsService.findById(id);
+  findById(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.customProductsService.findById(id, userId, role);
   }
 
   @Put(':id')
@@ -149,17 +153,28 @@ export class CustomProductsController {
   }
 
   @Post(':id/faqs')
-  createFaq(@Param('id') id: string, @Body() dto: CreateCustomProductFaqDto) {
-    return this.customProductsService.createFaq(id, dto);
+  createFaq(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body() dto: CreateCustomProductFaqDto,
+  ) {
+    return this.customProductsService.createFaq(id, userId, dto);
   }
 
   @Put('faqs/:faqId')
-  updateFaq(@Param('faqId') faqId: string, @Body() dto: UpdateCustomProductFaqDto) {
-    return this.customProductsService.updateFaq(faqId, dto);
+  updateFaq(
+    @Param('faqId') faqId: string,
+    @CurrentUser('id') userId: string,
+    @Body() dto: UpdateCustomProductFaqDto,
+  ) {
+    return this.customProductsService.updateFaq(faqId, userId, dto);
   }
 
   @Delete('faqs/:faqId')
-  deleteFaq(@Param('faqId') faqId: string) {
-    return this.customProductsService.deleteFaq(faqId);
+  deleteFaq(
+    @Param('faqId') faqId: string,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.customProductsService.deleteFaq(faqId, userId);
   }
 }

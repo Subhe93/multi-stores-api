@@ -72,7 +72,11 @@ export class ProvidersController {
     return this.providersService.findAll(page, limit);
   }
 
+  // Admin-only: the Provider row carries the connected Stripe account id and
+  // onboarding flags, plus the owner's email.
   @Get(':id')
+  @Roles(UserRole.ADMIN)
+  @UseGuards(RolesGuard)
   findById(@Param('id') id: string) {
     return this.providersService.findById(id);
   }

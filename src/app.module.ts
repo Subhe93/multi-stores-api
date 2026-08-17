@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule } from './prisma/prisma.module';
 import { CryptoModule } from './common/crypto/crypto.module';
 import { RevalidationModule } from './common/revalidation/revalidation.module';
@@ -41,7 +42,11 @@ import { NotificationTemplatesModule } from './modules/notification-templates/no
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
-    ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
+    // Generous global backstop against runaway clients. It is deliberately not
+    // the real defence — sensitive routes carry their own tight @Throttle, and
+    // storefront reads / Stripe webhooks are exempt (both legitimately arrive
+    // in bursts from a single IP).
+    ThrottlerModule.forRoot([{ ttl: 60000, limit: 300 }]),
     PrismaModule,
     CryptoModule,
     RevalidationModule,
@@ -78,6 +83,12 @@ import { NotificationTemplatesModule } from './modules/notification-templates/no
     MailModule,
     LegalModule,
     NotificationTemplatesModule,
+  ],
+  providers: [
+    // ThrottlerModule alone throttles nothing — only routes that explicitly
+    // used ThrottlerGuard were covered, leaving login, register, coupon
+    // validation and checkout open to brute force and cost abuse.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule {}

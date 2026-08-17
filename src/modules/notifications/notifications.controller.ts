@@ -18,8 +18,8 @@ export class NotificationsController {
   }
 
   @Put(':id/read')
-  markAsRead(@Param('id') id: string) {
-    return this.notificationsService.markAsRead(id);
+  markAsRead(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.notificationsService.markAsRead(id, userId);
   }
 
   @Put('read-all')

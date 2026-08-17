@@ -32,14 +32,14 @@ export class TranslationsController {
 
   // Translate a single entity (reads from DB and saves back)
   @Post('auto-translate')
-  autoTranslate(@Body() dto: AutoTranslateDto) {
-    return this.translationsService.autoTranslate(dto);
+  autoTranslate(@Body() dto: AutoTranslateDto, @Request() req: any) {
+    return this.translationsService.autoTranslate(dto, req.user.id, req.user.role);
   }
 
   // Bulk translate all entities of given types for a store
   @Post('bulk-translate')
-  bulkTranslate(@Body() dto: BulkTranslateDto) {
-    return this.translationsService.bulkTranslate(dto);
+  bulkTranslate(@Body() dto: BulkTranslateDto, @Request() req: any) {
+    return this.translationsService.bulkTranslate(dto, req.user.id, req.user.role);
   }
 
   // Translate raw text — used by dashboard forms before entity is saved

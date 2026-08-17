@@ -56,7 +56,11 @@ export class CommissionsController {
   @Get('order/:orderId')
   @UseGuards(RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
-  getByOrder(@Param('orderId') orderId: string) {
-    return this.commissionsService.getByOrder(orderId);
+  getByOrder(
+    @Param('orderId') orderId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.commissionsService.getByOrder(orderId, userId, role);
   }
 }

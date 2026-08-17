@@ -1,12 +1,51 @@
-import { Injectable } from '@nestjs/common';
-import { CommissionStatus, FulfillerType, Prisma } from '@prisma/client';
+import { ForbiddenException, Injectable } from '@nestjs/common';
+import { CommissionStatus, FulfillerType, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
 export class CommissionsService {
   constructor(private prisma: PrismaService) {}
 
-  async getByOrder(orderId: string) {
+  // The caller must be part of the order — this exposes the full platform /
+  // provider / creator split, which is confidential between the parties.
+  async getByOrder(orderId: string, userId: string, role: UserRole) {
+    if (role !== UserRole.ADMIN) {
+      const order = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: {
+          store_id: true,
+          items: { select: { fulfiller_id: true } },
+        },
+      });
+      if (!order) return null;
+
+      let allowed = false;
+      if (role === UserRole.PROVIDER) {
+        const provider = await this.prisma.provider.findUnique({
+          where: { user_id: userId },
+          select: { id: true },
+        });
+        allowed =
+          !!provider && order.items.some((i) => i.fulfiller_id === provider.id);
+      } else if (role === UserRole.CREATOR) {
+        const creator = await this.prisma.creator.findUnique({
+          where: { user_id: userId },
+          include: { store: { select: { id: true } } },
+        });
+        allowed =
+          !!creator &&
+          ((!!creator.store && order.store_id === creator.store.id) ||
+            order.items.some((i) => i.fulfiller_id === creator.id));
+      }
+
+      if (!allowed) {
+        throw new ForbiddenException({
+          code: 'COMMISSION_FORBIDDEN',
+          message: 'You are not part of this order',
+        });
+      }
+    }
+
     return this.prisma.orderCommission.findUnique({
       where: { order_id: orderId },
     });

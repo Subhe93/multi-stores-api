@@ -23,6 +23,16 @@ async function bootstrap() {
     prefix: '/uploads/',
     maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year in ms
     immutable: true,
+    setHeaders: (res, filePath) => {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      // An SVG is a document: navigating straight to an uploaded one would run
+      // any script inside it on this origin. Forcing a download kills that path
+      // while `<img src="...svg">` still renders normally (embedded SVGs can't
+      // execute scripts).
+      if (filePath.toLowerCase().endsWith('.svg')) {
+        res.setHeader('Content-Disposition', 'attachment');
+      }
+    },
   });
 
   app.setGlobalPrefix('api');
@@ -42,14 +52,29 @@ async function bootstrap() {
 
   app.useGlobalFilters(new AllExceptionsFilter());
 
+  // Stores can be served from creator-owned custom domains, so a hard-coded
+  // allowlist isn't possible by default. Set CORS_ALLOWED_ORIGINS (comma
+  // separated) to pin the origins once the deployment's domains are known;
+  // without it we keep reflecting the request origin, which is safe here only
+  // because authentication is Bearer-token rather than cookie based.
+  const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+
+  if (allowedOrigins.length === 0) {
+    console.warn(
+      '[CORS] CORS_ALLOWED_ORIGINS is not set — every origin is being reflected.',
+    );
+  }
+
   app.enableCors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps, curl, server-side)
+      // Requests with no origin (mobile apps, curl, server-side fetches).
       if (!origin) return callback(null, true);
-      // Allow all localhost ports in development
       if (origin.startsWith('http://localhost:')) return callback(null, true);
-      // Allow custom subdomains in production
-      callback(null, true);
+      if (allowedOrigins.length === 0) return callback(null, true);
+      return callback(null, allowedOrigins.includes(origin));
     },
     credentials: true,
   });

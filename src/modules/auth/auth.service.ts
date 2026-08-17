@@ -123,6 +123,16 @@ export class AuthService {
         secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
       });
 
+      // logout() records the surrendered token as an expired session row. That
+      // list was never consulted here, so a token stolen before logout stayed
+      // usable until it expired naturally.
+      const revoked = await this.prisma.session.findUnique({
+        where: { token: refreshToken },
+      });
+      if (revoked && revoked.expires_at <= new Date()) {
+        throw new UnauthorizedException();
+      }
+
       const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },
       });
@@ -137,20 +147,24 @@ export class AuthService {
     }
   }
 
-  async logout(userId: string, refreshToken: string) {
-    // حذف كل sessions المستخدم — إبطال التوكن
+  async logout(userId: string, refreshToken?: string) {
+    // Drop the user's session rows (this also invalidates any outstanding
+    // password-reset links, which share this table).
     await this.prisma.session.deleteMany({
       where: { user_id: userId },
     });
 
-    // حفظ الـ refresh token المُبطل (blacklist)
-    await this.prisma.session.create({
-      data: {
-        user_id: userId,
-        token: refreshToken,
-        expires_at: new Date(0), // منتهي الصلاحية = مُبطل
-      },
-    });
+    // Record the surrendered refresh token as revoked. An already-expired
+    // expires_at is the marker refreshToken() checks for.
+    if (refreshToken) {
+      await this.prisma.session.create({
+        data: {
+          user_id: userId,
+          token: refreshToken,
+          expires_at: new Date(0),
+        },
+      });
+    }
 
     return { message: 'Logged out successfully' };
   }

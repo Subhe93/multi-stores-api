@@ -1,4 +1,10 @@
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  ForbiddenException,
+  NotFoundException,
+  Logger,
+} from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   AutoTranslateDto,
@@ -74,8 +80,9 @@ export class TranslationsService {
   /**
    * Translate a single entity from source to target locale.
    */
-  async autoTranslate(dto: AutoTranslateDto) {
+  async autoTranslate(dto: AutoTranslateDto, userId: string, userRole: UserRole) {
     const { entity_type, entity_id, source_locale, target_locale } = dto;
+    await this.assertOwnsEntity(entity_type, entity_id, userId, userRole);
 
     const sourceText = await this.getSourceTranslation(entity_type, entity_id, source_locale);
     if (!sourceText) {
@@ -102,12 +109,15 @@ export class TranslationsService {
    * Bulk translate all entities of specified types for a store.
    * entity_types: 'products' | 'custom_products' | 'designs' | 'pages' | 'all'
    */
-  async bulkTranslate(dto: BulkTranslateDto) {
+  async bulkTranslate(dto: BulkTranslateDto, userId: string, userRole: UserRole) {
     const store = await this.prisma.store.findUnique({
       where: { id: dto.store_id },
       include: { language_config: true, creator: true },
     });
     if (!store) throw new NotFoundException({ code: 'TRANSLATION_STORE_NOT_FOUND', message: 'Store not found' });
+    // Otherwise any creator could overwrite a rival store's whole catalogue of
+    // translations and run up its external translation-API usage.
+    this.assertOwnsStore(store.creator.user_id, userId, userRole);
 
     const sourceLocale = dto.source_locale || store.language_config?.primary_locale || 'en';
     const entityTypes = dto.entity_types ?? ['products'];
@@ -254,6 +264,85 @@ export class TranslationsService {
   // ──────────────────────────────────────────────────────────
   // Auto-translate single entity (reads from DB, saves to DB)
   // ──────────────────────────────────────────────────────────
+
+  /**
+   * The entity id arrives from the client and translations are written straight
+   * back to it, so a caller must own the entity. CATEGORY is platform-owned and
+   * therefore admin-only; the remaining types resolve to a creator.
+   */
+  private async assertOwnsEntity(
+    entityType: TranslatableEntity,
+    entityId: string,
+    userId: string,
+    userRole: UserRole,
+  ): Promise<void> {
+    if (userRole === UserRole.ADMIN) return;
+
+    const denied = () => {
+      throw new ForbiddenException({
+        code: 'TRANSLATION_ENTITY_FORBIDDEN',
+        message: 'You can only translate your own content',
+      });
+    };
+
+    const creator = await this.prisma.creator.findUnique({
+      where: { user_id: userId },
+      select: { id: true },
+    });
+    if (!creator) denied();
+
+    switch (entityType) {
+      case TranslatableEntity.PRODUCT: {
+        const product = await this.prisma.product.findUnique({
+          where: { id: entityId },
+          select: { creator_id: true },
+        });
+        if (!product || product.creator_id !== creator!.id) denied();
+        return;
+      }
+      case TranslatableEntity.CUSTOM_PRODUCT: {
+        const cp = await this.prisma.customProduct.findUnique({
+          where: { id: entityId },
+          select: { creator_id: true },
+        });
+        if (!cp || cp.creator_id !== creator!.id) denied();
+        return;
+      }
+      case TranslatableEntity.STATIC_PAGE: {
+        const page = await this.prisma.staticPage.findUnique({
+          where: { id: entityId },
+          select: { store: { select: { creator_id: true } } },
+        });
+        if (!page || page.store.creator_id !== creator!.id) denied();
+        return;
+      }
+      case TranslatableEntity.PROMOTION: {
+        const promo = await this.prisma.promotion.findUnique({
+          where: { id: entityId },
+          select: { creator_id: true },
+        });
+        if (!promo || promo.creator_id !== creator!.id) denied();
+        return;
+      }
+      default:
+        // CATEGORY and CUSTOM_FIELD are not creator-scoped — admins only.
+        denied();
+    }
+  }
+
+  private assertOwnsStore(
+    storeOwnerUserId: string,
+    userId: string,
+    userRole: UserRole,
+  ): void {
+    if (userRole === UserRole.ADMIN) return;
+    if (storeOwnerUserId !== userId) {
+      throw new ForbiddenException({
+        code: 'TRANSLATION_STORE_FORBIDDEN',
+        message: 'You can only translate your own store',
+      });
+    }
+  }
 
   private async getSourceTranslation(
     entityType: TranslatableEntity,
