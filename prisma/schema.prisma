@@ -791,6 +791,8 @@ model Store {
   is_active            Boolean  @default(true)
   // When false, the storefront serves this store uncached (always fresh).
   cache_enabled        Boolean  @default(true)
+  // Cash on delivery is opt-in per store (off by default).
+  cod_enabled          Boolean   @default(false)
   created_at           DateTime @default(now())
   updated_at           DateTime @updatedAt
 

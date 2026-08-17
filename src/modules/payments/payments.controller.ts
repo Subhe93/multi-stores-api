@@ -87,6 +87,16 @@ export class PaymentsController {
     return this.paymentsService.getConnectStatus(userId, role);
   }
 
+  @Post('connect/disconnect')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.CREATOR, UserRole.PROVIDER)
+  disconnectAccount(
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.paymentsService.disconnectConnectedAccount(userId, role);
+  }
+
   // ── Checkout (order-first) ──────────────────────────────────────────────────
 
   @Post('create-intent')

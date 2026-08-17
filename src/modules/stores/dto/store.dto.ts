@@ -80,6 +80,11 @@ export class UpdateStoreDto {
   @IsOptional()
   @IsBoolean()
   cache_enabled?: boolean;
+
+  // Cash on delivery availability at checkout (off by default).
+  @IsOptional()
+  @IsBoolean()
+  cod_enabled?: boolean;
 }
 
 // Admin-only store update: also allows switching the store type. The creator

@@ -418,6 +418,42 @@ export class PaymentsService {
     return { url: link.url };
   }
 
+  /**
+   * Unlink the party's connected Stripe account. The account itself stays
+   * intact in Stripe (historic charges keep working through the per-order
+   * account snapshots) — we only drop our reference, which disables card
+   * payments for their store until a new account is connected.
+   */
+  async disconnectConnectedAccount(userId: string, role: UserRole) {
+    const party = await this.resolveParty(userId, role);
+    if (!party.stripeAccountId) {
+      throw new BadRequestException('No Stripe account is connected.');
+    }
+    if (party.kind === 'provider') {
+      await this.prisma.provider.update({
+        where: { id: party.id },
+        data: {
+          stripe_account_id: null,
+          stripe_charges_enabled: false,
+          stripe_payouts_enabled: false,
+          stripe_onboarding_completed_at: null,
+        },
+      });
+    } else {
+      await this.prisma.creator.update({
+        where: { id: party.id },
+        data: {
+          stripe_account_id: null,
+          stripe_account_type: null,
+          stripe_charges_enabled: false,
+          stripe_payouts_enabled: false,
+          stripe_onboarding_completed_at: null,
+        },
+      });
+    }
+    return { disconnected: true };
+  }
+
   /** Onboarding status for the creator/provider dashboard. */
   async getConnectStatus(userId: string, role: UserRole) {
     let party = await this.resolveParty(userId, role);

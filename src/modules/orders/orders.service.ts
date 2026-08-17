@@ -171,10 +171,19 @@ export class OrdersService {
     const orderStore = dto.store_id
       ? await this.prisma.store.findUnique({
           where: { id: dto.store_id },
-          select: { store_type: true },
+          select: { store_type: true, cod_enabled: true },
         })
       : null;
     const isIndependentStore = orderStore?.store_type === StoreType.INDEPENDENT;
+
+    // Cash on delivery is opt-in per store (off by default) — reject COD
+    // orders for stores that haven't enabled it.
+    if (orderStore && (dto.payment_method || 'COD') !== 'STRIPE' && !orderStore.cod_enabled) {
+      throw new BadRequestException({
+        code: 'ORDER_COD_DISABLED',
+        message: 'Cash on delivery is not available for this store. Please pay by card.',
+      });
+    }
 
     for (const item of cart.items) {
       let unitPrice = 0;
