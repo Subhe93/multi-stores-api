@@ -284,7 +284,7 @@ export function renderOrderItems(
   return { items_html, items_text };
 }
 
-function absoluteUrl(maybeRelative: string, base: string): string {
+export function absoluteUrl(maybeRelative: string, base: string): string {
   if (/^https?:\/\//i.test(maybeRelative)) return maybeRelative;
   const cleanBase = base.replace(/\/$/, '');
   const cleanPath = maybeRelative.startsWith('/') ? maybeRelative : `/${maybeRelative}`;
@@ -307,6 +307,8 @@ export interface OrderStoreContext {
   id: string;
   slug: string;
   name: string;
+  /** Used to brand the email — customers buy from the shop, not the platform. */
+  logoUrl?: string;
   primaryLocale?: string;
   ownerEmail?: string;
 }
@@ -339,6 +341,7 @@ export async function loadOrderForEmail(
         id: true,
         slug: true,
         name: true,
+        logo_url: true,
         language_config: { select: { primary_locale: true } },
         creator: { select: { user: { select: { email: true } } } },
       },
@@ -348,6 +351,7 @@ export async function loadOrderForEmail(
         id: store.id,
         slug: store.slug,
         name: store.name,
+        logoUrl: store.logo_url ?? undefined,
         primaryLocale: store.language_config?.primary_locale,
         ownerEmail: store.creator?.user?.email,
       };

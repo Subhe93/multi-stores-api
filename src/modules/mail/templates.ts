@@ -21,16 +21,36 @@ function esc(s: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
-function layout(title: string, bodyHtml: string): string {
+/**
+ * Branding an order email carries. A customer buying from a creator's shop
+ * should see that shop's name and logo, not the platform's — especially once
+ * the mail is sent from the shop's own domain. Falls back to the platform
+ * brand when a store hasn't been resolved.
+ */
+export interface EmailBrand {
+  storeName?: string;
+  storeLogoUrl?: string;
+  /** Which store this message belongs to — selects its sender and templates. */
+  storeId?: string;
+}
+
+function layout(title: string, bodyHtml: string, brand?: EmailBrand): string {
+  const name = brand?.storeName || BRAND;
+  const header = brand?.storeLogoUrl
+    ? `<div style="text-align:center;margin-bottom:20px;"><img src="${esc(
+        brand.storeLogoUrl,
+      )}" alt="${esc(name)}" style="max-height:44px;max-width:200px;" /></div>`
+    : '';
   return `<!doctype html>
 <html>
   <body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,Helvetica,sans-serif;color:#18181b;">
     <div style="max-width:520px;margin:0 auto;padding:24px;">
       <div style="background:#ffffff;border:1px solid #e4e4e7;border-radius:12px;padding:28px;">
+        ${header}
         <h1 style="font-size:18px;margin:0 0 16px;">${title}</h1>
         ${bodyHtml}
       </div>
-      <p style="font-size:11px;color:#a1a1aa;text-align:center;margin-top:16px;">${BRAND}</p>
+      <p style="font-size:11px;color:#a1a1aa;text-align:center;margin-top:16px;">${esc(name)}</p>
     </div>
   </body>
 </html>`;
@@ -60,7 +80,7 @@ export function passwordResetEmail(resetUrl: string): EmailParts {
 // the template doesn't need a loop construct. Helpers in order-mail.helpers.ts
 // produce those blocks from the loaded order.
 
-export interface OrderConfirmationData {
+export interface OrderConfirmationData extends EmailBrand {
   orderNumber: string;
   total: string; // already formatted, e.g. "SEK 423.30"
   paid: boolean; // true = paid (card), false = cash on delivery
@@ -88,6 +108,7 @@ export function orderConfirmationEmail(data: OrderConfirmationData): EmailParts 
        ${itemsHtml}
        <p style="font-size:14px;color:#3f3f46;">Total: <strong>${esc(data.total)}</strong></p>
        ${cta}`,
+      data,
     ),
     text: `Thanks for your order!\n\nOrder ${data.orderNumber} has been placed. ${paymentLine}${itemsText}\nTotal: ${data.total}${
       data.orderUrl ? `\n\nView your order: ${data.orderUrl}` : ''
@@ -95,7 +116,7 @@ export function orderConfirmationEmail(data: OrderConfirmationData): EmailParts 
   };
 }
 
-export interface OrderShippedData {
+export interface OrderShippedData extends EmailBrand {
   orderNumber: string;
   trackingNumber?: string;
   trackingUrl?: string;
@@ -125,6 +146,7 @@ export function orderShippedEmail(data: OrderShippedData): EmailParts {
        ${tracking}
        ${trackBtn}
        ${viewBtn}`,
+      data,
     ),
     text:
       `Your order ${data.orderNumber} has shipped.` +
@@ -135,7 +157,7 @@ export function orderShippedEmail(data: OrderShippedData): EmailParts {
   };
 }
 
-export interface OrderDeliveredData {
+export interface OrderDeliveredData extends EmailBrand {
   orderNumber: string;
   orderUrl?: string;
   itemsHtml?: string;
@@ -155,6 +177,7 @@ export function orderDeliveredEmail(data: OrderDeliveredData): EmailParts {
        </p>
        ${data.itemsHtml || ''}
        ${cta}`,
+      data,
     ),
     text:
       `Your order ${data.orderNumber} has been delivered.` +
@@ -163,7 +186,7 @@ export function orderDeliveredEmail(data: OrderDeliveredData): EmailParts {
   };
 }
 
-export interface OrderCancelledData {
+export interface OrderCancelledData extends EmailBrand {
   orderNumber: string;
   reason?: string;
   orderUrl?: string;
@@ -188,6 +211,7 @@ export function orderCancelledEmail(data: OrderCancelledData): EmailParts {
        ${reasonHtml}
        ${data.itemsHtml || ''}
        ${cta}`,
+      data,
     ),
     text:
       `Order ${data.orderNumber} has been cancelled.` +
@@ -197,7 +221,7 @@ export function orderCancelledEmail(data: OrderCancelledData): EmailParts {
   };
 }
 
-export interface OrderRefundedData {
+export interface OrderRefundedData extends EmailBrand {
   orderNumber: string;
   refundAmount?: string;
   orderUrl?: string;
@@ -222,6 +246,7 @@ export function orderRefundedEmail(data: OrderRefundedData): EmailParts {
        ${amountHtml}
        ${data.itemsHtml || ''}
        ${cta}`,
+      data,
     ),
     text:
       `A refund has been processed for order ${data.orderNumber}.` +
@@ -231,7 +256,7 @@ export function orderRefundedEmail(data: OrderRefundedData): EmailParts {
   };
 }
 
-export interface NewOrderOwnerData {
+export interface NewOrderOwnerData extends EmailBrand {
   orderNumber: string;
   total: string;
   storeName?: string;
@@ -259,6 +284,7 @@ export function newOrderOwnerEmail(data: NewOrderOwnerData): EmailParts {
        ${customerBit}
        ${data.itemsHtml || ''}
        ${cta}`,
+      data,
     ),
     text:
       `New order ${data.orderNumber}${data.storeName ? ` for ${data.storeName}` : ''}. Total: ${data.total}.` +

@@ -807,8 +807,52 @@ model Store {
   static_pages    StaticPage[]
   pages           Page[]
   menus           Menu[]
+  mail_settings   StoreMailSettings?
+  mail_templates  StoreNotificationTemplate[]
 
   @@index([slug])
+}
+
+// Own SMTP sender for an INDEPENDENT store, so its customers receive mail from
+// the creator's own domain instead of the platform's. Absent, disabled or
+// incomplete means "use the platform sender". The password is encrypted at
+// rest with the same envelope as the platform SMTP and the Stripe secrets.
+model StoreMailSettings {
+  id          String    @id @default(uuid())
+  store_id    String    @unique
+  smtp_host   String?
+  smtp_port   Int?
+  smtp_secure Boolean   @default(false)
+  smtp_user   String?
+  smtp_pass   String?
+  mail_from   String?
+  enabled     Boolean   @default(false)
+  // Last time a test message went out successfully — surfaced in the dashboard
+  // so a creator can tell a saved config from a working one.
+  verified_at DateTime?
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+
+  store Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
+}
+
+// Per-store override of a transactional email template. Same per-locale JSON
+// shape as NotificationTemplate so both go through one render path; a missing
+// row simply falls through to the platform template.
+model StoreNotificationTemplate {
+  id         String   @id @default(uuid())
+  store_id   String
+  event      String
+  subject    Json     @default("{}")
+  body_html  Json     @default("{}")
+  body_text  Json     @default("{}")
+  enabled    Boolean  @default(true)
+  updated_at DateTime @updatedAt
+
+  store Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
+
+  @@unique([store_id, event])
+  @@index([store_id])
 }
 
 model StoreLanguageConfig {

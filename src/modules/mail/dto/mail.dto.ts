@@ -38,6 +38,14 @@ export class UpdateSmtpSettingsDto {
   from?: string;
 }
 
+// Same shape as the platform settings, plus an on/off switch: a creator can
+// save their SMTP details and only turn the sender on once a test succeeds.
+export class UpdateStoreSmtpSettingsDto extends UpdateSmtpSettingsDto {
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
+}
+
 export class SendTestEmailDto {
   @IsOptional()
   @IsEmail()

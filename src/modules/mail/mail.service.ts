@@ -1,5 +1,6 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { StoreType } from '@prisma/client';
 import * as nodemailer from 'nodemailer';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CryptoService } from '../../common/crypto/crypto.service';
@@ -22,6 +23,7 @@ import {
   WelcomeData,
 } from './templates';
 import {
+  absoluteUrl,
   emailPhrases,
   formatMoney,
   renderOrderItems,
@@ -50,8 +52,9 @@ interface SmtpConfig {
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
-  private transporter: nodemailer.Transporter | null = null;
-  private signature: string | null = null;
+  // One transporter per distinct SMTP config: the platform's, plus one for each
+  // independent store sending under its own domain.
+  private transporters = new Map<string, nodemailer.Transporter>();
 
   constructor(
     private config: ConfigService,
@@ -59,6 +62,34 @@ export class MailService {
     private crypto: CryptoService,
     private templates: NotificationTemplatesService,
   ) {}
+
+  /**
+   * A store's own sender, when it has one. Only INDEPENDENT stores may send
+   * under their own domain, and the check is re-run here at send time so a
+   * store switched back to marketplace immediately reverts to the platform
+   * sender without anyone having to clear its settings.
+   */
+  private async resolveStoreConfig(storeId: string): Promise<SmtpConfig | null> {
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { store_type: true, name: true, mail_settings: true },
+    });
+    if (!store || store.store_type !== StoreType.INDEPENDENT) return null;
+
+    const s = store.mail_settings;
+    if (!s || !s.enabled || !s.smtp_host) return null;
+
+    return {
+      host: s.smtp_host,
+      port: s.smtp_port ?? 587,
+      secure: s.smtp_secure,
+      user: s.smtp_user || undefined,
+      pass: this.crypto.decrypt(s.smtp_pass) || undefined,
+      // Without an explicit from, use the SMTP account itself so the message
+      // still has a plausible sender under the creator's own domain.
+      from: s.mail_from || s.smtp_user || `${store.name} <no-reply@localhost>`,
+    };
+  }
 
   /** Resolve SMTP settings: DB (admin) first, then environment. */
   private async resolveConfig(): Promise<SmtpConfig | null> {
@@ -105,27 +136,33 @@ export class MailService {
     };
   }
 
+  /**
+   * Build (or reuse) a transporter for a resolved config. Keyed by the settings
+   * themselves rather than kept in a single slot, because stores now send under
+   * their own senders and alternating between them would otherwise rebuild the
+   * transport on every message.
+   */
+  private transporterFor(cfg: SmtpConfig): nodemailer.Transporter {
+    const signature = JSON.stringify([cfg.host, cfg.port, cfg.secure, cfg.user, cfg.pass]);
+    const cached = this.transporters.get(signature);
+    if (cached) return cached;
+    const transporter = nodemailer.createTransport({
+      host: cfg.host,
+      port: cfg.port,
+      secure: cfg.secure,
+      auth: cfg.user ? { user: cfg.user, pass: cfg.pass } : undefined,
+    });
+    this.transporters.set(signature, transporter);
+    return transporter;
+  }
+
   private async getTransporter(): Promise<{
     transporter: nodemailer.Transporter;
     from: string;
   } | null> {
     const cfg = await this.resolveConfig();
-    if (!cfg) {
-      this.transporter = null;
-      this.signature = null;
-      return null;
-    }
-    const signature = JSON.stringify([cfg.host, cfg.port, cfg.secure, cfg.user, cfg.pass]);
-    if (!this.transporter || this.signature !== signature) {
-      this.transporter = nodemailer.createTransport({
-        host: cfg.host,
-        port: cfg.port,
-        secure: cfg.secure,
-        auth: cfg.user ? { user: cfg.user, pass: cfg.pass } : undefined,
-      });
-      this.signature = signature;
-    }
-    return { transporter: this.transporter, from: cfg.from };
+    if (!cfg) return null;
+    return { transporter: this.transporterFor(cfg), from: cfg.from };
   }
 
   async isConfigured(): Promise<boolean> {
@@ -137,30 +174,52 @@ export class MailService {
     subject: string;
     html: string;
     text?: string;
+    /** Send under this store's own sender when it has one configured. */
+    storeId?: string;
   }): Promise<{ sent: boolean }> {
-    const resolved = await this.getTransporter();
-    if (!resolved) {
+    const storeCfg = opts.storeId ? await this.resolveStoreConfig(opts.storeId) : null;
+
+    if (storeCfg) {
+      const ok = await this.trySend(storeCfg, opts);
+      if (ok) return { sent: true };
+      // A store's own sender failing must not cost the customer their email —
+      // fall through to the platform sender for this message. The creator sees
+      // the real error when they run a test from the dashboard.
+      this.logger.warn(
+        `Store ${opts.storeId} sender failed for "${opts.subject}" — retrying via the platform sender`,
+      );
+    }
+
+    const platformCfg = await this.resolveConfig();
+    if (!platformCfg) {
       this.logger.warn(
         `[mail:not-configured] Would send "${opts.subject}" to ${opts.to}`,
       );
       return { sent: false };
     }
+    return { sent: await this.trySend(platformCfg, opts) };
+  }
+
+  private async trySend(
+    cfg: SmtpConfig,
+    opts: { to: string; subject: string; html: string; text?: string },
+  ): Promise<boolean> {
     try {
-      await resolved.transporter.sendMail({
-        from: resolved.from,
+      await this.transporterFor(cfg).sendMail({
+        from: cfg.from,
         to: opts.to,
         subject: opts.subject,
         html: opts.html,
         text: opts.text,
       });
-      return { sent: true };
+      return true;
     } catch (err) {
       this.logger.error(
-        `Failed to send "${opts.subject}" to ${opts.to}: ${
+        `Failed to send "${opts.subject}" to ${opts.to} via ${cfg.host}: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
-      return { sent: false };
+      return false;
     }
   }
 
@@ -198,6 +257,7 @@ export class MailService {
     const cta = this.orderCta(data.orderUrl, phrases.viewOrder);
 
     const rendered = await this.templates.render('order_confirmation', locale, {
+      store_name: data.storeName ?? '',
       order_number: data.orderNumber,
       total: data.total,
       payment_line: paymentLine,
@@ -205,9 +265,9 @@ export class MailService {
       order_url_text: cta.text,
       items_html: data.itemsHtml ?? '',
       items_text: data.itemsText ?? '',
-    });
-    if (rendered) return this.send({ to, ...rendered });
-    return this.send({ to, ...orderConfirmationEmail(data) });
+    }, data.storeId);
+    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId });
+    return this.send({ to, ...orderConfirmationEmail(data), storeId: data.storeId });
   }
 
   async sendOrderShipped(to: string, data: OrderShippedData, locale?: string) {
@@ -215,6 +275,7 @@ export class MailService {
     const cta = this.orderCta(data.orderUrl, phrases.viewOrder);
 
     const rendered = await this.templates.render('order_shipped', locale, {
+      store_name: data.storeName ?? '',
       order_number: data.orderNumber,
       tracking_number: data.trackingNumber ?? '',
       tracking_url: data.trackingUrl ?? '',
@@ -222,9 +283,9 @@ export class MailService {
       order_url_text: cta.text,
       items_html: data.itemsHtml ?? '',
       items_text: data.itemsText ?? '',
-    });
-    if (rendered) return this.send({ to, ...rendered });
-    return this.send({ to, ...orderShippedEmail(data) });
+    }, data.storeId);
+    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId });
+    return this.send({ to, ...orderShippedEmail(data), storeId: data.storeId });
   }
 
   async sendOrderDelivered(to: string, data: OrderDeliveredData, locale?: string) {
@@ -232,14 +293,15 @@ export class MailService {
     const cta = this.orderCta(data.orderUrl, phrases.viewOrder);
 
     const rendered = await this.templates.render('order_delivered', locale, {
+      store_name: data.storeName ?? '',
       order_number: data.orderNumber,
       order_button: cta.html,
       order_url_text: cta.text,
       items_html: data.itemsHtml ?? '',
       items_text: data.itemsText ?? '',
-    });
-    if (rendered) return this.send({ to, ...rendered });
-    return this.send({ to, ...orderDeliveredEmail(data) });
+    }, data.storeId);
+    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId });
+    return this.send({ to, ...orderDeliveredEmail(data), storeId: data.storeId });
   }
 
   async sendOrderCancelled(to: string, data: OrderCancelledData, locale?: string) {
@@ -247,15 +309,16 @@ export class MailService {
     const cta = this.orderCta(data.orderUrl, phrases.viewOrder);
 
     const rendered = await this.templates.render('order_cancelled', locale, {
+      store_name: data.storeName ?? '',
       order_number: data.orderNumber,
       reason: data.reason ?? '',
       order_button: cta.html,
       order_url_text: cta.text,
       items_html: data.itemsHtml ?? '',
       items_text: data.itemsText ?? '',
-    });
-    if (rendered) return this.send({ to, ...rendered });
-    return this.send({ to, ...orderCancelledEmail(data) });
+    }, data.storeId);
+    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId });
+    return this.send({ to, ...orderCancelledEmail(data), storeId: data.storeId });
   }
 
   async sendOrderRefunded(to: string, data: OrderRefundedData, locale?: string) {
@@ -263,15 +326,16 @@ export class MailService {
     const cta = this.orderCta(data.orderUrl, phrases.viewOrder);
 
     const rendered = await this.templates.render('order_refunded', locale, {
+      store_name: data.storeName ?? '',
       order_number: data.orderNumber,
       refund_amount: data.refundAmount ?? '',
       order_button: cta.html,
       order_url_text: cta.text,
       items_html: data.itemsHtml ?? '',
       items_text: data.itemsText ?? '',
-    });
-    if (rendered) return this.send({ to, ...rendered });
-    return this.send({ to, ...orderRefundedEmail(data) });
+    }, data.storeId);
+    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId });
+    return this.send({ to, ...orderRefundedEmail(data), storeId: data.storeId });
   }
 
   async sendNewOrderToOwner(to: string, data: NewOrderOwnerData, locale?: string) {
@@ -286,11 +350,13 @@ export class MailService {
       order_url_text: cta.text,
       items_html: data.itemsHtml ?? '',
       items_text: data.itemsText ?? '',
-    });
-    if (rendered) return this.send({ to, ...rendered });
-    return this.send({ to, ...newOrderOwnerEmail(data) });
+    }, data.storeId);
+    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId });
+    return this.send({ to, ...newOrderOwnerEmail(data), storeId: data.storeId });
   }
 
+  // Signup is a platform event, not a store one — it goes out under the
+  // platform sender with the platform template.
   async sendWelcome(to: string, data: WelcomeData, locale?: string) {
     const rendered = await this.templates.render('welcome', locale, {
       name: data.name ?? '',
@@ -350,6 +416,16 @@ export class MailService {
     const orderNumber = order.order_number;
     const totalStr = formatMoney(Number(order.total), currency);
 
+    // Identity of the shop the customer actually bought from: it selects the
+    // sender and template overrides, and brands the message itself.
+    const brand = {
+      storeId: order.storeCtx?.id,
+      storeName: order.storeCtx?.name,
+      storeLogoUrl: order.storeCtx?.logoUrl
+        ? absoluteUrl(order.storeCtx.logoUrl, publicBase)
+        : undefined,
+    };
+
     // Pick the recipient + payload per event.
     switch (event) {
       case 'order_confirmation': {
@@ -357,6 +433,7 @@ export class MailService {
         await this.sendOrderConfirmation(
           customerEmail,
           {
+            ...brand,
             orderNumber,
             total: totalStr,
             paid: order.payment_status === 'paid',
@@ -373,6 +450,7 @@ export class MailService {
         await this.sendOrderShipped(
           customerEmail,
           {
+            ...brand,
             orderNumber,
             trackingNumber: extra.trackingNumber,
             trackingUrl: extra.trackingUrl,
@@ -398,6 +476,7 @@ export class MailService {
         await this.sendOrderCancelled(
           customerEmail,
           {
+            ...brand,
             orderNumber,
             reason: extra.reason,
             orderUrl,
@@ -413,6 +492,7 @@ export class MailService {
         await this.sendOrderRefunded(
           customerEmail,
           {
+            ...brand,
             orderNumber,
             refundAmount:
               extra.refundAmount !== undefined
@@ -441,6 +521,7 @@ export class MailService {
         await this.sendNewOrderToOwner(
           ownerEmail,
           {
+            ...brand,
             orderNumber,
             total: totalStr,
             storeName: order.storeCtx?.name,
@@ -514,9 +595,8 @@ export class MailService {
       where: { id: config.id },
       data,
     });
-    // Invalidate the cached transporter so the next send picks up the change.
-    this.transporter = null;
-    this.signature = null;
+    // Drop the cached transporters so the next send picks up the change.
+    this.transporters.clear();
     return this.getAdminSettings();
   }
 
@@ -538,6 +618,133 @@ export class MailService {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`Test email to ${to} failed: ${message}`);
+      throw new BadRequestException(`SMTP error: ${message}`);
+    }
+  }
+
+  // ── Store sender (CREATOR, independent stores only) ────────────────────────
+
+  /**
+   * Resolve the caller's own store and confirm it may have its own sender.
+   * Marketplace stores send through the platform, so they are refused here
+   * rather than being allowed to save settings that would never be used.
+   */
+  private async requireIndependentStore(userId: string) {
+    const creator = await this.prisma.creator.findUnique({
+      where: { user_id: userId },
+      select: { id: true },
+    });
+    const store = creator
+      ? await this.prisma.store.findUnique({
+          where: { creator_id: creator.id },
+          select: { id: true, store_type: true },
+        })
+      : null;
+    if (!store) {
+      throw new BadRequestException({
+        code: 'STORE_MAIL_NO_STORE',
+        message: 'You need a store before you can configure email.',
+      });
+    }
+    if (store.store_type !== StoreType.INDEPENDENT) {
+      throw new BadRequestException({
+        code: 'STORE_MAIL_MARKETPLACE_ONLY',
+        message:
+          'Only independent stores can send from their own address. Marketplace stores use the platform sender.',
+      });
+    }
+    return store;
+  }
+
+  async getStoreSettings(userId: string) {
+    const store = await this.requireIndependentStore(userId);
+    const s = await this.prisma.storeMailSettings.findUnique({
+      where: { store_id: store.id },
+    });
+    return {
+      host: s?.smtp_host || null,
+      port: s?.smtp_port ?? null,
+      secure: s?.smtp_secure ?? false,
+      user: s?.smtp_user || null,
+      from: s?.mail_from || null,
+      enabled: s?.enabled ?? false,
+      // Never return the password itself — only whether one is stored.
+      passwordSet: Boolean(s?.smtp_pass),
+      verifiedAt: s?.verified_at ?? null,
+    };
+  }
+
+  async updateStoreSettings(
+    userId: string,
+    dto: {
+      host?: string;
+      port?: number | null;
+      secure?: boolean;
+      user?: string;
+      password?: string;
+      from?: string;
+      enabled?: boolean;
+    },
+  ) {
+    const store = await this.requireIndependentStore(userId);
+
+    const data: Record<string, unknown> = {};
+    if (dto.host !== undefined) data.smtp_host = dto.host.trim() || null;
+    if (dto.port !== undefined) data.smtp_port = dto.port ?? null;
+    if (dto.secure !== undefined) data.smtp_secure = dto.secure;
+    if (dto.user !== undefined) data.smtp_user = dto.user.trim() || null;
+    if (dto.from !== undefined) data.mail_from = dto.from.trim() || null;
+    if (dto.enabled !== undefined) data.enabled = dto.enabled;
+    // Same rule as the platform settings: an empty password means "keep the
+    // stored one", so the dashboard never has to round-trip the secret.
+    if (dto.password) {
+      data.smtp_pass = this.crypto.encrypt(dto.password);
+      // Credentials changed — the previous successful test no longer proves
+      // anything about the current config.
+      data.verified_at = null;
+    }
+
+    await this.prisma.storeMailSettings.upsert({
+      where: { store_id: store.id },
+      create: { store_id: store.id, ...data },
+      update: data,
+    });
+
+    this.transporters.clear();
+    return this.getStoreSettings(userId);
+  }
+
+  /**
+   * Send a test through the store's own sender. This is the only place the
+   * creator sees the real SMTP error — order mail silently falls back to the
+   * platform sender rather than failing, so without this a broken config
+   * would go unnoticed.
+   */
+  async sendStoreTest(userId: string, to: string): Promise<{ sent: true }> {
+    const store = await this.requireIndependentStore(userId);
+    const cfg = await this.resolveStoreConfig(store.id);
+    if (!cfg) {
+      throw new BadRequestException({
+        code: 'STORE_MAIL_NOT_CONFIGURED',
+        message: 'Enter your SMTP details and enable the sender first.',
+      });
+    }
+    try {
+      await this.transporterFor(cfg).sendMail({
+        from: cfg.from,
+        to,
+        subject: 'Test email from your store',
+        html: '<p>Your store\'s email sender is working. ✅</p>',
+        text: "Your store's email sender is working.",
+      });
+      await this.prisma.storeMailSettings.update({
+        where: { store_id: store.id },
+        data: { verified_at: new Date() },
+      });
+      return { sent: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Store ${store.id} test email to ${to} failed: ${message}`);
       throw new BadRequestException(`SMTP error: ${message}`);
     }
   }
