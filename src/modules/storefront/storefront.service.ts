@@ -738,17 +738,18 @@ export class StorefrontService {
       include: {
         translations: { select: { locale: true, title: true, description: true, slug: true } },
         images: { orderBy: { sort_order: 'asc' } },
-        variants: { where: { is_active: true } },
+        variants: { where: { is_active: true }, include: { images: true } },
         faqs: { include: { translations: true }, orderBy: { sort_order: 'asc' } },
       },
       orderBy: { updated_at: 'desc' },
     });
     if (own) {
       const slug = own.translations.find((t) => !!t.slug)?.slug || own.id;
+      const basePrice = Number(own.base_price);
       return {
         id: own.id,
         slug,
-        base_price: Number(own.base_price),
+        base_price: basePrice,
         compare_at_price: own.compare_at_price ? Number(own.compare_at_price) : undefined,
         translations: own.translations,
         images: own.images.map((img) => ({
@@ -756,11 +757,18 @@ export class StorefrontService {
           alt_text: img.alt_text,
           sort_order: img.sort_order,
         })),
+        // Mirror the live product payload: the preview renders the real
+        // ProductDetailClient, which needs options/images per variant and the
+        // option config (styles, color/image maps) to not fall over.
+        variant_option_config: own.variant_option_config,
         variants: own.variants.map((v) => ({
           id: v.id,
-          price: Number(own.base_price) + Number(v.price_adjustment || 0),
+          options: v.options ?? {},
+          price: basePrice + Number(v.price_adjustment || 0),
+          compare_at_price: v.compare_at_price ? Number(v.compare_at_price) : undefined,
           stock: v.stock_quantity ?? undefined,
           sku: v.sku ?? undefined,
+          images: (v as any).images || [],
         })),
         faqs: own.faqs,
       };
