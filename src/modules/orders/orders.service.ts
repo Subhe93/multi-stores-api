@@ -1502,6 +1502,92 @@ export class OrdersService {
   }
 
   /**
+   * The payment was fully refunded in Stripe — on the platform account, or on
+   * an independent store's own account where the creator refunds directly and
+   * we only ever learn about it through the connect webhook.
+   *
+   * Brings the order to the same place an admin-driven REFUNDED transition
+   * would: terminal order status, commission written off, stock returned, the
+   * customer emailed. Idempotent, and returns `changed` so the caller can skip
+   * duplicate notifications on a replayed event.
+   */
+  async markOrderRefunded(orderId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { customer: { select: { user_id: true } } },
+    });
+    if (!order) return null;
+    if (order.payment_status === 'refunded') return { order, changed: false };
+
+    const flip = await this.prisma.order.updateMany({
+      where: { id: orderId, payment_status: { not: 'refunded' } },
+      data: {
+        payment_status: 'refunded',
+        // REFUNDED is terminal; recomputeOrderStatusFromItems and the
+        // fulfilment paths both leave terminal states alone.
+        status: OrderStatus.REFUNDED,
+      },
+    });
+    if (flip.count === 0) return { order, changed: false };
+
+    await this.prisma.orderTimeline.create({
+      data: {
+        order_id: orderId,
+        status: 'REFUNDED',
+        note: 'Payment fully refunded via Stripe',
+        actor: 'system',
+      },
+    });
+
+    // Write off the commission so refunded money stops counting as earnings.
+    await this.prisma.orderCommission.updateMany({
+      where: { order_id: orderId },
+      data: { status: deriveCommissionStatus(OrderStatus.REFUNDED) },
+    });
+
+    // The goods are coming back (or never shipped) — return them to stock.
+    // Guarded by the flip above, so a replayed webhook cannot double-restock.
+    await this.restoreOrderItemsStock(orderId);
+
+    // The customer paid us; they should hear about the refund from us, not
+    // only from their bank statement. Skipped when the order was already
+    // marked REFUNDED by an admin, since that transition emailed them
+    // already — otherwise refunding in Stripe afterwards sends a duplicate.
+    if (order.status !== OrderStatus.REFUNDED) {
+      await this.mail.dispatchOrderEmail(orderId, 'order_refunded', {
+        refundAmount: Number(order.total),
+      });
+    }
+
+    return { order, changed: true };
+  }
+
+  /**
+   * A partial refund: money went back but the order stands. Recorded on the
+   * timeline so the creator and admin can see it, without touching payment
+   * status, stock or commissions — those still reflect a live order.
+   * Deduplicated on the note so a replayed event doesn't stack rows.
+   */
+  async recordPartialRefund(orderId: string, amountRefunded: number, currency: string) {
+    const note = `Partially refunded via Stripe: ${amountRefunded} ${currency.toUpperCase()}`;
+    const existing = await this.prisma.orderTimeline.findFirst({
+      where: { order_id: orderId, status: 'PARTIALLY_REFUNDED', note },
+      select: { id: true },
+    });
+    if (existing) return { changed: false };
+
+    await this.prisma.orderTimeline.create({
+      data: {
+        order_id: orderId,
+        status: 'PARTIALLY_REFUNDED',
+        note,
+        actor: 'system',
+      },
+    });
+    return { changed: true };
+  }
+
+  /**
    * Cancel card orders that reserved stock and were never paid for, restoring
    * their inventory. A Stripe PaymentIntent cannot be confirmed anywhere near
    * this far after creation, so an order still `awaiting_payment` past the

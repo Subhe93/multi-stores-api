@@ -186,12 +186,23 @@ export class PaymentsService {
     const envConnectWebhook = Boolean(
       this.config.get<string>('STRIPE_CONNECT_WEBHOOK_SECRET'),
     );
+    const connectWebhookSecretConfigured =
+      Boolean(cfg?.stripe_connect_webhook_secret) || envConnectWebhook;
+    // Independent stores charge on their own accounts, so their events — most
+    // importantly refunds the creator makes from their own Stripe dashboard —
+    // only reach us through the Connect endpoint. Without its signing secret
+    // every one of those events is rejected, so flag it rather than let
+    // refunds silently never sync.
+    const independentStores = await this.prisma.store.count({
+      where: { store_type: StoreType.INDEPENDENT },
+    });
     return {
       publishableKey: cfg?.stripe_publishable_key || null,
       secretKeyConfigured: Boolean(cfg?.stripe_secret_key) || envSecret,
       webhookSecretConfigured: Boolean(cfg?.stripe_webhook_secret) || envWebhook,
-      connectWebhookSecretConfigured:
-        Boolean(cfg?.stripe_connect_webhook_secret) || envConnectWebhook,
+      connectWebhookSecretConfigured,
+      connectWebhookRequired: independentStores > 0,
+      independentStoreCount: independentStores,
       // True when no DB secret is set but an env key is in use (legacy fallback).
       usingEnvFallback: !cfg?.stripe_secret_key && envSecret,
     };
@@ -786,10 +797,17 @@ export class PaymentsService {
       },
     });
     if (!order) throw new NotFoundException('Order not found');
-    // Already paid: still re-attempt payouts so a previously failed transfer can
-    // be retried (idempotent — paid payouts are skipped). Don't rethrow: a
-    // failed transfer is recorded and surfaced, not turned into a 500.
+    // Already paid: a refund may have happened since — especially on an
+    // independent store, where the creator refunds from their own Stripe
+    // dashboard and the connect webhook is the only thing that would tell us.
+    // Checking here makes this the manual fallback when that webhook is
+    // missing or was never delivered.
     if (order.payment_status === 'paid') {
+      const refunded = await this.syncRefundState(orderId);
+      if (refunded) return { payment_status: 'refunded' };
+      // Re-attempt payouts so a previously failed transfer can be retried
+      // (idempotent — paid payouts are skipped). Don't rethrow: a failed
+      // transfer is recorded and surfaced, not turned into a 500.
       await this.issueOrderTransfers(orderId, { rethrow: false });
       return { payment_status: 'paid' };
     }
@@ -820,6 +838,40 @@ export class PaymentsService {
       return { payment_status: 'failed' };
     }
     return { payment_status: order.payment_status ?? 'awaiting_payment' };
+  }
+
+  /**
+   * Read the order's charge live and apply any refund we haven't seen yet.
+   * Returns true when the order ends up fully refunded. Best-effort: this runs
+   * inside reconcile, which must keep working even if the charge can't be read.
+   */
+  private async syncRefundState(orderId: string): Promise<boolean> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { stripe_charge_id: true, stripe_account_id: true },
+    });
+    if (!order?.stripe_charge_id) return false;
+    try {
+      const stripe = await this.requireStripe();
+      const charge = await stripe.charges.retrieve(
+        order.stripe_charge_id,
+        undefined,
+        order.stripe_account_id
+          ? { stripeAccount: order.stripe_account_id }
+          : undefined,
+      );
+      if (!charge.refunded && charge.amount_refunded === 0) return false;
+      // Reuse the webhook path so both routes apply identical effects.
+      await this.onChargeRefunded(charge as StripeCharge);
+      return charge.refunded;
+    } catch (err) {
+      this.logger.error(
+        `Refund sync failed for order ${orderId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return false;
+    }
   }
 
   /** Customer-facing: confirm own order's payment after card confirmation. */
@@ -1239,9 +1291,6 @@ export class PaymentsService {
    * store creator. The fulfillment status is left alone — the admin manages it.
    */
   private async onChargeRefunded(charge: StripeCharge) {
-    // Only act on full refunds; partial refunds keep the order payable state.
-    if (!charge.refunded) return;
-
     // Resolve the order: by charge id first, then by the PaymentIntent's
     // metadata (charges inherit the PI metadata), then by the PI id itself.
     const piId =
@@ -1268,9 +1317,9 @@ export class PaymentsService {
 
     // SECURITY: mirror onPaymentSucceeded — never trust the event payload
     // alone. Re-read the charge live from Stripe (from the connected account
-    // for direct charges) and only proceed when Stripe itself says it is
-    // fully refunded. A retrieval failure propagates (the webhook handler
-    // logs + rethrows so Stripe retries the delivery).
+    // for direct charges) and act on what Stripe itself reports. A retrieval
+    // failure propagates (the webhook handler logs + rethrows so Stripe
+    // retries the delivery).
     const stripe = await this.requireStripe();
     const live = await stripe.charges.retrieve(
       charge.id,
@@ -1279,45 +1328,62 @@ export class PaymentsService {
         ? { stripeAccount: order.stripe_account_id }
         : undefined,
     );
+
     if (!live.refunded) {
-      this.logger.warn(
-        `Ignoring charge.refunded for order ${order.id}: live charge is not fully refunded`,
-      );
+      // Partial refund: the order stands, but the money movement is recorded
+      // so it isn't invisible to the creator and admin.
+      if (live.amount_refunded > 0) {
+        const amount = fromStripeAmount(live.amount_refunded, live.currency);
+        const recorded = await this.orders.recordPartialRefund(
+          order.id,
+          amount,
+          live.currency,
+        );
+        if (recorded.changed) {
+          await this.notifyStoreCreator(
+            order.store_id,
+            'order_refunded',
+            'Partial refund',
+            `${amount} ${live.currency.toUpperCase()} was refunded on order ${order.order_number}.`,
+            order.id,
+          );
+        }
+      }
       return;
     }
 
-    // Idempotent: replaying the event leaves an already-refunded order alone.
-    const flip = await this.prisma.order.updateMany({
-      where: { id: order.id, payment_status: { not: 'refunded' } },
-      data: { payment_status: 'refunded' },
-    });
-    if (flip.count === 0) return;
+    // Full refund — OrdersService brings the order to the same state an admin
+    // REFUNDED transition would (status, commission, stock, customer email)
+    // and is idempotent, so a replayed event is a no-op.
+    const result = await this.orders.markOrderRefunded(order.id);
+    if (!result?.changed) return;
 
-    await this.prisma.orderTimeline.create({
-      data: {
-        order_id: order.id,
-        status: 'REFUNDED',
-        note: 'Payment fully refunded via Stripe',
-        actor: 'system',
-      },
-    });
+    await this.notifyStoreCreator(
+      order.store_id,
+      'order_refunded',
+      'Order refunded',
+      `The payment for order ${order.order_number} was fully refunded.`,
+      order.id,
+    );
+  }
 
-    // Notify the store creator so they know money went back to the customer.
-    if (order.store_id) {
-      const store = await this.prisma.store.findUnique({
-        where: { id: order.store_id },
-        select: { creator: { select: { user_id: true } } },
-      });
-      if (store?.creator) {
-        await this.notifications.create(
-          store.creator.user_id,
-          'order_refunded',
-          'Order refunded',
-          `The payment for order ${order.order_number} was fully refunded.`,
-          { order_id: order.id },
-        );
-      }
-    }
+  /** Best-effort in-app notification to the store's owner. */
+  private async notifyStoreCreator(
+    storeId: string | null,
+    type: string,
+    title: string,
+    body: string,
+    orderId: string,
+  ) {
+    if (!storeId) return;
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { creator: { select: { user_id: true } } },
+    });
+    if (!store?.creator) return;
+    await this.notifications.create(store.creator.user_id, type, title, body, {
+      order_id: orderId,
+    });
   }
 
   /** Store the charge's card brand/last4 + receipt URL on the order. */
