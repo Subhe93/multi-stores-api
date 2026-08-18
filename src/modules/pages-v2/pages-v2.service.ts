@@ -45,6 +45,41 @@ export class PagesV2Service {
     return store.id;
   }
 
+  /**
+   * The store's primary CONTENT locale — used to seed default titles for
+   * lazily provisioned system pages so they never show up as "Untitled".
+   */
+  private async storePrimaryLocale(storeId: string): Promise<string> {
+    const cfg = await this.prisma.storeLanguageConfig.findFirst({
+      where: { store_id: storeId },
+      select: { primary_locale: true },
+    });
+    return cfg?.primary_locale || 'en';
+  }
+
+  /**
+   * Localized default titles for the four provisioned system pages, keyed by
+   * page type then locale. Falls back to English for unknown locales.
+   */
+  private defaultPageTitle(type: PageType, locale: string): string {
+    const titles: Partial<Record<PageType, Record<string, string>>> = {
+      [PageType.HOME]: {
+        en: 'Home', ar: 'الرئيسية', de: 'Startseite', fr: 'Accueil', sv: 'Startsida', tr: 'Ana Sayfa',
+      },
+      [PageType.PRODUCT_TEMPLATE]: {
+        en: 'Product page', ar: 'صفحة المنتج', de: 'Produktseite', fr: 'Page produit', sv: 'Produktsida', tr: 'Ürün sayfası',
+      },
+      [PageType.HEADER]: {
+        en: 'Header', ar: 'الترويسة', de: 'Kopfzeile', fr: 'En-tête', sv: 'Sidhuvud', tr: 'Üst bilgi',
+      },
+      [PageType.FOOTER]: {
+        en: 'Footer', ar: 'التذييل', de: 'Fußzeile', fr: 'Pied de page', sv: 'Sidfot', tr: 'Alt bilgi',
+      },
+    };
+    const byLocale = titles[type];
+    return byLocale?.[locale] || byLocale?.en || 'Untitled';
+  }
+
   private async assertPageBelongsToStore(pageId: string, storeId: string) {
     const page = await this.prisma.page.findUnique({
       where: { id: pageId },
@@ -213,12 +248,16 @@ export class PagesV2Service {
       include: { translations: true },
     });
     if (existing) return existing;
+    const locale = await this.storePrimaryLocale(storeId);
     return this.prisma.page.create({
       data: {
         store_id: storeId,
         type: PageType.HOME,
         slug: null,
         is_required: true,
+        translations: {
+          create: [{ locale, title: this.defaultPageTitle(PageType.HOME, locale) }],
+        },
       },
       include: { translations: true },
     });
@@ -246,12 +285,16 @@ export class PagesV2Service {
     // 1:1 (gallery + price + bundles + variants + custom fields + shipping +
     // tabs). The older granular magic sections stay registered in the theme
     // for backward-compat with templates published before this change.
+    const locale = await this.storePrimaryLocale(storeId);
     return this.prisma.page.create({
       data: {
         store_id: storeId,
         type: PageType.PRODUCT_TEMPLATE,
         slug: null,
         is_required: true,
+        translations: {
+          create: [{ locale, title: this.defaultPageTitle(PageType.PRODUCT_TEMPLATE, locale) }],
+        },
         sections: {
           create: [
             {
@@ -284,12 +327,16 @@ export class PagesV2Service {
     });
     if (existing) return existing;
 
+    const locale = await this.storePrimaryLocale(storeId);
     return this.prisma.page.create({
       data: {
         store_id: storeId,
         type: PageType.HEADER,
         slug: null,
         is_required: true,
+        translations: {
+          create: [{ locale, title: this.defaultPageTitle(PageType.HEADER, locale) }],
+        },
         sections: {
           create: [
             {
@@ -324,12 +371,16 @@ export class PagesV2Service {
     });
     if (existing) return existing;
 
+    const locale = await this.storePrimaryLocale(storeId);
     return this.prisma.page.create({
       data: {
         store_id: storeId,
         type: PageType.FOOTER,
         slug: null,
         is_required: true,
+        translations: {
+          create: [{ locale, title: this.defaultPageTitle(PageType.FOOTER, locale) }],
+        },
         sections: {
           create: [
             {

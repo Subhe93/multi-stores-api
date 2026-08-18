@@ -80,6 +80,39 @@ export class StorefrontService {
     if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
     const themeConfig = (store.theme_config as any) || {};
     const platformConfig = await this.prisma.platformConfig.findFirst();
+
+    // Builder (v2) static pages that are live. A legacy page migrated into the
+    // builder is deleted from static_pages, so without this merge it silently
+    // vanishes from the storefront nav (header/footer links). "Live" for v2
+    // means a published snapshot exists — the status column is not consulted
+    // (see getPublishedPage). On slug collision the v2 page wins because the
+    // storefront page route also prefers the v2 snapshot.
+    const v2StaticPages = await this.prisma.page.findMany({
+      where: {
+        store_id: store.id,
+        type: 'STATIC',
+        slug: { not: null },
+        published_version_id: { not: null },
+      },
+      select: {
+        slug: true,
+        sort_order: true,
+        translations: { select: { locale: true, title: true } },
+      },
+      orderBy: { sort_order: 'asc' },
+    });
+    const v2Slugs = new Set(v2StaticPages.map((p) => p.slug));
+    const mergedPages = [
+      ...v2StaticPages.map((p) => ({
+        slug: p.slug as string,
+        sort_order: p.sort_order,
+        translations: p.translations
+          .filter((t) => !!t.title)
+          .map((t) => ({ locale: t.locale, title: t.title as string })),
+      })),
+      ...store.static_pages.filter((p) => !v2Slugs.has(p.slug)),
+    ];
+
     return {
       ...store,
       // Independent stores may price in their own currency; everyone else
@@ -100,7 +133,7 @@ export class StorefrontService {
             // so the card option must not be offered.
             store.creator.stripe_account_type !== 'standard' &&
             store.creator.stripe_payouts_enabled,
-      pages: store.static_pages,
+      pages: mergedPages,
       // New theme system: storefront resolves the registry by theme_key and
       // merges theme_customizations on top.
       theme_key: (store as any).theme_key || 'minimal',
@@ -686,7 +719,7 @@ export class StorefrontService {
     // + lastmod, so we project a thin shape. Independent stores never expose
     // custom products, so their sitemap lists own products only (mirrors
     // getProducts).
-    const [ownProducts, customProducts] = await Promise.all([
+    const [ownProducts, customProducts, collections, legalPages] = await Promise.all([
       this.prisma.product.findMany({
         where: { creator_id: store.creator.id, status: 'PUBLISHED' },
         select: {
@@ -703,6 +736,17 @@ export class StorefrontService {
               translations: { select: { locale: true, slug: true } },
             },
           }),
+      // Collections are linkable, indexable storefront pages but were missing
+      // from the sitemap entirely.
+      this.prisma.creatorCategory.findMany({
+        where: { creator_id: store.creator.id, is_active: true },
+        select: { slug: true, updated_at: true },
+      }),
+      // Legal pages are platform content rendered under each store's own
+      // /legal/{slug}, so they belong in the store's sitemap too.
+      this.prisma.legalPage.findMany({
+        select: { slug: true, updated_at: true },
+      }),
     ]);
 
     return {
@@ -724,12 +768,17 @@ export class StorefrontService {
         .map((p) => ({ slug: p.slug!, lastmod: p.updated_at })),
       products: [...ownProducts, ...customProducts]
         .map((p) => {
-          // Pick the first translation that has a slug; sitemap doesn't care
-          // which locale it came from since it'll emit alternates for all.
-          const t = p.translations.find((tr) => !!tr.slug);
+          // The sitemap's canonical is the PRIMARY-locale URL, so the slug has
+          // to be the primary locale's. Picking whichever translation happened
+          // to have one first emitted a canonical in an arbitrary language.
+          const t =
+            p.translations.find((tr) => tr.locale === primaryLocale && !!tr.slug) ||
+            p.translations.find((tr) => !!tr.slug);
           return t ? { slug: t.slug!, lastmod: p.updated_at } : null;
         })
         .filter((p): p is { slug: string; lastmod: Date } => !!p),
+      collections: collections.map((c) => ({ slug: c.slug, lastmod: c.updated_at })),
+      legal_pages: legalPages.map((p) => ({ slug: p.slug, lastmod: p.updated_at })),
     };
   }
 

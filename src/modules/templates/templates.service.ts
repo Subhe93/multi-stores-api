@@ -97,7 +97,7 @@ export class TemplatesService {
         // Snapshot the current page before the destructive replace so the
         // creator can undo the import from the builder's History/restore.
         if (existingId) await this.snapshotPage(tx, existingId, backupLabel);
-        const page = await this.upsertPage(tx, storeId, kitPage, existingId);
+        const page = await this.upsertPage(tx, storeId, kitPage, existingId, locales, kit.fallbackLocale);
         await tx.pageSection.deleteMany({ where: { page_id: page.id } });
 
         let order = 0;
@@ -285,12 +285,16 @@ export class TemplatesService {
   }
 
   /** Create the page if absent (by the pre-resolved id) and upsert its
-   *  translations. */
+   *  translations. Titles are re-keyed to the STORE's locales (like section
+   *  content is) so a German store gets its page titles under `de`, not just
+   *  the kit's declared locale. */
   private async upsertPage(
     tx: Prisma.TransactionClient,
     storeId: string,
     kitPage: KitPage,
     existingId: string | null,
+    locales: string[],
+    fallbackLocale: string,
   ) {
     const page =
       (existingId ? { id: existingId } : null) ??
@@ -306,13 +310,17 @@ export class TemplatesService {
       }));
 
     if (kitPage.translations?.length) {
-      for (const tr of kitPage.translations) {
+      const byLocale = new Map(kitPage.translations.map((t) => [t.locale, t]));
+      const fallback = byLocale.get(fallbackLocale) ?? kitPage.translations[0];
+      for (const locale of locales) {
+        const tr = byLocale.get(locale) ?? fallback;
+        if (!tr) continue;
         await tx.pageTranslation.upsert({
-          where: { page_id_locale: { page_id: page.id, locale: tr.locale } },
+          where: { page_id_locale: { page_id: page.id, locale } },
           update: { title: tr.title, meta_title: tr.meta_title, meta_description: tr.meta_description },
           create: {
             page_id: page.id,
-            locale: tr.locale,
+            locale,
             title: tr.title,
             meta_title: tr.meta_title,
             meta_description: tr.meta_description,
