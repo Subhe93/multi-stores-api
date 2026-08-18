@@ -6,6 +6,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
+import { resolveVariantImage } from '../../common/catalog/variant-image.util';
 import { validateBundleEconomics } from '../bundles/bundle-economics.util';
 
 @Injectable()
@@ -64,6 +65,9 @@ export class CartService {
       let imageUrl: string | null = null;
       let variantLabel: string | null = null;
       let currency = platformCurrency;
+      // Per-value image map for the product behind this line, read once and
+      // used when the chosen variant is resolved further down.
+      let productOptionConfig: unknown = null;
 
       if (item.custom_product_id) {
         // Custom product: fetch from CustomProduct with mockup images and base product
@@ -83,13 +87,19 @@ export class CartService {
             },
           },
         });
+        // Selected in the same round-trip; used only when the creator has not
+        // uploaded a mockup (see the image resolution below).
+        const cpOptionConfig = cp?.product?.variant_option_config ?? null;
 
         if (cp) {
           title =
             this.pickTranslation(cp.translations, locale)?.title ||
             this.pickTranslation(cp.product.translations, locale)?.title ||
             null;
-          imageUrl = cp.mockup_images[0]?.url || cp.product.images[0]?.url || null;
+          // The creator's own mockup is their design of this product and wins
+          // over a per-colour photo of the blank; the colour image only stands
+          // in when there is no mockup.
+          imageUrl = cp.mockup_images[0]?.url || null;
 
           // Resolve the chosen variant's adjustment (if any) up front so the
           // pricing math below can use it for PER_VARIANT/MARGIN. This mirrors
@@ -98,10 +108,18 @@ export class CartService {
           if (item.variant_id) {
             const v = await this.prisma.productVariant.findUnique({
               where: { id: item.variant_id },
-              select: { price_adjustment: true },
+              select: { price_adjustment: true, options: true, images: true },
             });
             variantAdjustment = Number(v?.price_adjustment || 0);
+            if (!imageUrl && v) {
+              imageUrl = resolveVariantImage({
+                optionConfig: cpOptionConfig,
+                variantOptions: v.options,
+                variantImages: v.images,
+              });
+            }
           }
+          imageUrl = imageUrl || cp.product.images[0]?.url || null;
 
           switch (cp.pricing_type) {
             case 'SINGLE':
@@ -142,6 +160,7 @@ export class CartService {
         if (product) {
           title = this.pickTranslation(product.translations, locale)?.title || null;
           price = Number(product.base_price);
+          productOptionConfig = product.variant_option_config;
           imageUrl = product.images[0]?.url || null;
 
           // If no featured image, get the first image
@@ -158,11 +177,22 @@ export class CartService {
       if (item.variant_id) {
         const variant = await this.prisma.productVariant.findUnique({
           where: { id: item.variant_id },
+          include: { images: true },
         });
 
         if (variant) {
           if (!item.custom_product_id) {
             price = price + Number(variant.price_adjustment);
+
+            // Show what the buyer picked, not the generic product shot: the
+            // per-value image the creator set for this colour, else an image
+            // attached to this variant. Falls through to the product image.
+            const variantImage = resolveVariantImage({
+              optionConfig: productOptionConfig,
+              variantOptions: variant.options,
+              variantImages: variant.images,
+            });
+            if (variantImage) imageUrl = variantImage;
           }
           if (variant.options && typeof variant.options === 'object') {
             const opts = variant.options as Record<string, string>;

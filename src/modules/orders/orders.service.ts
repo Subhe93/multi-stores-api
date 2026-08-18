@@ -21,6 +21,7 @@ import { ShippingService } from '../shipping/shipping.service';
 import { MailService } from '../mail/mail.service';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import { resolveStoreCurrency } from '../../common/money/currency.util';
+import { resolveVariantImage } from '../../common/catalog/variant-image.util';
 
 function deriveCommissionStatus(orderStatus: OrderStatus): CommissionStatus {
   if (orderStatus === OrderStatus.DELIVERED) return CommissionStatus.COMPLETED;
@@ -107,6 +108,9 @@ export class OrdersService {
       },
       variant: {
         include: {
+          // Images attached to this specific variant, used when resolving the
+          // line's display image (see resolveOrderItemImage).
+          images: true,
           product: {
             include: {
               translations: true,
@@ -138,6 +142,52 @@ export class OrdersService {
       },
     },
   };
+
+  /**
+   * The image that represents an order line, resolved once here so the
+   * storefront, the dashboard and the emails can't drift apart:
+   * the creator's mockup (their design of this product) wins, then the image
+   * for the option value the buyer chose (their colour), then the product's
+   * own photo.
+   *
+   * Resolved live from the current catalogue, matching how every other order
+   * image already behaves — changing a colour photo later also changes it on
+   * past orders.
+   */
+  private resolveOrderItemImage(item: any): string | null {
+    const mockup = item?.custom_product?.mockup_images?.[0]?.url;
+    if (mockup) return mockup;
+
+    const variantImage = resolveVariantImage({
+      optionConfig:
+        item?.variant?.product?.variant_option_config ??
+        item?.product?.variant_option_config ??
+        item?.custom_product?.product?.variant_option_config,
+      variantOptions: item?.variant?.options,
+      variantImages: item?.variant?.images,
+    });
+    if (variantImage) return variantImage;
+
+    return (
+      item?.product?.images?.[0]?.url ||
+      item?.variant?.product?.images?.[0]?.url ||
+      item?.custom_product?.product?.images?.[0]?.url ||
+      null
+    );
+  }
+
+  /** Stamp every line of an order with its resolved display image. */
+  private withItemImages<T extends { items?: unknown } | null>(order: T): T {
+    const items = (order as { items?: unknown[] } | null)?.items;
+    if (!order || !Array.isArray(items)) return order;
+    return {
+      ...(order as object),
+      items: items.map((it) => ({
+        ...(it as object),
+        image_url: this.resolveOrderItemImage(it),
+      })),
+    } as T;
+  }
 
   private generateOrderNumber(): string {
     const prefix = 'ORD';
@@ -953,7 +1003,10 @@ export class OrdersService {
       this.prisma.order.count({ where: { customer_id: customer.id } }),
     ]);
 
-    return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+    return {
+      data: data.map((o) => this.withItemImages(o)),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
   }
 
   async findByRole(userId: string, role: UserRole, page = 1, limit = 20, status?: OrderStatus) {
@@ -995,7 +1048,10 @@ export class OrdersService {
       this.prisma.order.count({ where }),
     ]);
 
-    return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+    return {
+      data: data.map((o) => this.withItemImages(o)),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
   }
 
   // Creator sees orders placed through their store
@@ -1030,7 +1086,10 @@ export class OrdersService {
       this.prisma.order.count({ where }),
     ]);
 
-    return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+    return {
+      data: data.map((o) => this.withItemImages(o)),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
   }
 
   // Generic fulfiller lookup (used by /orders/fulfiller/:id endpoint).
@@ -1073,7 +1132,10 @@ export class OrdersService {
       this.prisma.order.count({ where }),
     ]);
 
-    return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+    return {
+      data: data.map((o) => this.withItemImages(o)),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
   }
 
   async findById(id: string, userId?: string, role?: UserRole) {
@@ -1092,7 +1154,7 @@ export class OrdersService {
     if (!order) throw new NotFoundException({ code: 'ORDER_NOT_FOUND', message: 'Order not found' });
 
     // Admin sees everything (full payment details + all payouts).
-    if (role === UserRole.ADMIN) return order;
+    if (role === UserRole.ADMIN) return this.withItemImages(order);
 
     // Everyone else must be part of the order: the owning customer, a
     // provider fulfilling one of its items, or the creator of its store.
@@ -1130,7 +1192,7 @@ export class OrdersService {
       const fulfillerId = await this.resolveFulfillerId(userId, role);
       scopedPayouts = payouts.filter((p) => p.recipient_id === fulfillerId);
     }
-    return { ...safe, payouts: scopedPayouts };
+    return this.withItemImages({ ...safe, payouts: scopedPayouts });
   }
 
   async findAll(page = 1, limit = 20, status?: OrderStatus) {
@@ -1147,7 +1209,10 @@ export class OrdersService {
       this.prisma.order.count({ where }),
     ]);
 
-    return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+    return {
+      data: data.map((o) => this.withItemImages(o)),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
   }
 
   /**

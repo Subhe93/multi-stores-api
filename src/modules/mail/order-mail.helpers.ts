@@ -1,5 +1,6 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 import { currencyDecimals } from '../../common/money/currency.util';
+import { resolveVariantImage } from '../../common/catalog/variant-image.util';
 
 // Per-locale phrasing used inside order emails. The admin can edit the
 // surrounding template body in NotificationTemplate, but list headers/labels
@@ -163,7 +164,10 @@ export const orderWithItemsInclude = {
           images: { take: 1, orderBy: { sort_order: 'asc' } },
         },
       },
-      variant: true,
+      // `images` on the variant, plus variant_option_config on both product
+      // shapes, so the email can show the colour the buyer actually chose
+      // rather than the generic product shot.
+      variant: { include: { images: true } },
       custom_product: {
         include: {
           translations: true,
@@ -197,14 +201,16 @@ interface OrderItemForEmail {
   product?: {
     translations?: Translation[];
     images?: { url: string }[];
+    variant_option_config?: unknown;
   } | null;
   variant?: {
     options?: unknown;
+    images?: { url: string }[];
   } | null;
   custom_product?: {
     translations?: Translation[];
     mockup_images?: { url: string }[];
-    product?: { images?: { url: string }[] } | null;
+    product?: { images?: { url: string }[]; variant_option_config?: unknown } | null;
   } | null;
 }
 
@@ -237,8 +243,19 @@ export function renderOrderItems(
         pickTitle(item.custom_product?.translations, lang) ||
         pickTitle(item.product?.translations, lang) ||
         phrases.product;
+      // Same precedence the storefront and cart use: the creator's mockup
+      // first, then the image for the chosen option value (the colour the
+      // buyer picked), then the generic product shot.
+      const variantImage = resolveVariantImage({
+        optionConfig:
+          item.product?.variant_option_config ??
+          item.custom_product?.product?.variant_option_config,
+        variantOptions: item.variant?.options,
+        variantImages: item.variant?.images,
+      });
       const imgPath =
         item.custom_product?.mockup_images?.[0]?.url ||
+        variantImage ||
         item.custom_product?.product?.images?.[0]?.url ||
         item.product?.images?.[0]?.url;
       const imgUrl = imgPath ? absoluteUrl(imgPath, publicBase) : '';
