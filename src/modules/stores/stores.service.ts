@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, ConflictException, BadRequestException }
 import { Prisma, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
+import { OrdersService } from '../orders/orders.service';
 import {
   CreateStoreDto,
   UpdateStoreDto,
@@ -35,6 +36,7 @@ export class StoresService {
   constructor(
     private prisma: PrismaService,
     private readonly revalidation: RevalidationService,
+    private readonly ordersService: OrdersService,
   ) {}
 
   async create(userId: string, dto: CreateStoreDto) {
@@ -206,9 +208,16 @@ export class StoresService {
   async adminUpdateByCreatorId(creatorId: string, dto: AdminUpdateStoreDto) {
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creatorId },
-      select: { id: true },
+      select: { id: true, store_type: true },
     });
     if (!store) throw new NotFoundException({ code: 'STORE_NOT_FOUND', message: 'Store not found' });
+
+    const typeChanged = Boolean(dto.store_type) && dto.store_type !== store.store_type;
+    // The store's own currency only makes sense while it charges on its own
+    // account. Clear it on any switch so a later flip back to INDEPENDENT
+    // cannot silently re-activate a currency nobody re-confirmed — and so the
+    // marketplace phase never carries a stale value.
+    if (typeChanged) (dto as UpdateStoreDto).currency = '';
 
     if (dto.slug) {
       const conflict = await this.prisma.store.findFirst({
@@ -219,6 +228,17 @@ export class StoresService {
     }
 
     const data = normalizeStoreUpdate(dto);
+
+    // Same rule as the creator path: only an independent store owns its
+    // currency. Judged against the type the store will have AFTER this update.
+    const effectiveType = dto.store_type ?? store.store_type;
+    if (data.currency && effectiveType !== StoreType.INDEPENDENT) {
+      throw new BadRequestException({
+        code: 'STORE_CURRENCY_MARKETPLACE_ONLY',
+        message:
+          'Only independent stores can set their own currency. Marketplace stores use the platform currency.',
+      });
+    }
 
     if (data.custom_domain) {
       if (isReservedDomain(data.custom_domain)) {
@@ -241,6 +261,25 @@ export class StoresService {
         include: { language_config: true },
       }),
     );
+
+    // The commission split of an unpaid order is derived from the store type
+    // at payment time — but COD orders are never "paid" through Stripe, so
+    // without this sweep they would keep the old model's split forever.
+    // Paid orders are settled history and are never touched (the recompute
+    // itself refuses them).
+    if (typeChanged) {
+      const unpaid = await this.prisma.order.findMany({
+        where: { store_id: store.id, payment_status: { not: 'paid' } },
+        select: { id: true },
+      });
+      for (const order of unpaid) {
+        try {
+          await this.ordersService.recomputeCommissionForOrder(order.id);
+        } catch (err) {
+          console.error('[StoreTypeSwitch] commission recompute failed for', order.id, err);
+        }
+      }
+    }
 
     await this.revalidation.revalidateStoreBySlug(updated.slug);
 

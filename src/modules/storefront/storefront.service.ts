@@ -95,7 +95,11 @@ export class StorefrontService {
         store.store_type === StoreType.INDEPENDENT
           ? store.creator.stripe_account_type === 'standard' &&
             store.creator.stripe_charges_enabled
-          : store.creator.stripe_payouts_enabled,
+          : // Marketplace needs an account that can receive transfers — a
+            // Standard account left over from an independent phase cannot,
+            // so the card option must not be offered.
+            store.creator.stripe_account_type !== 'standard' &&
+            store.creator.stripe_payouts_enabled,
       pages: store.static_pages,
       // New theme system: storefront resolves the registry by theme_key and
       // merges theme_customizations on top.

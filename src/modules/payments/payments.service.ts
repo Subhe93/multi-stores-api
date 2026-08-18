@@ -339,18 +339,19 @@ export class PaymentsService {
     const party = await this.resolveParty(userId, role);
 
     const useStandard = party.kind === 'creator' && party.independentStore;
-    // Independent-store creators must charge cards directly on a Standard
-    // account, but an Express account cannot become Standard. If such a
-    // creator still holds a non-Standard account (e.g. onboarded as Express
-    // before the store became independent), create a brand-new Standard
-    // account and point our records at it. The old account is left intact in
-    // Stripe — its historic transfers remain attached — we simply stop
-    // referencing it.
-    const replaceWithStandard =
+    // Stripe cannot convert an account's type in place, so a mismatch is fixed
+    // by creating a brand-new account of the right kind and pointing our
+    // records at it. This goes both ways: an independent-store creator stuck
+    // on Express (cannot take direct charges), and a marketplace creator stuck
+    // on Standard (created without the transfers capability, so payouts would
+    // fail after the platform captured the charge). The old account stays
+    // intact in Stripe — we simply stop referencing it.
+    const wantType = useStandard ? 'standard' : 'express';
+    const replaceMismatched =
       Boolean(party.stripeAccountId) &&
-      useStandard &&
-      party.accountType !== 'standard';
-    if (party.stripeAccountId && !replaceWithStandard) {
+      party.kind === 'creator' &&
+      party.accountType !== wantType;
+    if (party.stripeAccountId && !replaceMismatched) {
       return party.stripeAccountId;
     }
 
@@ -377,9 +378,9 @@ export class PaymentsService {
       account.id,
       useStandard ? 'standard' : 'express',
     );
-    if (replaceWithStandard) {
+    if (replaceMismatched) {
       // The stored flags described the OLD account — reset them so onboarding
-      // status reflects the brand-new (not yet onboarded) Standard account.
+      // status reflects the brand-new (not yet onboarded) account.
       await this.prisma.creator.update({
         where: { id: party.id },
         data: {
@@ -489,13 +490,18 @@ export class PaymentsService {
       payouts_enabled: party.payoutsEnabled,
       onboarding_completed: party.onboardingCompleted,
       account_type: party.accountType,
-      // An independent store cannot charge on a legacy Express account. The
-      // dashboard uses this to show a "reconnect required" state; the next
-      // onboarding-link request replaces the account with a Standard one.
+      // Account type must match the store model in BOTH directions: an
+      // independent store cannot charge on a legacy Express account, and a
+      // marketplace store cannot receive transfers on a Standard account (it
+      // was created without the transfers capability, so payouts would fail
+      // after the platform already captured the charge). The dashboard shows a
+      // "reconnect required" state; the next onboarding-link request replaces
+      // the account with the right kind.
       requires_relink:
-        party.independentStore &&
         Boolean(party.stripeAccountId) &&
-        party.accountType !== 'standard',
+        (party.independentStore
+          ? party.accountType !== 'standard'
+          : party.accountType === 'standard'),
     };
   }
 
@@ -713,12 +719,25 @@ export class PaymentsService {
         where: { id: storeId },
         select: {
           creator: {
-            select: { stripe_account_id: true, stripe_payouts_enabled: true },
+            select: {
+              stripe_account_id: true,
+              stripe_account_type: true,
+              stripe_payouts_enabled: true,
+            },
           },
         },
       });
       const creator = store?.creator;
       if (!creator?.stripe_account_id || !creator.stripe_payouts_enabled) {
+        throw new BadRequestException(
+          'This store cannot accept card payments yet. Please choose cash on delivery.',
+        );
+      }
+      // A Standard account left over from an independent phase has payouts
+      // enabled but was created without the transfers capability, so the
+      // platform would capture the charge and then fail to pay the creator.
+      // Refuse the card up front instead of stranding the money.
+      if (creator.stripe_account_type === 'standard') {
         throw new BadRequestException(
           'This store cannot accept card payments yet. Please choose cash on delivery.',
         );

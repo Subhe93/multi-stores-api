@@ -466,7 +466,7 @@ export class MailService {
         if (!customerEmail) return;
         await this.sendOrderDelivered(
           customerEmail,
-          { orderNumber, orderUrl, itemsHtml: items_html, itemsText: items_text },
+          { ...brand, orderNumber, orderUrl, itemsHtml: items_html, itemsText: items_text },
           locale,
         );
         return;

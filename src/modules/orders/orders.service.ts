@@ -1102,11 +1102,13 @@ export class OrdersService {
       throw new NotFoundException({ code: 'ORDER_NOT_FOUND', message: 'Order not found' });
     }
 
-    // Everyone else: hide the customer's card/charge/receipt details, and scope
-    // payouts to the requesting fulfiller (a provider/creator sees only theirs).
+    // Everyone else: hide the customer's card/charge/receipt details and the
+    // creator's connected-account id, and scope payouts to the requesting
+    // fulfiller (a provider/creator sees only theirs).
     const {
       stripe_charge_id: _c,
       stripe_payment_id: _p,
+      stripe_account_id: _a,
       card_brand: _b,
       card_last4: _l,
       receipt_url: _r,
@@ -1115,6 +1117,7 @@ export class OrdersService {
     } = order;
     void _c;
     void _p;
+    void _a;
     void _b;
     void _l;
     void _r;
