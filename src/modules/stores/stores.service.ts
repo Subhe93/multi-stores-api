@@ -380,10 +380,29 @@ export class StoresService {
     const store = await this.prisma.store.findUnique({ where: { creator_id: creator.id } });
     if (!store) throw new NotFoundException({ code: 'STORE_NOT_FOUND', message: 'Store not found' });
 
+    // Normalize: the secondary list must never contain the primary locale,
+    // duplicates, or empty values — a duplicated primary makes single-language
+    // stores render language switchers and breaks translate-target lists.
+    const existing = await this.prisma.storeLanguageConfig.findUnique({
+      where: { store_id: store.id },
+      select: { primary_locale: true },
+    });
+    const effectivePrimary = dto.primary_locale ?? existing?.primary_locale ?? 'en';
+    const normalized = {
+      ...dto,
+      ...(dto.secondary_locales
+        ? {
+            secondary_locales: Array.from(
+              new Set(dto.secondary_locales.filter((l) => l && l !== effectivePrimary)),
+            ),
+          }
+        : {}),
+    };
+
     const config = await this.prisma.storeLanguageConfig.upsert({
       where: { store_id: store.id },
-      update: dto,
-      create: { store_id: store.id, ...dto },
+      update: normalized,
+      create: { store_id: store.id, ...normalized },
     });
 
     await this.revalidation.revalidateStoreById(store.id);
