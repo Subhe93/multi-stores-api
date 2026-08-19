@@ -416,12 +416,18 @@ export class StoresService {
 // so Prisma stores NULL (the @unique index disallows duplicate empty strings).
 function normalizeStoreUpdate(dto: UpdateStoreDto): UpdateStoreDto {
   let out = dto;
-  if (Object.prototype.hasOwnProperty.call(dto, 'custom_domain')) {
+  // "Field was sent" must be judged by value, not hasOwnProperty: the global
+  // ValidationPipe (transform: true) materializes EVERY declared DTO property
+  // on the instance, so hasOwnProperty is true even for fields the client
+  // never sent — which turned every partial store update (e.g. a currency-only
+  // save) into a silent NULL-wipe of custom_domain, and vice versa. JSON can't
+  // carry undefined, so undefined reliably means "not provided".
+  if (dto.custom_domain !== undefined) {
     const raw = (dto.custom_domain ?? '').trim().toLowerCase();
     out = { ...out, custom_domain: raw || null } as UpdateStoreDto;
   }
   // An empty currency means "go back to the platform default", which is NULL.
-  if (Object.prototype.hasOwnProperty.call(dto, 'currency')) {
+  if (dto.currency !== undefined) {
     const raw = (dto.currency ?? '').trim().toUpperCase();
     out = { ...out, currency: raw || null } as UpdateStoreDto;
   }
