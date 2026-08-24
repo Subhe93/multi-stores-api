@@ -38,6 +38,76 @@ interface SmtpConfig {
   user?: string;
   pass?: string;
   from: string;
+  /** Set on the PLATFORM config only — used for fallback-sender branding. */
+  platformName?: string;
+}
+
+/**
+ * Force a display name onto an RFC-5322 from value, keeping the address part.
+ * "no-reply@x.com" or "Old Name <no-reply@x.com>" + "Acme" → "Acme" <no-reply@x.com>.
+ */
+function withDisplayName(from: string, name: string): string {
+  const clean = name.replace(/[\r\n"<>\\]/g, '').trim();
+  if (!clean) return from;
+  const match = from.match(/<([^<>]+)>\s*$/);
+  const address = (match ? match[1] : from).trim();
+  if (!address) return from;
+  return `"${clean}" <${address}>`;
+}
+
+/**
+ * Localized platform-attribution footer, appended ONLY when a store's email
+ * goes out through the PLATFORM sender (store has no SMTP of its own, or its
+ * SMTP failed). Soft product marketing, Shopify-style — a store sending under
+ * its own SMTP stays fully white-label.
+ */
+const FOOTER_PHRASES: Record<string, { sentTo: string; powered: string }> = {
+  en: { sentTo: 'This email was sent to {email} on behalf of {store}.', powered: 'Delivered by {platform}' },
+  ar: { sentTo: 'أُرسل هذا البريد إلى {email} بالنيابة عن متجر {store}.', powered: 'يُرسل عبر منصة {platform}' },
+  tr: { sentTo: 'Bu e-posta {store} adına {email} adresine gönderildi.', powered: '{platform} tarafından iletildi' },
+  de: { sentTo: 'Diese E-Mail wurde im Auftrag von {store} an {email} gesendet.', powered: 'Zugestellt über {platform}' },
+  fr: { sentTo: 'Cet e-mail a été envoyé à {email} de la part de {store}.', powered: 'Distribué par {platform}' },
+  sv: { sentTo: 'Det här mejlet skickades till {email} på uppdrag av {store}.', powered: 'Levereras av {platform}' },
+};
+
+function escapeHtml(v: string): string {
+  return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Token substitution via split/join — String.replace interprets `$&` / `$'`
+// patterns in the replacement string, which user-controlled names/emails could
+// contain and silently corrupt the output.
+function sub(template: string, token: string, value: string): string {
+  return template.split(token).join(value);
+}
+
+function appendPlatformFooter(
+  html: string,
+  platformName: string,
+  footer: { storeName?: string; customerEmail?: string; locale?: string },
+): string {
+  const lang = (footer.locale || 'en').slice(0, 2).toLowerCase();
+  const phrases = FOOTER_PHRASES[lang] || FOOTER_PHRASES.en!;
+  const lines: string[] = [];
+  if (footer.customerEmail && footer.storeName) {
+    lines.push(
+      sub(
+        sub(phrases.sentTo, '{email}', escapeHtml(footer.customerEmail)),
+        '{store}',
+        escapeHtml(footer.storeName),
+      ),
+    );
+  }
+  lines.push(sub(phrases.powered, '{platform}', `<strong>${escapeHtml(platformName)}</strong>`));
+  const block =
+    `<div dir="${lang === 'ar' ? 'rtl' : 'ltr'}" style="max-width:560px;margin:16px auto 0;padding:12px 16px 20px;border-top:1px solid #e4e4e7;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.7;color:#a1a1aa;text-align:center;">` +
+    lines.map((l) => `<p style="margin:2px 0;">${l}</p>`).join('') +
+    `</div>`;
+  // Keep the document valid when the template is a full HTML page. A replacer
+  // FUNCTION sidesteps `$`-pattern interpretation in the block content.
+  const closing = /<\/body>/i;
+  if (closing.test(html)) return html.replace(closing, () => `${block}</body>`);
+  return html + block;
 }
 
 /**
@@ -101,16 +171,23 @@ export class MailService {
         smtp_user: true,
         smtp_pass: true,
         mail_from: true,
+        platform_name: true,
       },
     });
+
+    // The admin-configurable platform name doubles as the sender display name
+    // for every platform-sent email (Admin → Settings → Platform Info).
+    const platformName = cfg?.platform_name?.trim() || 'Multi Stores';
 
     // Pick a single source so host/port/secure/user/pass never mix DB + env:
     // if the admin has saved a host in the DB, the whole SMTP config comes from
     // the DB; otherwise it all comes from the environment.
-    const from =
+    const from = withDisplayName(
       cfg?.mail_from ||
-      this.config.get<string>('MAIL_FROM') ||
-      'Multi Stores <no-reply@localhost>';
+        this.config.get<string>('MAIL_FROM') ||
+        'no-reply@localhost',
+      platformName,
+    );
 
     if (cfg?.smtp_host) {
       return {
@@ -121,6 +198,7 @@ export class MailService {
         // Password is encrypted at rest; decrypt before handing it to nodemailer.
         pass: this.crypto.decrypt(cfg.smtp_pass) || undefined,
         from,
+        platformName,
       };
     }
 
@@ -133,6 +211,7 @@ export class MailService {
       user: this.config.get<string>('SMTP_USER') || undefined,
       pass: this.config.get<string>('SMTP_PASS') || undefined,
       from,
+      platformName,
     };
   }
 
@@ -176,6 +255,12 @@ export class MailService {
     text?: string;
     /** Send under this store's own sender when it has one configured. */
     storeId?: string;
+    /**
+     * Store/customer context for the platform-attribution footer. Applied ONLY
+     * when the message actually goes out through the platform sender — a store
+     * sending under its own SMTP stays fully white-label.
+     */
+    brandFooter?: { storeName?: string; customerEmail?: string; locale?: string };
   }): Promise<{ sent: boolean }> {
     const storeCfg = opts.storeId ? await this.resolveStoreConfig(opts.storeId) : null;
 
@@ -197,7 +282,11 @@ export class MailService {
       );
       return { sent: false };
     }
-    return { sent: await this.trySend(platformCfg, opts) };
+    const html =
+      opts.brandFooter && platformCfg.platformName
+        ? appendPlatformFooter(opts.html, platformCfg.platformName, opts.brandFooter)
+        : opts.html;
+    return { sent: await this.trySend(platformCfg, { ...opts, html }) };
   }
 
   private async trySend(
@@ -266,8 +355,9 @@ export class MailService {
       items_html: data.itemsHtml ?? '',
       items_text: data.itemsText ?? '',
     }, data.storeId);
-    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId });
-    return this.send({ to, ...orderConfirmationEmail(data), storeId: data.storeId });
+    const brandFooter = { storeName: data.storeName, customerEmail: to, locale };
+    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+    return this.send({ to, ...orderConfirmationEmail(data), storeId: data.storeId, brandFooter });
   }
 
   async sendOrderShipped(to: string, data: OrderShippedData, locale?: string) {
@@ -284,8 +374,9 @@ export class MailService {
       items_html: data.itemsHtml ?? '',
       items_text: data.itemsText ?? '',
     }, data.storeId);
-    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId });
-    return this.send({ to, ...orderShippedEmail(data), storeId: data.storeId });
+    const brandFooter = { storeName: data.storeName, customerEmail: to, locale };
+    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+    return this.send({ to, ...orderShippedEmail(data), storeId: data.storeId, brandFooter });
   }
 
   async sendOrderDelivered(to: string, data: OrderDeliveredData, locale?: string) {
@@ -300,8 +391,9 @@ export class MailService {
       items_html: data.itemsHtml ?? '',
       items_text: data.itemsText ?? '',
     }, data.storeId);
-    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId });
-    return this.send({ to, ...orderDeliveredEmail(data), storeId: data.storeId });
+    const brandFooter = { storeName: data.storeName, customerEmail: to, locale };
+    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+    return this.send({ to, ...orderDeliveredEmail(data), storeId: data.storeId, brandFooter });
   }
 
   async sendOrderCancelled(to: string, data: OrderCancelledData, locale?: string) {
@@ -317,8 +409,9 @@ export class MailService {
       items_html: data.itemsHtml ?? '',
       items_text: data.itemsText ?? '',
     }, data.storeId);
-    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId });
-    return this.send({ to, ...orderCancelledEmail(data), storeId: data.storeId });
+    const brandFooter = { storeName: data.storeName, customerEmail: to, locale };
+    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+    return this.send({ to, ...orderCancelledEmail(data), storeId: data.storeId, brandFooter });
   }
 
   async sendOrderRefunded(to: string, data: OrderRefundedData, locale?: string) {
@@ -334,8 +427,9 @@ export class MailService {
       items_html: data.itemsHtml ?? '',
       items_text: data.itemsText ?? '',
     }, data.storeId);
-    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId });
-    return this.send({ to, ...orderRefundedEmail(data), storeId: data.storeId });
+    const brandFooter = { storeName: data.storeName, customerEmail: to, locale };
+    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+    return this.send({ to, ...orderRefundedEmail(data), storeId: data.storeId, brandFooter });
   }
 
   async sendNewOrderToOwner(to: string, data: NewOrderOwnerData, locale?: string) {
@@ -351,8 +445,11 @@ export class MailService {
       items_html: data.itemsHtml ?? '',
       items_text: data.itemsText ?? '',
     }, data.storeId);
-    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId });
-    return this.send({ to, ...newOrderOwnerEmail(data), storeId: data.storeId });
+    // Owner notification: platform attribution only (no "sent to" line — the
+    // recipient is the store owner, not a customer).
+    const brandFooter = { locale };
+    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+    return this.send({ to, ...newOrderOwnerEmail(data), storeId: data.storeId, brandFooter });
   }
 
   // Signup is a platform event, not a store one — it goes out under the
