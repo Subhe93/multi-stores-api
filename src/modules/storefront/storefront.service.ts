@@ -873,19 +873,31 @@ export class StorefrontService {
    * there is no published version yet — caller decides whether to fall back
    * to default content.
    *
-   * - HOME and PRODUCT_TEMPLATE: there's one per store, no slug needed.
+   * - HOME, PRODUCT_TEMPLATE, HEADER, FOOTER, CATALOG_TEMPLATE and
+   *   COLLECTION_TEMPLATE: there's one per store, no slug needed.
    * - STATIC and LANDING: identified by (store, slug).
    */
   async getPublishedPage(
     storeSlug: string,
     opts:
-      | { type: 'HOME' | 'PRODUCT_TEMPLATE' | 'HEADER' | 'FOOTER' }
+      | {
+          type:
+            | 'HOME'
+            | 'PRODUCT_TEMPLATE'
+            | 'HEADER'
+            | 'FOOTER'
+            | 'CATALOG_TEMPLATE'
+            | 'COLLECTION_TEMPLATE';
+        }
       | { type: 'STATIC' | 'LANDING'; slug: string },
   ) {
     const store = await this.prisma.store.findUnique({ where: { slug: storeSlug } });
     if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
 
-    const whereType: any = { store_id: store.id, type: opts.type };
+    // Only rows with a published snapshot qualify. Singleton types are
+    // looked up by (store, type) alone, so if a duplicate draft row ever
+    // exists (e.g. two concurrent ensures) the published one still wins.
+    const whereType: any = { store_id: store.id, type: opts.type, published_version_id: { not: null } };
     if (opts.type === 'STATIC' || opts.type === 'LANDING') whereType.slug = opts.slug;
 
     const page = await this.prisma.page.findFirst({

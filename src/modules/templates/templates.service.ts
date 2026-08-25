@@ -11,6 +11,8 @@ const SINGLETON_TYPES: PageType[] = [
   PageType.HEADER,
   PageType.FOOTER,
   PageType.PRODUCT_TEMPLATE,
+  PageType.CATALOG_TEMPLATE,
+  PageType.COLLECTION_TEMPLATE,
 ];
 
 export interface ImportKitResult {

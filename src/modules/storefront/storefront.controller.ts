@@ -96,6 +96,19 @@ export class StorefrontController {
     return this.storefrontService.getPublishedPage(slug, { type: 'PRODUCT_TEMPLATE' });
   }
 
+  // Listing templates — published snapshots for the /products catalog and the
+  // /collections/[handle] pages. Return null when nothing is published yet;
+  // the storefront then renders its built-in listing markup.
+  @Get(':slug/v2/catalog-template')
+  getCatalogTemplate(@Param('slug') slug: string) {
+    return this.storefrontService.getPublishedPage(slug, { type: 'CATALOG_TEMPLATE' });
+  }
+
+  @Get(':slug/v2/collection-template')
+  getCollectionTemplate(@Param('slug') slug: string) {
+    return this.storefrontService.getPublishedPage(slug, { type: 'COLLECTION_TEMPLATE' });
+  }
+
   // Store-wide chrome — published snapshots of the HEADER and FOOTER pages.
   // Returns null when the creator hasn't published the chrome yet; the
   // storefront falls back to its built-in header/footer in that case.

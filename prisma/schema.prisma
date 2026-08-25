@@ -997,6 +997,10 @@ enum PageType {
   // across every storefront page via StoreLayout.
   HEADER
   FOOTER
+  // Listing templates. One per store, no slug, never deletable. Rendered by
+  // the storefront /products catalog and every /collections/[handle] page.
+  CATALOG_TEMPLATE
+  COLLECTION_TEMPLATE
 }
 
 // ── Navigation menus (WordPress-style) ─────────────────────────

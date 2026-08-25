@@ -17,6 +17,26 @@ import {
   UpdateSectionDto,
 } from './dto/pages.dto';
 
+/**
+ * Default settings of the `product-listing` magic section. Used to seed both
+ * the CATALOG_TEMPLATE and the COLLECTION_TEMPLATE on first ensure. Must stay
+ * in parity with the section's `defaultSettings` in the web theme definition.
+ */
+const PRODUCT_LISTING_DEFAULT_SETTINGS = {
+  show_hero: true,
+  hero_height: 'auto',
+  show_count: true,
+  show_search: true,
+  show_collections: true,
+  show_sort: true,
+  show_description: true,
+  show_back_link: true,
+  aspect: 'square',
+  columns: 4,
+  columns_tablet: 3,
+  columns_mobile: 2,
+};
+
 @Injectable()
 export class PagesV2Service {
   constructor(
@@ -58,7 +78,7 @@ export class PagesV2Service {
   }
 
   /**
-   * Localized default titles for the four provisioned system pages, keyed by
+   * Localized default titles for the provisioned system pages, keyed by
    * page type then locale. Falls back to English for unknown locales.
    */
   private defaultPageTitle(type: PageType, locale: string): string {
@@ -74,6 +94,12 @@ export class PagesV2Service {
       },
       [PageType.FOOTER]: {
         en: 'Footer', ar: 'التذييل', de: 'Fußzeile', fr: 'Pied de page', sv: 'Sidfot', tr: 'Alt bilgi',
+      },
+      [PageType.CATALOG_TEMPLATE]: {
+        en: 'All products', ar: 'كل المنتجات', de: 'Alle Produkte', fr: 'Tous les produits', sv: 'Alla produkter', tr: 'Tüm ürünler',
+      },
+      [PageType.COLLECTION_TEMPLATE]: {
+        en: 'Collection page', ar: 'صفحة التصنيف', de: 'Kollektionsseite', fr: 'Page de collection', sv: 'Kollektionssida', tr: 'Koleksiyon sayfası',
       },
     };
     const byLocale = titles[type];
@@ -129,14 +155,19 @@ export class PagesV2Service {
     const storeId = await this.resolveCreatorStoreId(userId);
 
     // Slug rules per page type:
-    // - HOME, PRODUCT_TEMPLATE, HEADER, FOOTER: one per store, no slug.
+    // - HOME, PRODUCT_TEMPLATE, HEADER, FOOTER, CATALOG_TEMPLATE,
+    //   COLLECTION_TEMPLATE: one per store, no slug.
     //   HEADER/FOOTER are storefront-wide chrome — rendered on every page.
+    //   CATALOG_TEMPLATE serves /products, COLLECTION_TEMPLATE serves every
+    //   /collections/[handle].
     // - STATIC and LANDING: require slug
     const slugless =
       dto.type === PageType.HOME ||
       dto.type === PageType.PRODUCT_TEMPLATE ||
       dto.type === PageType.HEADER ||
-      dto.type === PageType.FOOTER;
+      dto.type === PageType.FOOTER ||
+      dto.type === PageType.CATALOG_TEMPLATE ||
+      dto.type === PageType.COLLECTION_TEMPLATE;
     if (slugless && dto.slug) {
       throw new BadRequestException(`${dto.type} page cannot have a slug`);
     }
@@ -229,7 +260,9 @@ export class PagesV2Service {
       page?.type === PageType.HOME ||
       page?.type === PageType.PRODUCT_TEMPLATE ||
       page?.type === PageType.HEADER ||
-      page?.type === PageType.FOOTER
+      page?.type === PageType.FOOTER ||
+      page?.type === PageType.CATALOG_TEMPLATE ||
+      page?.type === PageType.COLLECTION_TEMPLATE
     ) {
       throw new BadRequestException({ code: 'PAGE_CANNOT_BE_DELETED', message: 'This page cannot be deleted' });
     }
@@ -397,6 +430,74 @@ export class PagesV2Service {
         },
       },
       include: { translations: true },
+    });
+  }
+
+  /**
+   * Lazy provisioning for the CATALOG_TEMPLATE singleton (serves /products).
+   * Seeds with the single `product-listing` magic section so a freshly
+   * provisioned template renders the same catalog body as the hardcoded
+   * storefront route. Creators can add regular sections around it.
+   */
+  async ensureCatalogTemplate(userId: string) {
+    return this.ensureListingTemplate(userId, PageType.CATALOG_TEMPLATE);
+  }
+
+  /**
+   * Lazy provisioning for the COLLECTION_TEMPLATE singleton (serves every
+   * /collections/[handle]). Same seed as the catalog template — the section
+   * reads the current collection from the route-injected listing context.
+   */
+  async ensureCollectionTemplate(userId: string) {
+    return this.ensureListingTemplate(userId, PageType.COLLECTION_TEMPLATE);
+  }
+
+  /**
+   * Shared find-or-create for the two listing templates. Both are slugless,
+   * required singletons seeded with one `product-listing` section carrying
+   * PRODUCT_LISTING_DEFAULT_SETTINGS.
+   */
+  private async ensureListingTemplate(
+    userId: string,
+    type: typeof PageType.CATALOG_TEMPLATE | typeof PageType.COLLECTION_TEMPLATE,
+  ) {
+    const storeId = await this.resolveCreatorStoreId(userId);
+    const locale = await this.storePrimaryLocale(storeId);
+
+    // The (store_id, type, static_kind) unique index does not fire for these
+    // rows because static_kind is NULL, so two concurrent ensures (double
+    // click, two tabs) could both create a singleton. Serialise find-or-create
+    // per (store, type) with a transaction-scoped advisory lock.
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${storeId}:${type}`}))`;
+      const existing = await tx.page.findFirst({
+        where: { store_id: storeId, type },
+        include: { translations: true },
+        orderBy: { created_at: 'asc' },
+      });
+      if (existing) return existing;
+
+      return tx.page.create({
+        data: {
+          store_id: storeId,
+          type,
+          slug: null,
+          is_required: true,
+          translations: {
+            create: [{ locale, title: this.defaultPageTitle(type, locale) }],
+          },
+          sections: {
+            create: [
+              {
+                section_key: 'product-listing',
+                sort_order: 0,
+                settings: { ...PRODUCT_LISTING_DEFAULT_SETTINGS } as Prisma.InputJsonValue,
+              },
+            ],
+          },
+        },
+        include: { translations: true },
+      });
     });
   }
 

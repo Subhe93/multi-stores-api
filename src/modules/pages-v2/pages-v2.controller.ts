@@ -59,6 +59,19 @@ export class PagesV2Controller {
     return this.service.ensureFooter(userId);
   }
 
+  // Provision the creator's CATALOG_TEMPLATE (/products) if missing. Idempotent.
+  @Post('mine/catalog-template/ensure')
+  ensureCatalogTemplate(@CurrentUser('id') userId: string) {
+    return this.service.ensureCatalogTemplate(userId);
+  }
+
+  // Provision the creator's COLLECTION_TEMPLATE (/collections/[handle]) if
+  // missing. Idempotent.
+  @Post('mine/collection-template/ensure')
+  ensureCollectionTemplate(@CurrentUser('id') userId: string) {
+    return this.service.ensureCollectionTemplate(userId);
+  }
+
   @Get(':id')
   getById(@CurrentUser('id') userId: string, @Param('id') id: string) {
     return this.service.getById(userId, id);
