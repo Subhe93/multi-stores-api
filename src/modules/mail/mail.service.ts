@@ -248,6 +248,17 @@ export class MailService {
     return (await this.resolveConfig()) !== null;
   }
 
+  /**
+   * Admin-configured platform name — the single source every email inherits
+   * its platform branding from, independent of whether SMTP is configured.
+   */
+  private async platformDisplayName(): Promise<string> {
+    const cfg = await this.prisma.platformConfig.findFirst({
+      select: { platform_name: true },
+    });
+    return cfg?.platform_name?.trim() || 'Multi Stores';
+  }
+
   async send(opts: {
     to: string;
     subject: string;
@@ -319,7 +330,9 @@ export class MailService {
       reset_url: resetUrl,
     });
     if (rendered) return this.send({ to, ...rendered });
-    const fallback = passwordResetEmail(resetUrl);
+    const fallback = passwordResetEmail(resetUrl, {
+      platformName: await this.platformDisplayName(),
+    });
     return this.send({ to, ...fallback });
   }
 
@@ -460,7 +473,10 @@ export class MailService {
       login_url: data.loginUrl ?? '',
     });
     if (rendered) return this.send({ to, ...rendered });
-    return this.send({ to, ...welcomeEmail(data) });
+    return this.send({
+      to,
+      ...welcomeEmail(data, { platformName: await this.platformDisplayName() }),
+    });
   }
 
   // ── Order-event dispatcher ─────────────────────────────────────────────────
@@ -703,13 +719,14 @@ export class MailService {
     if (!resolved) {
       throw new BadRequestException('Email is not configured');
     }
+    const platform = await this.platformDisplayName();
     try {
       await resolved.transporter.sendMail({
         from: resolved.from,
         to,
-        subject: 'Multi Stores — test email',
-        html: '<p>This is a test email from your Multi Stores admin settings. SMTP is working. ✅</p>',
-        text: 'This is a test email from your Multi Stores admin settings. SMTP is working.',
+        subject: `${platform} — test email`,
+        html: `<p>This is a test email from your ${escapeHtml(platform)} admin settings. SMTP is working. ✅</p>`,
+        text: `This is a test email from your ${platform} admin settings. SMTP is working.`,
       });
       return { sent: true };
     } catch (err) {

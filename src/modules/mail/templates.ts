@@ -32,10 +32,13 @@ export interface EmailBrand {
   storeLogoUrl?: string;
   /** Which store this message belongs to — selects its sender and templates. */
   storeId?: string;
+  /** Admin-configured platform name (PlatformConfig.platform_name) — used when
+   *  no store brand applies, instead of the hardcoded fallback. */
+  platformName?: string;
 }
 
 function layout(title: string, bodyHtml: string, brand?: EmailBrand): string {
-  const name = brand?.storeName || BRAND;
+  const name = brand?.storeName || brand?.platformName || BRAND;
   const header = brand?.storeLogoUrl
     ? `<div style="text-align:center;margin-bottom:20px;"><img src="${esc(
         brand.storeLogoUrl,
@@ -60,9 +63,10 @@ function button(label: string, url: string): string {
   return `<a href="${esc(url)}" style="display:inline-block;background:#18181b;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 20px;border-radius:8px;">${esc(label)}</a>`;
 }
 
-export function passwordResetEmail(resetUrl: string): EmailParts {
+export function passwordResetEmail(resetUrl: string, brand?: EmailBrand): EmailParts {
+  const name = brand?.platformName || BRAND;
   return {
-    subject: `Reset your ${BRAND} password`,
+    subject: `Reset your ${name} password`,
     html: layout(
       'Reset your password',
       `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">
@@ -70,8 +74,9 @@ export function passwordResetEmail(resetUrl: string): EmailParts {
        </p>
        <p style="margin:20px 0;">${button('Reset password', resetUrl)}</p>
        <p style="font-size:12px;color:#71717a;">If you didn't request this, you can safely ignore this email.</p>`,
+      brand,
     ),
-    text: `Reset your ${BRAND} password.\n\nOpen this link to choose a new password (expires in 1 hour):\n${resetUrl}\n\nIf you didn't request this, ignore this email.`,
+    text: `Reset your ${name} password.\n\nOpen this link to choose a new password (expires in 1 hour):\n${resetUrl}\n\nIf you didn't request this, ignore this email.`,
   };
 }
 
@@ -299,20 +304,22 @@ export interface WelcomeData {
   loginUrl?: string;
 }
 
-export function welcomeEmail(data: WelcomeData): EmailParts {
+export function welcomeEmail(data: WelcomeData, brand?: EmailBrand): EmailParts {
+  const platform = brand?.platformName || BRAND;
   const greeting = data.name ? `Hi ${esc(data.name)},` : 'Hi there,';
   const cta = data.loginUrl
     ? `<p style="margin:20px 0;">${button('Sign in', data.loginUrl)}</p>`
     : '';
   return {
-    subject: `Welcome to ${BRAND}`,
+    subject: `Welcome to ${platform}`,
     html: layout(
-      `Welcome to ${BRAND}`,
+      `Welcome to ${esc(platform)}`,
       `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">
          ${greeting} we're glad you're here. Your account is ready — start exploring stores and products built by independent creators.
        </p>
        ${cta}`,
+      brand,
     ),
-    text: `Welcome to ${BRAND}!\n\nYour account is ready.${data.loginUrl ? `\n\nSign in: ${data.loginUrl}` : ''}`,
+    text: `Welcome to ${platform}!\n\nYour account is ready.${data.loginUrl ? `\n\nSign in: ${data.loginUrl}` : ''}`,
   };
 }

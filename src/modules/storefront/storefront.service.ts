@@ -44,6 +44,15 @@ export class StorefrontService {
     });
   }
 
+  // Public platform metadata. platform_name (Admin → Settings → Platform Info)
+  // is the single source of the platform name inherited across all apps.
+  async getPlatformMeta(): Promise<{ platform_name: string }> {
+    const cfg = await this.prisma.platformConfig.findFirst({
+      select: { platform_name: true },
+    });
+    return { platform_name: cfg?.platform_name?.trim() || 'Multi Stores' };
+  }
+
   // Lightweight read so the storefront can decide caching without pulling the
   // full store payload. Defaults to enabled when the store isn't found.
   async getCacheConfig(slug: string): Promise<{ enabled: boolean }> {

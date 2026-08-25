@@ -10,6 +10,14 @@ import { StorefrontService } from './storefront.service';
 export class StorefrontController {
   constructor(private storefrontService: StorefrontService) {}
 
+  // Public platform metadata (name, …) — the single source every app inherits
+  // the platform name from. Declared BEFORE the :slug route so the literal
+  // path wins the match.
+  @Get('platform-meta')
+  getPlatformMeta() {
+    return this.storefrontService.getPlatformMeta();
+  }
+
   @Get(':slug')
   getStore(@Param('slug') slug: string) {
     return this.storefrontService.getStore(slug);
