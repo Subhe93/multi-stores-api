@@ -2,6 +2,10 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PricingType, StoreType } from '@prisma/client';
 import { resolveStoreCurrency } from '../../common/money/currency.util';
+import {
+  isKustomEnabledForStore,
+  kustomCreatorSelect,
+} from '../payments/kustom/kustom.eligibility';
 
 @Injectable()
 export class StorefrontService {
@@ -86,9 +90,20 @@ export class StorefrontService {
         },
       },
     });
-    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
+    if (!store)
+      throw new NotFoundException({
+        code: 'STOREFRONT_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
     const themeConfig = (store.theme_config as any) || {};
     const platformConfig = await this.prisma.platformConfig.findFirst();
+
+    // Kustom readiness is read separately: the creator select above is spread
+    // into the response, and the shared secret must never travel with it.
+    const kustomCreator = await this.prisma.creator.findUnique({
+      where: { id: store.creator_id },
+      select: kustomCreatorSelect,
+    });
 
     // Builder (v2) static pages that are live. A legacy page migrated into the
     // builder is deleted from static_pages, so without this merge it silently
@@ -142,6 +157,14 @@ export class StorefrontService {
             // so the card option must not be offered.
             store.creator.stripe_account_type !== 'standard' &&
             store.creator.stripe_payouts_enabled,
+      // Kustom Checkout availability: independent stores only, creator setup
+      // complete. Same rule as GET /payments/config's kustomEnabled.
+      kustom_enabled: isKustomEnabledForStore({
+        store_type: store.store_type,
+        is_active: store.is_active,
+        creator: kustomCreator,
+        currency: resolveStoreCurrency(store, platformConfig?.default_currency),
+      }),
       pages: mergedPages,
       // New theme system: storefront resolves the registry by theme_key and
       // merges theme_customizations on top.
@@ -171,19 +194,26 @@ export class StorefrontService {
     };
   }
 
-  async getProducts(slug: string, filters: {
-    page?: number;
-    limit?: number;
-    category_id?: string;
-    creator_category?: string;
-    search?: string;
-    locale?: string;
-  }) {
+  async getProducts(
+    slug: string,
+    filters: {
+      page?: number;
+      limit?: number;
+      category_id?: string;
+      creator_category?: string;
+      search?: string;
+      locale?: string;
+    },
+  ) {
     const store = await this.prisma.store.findUnique({
       where: { slug },
       include: { creator: true },
     });
-    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
+    if (!store)
+      throw new NotFoundException({
+        code: 'STOREFRONT_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
 
     // If a creator-category slug is requested, resolve it to an id + match rule
     // up front so we can apply the same filter to both own and custom queries.
@@ -200,7 +230,12 @@ export class StorefrontService {
             slug: filters.creator_category,
           },
         },
-        select: { id: true, match_rule: true, match_tags: true, is_active: true },
+        select: {
+          id: true,
+          match_rule: true,
+          match_tags: true,
+          is_active: true,
+        },
       });
       if (cc && cc.is_active) {
         creatorCategory = {
@@ -311,9 +346,14 @@ export class StorefrontService {
         base_price: displayPrice,
         status: cp.status,
         translations: cp.translations,
-        images: cp.mockup_images.length > 0
-          ? cp.mockup_images.map((img) => ({ url: img.url, alt_text: null, sort_order: img.sort_order }))
-          : cp.product.images,
+        images:
+          cp.mockup_images.length > 0
+            ? cp.mockup_images.map((img) => ({
+                url: img.url,
+                alt_text: null,
+                sort_order: img.sort_order,
+              }))
+            : cp.product.images,
         variants,
         category: cp.product.category,
         pricing_type: cp.pricing_type,
@@ -325,11 +365,15 @@ export class StorefrontService {
     const mappedOwn = ownProducts.map((p: any) => ({
       ...p,
       base_price: Number(p.base_price),
-      compare_at_price: p.compare_at_price ? Number(p.compare_at_price) : undefined,
+      compare_at_price: p.compare_at_price
+        ? Number(p.compare_at_price)
+        : undefined,
       variants: (p.variants || []).map((v: any) => ({
         ...v,
         price: Number(p.base_price) + Number(v.price_adjustment || 0),
-        compare_at_price: v.compare_at_price ? Number(v.compare_at_price) : undefined,
+        compare_at_price: v.compare_at_price
+          ? Number(v.compare_at_price)
+          : undefined,
         stock: v.stock_quantity ?? 999,
       })),
     }));
@@ -350,19 +394,27 @@ export class StorefrontService {
 
     // Attach matching promotions to each product
     const attachPromos = (productId: string) =>
-      allPromos.filter((p) => {
-        const conds = p.conditions as any;
-        if (!conds?.product_ids?.length) return true;
-        return conds.product_ids.includes(productId);
-      }).map((p) => ({
-        id: p.id,
-        type: p.type,
-        value: Number(p.value),
-        translations: p.translations,
-      }));
+      allPromos
+        .filter((p) => {
+          const conds = p.conditions as any;
+          if (!conds?.product_ids?.length) return true;
+          return conds.product_ids.includes(productId);
+        })
+        .map((p) => ({
+          id: p.id,
+          type: p.type,
+          value: Number(p.value),
+          translations: p.translations,
+        }));
 
-    const ownWithPromos = mappedOwn.map((p: any) => ({ ...p, promotions: attachPromos(p.id) }));
-    const customWithPromos = mappedCustom.map((p) => ({ ...p, promotions: attachPromos(p.id) }));
+    const ownWithPromos = mappedOwn.map((p: any) => ({
+      ...p,
+      promotions: attachPromos(p.id),
+    }));
+    const customWithPromos = mappedCustom.map((p) => ({
+      ...p,
+      promotions: attachPromos(p.id),
+    }));
 
     return [...ownWithPromos, ...customWithPromos];
   }
@@ -371,7 +423,10 @@ export class StorefrontService {
    * Fetch active CREATOR_TO_CUSTOMER promotions that target a specific product
    * or apply to all products (no product_ids in conditions).
    */
-  private async getActivePromotionsForProduct(creatorId: string, productId: string) {
+  private async getActivePromotionsForProduct(
+    creatorId: string,
+    productId: string,
+  ) {
     const now = new Date();
     const promotions = await this.prisma.promotion.findMany({
       where: {
@@ -379,10 +434,7 @@ export class StorefrontService {
         level: 'CREATOR_TO_CUSTOMER',
         status: 'ACTIVE',
         starts_at: { lte: now },
-        OR: [
-          { expires_at: null },
-          { expires_at: { gte: now } },
-        ],
+        OR: [{ expires_at: null }, { expires_at: { gte: now } }],
         // Exclude coupon-only promotions (require manual code entry)
         type: { notIn: ['COUPON'] },
       },
@@ -390,19 +442,21 @@ export class StorefrontService {
     });
 
     // Filter: only promotions with no product targeting OR targeting this product
-    return promotions.filter((p) => {
-      const conds = p.conditions as any;
-      if (!conds?.product_ids?.length) return true; // applies to all
-      return conds.product_ids.includes(productId);
-    }).map((p) => ({
-      id: p.id,
-      type: p.type,
-      value: Number(p.value),
-      conditions: p.conditions,
-      starts_at: p.starts_at,
-      expires_at: p.expires_at,
-      translations: p.translations,
-    }));
+    return promotions
+      .filter((p) => {
+        const conds = p.conditions as any;
+        if (!conds?.product_ids?.length) return true; // applies to all
+        return conds.product_ids.includes(productId);
+      })
+      .map((p) => ({
+        id: p.id,
+        type: p.type,
+        value: Number(p.value),
+        conditions: p.conditions,
+        starts_at: p.starts_at,
+        expires_at: p.expires_at,
+        translations: p.translations,
+      }));
   }
 
   async getProduct(slug: string, productSlug: string, locale?: string) {
@@ -410,7 +464,11 @@ export class StorefrontService {
       where: { slug },
       include: { creator: true },
     });
-    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
+    if (!store)
+      throw new NotFoundException({
+        code: 'STOREFRONT_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
 
     // Try creator's own product first. Order by updated_at so duplicate-slug
     // collisions resolve to the most recently edited product instead of an
@@ -437,8 +495,14 @@ export class StorefrontService {
           include: { creator_category: { include: { translations: true } } },
           orderBy: { sort_order: 'asc' },
         },
-        custom_fields: { include: { translations: true }, orderBy: { sort_order: 'asc' } },
-        faqs: { include: { translations: true }, orderBy: { sort_order: 'asc' } },
+        custom_fields: {
+          include: { translations: true },
+          orderBy: { sort_order: 'asc' },
+        },
+        faqs: {
+          include: { translations: true },
+          orderBy: { sort_order: 'asc' },
+        },
         shipping_profile: { include: { zones: true } },
       },
     });
@@ -456,7 +520,10 @@ export class StorefrontService {
         if (defaultProfile) shippingProfile = defaultProfile;
       }
 
-      const promotions = await this.getActivePromotionsForProduct(store.creator.id, product.id);
+      const promotions = await this.getActivePromotionsForProduct(
+        store.creator.id,
+        product.id,
+      );
       const bundles = await this.getBundlesForProduct(store.creator.id, {
         productId: product.id,
       });
@@ -465,11 +532,15 @@ export class StorefrontService {
         ...product,
         shipping_profile: shippingProfile,
         base_price: prodBasePrice,
-        compare_at_price: product.compare_at_price ? Number(product.compare_at_price) : undefined,
+        compare_at_price: product.compare_at_price
+          ? Number(product.compare_at_price)
+          : undefined,
         variants: (product.variants || []).map((v: any) => ({
           ...v,
           price: prodBasePrice + Number(v.price_adjustment || 0),
-          compare_at_price: v.compare_at_price ? Number(v.compare_at_price) : undefined,
+          compare_at_price: v.compare_at_price
+            ? Number(v.compare_at_price)
+            : undefined,
           stock: v.stock_quantity ?? 999,
         })),
         creator_categories: ((product as any).creator_categories || [])
@@ -484,7 +555,10 @@ export class StorefrontService {
     // custom products (provider resells), so skip the fallback and 404 as if
     // the product doesn't exist.
     if (store.store_type === StoreType.INDEPENDENT) {
-      throw new NotFoundException({ code: 'STOREFRONT_PRODUCT_NOT_FOUND', message: 'Product not found' });
+      throw new NotFoundException({
+        code: 'STOREFRONT_PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
     }
 
     // Fall back to custom product. Same ordering rationale as above.
@@ -498,9 +572,16 @@ export class StorefrontService {
       include: {
         translations: true,
         mockup_images: { orderBy: { sort_order: 'asc' } },
-        selected_variants: { include: { variant: { include: { images: true } } } },
-        field_values: { include: { custom_field: { include: { translations: true } } } },
-        faqs: { include: { translations: true }, orderBy: { sort_order: 'asc' } },
+        selected_variants: {
+          include: { variant: { include: { images: true } } },
+        },
+        field_values: {
+          include: { custom_field: { include: { translations: true } } },
+        },
+        faqs: {
+          include: { translations: true },
+          orderBy: { sort_order: 'asc' },
+        },
         creator_categories: {
           include: { creator_category: { include: { translations: true } } },
           orderBy: { sort_order: 'asc' },
@@ -508,20 +589,35 @@ export class StorefrontService {
         product: {
           include: {
             // Product-level gallery only (see creator-product include above).
-            images: { where: { variant_id: null }, orderBy: { sort_order: 'asc' } },
-            attributes: { include: { template: { include: { translations: true } } } },
+            images: {
+              where: { variant_id: null },
+              orderBy: { sort_order: 'asc' },
+            },
+            attributes: {
+              include: { template: { include: { translations: true } } },
+            },
             variants: { where: { is_active: true }, include: { images: true } },
             tags: true,
             category: { include: { translations: true } },
-            custom_fields: { include: { translations: true }, orderBy: { sort_order: 'asc' } },
-            faqs: { include: { translations: true }, orderBy: { sort_order: 'asc' } },
+            custom_fields: {
+              include: { translations: true },
+              orderBy: { sort_order: 'asc' },
+            },
+            faqs: {
+              include: { translations: true },
+              orderBy: { sort_order: 'asc' },
+            },
             shipping_profile: { include: { zones: true } },
           },
         },
       },
     });
 
-    if (!customProduct) throw new NotFoundException({ code: 'STOREFRONT_PRODUCT_NOT_FOUND', message: 'Product not found' });
+    if (!customProduct)
+      throw new NotFoundException({
+        code: 'STOREFRONT_PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
 
     const variants = this.computeVariants(customProduct);
     const displayPrice = this.computeDisplayPrice(customProduct, variants);
@@ -546,7 +642,10 @@ export class StorefrontService {
       if (defaultProfile) shippingProfile = defaultProfile;
     }
 
-    const promotions = await this.getActivePromotionsForProduct(store.creator.id, customProduct.id);
+    const promotions = await this.getActivePromotionsForProduct(
+      store.creator.id,
+      customProduct.id,
+    );
     const bundles = await this.getBundlesForProduct(store.creator.id, {
       customProductId: customProduct.id,
     });
@@ -554,15 +653,22 @@ export class StorefrontService {
     return {
       id: customProduct.id,
       base_price: displayPrice,
-      compare_at_price: baseProduct.compare_at_price ? Number(baseProduct.compare_at_price) : undefined,
+      compare_at_price: baseProduct.compare_at_price
+        ? Number(baseProduct.compare_at_price)
+        : undefined,
       status: customProduct.status,
       product_type: baseProduct.product_type,
       customization_type: baseProduct.customization_type,
       variant_option_config: baseProduct.variant_option_config,
       translations: customProduct.translations,
-      images: customProduct.mockup_images.length > 0
-        ? customProduct.mockup_images.map((img) => ({ url: img.url, alt_text: null, sort_order: img.sort_order }))
-        : baseProduct.images,
+      images:
+        customProduct.mockup_images.length > 0
+          ? customProduct.mockup_images.map((img) => ({
+              url: img.url,
+              alt_text: null,
+              sort_order: img.sort_order,
+            }))
+          : baseProduct.images,
       attributes: baseProduct.attributes,
       variants,
       tags: baseProduct.tags,
@@ -586,7 +692,11 @@ export class StorefrontService {
       where: { slug },
       include: { creator: true },
     });
-    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
+    if (!store)
+      throw new NotFoundException({
+        code: 'STOREFRONT_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
 
     // Independent stores never expose custom products, so their categories
     // come from the creator's own products only (mirrors getProducts).
@@ -640,7 +750,11 @@ export class StorefrontService {
       where: { slug },
       include: { creator: true },
     });
-    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
+    if (!store)
+      throw new NotFoundException({
+        code: 'STOREFRONT_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
 
     const rows = await this.prisma.creatorCategory.findMany({
       where: { creator_id: store.creator.id, is_active: true },
@@ -664,7 +778,11 @@ export class StorefrontService {
 
   async getPage(slug: string, pageSlug: string) {
     const store = await this.prisma.store.findUnique({ where: { slug } });
-    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
+    if (!store)
+      throw new NotFoundException({
+        code: 'STOREFRONT_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
 
     const page = await this.prisma.staticPage.findUnique({
       where: {
@@ -674,7 +792,10 @@ export class StorefrontService {
     });
 
     if (!page || page.status !== 'PUBLISHED') {
-      throw new NotFoundException({ code: 'STOREFRONT_PAGE_NOT_FOUND', message: 'Page not found' });
+      throw new NotFoundException({
+        code: 'STOREFRONT_PAGE_NOT_FOUND',
+        message: 'Page not found',
+      });
     }
 
     return page;
@@ -701,7 +822,11 @@ export class StorefrontService {
         language_config: true,
       },
     });
-    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
+    if (!store)
+      throw new NotFoundException({
+        code: 'STOREFRONT_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
 
     const primaryLocale = store.language_config?.primary_locale || 'en';
     const secondaryLocales = store.language_config?.secondary_locales || [];
@@ -728,35 +853,36 @@ export class StorefrontService {
     // + lastmod, so we project a thin shape. Independent stores never expose
     // custom products, so their sitemap lists own products only (mirrors
     // getProducts).
-    const [ownProducts, customProducts, collections, legalPages] = await Promise.all([
-      this.prisma.product.findMany({
-        where: { creator_id: store.creator.id, status: 'PUBLISHED' },
-        select: {
-          updated_at: true,
-          translations: { select: { locale: true, slug: true } },
-        },
-      }),
-      store.store_type === StoreType.INDEPENDENT
-        ? []
-        : this.prisma.customProduct.findMany({
-            where: { creator_id: store.creator.id, status: 'PUBLISHED' },
-            select: {
-              updated_at: true,
-              translations: { select: { locale: true, slug: true } },
-            },
-          }),
-      // Collections are linkable, indexable storefront pages but were missing
-      // from the sitemap entirely.
-      this.prisma.creatorCategory.findMany({
-        where: { creator_id: store.creator.id, is_active: true },
-        select: { slug: true, updated_at: true },
-      }),
-      // Legal pages are platform content rendered under each store's own
-      // /legal/{slug}, so they belong in the store's sitemap too.
-      this.prisma.legalPage.findMany({
-        select: { slug: true, updated_at: true },
-      }),
-    ]);
+    const [ownProducts, customProducts, collections, legalPages] =
+      await Promise.all([
+        this.prisma.product.findMany({
+          where: { creator_id: store.creator.id, status: 'PUBLISHED' },
+          select: {
+            updated_at: true,
+            translations: { select: { locale: true, slug: true } },
+          },
+        }),
+        store.store_type === StoreType.INDEPENDENT
+          ? []
+          : this.prisma.customProduct.findMany({
+              where: { creator_id: store.creator.id, status: 'PUBLISHED' },
+              select: {
+                updated_at: true,
+                translations: { select: { locale: true, slug: true } },
+              },
+            }),
+        // Collections are linkable, indexable storefront pages but were missing
+        // from the sitemap entirely.
+        this.prisma.creatorCategory.findMany({
+          where: { creator_id: store.creator.id, is_active: true },
+          select: { slug: true, updated_at: true },
+        }),
+        // Legal pages are platform content rendered under each store's own
+        // /legal/{slug}, so they belong in the store's sitemap too.
+        this.prisma.legalPage.findMany({
+          select: { slug: true, updated_at: true },
+        }),
+      ]);
 
     return {
       locales,
@@ -781,13 +907,20 @@ export class StorefrontService {
           // to be the primary locale's. Picking whichever translation happened
           // to have one first emitted a canonical in an arbitrary language.
           const t =
-            p.translations.find((tr) => tr.locale === primaryLocale && !!tr.slug) ||
-            p.translations.find((tr) => !!tr.slug);
-          return t ? { slug: t.slug!, lastmod: p.updated_at } : null;
+            p.translations.find(
+              (tr) => tr.locale === primaryLocale && !!tr.slug,
+            ) || p.translations.find((tr) => !!tr.slug);
+          return t ? { slug: t.slug, lastmod: p.updated_at } : null;
         })
         .filter((p): p is { slug: string; lastmod: Date } => !!p),
-      collections: collections.map((c) => ({ slug: c.slug, lastmod: c.updated_at })),
-      legal_pages: legalPages.map((p) => ({ slug: p.slug, lastmod: p.updated_at })),
+      collections: collections.map((c) => ({
+        slug: c.slug,
+        lastmod: c.updated_at,
+      })),
+      legal_pages: legalPages.map((p) => ({
+        slug: p.slug,
+        lastmod: p.updated_at,
+      })),
     };
   }
 
@@ -796,15 +929,24 @@ export class StorefrontService {
       where: { slug: storeSlug },
       include: { creator: true },
     });
-    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
+    if (!store)
+      throw new NotFoundException({
+        code: 'STOREFRONT_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
 
     const own = await this.prisma.product.findFirst({
       where: { creator_id: store.creator.id, status: 'PUBLISHED' },
       include: {
-        translations: { select: { locale: true, title: true, description: true, slug: true } },
+        translations: {
+          select: { locale: true, title: true, description: true, slug: true },
+        },
         images: { orderBy: { sort_order: 'asc' } },
         variants: { where: { is_active: true }, include: { images: true } },
-        faqs: { include: { translations: true }, orderBy: { sort_order: 'asc' } },
+        faqs: {
+          include: { translations: true },
+          orderBy: { sort_order: 'asc' },
+        },
       },
       orderBy: { updated_at: 'desc' },
     });
@@ -815,7 +957,9 @@ export class StorefrontService {
         id: own.id,
         slug,
         base_price: basePrice,
-        compare_at_price: own.compare_at_price ? Number(own.compare_at_price) : undefined,
+        compare_at_price: own.compare_at_price
+          ? Number(own.compare_at_price)
+          : undefined,
         translations: own.translations,
         images: own.images.map((img) => ({
           url: img.url,
@@ -830,7 +974,9 @@ export class StorefrontService {
           id: v.id,
           options: v.options ?? {},
           price: basePrice + Number(v.price_adjustment || 0),
-          compare_at_price: v.compare_at_price ? Number(v.compare_at_price) : undefined,
+          compare_at_price: v.compare_at_price
+            ? Number(v.compare_at_price)
+            : undefined,
           stock: v.stock_quantity ?? undefined,
           sku: v.sku ?? undefined,
           images: (v as any).images || [],
@@ -853,18 +999,35 @@ export class StorefrontService {
       where: { slug: storeSlug },
       select: { id: true },
     });
-    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
+    if (!store)
+      throw new NotFoundException({
+        code: 'STOREFRONT_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
     const menus = await this.prisma.menu.findMany({
       where: { store_id: store.id },
       include: {
         items: {
           orderBy: { sort_order: 'asc' },
-          select: { id: true, parent_id: true, label: true, label_i18n: true, url: true, open_in_new_tab: true, sort_order: true },
+          select: {
+            id: true,
+            parent_id: true,
+            label: true,
+            label_i18n: true,
+            url: true,
+            open_in_new_tab: true,
+            sort_order: true,
+          },
         },
       },
       orderBy: { created_at: 'asc' },
     });
-    return menus.map((m) => ({ id: m.id, key: m.key, name: m.name, items: m.items }));
+    return menus.map((m) => ({
+      id: m.id,
+      key: m.key,
+      name: m.name,
+      items: m.items,
+    }));
   }
 
   /**
@@ -891,14 +1054,25 @@ export class StorefrontService {
         }
       | { type: 'STATIC' | 'LANDING'; slug: string },
   ) {
-    const store = await this.prisma.store.findUnique({ where: { slug: storeSlug } });
-    if (!store) throw new NotFoundException({ code: 'STOREFRONT_STORE_NOT_FOUND', message: 'Store not found' });
+    const store = await this.prisma.store.findUnique({
+      where: { slug: storeSlug },
+    });
+    if (!store)
+      throw new NotFoundException({
+        code: 'STOREFRONT_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
 
     // Only rows with a published snapshot qualify. Singleton types are
     // looked up by (store, type) alone, so if a duplicate draft row ever
     // exists (e.g. two concurrent ensures) the published one still wins.
-    const whereType: any = { store_id: store.id, type: opts.type, published_version_id: { not: null } };
-    if (opts.type === 'STATIC' || opts.type === 'LANDING') whereType.slug = opts.slug;
+    const whereType: any = {
+      store_id: store.id,
+      type: opts.type,
+      published_version_id: { not: null },
+    };
+    if (opts.type === 'STATIC' || opts.type === 'LANDING')
+      whereType.slug = opts.slug;
 
     const page = await this.prisma.page.findFirst({
       where: whereType,

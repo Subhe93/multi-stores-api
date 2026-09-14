@@ -103,6 +103,12 @@ model Creator {
   stripe_charges_enabled        Boolean   @default(false)
   stripe_payouts_enabled        Boolean   @default(false)
   stripe_onboarding_completed_at DateTime?
+  // Kustom Checkout (independent stores only). The creator holds their own
+  // Kustom merchant account; the shared secret is encrypted at rest.
+  kustom_merchant_id   String?
+  kustom_shared_secret String?
+  kustom_environment   String  @default("playground") // 'playground' | 'production'
+  kustom_enabled       Boolean @default(false)
   verified          Boolean  @default(false)
   created_at        DateTime @default(now())
   updated_at        DateTime @updatedAt
@@ -549,6 +555,13 @@ model Order {
   paid_at                 DateTime?
   payment_failure_code    String?
   payment_failure_message String?
+  // Kustom Checkout: the checkout/order id on Kustom's side, the random secret
+  // embedded in the push/validation callback URLs (never exposed to the
+  // customer), and the capture bookkeeping (captured when the order ships).
+  kustom_order_id    String?   @unique
+  kustom_push_token  String?
+  kustom_capture_id  String?
+  kustom_captured_at DateTime?
   notes           String?
   created_at      DateTime    @default(now())
   updated_at      DateTime    @updatedAt
@@ -592,6 +605,7 @@ model OrderPayout {
 enum PaymentMethod {
   COD
   STRIPE
+  KUSTOM
 }
 
 enum OrderStatus {
@@ -723,6 +737,10 @@ model PlatformConfig {
   // Signing secret of the Connect (connected accounts) webhook endpoint,
   // used to verify direct-charge events from independent stores.
   stripe_connect_webhook_secret String?
+
+  // Kustom partner id of the platform — sent as the Kustom-Partner header on
+  // every Kustom API call made on behalf of a creator. Plain text, optional.
+  kustom_partner_id String?
 
   // Platform SMTP email settings (managed from the admin dashboard). Override
   // the SMTP_*/MAIL_FROM environment variables when set. Credentials are never

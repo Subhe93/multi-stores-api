@@ -10,10 +10,18 @@ import Stripe from 'stripe';
 import { UserRole, FulfillerType, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CryptoService } from '../../common/crypto/crypto.service';
-import { toStripeAmount, fromStripeAmount } from '../../common/money/currency.util';
+import {
+  toStripeAmount,
+  fromStripeAmount,
+  resolveStoreCurrency,
+} from '../../common/money/currency.util';
 import { OrdersService } from '../orders/orders.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
+import {
+  isKustomEnabledForStore,
+  kustomCreatorSelect,
+} from './kustom/kustom.eligibility';
 
 // The stripe package does not surface the `Stripe.*` resource namespace through
 // its package entry under nodenext, so we derive the types we need from the
@@ -103,6 +111,7 @@ export class PaymentsService {
    * For an INDEPENDENT store, stripeAccount is the creator's Standard connected
    * account (so Stripe.js can confirm the direct-charge PaymentIntent on it) —
    * and the store only counts as configured once that account is ready.
+   * `kustomEnabled` follows the same independent-store rule for Kustom Checkout.
    */
   async getPublicConfig(storeSlug?: string) {
     const stripeConfigured = await this.isStripeConfigured();
@@ -115,11 +124,13 @@ export class PaymentsService {
           where: { slug: storeSlug, is_active: true },
           select: {
             store_type: true,
+            currency: true,
             creator: {
               select: {
                 stripe_account_id: true,
                 stripe_account_type: true,
                 stripe_charges_enabled: true,
+                ...kustomCreatorSelect,
               },
             },
           },
@@ -127,7 +138,12 @@ export class PaymentsService {
       : null;
 
     if (!store || store.store_type !== StoreType.INDEPENDENT) {
-      return { stripeConfigured, publishableKey, stripeAccount: null };
+      return {
+        stripeConfigured,
+        publishableKey,
+        stripeAccount: null,
+        kustomEnabled: false,
+      };
     }
 
     const creator = store.creator;
@@ -141,6 +157,18 @@ export class PaymentsService {
         Boolean(publishableKey) && stripeConfigured && stripeAccount != null,
       publishableKey,
       stripeAccount,
+      // Kustom also needs a currency it can process.
+      kustomEnabled: isKustomEnabledForStore({
+        ...store,
+        currency: resolveStoreCurrency(
+          store,
+          (
+            await this.prisma.platformConfig.findFirst({
+              select: { default_currency: true },
+            })
+          )?.default_currency,
+        ),
+      }),
     };
   }
 
@@ -179,10 +207,13 @@ export class PaymentsService {
         stripe_secret_key: true,
         stripe_webhook_secret: true,
         stripe_connect_webhook_secret: true,
+        kustom_partner_id: true,
       },
     });
     const envSecret = Boolean(this.config.get<string>('STRIPE_SECRET_KEY'));
-    const envWebhook = Boolean(this.config.get<string>('STRIPE_WEBHOOK_SECRET'));
+    const envWebhook = Boolean(
+      this.config.get<string>('STRIPE_WEBHOOK_SECRET'),
+    );
     const envConnectWebhook = Boolean(
       this.config.get<string>('STRIPE_CONNECT_WEBHOOK_SECRET'),
     );
@@ -199,12 +230,15 @@ export class PaymentsService {
     return {
       publishableKey: cfg?.stripe_publishable_key || null,
       secretKeyConfigured: Boolean(cfg?.stripe_secret_key) || envSecret,
-      webhookSecretConfigured: Boolean(cfg?.stripe_webhook_secret) || envWebhook,
+      webhookSecretConfigured:
+        Boolean(cfg?.stripe_webhook_secret) || envWebhook,
       connectWebhookSecretConfigured,
       connectWebhookRequired: independentStores > 0,
       independentStoreCount: independentStores,
       // True when no DB secret is set but an env key is in use (legacy fallback).
       usingEnvFallback: !cfg?.stripe_secret_key && envSecret,
+      // Platform's Kustom partner id (plain text, not a secret).
+      kustomPartnerId: cfg?.kustom_partner_id || null,
     };
   }
 
@@ -213,6 +247,7 @@ export class PaymentsService {
     publishable_key?: string;
     webhook_secret?: string;
     connect_webhook_secret?: string;
+    kustom_partner_id?: string;
   }) {
     let config = await this.prisma.platformConfig.findFirst();
     if (!config) config = await this.prisma.platformConfig.create({ data: {} });
@@ -223,6 +258,7 @@ export class PaymentsService {
       stripe_publishable_key?: string | null;
       stripe_webhook_secret?: string | null;
       stripe_connect_webhook_secret?: string | null;
+      kustom_partner_id?: string | null;
     } = {};
     // Secret key and webhook secrets are encrypted at rest; the publishable key
     // is a public value and stays plaintext.
@@ -231,11 +267,17 @@ export class PaymentsService {
     if (dto.publishable_key !== undefined)
       data.stripe_publishable_key = dto.publishable_key.trim() || null;
     if (dto.webhook_secret !== undefined)
-      data.stripe_webhook_secret = this.crypto.encrypt(dto.webhook_secret.trim());
+      data.stripe_webhook_secret = this.crypto.encrypt(
+        dto.webhook_secret.trim(),
+      );
     if (dto.connect_webhook_secret !== undefined)
       data.stripe_connect_webhook_secret = this.crypto.encrypt(
         dto.connect_webhook_secret.trim(),
       );
+    // The partner id is an identifier Kustom sends back in headers, not a
+    // credential — stored plain so the admin can read it back.
+    if (dto.kustom_partner_id !== undefined)
+      data.kustom_partner_id = dto.kustom_partner_id.trim() || null;
 
     await this.prisma.platformConfig.update({
       where: { id: config.id },
@@ -327,7 +369,10 @@ export class PaymentsService {
     } else {
       await this.prisma.creator.update({
         where: { id },
-        data: { stripe_account_id: accountId, stripe_account_type: accountType },
+        data: {
+          stripe_account_id: accountId,
+          stripe_account_type: accountType,
+        },
       });
     }
   }
@@ -651,7 +696,7 @@ export class PaymentsService {
           'This store can only sell its own products.',
         );
       }
-      const creator = store!.creator;
+      const creator = store.creator;
       if (
         !creator?.stripe_account_id ||
         !creator.stripe_charges_enabled ||
@@ -766,7 +811,11 @@ export class PaymentsService {
 
     const providers = await this.prisma.provider.findMany({
       where: { id: { in: providerIds } },
-      select: { id: true, stripe_account_id: true, stripe_payouts_enabled: true },
+      select: {
+        id: true,
+        stripe_account_id: true,
+        stripe_payouts_enabled: true,
+      },
     });
     const ready = (id: string) => {
       const p = providers.find((x) => x.id === id);
@@ -1081,7 +1130,7 @@ export class PaymentsService {
       chargeId =
         typeof pi.latest_charge === 'string'
           ? pi.latest_charge
-          : pi.latest_charge?.id ?? null;
+          : (pi.latest_charge?.id ?? null);
     }
     if (!chargeId) return;
 
@@ -1163,7 +1212,9 @@ export class PaymentsService {
           // Key includes the transfer currency so a prior attempt that ran with
           // a different settlement currency (e.g. before balance_transaction was
           // ready) can't poison this retry.
-          { idempotencyKey: `transfer_${orderId}_${destination}_${transferCurrency}_v4` },
+          {
+            idempotencyKey: `transfer_${orderId}_${destination}_${transferCurrency}_v4`,
+          },
         );
         await this.prisma.orderPayout.upsert({
           where: key,
@@ -1188,7 +1239,9 @@ export class PaymentsService {
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        this.logger.error(`Payout transfer failed for order ${orderId}: ${message}`);
+        this.logger.error(
+          `Payout transfer failed for order ${orderId}: ${message}`,
+        );
         await this.prisma.orderPayout.upsert({
           where: key,
           create: {
@@ -1230,9 +1283,13 @@ export class PaymentsService {
         select: { id: true, stripe_account_id: true },
       });
       for (const [providerId, base] of baseByProvider) {
-        const acct = providers.find((p) => p.id === providerId)?.stripe_account_id;
+        const acct = providers.find(
+          (p) => p.id === providerId,
+        )?.stripe_account_id;
         if (!acct) continue;
-        const share = Math.round(providerAmountCents * (base / providerBaseTotal));
+        const share = Math.round(
+          providerAmountCents * (base / providerBaseTotal),
+        );
         await payout(FulfillerType.PROVIDER, providerId, acct, share);
       }
     }
@@ -1299,18 +1356,36 @@ export class PaymentsService {
         : charge.payment_intent?.id;
     let order = await this.prisma.order.findFirst({
       where: { stripe_charge_id: charge.id },
-      select: { id: true, order_number: true, payment_status: true, store_id: true, stripe_account_id: true },
+      select: {
+        id: true,
+        order_number: true,
+        payment_status: true,
+        store_id: true,
+        stripe_account_id: true,
+      },
     });
     if (!order && charge.metadata?.order_id) {
       order = await this.prisma.order.findUnique({
         where: { id: charge.metadata.order_id },
-        select: { id: true, order_number: true, payment_status: true, store_id: true, stripe_account_id: true },
+        select: {
+          id: true,
+          order_number: true,
+          payment_status: true,
+          store_id: true,
+          stripe_account_id: true,
+        },
       });
     }
     if (!order && piId) {
       order = await this.prisma.order.findFirst({
         where: { stripe_payment_id: piId },
-        select: { id: true, order_number: true, payment_status: true, store_id: true, stripe_account_id: true },
+        select: {
+          id: true,
+          order_number: true,
+          payment_status: true,
+          store_id: true,
+          stripe_account_id: true,
+        },
       });
     }
     if (!order) return;

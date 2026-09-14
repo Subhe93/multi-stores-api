@@ -27,4 +27,10 @@ export class UpdateStripeSettingsDto {
   @IsOptional()
   @IsString()
   connect_webhook_secret?: string;
+
+  // Platform's Kustom partner id (sent as the Kustom-Partner header). Plain
+  // text; an empty string clears it.
+  @IsOptional()
+  @IsString()
+  kustom_partner_id?: string;
 }

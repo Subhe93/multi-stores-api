@@ -1,27 +1,42 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
+import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   CommissionStatus,
   FulfillerType,
   FulfillmentStatus,
   OrderStatus,
+  PaymentMethod,
   PricingType,
   ProductStatus,
   StoreType,
   UserRole,
 } from '@prisma/client';
-import { CreateOrderDto, UpdateOrderStatusDto, UpdateFulfillmentDto } from './dto/order.dto';
+import {
+  CreateOrderDto,
+  UpdateOrderStatusDto,
+  UpdateFulfillmentDto,
+} from './dto/order.dto';
 import { PromotionsService } from '../promotions/promotions.service';
 import { ShippingService } from '../shipping/shipping.service';
 import { MailService } from '../mail/mail.service';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import { resolveStoreCurrency } from '../../common/money/currency.util';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
+import {
+  isKustomEnabledForStore,
+  kustomCreatorSelect,
+} from '../payments/kustom/kustom.eligibility';
+
+// Callback run after an order's status becomes SHIPPED. Registered by payment
+// providers that capture on shipment (Kustom); see registerShippedHook.
+type ShippedHook = (orderId: string) => Promise<void>;
 
 function deriveCommissionStatus(orderStatus: OrderStatus): CommissionStatus {
   if (orderStatus === OrderStatus.DELIVERED) return CommissionStatus.COMPLETED;
@@ -39,16 +54,26 @@ function deriveCommissionStatus(orderStatus: OrderStatus): CommissionStatus {
 // so item badges don't get stuck on PENDING after the order advances.
 // Terminal failure states (CANCELLED/REFUNDED/RETURNED) return null — we leave items
 // alone there so the UI keeps the historical fulfillment context.
-function deriveFulfillmentStatus(orderStatus: OrderStatus): FulfillmentStatus | null {
+function deriveFulfillmentStatus(
+  orderStatus: OrderStatus,
+): FulfillmentStatus | null {
   switch (orderStatus) {
-    case OrderStatus.PENDING:        return FulfillmentStatus.PENDING;
-    case OrderStatus.CONFIRMED:      return FulfillmentStatus.PROCESSING;
-    case OrderStatus.PROCESSING:     return FulfillmentStatus.PROCESSING;
-    case OrderStatus.MANUFACTURING:  return FulfillmentStatus.MANUFACTURING;
-    case OrderStatus.QUALITY_CHECK:  return FulfillmentStatus.MANUFACTURING;
-    case OrderStatus.SHIPPED:        return FulfillmentStatus.SHIPPED;
-    case OrderStatus.DELIVERED:      return FulfillmentStatus.DELIVERED;
-    default:                         return null;
+    case OrderStatus.PENDING:
+      return FulfillmentStatus.PENDING;
+    case OrderStatus.CONFIRMED:
+      return FulfillmentStatus.PROCESSING;
+    case OrderStatus.PROCESSING:
+      return FulfillmentStatus.PROCESSING;
+    case OrderStatus.MANUFACTURING:
+      return FulfillmentStatus.MANUFACTURING;
+    case OrderStatus.QUALITY_CHECK:
+      return FulfillmentStatus.MANUFACTURING;
+    case OrderStatus.SHIPPED:
+      return FulfillmentStatus.SHIPPED;
+    case OrderStatus.DELIVERED:
+      return FulfillmentStatus.DELIVERED;
+    default:
+      return null;
   }
 }
 
@@ -66,6 +91,11 @@ const FULFILLMENT_RANK: Record<FulfillmentStatus, number> = {
 // PaymentIntents are long-lived, so this is generous — it only has to be long
 // enough that a genuine checkout (including 3-D Secure) can never hit it.
 const ABANDONED_PAYMENT_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+// Kustom sessions stay open for 48 hours and the customer completes them in
+// an iframe we do not control, so give them a longer window before their
+// stock reservation is released. Validation rejects a released order, so a
+// late completion can never oversell.
+const ABANDONED_KUSTOM_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 const ORDER_STATUS_RANK: Record<string, number> = {
   PENDING: 0,
@@ -80,22 +110,53 @@ const ORDER_STATUS_RANK: Record<string, number> = {
 // Map the slowest item's fulfillment stage to a candidate order status.
 function fulfillmentStageToOrderStatus(rank: number): OrderStatus | null {
   switch (rank) {
-    case 1: return OrderStatus.PROCESSING;
-    case 2: return OrderStatus.MANUFACTURING;
-    case 3: return OrderStatus.SHIPPED;
-    case 4: return OrderStatus.DELIVERED;
-    default: return null; // 0 (PENDING): leave the pre-fulfillment status alone
+    case 1:
+      return OrderStatus.PROCESSING;
+    case 2:
+      return OrderStatus.MANUFACTURING;
+    case 3:
+      return OrderStatus.SHIPPED;
+    case 4:
+      return OrderStatus.DELIVERED;
+    default:
+      return null; // 0 (PENDING): leave the pre-fulfillment status alone
   }
 }
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+  // PaymentsModule imports OrdersModule, so a payment provider cannot be
+  // injected here without a circular dependency. Providers that need to react
+  // to shipment (Kustom captures the authorization then) register a callback
+  // instead; it is invoked best-effort and can never block the transition.
+  private readonly shippedHooks: ShippedHook[] = [];
+
   constructor(
     private prisma: PrismaService,
     private promotionsService: PromotionsService,
     private shippingService: ShippingService,
     private mail: MailService,
   ) {}
+
+  /** Register a callback to run once an order's status becomes SHIPPED. */
+  registerShippedHook(hook: ShippedHook): void {
+    this.shippedHooks.push(hook);
+  }
+
+  private async runShippedHooks(orderId: string): Promise<void> {
+    for (const hook of this.shippedHooks) {
+      try {
+        await hook(orderId);
+      } catch (err) {
+        this.logger.warn(
+          `Shipped hook failed for order ${orderId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+  }
 
   // Reusable include for order items with full product details
   private readonly itemsWithProduct = {
@@ -176,12 +237,21 @@ export class OrdersService {
     );
   }
 
-  /** Stamp every line of an order with its resolved display image. */
+  /**
+   * Stamp every line of an order with its resolved display image. Also the
+   * single choke point every order response passes through, so the Kustom
+   * push token — a callback secret, useful to nobody outside the API — is
+   * dropped here for every role.
+   */
   private withItemImages<T extends { items?: unknown } | null>(order: T): T {
     const items = (order as { items?: unknown[] } | null)?.items;
     if (!order || !Array.isArray(items)) return order;
+    const { kustom_push_token: _kt, ...rest } = order as {
+      kustom_push_token?: string | null;
+    };
+    void _kt;
     return {
-      ...(order as object),
+      ...rest,
       items: items.map((it) => ({
         ...(it as object),
         image_url: this.resolveOrderItemImage(it),
@@ -206,7 +276,11 @@ export class OrdersService {
     const customer = await this.prisma.customer.findUnique({
       where: { user_id: userId },
     });
-    if (!customer) throw new NotFoundException({ code: 'ORDER_CUSTOMER_NOT_FOUND', message: 'Customer not found' });
+    if (!customer)
+      throw new NotFoundException({
+        code: 'ORDER_CUSTOMER_NOT_FOUND',
+        message: 'Customer not found',
+      });
 
     // Load the cart
     const cart = await this.prisma.cart.findUnique({
@@ -215,7 +289,10 @@ export class OrdersService {
     });
 
     if (!cart || cart.items.length === 0) {
-      throw new BadRequestException({ code: 'ORDER_CART_EMPTY', message: 'Cart is empty' });
+      throw new BadRequestException({
+        code: 'ORDER_CART_EMPTY',
+        message: 'Cart is empty',
+      });
     }
 
     // Calculate prices
@@ -227,7 +304,8 @@ export class OrdersService {
     // Collected during the loop and decremented atomically before order.create.
     // Only items whose product/variant tracks inventory go in here — others are
     // treated as unlimited (consistent with track_inventory=false / null stock).
-    const stockOps: { kind: 'product' | 'variant'; id: string; qty: number }[] = [];
+    const stockOps: { kind: 'product' | 'variant'; id: string; qty: number }[] =
+      [];
 
     // The store drives the commission model, the COD gate and — for independent
     // stores — which Stripe account the customer's card is charged on. It must
@@ -243,6 +321,7 @@ export class OrdersService {
         currency: true,
         cod_enabled: true,
         is_active: true,
+        creator: { select: kustomCreatorSelect },
       },
     });
     if (!orderStore) {
@@ -259,12 +338,42 @@ export class OrdersService {
     }
     const isIndependentStore = orderStore.store_type === StoreType.INDEPENDENT;
 
+    const requestedPaymentMethod: PaymentMethod =
+      dto.payment_method || PaymentMethod.COD;
+
     // Cash on delivery is opt-in per store (off by default) — reject COD
     // orders for stores that haven't enabled it.
-    if ((dto.payment_method || 'COD') !== 'STRIPE' && !orderStore.cod_enabled) {
+    if (
+      requestedPaymentMethod === PaymentMethod.COD &&
+      !orderStore.cod_enabled
+    ) {
       throw new BadRequestException({
         code: 'ORDER_COD_DISABLED',
-        message: 'Cash on delivery is not available for this store. Please pay by card.',
+        message:
+          'Cash on delivery is not available for this store. Please pay by card.',
+      });
+    }
+
+    // Kustom settles on the creator's own merchant account, so it is only
+    // offered by independent stores whose creator finished the Kustom setup.
+    if (
+      requestedPaymentMethod === PaymentMethod.KUSTOM &&
+      !isKustomEnabledForStore({
+        ...orderStore,
+        currency: resolveStoreCurrency(
+          orderStore,
+          (
+            await this.prisma.platformConfig.findFirst({
+              select: { default_currency: true },
+            })
+          )?.default_currency,
+        ),
+      })
+    ) {
+      throw new BadRequestException({
+        code: 'ORDER_KUSTOM_UNAVAILABLE',
+        message:
+          'Kustom Checkout is not available for this store. Please choose another payment method.',
       });
     }
 
@@ -296,11 +405,17 @@ export class OrdersService {
               : true,
           },
         });
-        if (!cp) throw new NotFoundException(`Custom product ${item.custom_product_id} not found`);
+        if (!cp)
+          throw new NotFoundException(
+            `Custom product ${item.custom_product_id} not found`,
+          );
 
         // The storefront lists a custom product only when it belongs to this
         // store's creator and is published — enforce the same rule here.
-        if (cp.creator_id !== orderStore.creator_id || cp.status !== ProductStatus.PUBLISHED) {
+        if (
+          cp.creator_id !== orderStore.creator_id ||
+          cp.status !== ProductStatus.PUBLISHED
+        ) {
           rejectForeignItem();
         }
 
@@ -310,13 +425,16 @@ export class OrdersService {
             where: { id: item.variant_id },
             select: { price_adjustment: true, product_id: true },
           });
-          if (!variantRow) throw new NotFoundException(`Variant ${item.variant_id} not found`);
+          if (!variantRow)
+            throw new NotFoundException(`Variant ${item.variant_id} not found`);
           // The variant must belong to the custom product's base product,
           // otherwise its price adjustment would be borrowed from elsewhere.
           if (variantRow.product_id !== cp.product_id) rejectForeignItem();
           variant = variantRow;
         }
-        const variantAdjustment = variant ? Number(variant.price_adjustment || 0) : 0;
+        const variantAdjustment = variant
+          ? Number(variant.price_adjustment || 0)
+          : 0;
 
         // Compute price based on pricing strategy
         switch (cp.pricing_type) {
@@ -326,18 +444,24 @@ export class OrdersService {
             break;
           case PricingType.PER_VARIANT: {
             if (variant) {
-              const selected = cp.selected_variants.find((sv) => sv.variant_id === item.variant_id);
+              const selected = cp.selected_variants.find(
+                (sv) => sv.variant_id === item.variant_id,
+              );
               unitPrice = selected?.custom_price
                 ? Number(selected.custom_price)
                 : Number(cp.product.base_price) + variantAdjustment;
             } else {
               // No variant chosen on a per-variant product — fall back to final_price
-              unitPrice = Number(cp.final_price) || Number(cp.product.base_price);
+              unitPrice =
+                Number(cp.final_price) || Number(cp.product.base_price);
             }
             break;
           }
           case PricingType.MARGIN:
-            unitPrice = Number(cp.product.base_price) + variantAdjustment + Number(cp.margin_amount || 0);
+            unitPrice =
+              Number(cp.product.base_price) +
+              variantAdjustment +
+              Number(cp.margin_amount || 0);
             break;
         }
 
@@ -354,7 +478,8 @@ export class OrdersService {
           where: { id: item.variant_id },
           include: { product: true },
         });
-        if (!variant) throw new NotFoundException(`Variant ${item.variant_id} not found`);
+        if (!variant)
+          throw new NotFoundException(`Variant ${item.variant_id} not found`);
 
         // A bare variant line sells the creator's own product: it must belong
         // to this store's creator and be published. This is what stops another
@@ -372,19 +497,26 @@ export class OrdersService {
           rejectForeignItem();
         }
 
-        unitPrice = Number(variant.product.base_price) + Number(variant.price_adjustment);
+        unitPrice =
+          Number(variant.product.base_price) + Number(variant.price_adjustment);
         if (variant.product.provider_id) providerBasePrice = unitPrice;
-        fulfillerId = variant.product.provider_id || variant.product.creator_id || '';
+        fulfillerId =
+          variant.product.provider_id || variant.product.creator_id || '';
         fulfillerType = variant.product.provider_id ? 'PROVIDER' : 'CREATOR';
         // Variants track stock when stock_quantity is non-null.
         if (variant.stock_quantity != null) {
-          stockOps.push({ kind: 'variant', id: variant.id, qty: item.quantity });
+          stockOps.push({
+            kind: 'variant',
+            id: variant.id,
+            qty: item.quantity,
+          });
         }
       } else if (item.product_id) {
         const product = await this.prisma.product.findUnique({
           where: { id: item.product_id },
         });
-        if (!product) throw new NotFoundException(`Product ${item.product_id} not found`);
+        if (!product)
+          throw new NotFoundException(`Product ${item.product_id} not found`);
 
         // Same rule as the variant branch: only this store creator's own
         // published products are sellable here. Provider catalogue products
@@ -403,7 +535,11 @@ export class OrdersService {
         fulfillerType = product.provider_id ? 'PROVIDER' : 'CREATOR';
         // Only enforce when the seller actually tracks inventory for this product.
         if (product.track_inventory && product.stock_quantity != null) {
-          stockOps.push({ kind: 'product', id: product.id, qty: item.quantity });
+          stockOps.push({
+            kind: 'product',
+            id: product.id,
+            qty: item.quantity,
+          });
         }
       } else {
         // No product, variant or custom product on the line — nothing to price
@@ -417,7 +553,8 @@ export class OrdersService {
       if (isIndependentStore && item.custom_product_id) {
         throw new BadRequestException({
           code: 'ORDER_INDEPENDENT_STORE_CUSTOM_ITEM',
-          message: 'This store can only sell its own products. Please remove unavailable items from your cart.',
+          message:
+            'This store can only sell its own products. Please remove unavailable items from your cart.',
         });
       }
 
@@ -426,7 +563,8 @@ export class OrdersService {
       if (isIndependentStore && fulfillerType === 'PROVIDER') {
         throw new BadRequestException({
           code: 'ORDER_INDEPENDENT_STORE_PROVIDER_ITEM',
-          message: 'This store can only sell its own products. Please remove supplier items from your cart.',
+          message:
+            'This store can only sell its own products. Please remove supplier items from your cart.',
         });
       }
 
@@ -438,11 +576,15 @@ export class OrdersService {
           include: { bundle: true },
         });
         if (!offer || offer.bundle.status !== 'ACTIVE') {
-          throw new BadRequestException({ code: 'ORDER_BUNDLE_OFFER_UNAVAILABLE', message: 'Bundle offer is no longer available' });
+          throw new BadRequestException({
+            code: 'ORDER_BUNDLE_OFFER_UNAVAILABLE',
+            message: 'Bundle offer is no longer available',
+          });
         }
         // A bundle offer only ever lowers the price, so an offer belonging to
         // another creator would be a straight discount on this store's goods.
-        if (offer.bundle.creator_id !== orderStore.creator_id) rejectForeignItem();
+        if (offer.bundle.creator_id !== orderStore.creator_id)
+          rejectForeignItem();
         const pricing = computeBundlePricing(unitPrice, {
           quantity: offer.quantity,
           discount_type: offer.discount_type,
@@ -466,9 +608,11 @@ export class OrdersService {
         // economic guard at attach/cart time this case should only trigger
         // when provider pricing changed after the line entered the cart.
         if (providerBasePrice > 0 && unitPrice < providerBasePrice) {
-          throw new BadRequestException(
-            { code: 'ORDER_BUNDLE_BELOW_PROVIDER_COST', message: 'Bundle pricing would sell this item below provider cost. Remove the bundle or adjust pricing.' },
-          );
+          throw new BadRequestException({
+            code: 'ORDER_BUNDLE_BELOW_PROVIDER_COST',
+            message:
+              'Bundle pricing would sell this item below provider cost. Remove the bundle or adjust pricing.',
+          });
         }
       }
 
@@ -485,7 +629,11 @@ export class OrdersService {
       // Format: { "field-uuid": "value" } or { "field-uuid": "https://...url" }
       const dtoCustomization = dto.item_customizations?.[item.id];
       const cartFields = item.custom_fields as Record<string, any> | null;
-      let fieldValues: { custom_field_id: string; value?: string; file_url?: string }[] = [];
+      let fieldValues: {
+        custom_field_id: string;
+        value?: string;
+        file_url?: string;
+      }[] = [];
 
       if (dtoCustomization?.custom_field_values?.length) {
         fieldValues = dtoCustomization.custom_field_values;
@@ -494,7 +642,8 @@ export class OrdersService {
           .filter(([, v]) => v !== '' && v != null)
           .map(([fieldId, val]) => {
             const strVal = Array.isArray(val) ? val.join(', ') : String(val);
-            const isUrl = strVal.startsWith('http') || strVal.startsWith('/uploads');
+            const isUrl =
+              strVal.startsWith('http') || strVal.startsWith('/uploads');
             return {
               custom_field_id: fieldId,
               value: isUrl ? undefined : strVal,
@@ -504,12 +653,16 @@ export class OrdersService {
       }
 
       // Validate required custom fields (skip fields already filled by creator)
-      const productIdForFields = item.product_id || (item.custom_product_id
-        ? (await this.prisma.customProduct.findUnique({
-            where: { id: item.custom_product_id },
-            select: { product_id: true },
-          }))?.product_id
-        : null);
+      const productIdForFields =
+        item.product_id ||
+        (item.custom_product_id
+          ? (
+              await this.prisma.customProduct.findUnique({
+                where: { id: item.custom_product_id },
+                select: { product_id: true },
+              })
+            )?.product_id
+          : null);
 
       if (productIdForFields) {
         const requiredFields = await this.prisma.productCustomField.findMany({
@@ -520,10 +673,11 @@ export class OrdersService {
         // Get creator-provided field values (for custom products)
         let creatorFilledIds: string[] = [];
         if (item.custom_product_id) {
-          const creatorValues = await this.prisma.customProductFieldValue.findMany({
-            where: { custom_product_id: item.custom_product_id },
-            select: { custom_field_id: true, value: true, file_url: true },
-          });
+          const creatorValues =
+            await this.prisma.customProductFieldValue.findMany({
+              where: { custom_product_id: item.custom_product_id },
+              select: { custom_field_id: true, value: true, file_url: true },
+            });
           creatorFilledIds = creatorValues
             .filter((cv) => cv.value || cv.file_url)
             .map((cv) => cv.custom_field_id);
@@ -534,12 +688,16 @@ export class OrdersService {
           // Skip if creator already filled this field
           if (creatorFilledIds.includes(rf.id)) continue;
 
-          const isFilled = filledIds.includes(rf.id) && fieldValues.some(
-            (fv) => fv.custom_field_id === rf.id && (fv.value || fv.file_url),
-          );
+          const isFilled =
+            filledIds.includes(rf.id) &&
+            fieldValues.some(
+              (fv) => fv.custom_field_id === rf.id && (fv.value || fv.file_url),
+            );
           if (!isFilled) {
             const label = rf.translations?.[0]?.label || rf.name || rf.id;
-            throw new BadRequestException(`Required field "${label}" is missing`);
+            throw new BadRequestException(
+              `Required field "${label}" is missing`,
+            );
           }
         }
       }
@@ -566,11 +724,15 @@ export class OrdersService {
     const shippingAddress = await this.prisma.address.findUnique({
       where: { id: dto.address_id },
     });
-    if (!shippingAddress) throw new NotFoundException({ code: 'ORDER_SHIPPING_ADDRESS_NOT_FOUND', message: 'Shipping address not found' });
+    if (!shippingAddress)
+      throw new NotFoundException({
+        code: 'ORDER_SHIPPING_ADDRESS_NOT_FOUND',
+        message: 'Shipping address not found',
+      });
 
-    const productIds = cart.items.map(
-      (item) => item.product_id || item.custom_product_id,
-    ).filter(Boolean) as string[];
+    const productIds = cart.items
+      .map((item) => item.product_id || item.custom_product_id)
+      .filter(Boolean) as string[];
 
     const totalItemCount = cart.items.reduce((sum, i) => sum + i.quantity, 0);
 
@@ -583,7 +745,8 @@ export class OrdersService {
 
     if (!(shippingResult as any).available) {
       throw new BadRequestException(
-        (shippingResult as any).message || 'Shipping not available to your country',
+        (shippingResult as any).message ||
+          'Shipping not available to your country',
       );
     }
 
@@ -630,7 +793,10 @@ export class OrdersService {
       // Reject rather than sell below provider cost — the same economic guard
       // the bundle path applies. Without it a percentage coupon silently
       // scales the provider's payout below the base price they are owed.
-      if (!isIndependentStore && subtotal - discountAmount < providerBaseTotal) {
+      if (
+        !isIndependentStore &&
+        subtotal - discountAmount < providerBaseTotal
+      ) {
         throw new BadRequestException({
           code: 'ORDER_DISCOUNT_BELOW_PROVIDER_COST',
           message:
@@ -652,7 +818,8 @@ export class OrdersService {
       }
       // Only a real reservation is releasable — unlimited coupons were never
       // incremented, so handing one back would corrupt the counter.
-      if (claim === 'reserved') redemptionClaimed = couponValidation.promotion_id;
+      if (claim === 'reserved')
+        redemptionClaimed = couponValidation.promotion_id;
     }
 
     const total = subtotal + shippingCost - discountAmount;
@@ -664,16 +831,26 @@ export class OrdersService {
       return vals;
     });
 
-    // Determine payment status based on method
-    const paymentMethod = dto.payment_method || 'COD';
-    const paymentStatus = paymentMethod === 'COD' ? 'pending' : 'awaiting_payment';
+    // Determine payment status based on method. Both online methods start
+    // in awaiting_payment; Kustom additionally gets the random secret that is
+    // embedded in its push/validation callback URLs.
+    const paymentMethod = requestedPaymentMethod;
+    const paymentStatus =
+      paymentMethod === PaymentMethod.COD ? 'pending' : 'awaiting_payment';
+    const kustomPushToken =
+      paymentMethod === PaymentMethod.KUSTOM
+        ? randomBytes(32).toString('hex')
+        : undefined;
 
     // Order currency: an independent store may price in its own currency
     // (it charges on its own connected account); everything else uses the
     // platform default. Snapshotted onto the order so a later change to the
     // store never rewrites settled history.
     const platformConfig = await this.prisma.platformConfig.findFirst();
-    const currency = resolveStoreCurrency(orderStore, platformConfig?.default_currency);
+    const currency = resolveStoreCurrency(
+      orderStore,
+      platformConfig?.default_currency,
+    );
 
     // ── Stock: atomically decrement before creating the order. The conditional
     // updateMany (where stock_quantity >= qty) is race-safe — if two buyers
@@ -708,7 +885,8 @@ export class OrdersService {
       }
     } catch (err) {
       await this.restoreStock(decrementedStock);
-      if (redemptionClaimed) await this.promotionsService.releaseRedemption(redemptionClaimed);
+      if (redemptionClaimed)
+        await this.promotionsService.releaseRedemption(redemptionClaimed);
       throw err;
     }
 
@@ -729,6 +907,7 @@ export class OrdersService {
           payment_method: paymentMethod,
           payment_status: paymentStatus,
           stripe_payment_id: dto.stripe_payment_intent_id,
+          kustom_push_token: kustomPushToken,
           notes: dto.notes,
           items: { create: orderItems },
           timeline: {
@@ -750,7 +929,8 @@ export class OrdersService {
       // Order creation failed AFTER stock was decremented — restore so the
       // sold-out signal doesn't stick to a non-existent order.
       await this.restoreStock(decrementedStock);
-      if (redemptionClaimed) await this.promotionsService.releaseRedemption(redemptionClaimed);
+      if (redemptionClaimed)
+        await this.promotionsService.releaseRedemption(redemptionClaimed);
       throw new BadRequestException(
         err instanceof Error ? err.message : 'Failed to create order',
       );
@@ -836,12 +1016,14 @@ export class OrdersService {
     // store owner now. Card orders wait for payment success (PaymentsService
     // dispatches both events once the Stripe payment is confirmed) so we
     // don't spam the owner about orders that may end up failing.
-    if (paymentMethod === 'COD') {
+    if (paymentMethod === PaymentMethod.COD) {
       await this.mail.dispatchOrderEmail(order.id, 'order_confirmation');
       await this.mail.dispatchOrderEmail(order.id, 'new_order_owner');
     }
 
-    return order;
+    // Same shaping as every read path: resolves item images and drops the
+    // Kustom push token, which must never reach the customer's browser.
+    return this.withItemImages(order);
   }
 
   /**
@@ -857,7 +1039,11 @@ export class OrdersService {
     providerBaseTotal: number;
     creatorMarginTotal: number;
     commissionPercent: number;
-  }): { platformAmount: number; providerAmount: number; creatorAmount: number } {
+  }): {
+    platformAmount: number;
+    providerAmount: number;
+    creatorAmount: number;
+  } {
     const {
       subtotal,
       discountAmount,
@@ -880,7 +1066,10 @@ export class OrdersService {
     const providerFloor =
       Math.round(providerBaseTotal * (1 - commissionPercent / 100) * 100) / 100;
     if (platformAmount > commissionBase - providerFloor) {
-      platformAmount = Math.max(0, Math.round((commissionBase - providerFloor) * 100) / 100);
+      platformAmount = Math.max(
+        0,
+        Math.round((commissionBase - providerFloor) * 100) / 100,
+      );
     }
 
     // Scale provider/creator by discount factor to reflect discounted revenue
@@ -896,7 +1085,8 @@ export class OrdersService {
     let creatorAmount = 0;
     if (totalScaled > 0 && payoutPool > 0) {
       providerAmount =
-        Math.round((payoutPool * scaledProviderBase / totalScaled) * 100) / 100;
+        Math.round(((payoutPool * scaledProviderBase) / totalScaled) * 100) /
+        100;
       // Never below the provider's base cost, never above what was collected.
       if (providerAmount < providerFloor) providerAmount = providerFloor;
       if (providerAmount > payoutPool) providerAmount = payoutPool;
@@ -989,7 +1179,11 @@ export class OrdersService {
     const customer = await this.prisma.customer.findUnique({
       where: { user_id: userId },
     });
-    if (!customer) throw new NotFoundException({ code: 'ORDER_CUSTOMER_NOT_FOUND', message: 'Customer not found' });
+    if (!customer)
+      throw new NotFoundException({
+        code: 'ORDER_CUSTOMER_NOT_FOUND',
+        message: 'Customer not found',
+      });
 
     const skip = (page - 1) * limit;
     const [data, total] = await Promise.all([
@@ -1009,7 +1203,13 @@ export class OrdersService {
     };
   }
 
-  async findByRole(userId: string, role: UserRole, page = 1, limit = 20, status?: OrderStatus) {
+  async findByRole(
+    userId: string,
+    role: UserRole,
+    page = 1,
+    limit = 20,
+    status?: OrderStatus,
+  ) {
     if (role === UserRole.PROVIDER) {
       return this.findByProvider(userId, page, limit, status);
     }
@@ -1020,8 +1220,15 @@ export class OrdersService {
   }
 
   // Provider sees orders where their products are being fulfilled
-  private async findByProvider(userId: string, page = 1, limit = 20, status?: OrderStatus) {
-    const provider = await this.prisma.provider.findUnique({ where: { user_id: userId } });
+  private async findByProvider(
+    userId: string,
+    page = 1,
+    limit = 20,
+    status?: OrderStatus,
+  ) {
+    const provider = await this.prisma.provider.findUnique({
+      where: { user_id: userId },
+    });
     if (!provider) {
       return { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
     }
@@ -1055,7 +1262,12 @@ export class OrdersService {
   }
 
   // Creator sees orders placed through their store
-  private async findByCreator(userId: string, page = 1, limit = 20, status?: OrderStatus) {
+  private async findByCreator(
+    userId: string,
+    page = 1,
+    limit = 20,
+    status?: OrderStatus,
+  ) {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
       include: { store: true },
@@ -1151,7 +1363,11 @@ export class OrdersService {
       },
     });
 
-    if (!order) throw new NotFoundException({ code: 'ORDER_NOT_FOUND', message: 'Order not found' });
+    if (!order)
+      throw new NotFoundException({
+        code: 'ORDER_NOT_FOUND',
+        message: 'Order not found',
+      });
 
     // Admin sees everything (full payment details + all payouts).
     if (role === UserRole.ADMIN) return this.withItemImages(order);
@@ -1161,7 +1377,10 @@ export class OrdersService {
     // Foreign orders get a 404 (not 403) so order ids are not enumerable.
     const canRead = await this.userCanReadOrder(order, userId, role);
     if (!canRead) {
-      throw new NotFoundException({ code: 'ORDER_NOT_FOUND', message: 'Order not found' });
+      throw new NotFoundException({
+        code: 'ORDER_NOT_FOUND',
+        message: 'Order not found',
+      });
     }
 
     // Everyone else: hide the customer's card/charge/receipt details and the
@@ -1185,12 +1404,26 @@ export class OrdersService {
     void _r;
 
     let scopedPayouts: typeof payouts = [];
-    if (
-      (role === UserRole.PROVIDER || role === UserRole.CREATOR) &&
-      userId
-    ) {
+    if ((role === UserRole.PROVIDER || role === UserRole.CREATOR) && userId) {
       const fulfillerId = await this.resolveFulfillerId(userId, role);
       scopedPayouts = payouts.filter((p) => p.recipient_id === fulfillerId);
+    }
+
+    // Kustom references are merchant-side bookkeeping: the owning creator
+    // (whose Kustom account holds the money) keeps them; customers and
+    // providers don't need them. The push token is removed for everyone
+    // inside withItemImages.
+    if (role !== UserRole.CREATOR) {
+      const {
+        kustom_order_id: _ko,
+        kustom_capture_id: _kc,
+        kustom_captured_at: _kd,
+        ...customerSafe
+      } = safe;
+      void _ko;
+      void _kc;
+      void _kd;
+      return this.withItemImages({ ...customerSafe, payouts: scopedPayouts });
     }
     return this.withItemImages({ ...safe, payouts: scopedPayouts });
   }
@@ -1223,7 +1456,11 @@ export class OrdersService {
    * Admin is handled by the caller; any other case is denied.
    */
   private async userCanReadOrder(
-    order: { customer: { user_id: string } | null; items: { fulfiller_id: string | null }[]; store_id: string | null },
+    order: {
+      customer: { user_id: string } | null;
+      items: { fulfiller_id: string | null }[];
+      store_id: string | null;
+    },
     userId?: string,
     role?: UserRole,
   ): Promise<boolean> {
@@ -1235,7 +1472,9 @@ export class OrdersService {
 
     if (role === UserRole.PROVIDER) {
       const providerId = await this.resolveFulfillerId(userId, role);
-      return !!providerId && order.items.some((i) => i.fulfiller_id === providerId);
+      return (
+        !!providerId && order.items.some((i) => i.fulfiller_id === providerId)
+      );
     }
 
     if (role === UserRole.CREATOR) {
@@ -1257,13 +1496,20 @@ export class OrdersService {
    * Resolve the fulfiller (provider/creator) profile id for a given user.
    * Returns null when the role doesn't have a fulfiller profile.
    */
-  private async resolveFulfillerId(userId: string, userRole: UserRole): Promise<string | null> {
+  private async resolveFulfillerId(
+    userId: string,
+    userRole: UserRole,
+  ): Promise<string | null> {
     if (userRole === UserRole.PROVIDER) {
-      const provider = await this.prisma.provider.findUnique({ where: { user_id: userId } });
+      const provider = await this.prisma.provider.findUnique({
+        where: { user_id: userId },
+      });
       return provider?.id ?? null;
     }
     if (userRole === UserRole.CREATOR) {
-      const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
+      const creator = await this.prisma.creator.findUnique({
+        where: { user_id: userId },
+      });
       return creator?.id ?? null;
     }
     return null;
@@ -1302,7 +1548,10 @@ export class OrdersService {
     const candidate = fulfillmentStageToOrderStatus(minRank);
     if (!candidate) return null;
     // Advance only.
-    if ((ORDER_STATUS_RANK[candidate] ?? 0) <= (ORDER_STATUS_RANK[order.status] ?? 0)) {
+    if (
+      (ORDER_STATUS_RANK[candidate] ?? 0) <=
+      (ORDER_STATUS_RANK[order.status] ?? 0)
+    ) {
       return null;
     }
 
@@ -1322,6 +1571,7 @@ export class OrdersService {
       where: { order_id: orderId },
       data: { status: deriveCommissionStatus(candidate) },
     });
+    if (candidate === OrderStatus.SHIPPED) await this.runShippedHooks(orderId);
     return { from: order.status, to: candidate };
   }
 
@@ -1354,7 +1604,9 @@ export class OrdersService {
         await this.mail.dispatchOrderEmail(orderId, 'order_delivered');
         return;
       case OrderStatus.CANCELLED:
-        await this.mail.dispatchOrderEmail(orderId, 'order_cancelled', { reason: note });
+        await this.mail.dispatchOrderEmail(orderId, 'order_cancelled', {
+          reason: note,
+        });
         return;
       case OrderStatus.REFUNDED: {
         const o = await this.prisma.order.findUnique({
@@ -1379,14 +1631,31 @@ export class OrdersService {
    *   what makes mixed-fulfiller orders work — each side advances its own items
    *   and the order header follows the slowest item automatically.
    */
-  async updateStatus(id: string, dto: UpdateOrderStatusDto, actorId: string, actorRole: UserRole) {
+  async updateStatus(
+    id: string,
+    dto: UpdateOrderStatusDto,
+    actorId: string,
+    actorRole: UserRole,
+  ) {
     const order = await this.prisma.order.findUnique({ where: { id } });
-    if (!order) throw new NotFoundException({ code: 'ORDER_NOT_FOUND', message: 'Order not found' });
+    if (!order)
+      throw new NotFoundException({
+        code: 'ORDER_NOT_FOUND',
+        message: 'Order not found',
+      });
 
     if (actorRole === UserRole.ADMIN) {
-      await this.prisma.order.update({ where: { id }, data: { status: dto.status } });
+      await this.prisma.order.update({
+        where: { id },
+        data: { status: dto.status },
+      });
       await this.prisma.orderTimeline.create({
-        data: { order_id: id, status: dto.status, note: dto.note, actor: actorId },
+        data: {
+          order_id: id,
+          status: dto.status,
+          note: dto.note,
+          actor: actorId,
+        },
       });
       await this.prisma.orderCommission.updateMany({
         where: { order_id: id },
@@ -1399,16 +1668,27 @@ export class OrdersService {
           data: { fulfillment_status: nextFulfillment },
         });
       }
+      if (
+        dto.status === OrderStatus.SHIPPED &&
+        order.status !== OrderStatus.SHIPPED
+      ) {
+        await this.runShippedHooks(id);
+      }
       await this.dispatchStatusEmail(id, order.status, dto.status, dto.note);
       return this.findById(id, actorId, actorRole);
     }
 
     // Provider/Creator — advance only their own items.
     const expectedType =
-      actorRole === UserRole.PROVIDER ? FulfillerType.PROVIDER : FulfillerType.CREATOR;
+      actorRole === UserRole.PROVIDER
+        ? FulfillerType.PROVIDER
+        : FulfillerType.CREATOR;
     const fulfillerId = await this.resolveFulfillerId(actorId, actorRole);
     if (!fulfillerId) {
-      throw new ForbiddenException({ code: 'ORDER_FULFILLER_PROFILE_NOT_FOUND', message: 'Fulfiller profile not found for this user' });
+      throw new ForbiddenException({
+        code: 'ORDER_FULFILLER_PROFILE_NOT_FOUND',
+        message: 'Fulfiller profile not found for this user',
+      });
     }
 
     const targetFulfillment = deriveFulfillmentStatus(dto.status);
@@ -1417,11 +1697,18 @@ export class OrdersService {
     }
 
     const res = await this.prisma.orderItem.updateMany({
-      where: { order_id: id, fulfiller_id: fulfillerId, fulfiller_type: expectedType },
+      where: {
+        order_id: id,
+        fulfiller_id: fulfillerId,
+        fulfiller_type: expectedType,
+      },
       data: { fulfillment_status: targetFulfillment },
     });
     if (res.count === 0) {
-      throw new ForbiddenException({ code: 'ORDER_NO_OWNED_ITEMS', message: 'You have no items to fulfill in this order' });
+      throw new ForbiddenException({
+        code: 'ORDER_NO_OWNED_ITEMS',
+        message: 'You have no items to fulfill in this order',
+      });
     }
 
     await this.prisma.orderTimeline.create({
@@ -1435,7 +1722,12 @@ export class OrdersService {
 
     const transition = await this.recomputeOrderStatusFromItems(id);
     if (transition) {
-      await this.dispatchStatusEmail(id, transition.from, transition.to, dto.note);
+      await this.dispatchStatusEmail(
+        id,
+        transition.from,
+        transition.to,
+        dto.note,
+      );
     }
     return this.findById(id, actorId, actorRole);
   }
@@ -1453,18 +1745,27 @@ export class OrdersService {
       where: { id: itemId, order_id: orderId },
       select: { id: true, fulfiller_id: true, fulfiller_type: true },
     });
-    if (!item) throw new NotFoundException({ code: 'ORDER_ITEM_NOT_FOUND', message: 'Order item not found' });
+    if (!item)
+      throw new NotFoundException({
+        code: 'ORDER_ITEM_NOT_FOUND',
+        message: 'Order item not found',
+      });
 
     if (actorRole !== UserRole.ADMIN) {
       const expectedType =
-        actorRole === UserRole.PROVIDER ? FulfillerType.PROVIDER : FulfillerType.CREATOR;
+        actorRole === UserRole.PROVIDER
+          ? FulfillerType.PROVIDER
+          : FulfillerType.CREATOR;
       const fulfillerId = await this.resolveFulfillerId(actorId, actorRole);
       if (
         !fulfillerId ||
         item.fulfiller_type !== expectedType ||
         item.fulfiller_id !== fulfillerId
       ) {
-        throw new ForbiddenException({ code: 'ORDER_FULFILLMENT_NOT_OWNED', message: 'You can only update fulfillment for items you fulfill' });
+        throw new ForbiddenException({
+          code: 'ORDER_FULFILLMENT_NOT_OWNED',
+          message: 'You can only update fulfillment for items you fulfill',
+        });
       }
     }
 
@@ -1485,12 +1786,18 @@ export class OrdersService {
     return updated;
   }
 
-  // ── Payment status transitions (called from the Stripe webhook) ──────────────
-  // Both methods are idempotent: replaying the same webhook event leaves the
-  // order untouched on the second pass. They return the order plus a `changed`
-  // flag so the caller can decide whether to fire a notification.
+  // ── Payment status transitions (called from the payment providers) ───────────
+  // All methods are idempotent: replaying the same webhook/push event leaves
+  // the order untouched on the second pass. They return the order plus a
+  // `changed` flag so the caller can decide whether to fire a notification.
+  // `provider` only labels the timeline note ('Stripe' by default, 'Kustom'
+  // for Kustom Checkout).
 
-  async markOrderPaid(orderId: string, stripePaymentId?: string) {
+  async markOrderPaid(
+    orderId: string,
+    stripePaymentId?: string,
+    provider = 'Stripe',
+  ) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: { customer: { select: { user_id: true } } },
@@ -1527,14 +1834,17 @@ export class OrdersService {
       data: {
         order_id: orderId,
         status: 'PAID',
-        note: 'Payment confirmed via Stripe',
+        note: `Payment confirmed via ${provider}`,
         actor: 'system',
       },
     });
     return { order, changed: true };
   }
 
-  async markOrderFailed(orderId: string) {
+  async markOrderFailed(
+    orderId: string,
+    reason = 'Stripe reported the payment failed',
+  ) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: { customer: { select: { user_id: true } } },
@@ -1555,7 +1865,7 @@ export class OrdersService {
       data: {
         order_id: orderId,
         status: 'PAYMENT_FAILED',
-        note: 'Stripe reported the payment failed',
+        note: reason,
         actor: 'system',
       },
     });
@@ -1576,7 +1886,7 @@ export class OrdersService {
    * customer emailed. Idempotent, and returns `changed` so the caller can skip
    * duplicate notifications on a replayed event.
    */
-  async markOrderRefunded(orderId: string) {
+  async markOrderRefunded(orderId: string, provider = 'Stripe') {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: { customer: { select: { user_id: true } } },
@@ -1599,7 +1909,7 @@ export class OrdersService {
       data: {
         order_id: orderId,
         status: 'REFUNDED',
-        note: 'Payment fully refunded via Stripe',
+        note: `Payment fully refunded via ${provider}`,
         actor: 'system',
       },
     });
@@ -1633,8 +1943,13 @@ export class OrdersService {
    * status, stock or commissions — those still reflect a live order.
    * Deduplicated on the note so a replayed event doesn't stack rows.
    */
-  async recordPartialRefund(orderId: string, amountRefunded: number, currency: string) {
-    const note = `Partially refunded via Stripe: ${amountRefunded} ${currency.toUpperCase()}`;
+  async recordPartialRefund(
+    orderId: string,
+    amountRefunded: number,
+    currency: string,
+    provider = 'Stripe',
+  ) {
+    const note = `Partially refunded via ${provider}: ${amountRefunded} ${currency.toUpperCase()}`;
     const existing = await this.prisma.orderTimeline.findFirst({
       where: { order_id: orderId, status: 'PARTIALLY_REFUNDED', note },
       select: { id: true },
@@ -1657,7 +1972,10 @@ export class OrdersService {
    * their inventory. A Stripe PaymentIntent cannot be confirmed anywhere near
    * this far after creation, so an order still `awaiting_payment` past the
    * window was abandoned — the buyer closed the tab, or the client failed
-   * between creating the order and confirming the card.
+   * between creating the order and confirming the card. Kustom sessions live
+   * longer (48h), but the same window applies: a Kustom push arriving after
+   * the sweep still lands, because markOrderPaid accepts a `failed` order and
+   * re-takes its stock.
    *
    * Deliberately bounded and best-effort: it runs inside a checkout request, so
    * it must never slow that request down or fail it. `markOrderFailed` does the
@@ -1665,18 +1983,30 @@ export class OrdersService {
    */
   private async releaseExpiredAwaitingPaymentOrders(): Promise<void> {
     try {
-      const cutoff = new Date(Date.now() - ABANDONED_PAYMENT_TTL_MS);
+      const now = Date.now();
       const stale = await this.prisma.order.findMany({
         where: {
           payment_status: 'awaiting_payment',
-          created_at: { lt: cutoff },
+          OR: [
+            {
+              payment_method: { not: PaymentMethod.KUSTOM },
+              created_at: { lt: new Date(now - ABANDONED_PAYMENT_TTL_MS) },
+            },
+            {
+              payment_method: PaymentMethod.KUSTOM,
+              created_at: { lt: new Date(now - ABANDONED_KUSTOM_TTL_MS) },
+            },
+          ],
         },
         select: { id: true },
         orderBy: { created_at: 'asc' },
         take: 20,
       });
       for (const order of stale) {
-        await this.markOrderFailed(order.id);
+        await this.markOrderFailed(
+          order.id,
+          'Payment was not completed in time; the order was released',
+        );
       }
     } catch (err) {
       console.error('[OrderSweep] Failed to release abandoned orders', err);
