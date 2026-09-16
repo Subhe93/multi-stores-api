@@ -197,6 +197,33 @@ export class KustomService implements OnModuleInit {
   }
 
   /**
+   * Kustom calls the push/validation URLs itself and redirects the customer
+   * to the storefront URLs, so all of them must be public https addresses.
+   * A localhost or http base is rejected by Kustom with an opaque
+   * "BAD_VALUE: push" — fail here with a message that names the fix instead.
+   */
+  private requirePublicUrls(): { storefrontBase: string; apiBase: string } {
+    const bases = this.urls();
+    const isPublicHttps = (value: string) =>
+      /^https:\/\/[^/\s]+/i.test(value) &&
+      !/localhost|127\.0\.0\.1/i.test(value);
+    const bad: string[] = [];
+    if (!isPublicHttps(bases.apiBase)) bad.push('PUBLIC_API_URL');
+    if (!isPublicHttps(bases.storefrontBase)) bad.push('STOREFRONT_URL');
+    if (bad.length) {
+      this.logger.error(
+        `Kustom checkout blocked: ${bad.join(' and ')} must be public https URL(s) (api=${bases.apiBase}, storefront=${bases.storefrontBase})`,
+      );
+      throw new BadRequestException({
+        code: 'KUSTOM_CALLBACK_URL_INVALID',
+        message:
+          'Kustom Checkout is not fully configured on the server (callback URLs are not public https). Please choose another payment method.',
+      });
+    }
+    return bases;
+  }
+
+  /**
    * Turn a Kustom failure into the HTTP error the caller should see: 4xx from
    * Kustom is a request/config problem (400 with Kustom's message), anything
    * else (network, timeout, 5xx) is an upstream outage (502).
@@ -319,7 +346,7 @@ export class KustomService implements OnModuleInit {
       customDomain: ctx.customDomain,
       primaryLocale: ctx.primaryLocale,
       pushToken,
-      ...this.urls(),
+      ...this.requirePublicUrls(),
     });
     const client = new KustomClient(creds);
 
