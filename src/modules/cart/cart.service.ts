@@ -9,6 +9,26 @@ import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
 import { validateBundleEconomics } from '../bundles/bundle-economics.util';
 
+// Shape of a product custom field as loaded with its translations.
+interface CustomFieldDef {
+  id: string;
+  name: string;
+  translations: {
+    locale: string;
+    label: string;
+    option_labels?: unknown;
+  }[];
+}
+
+// One displayable "label: value" line for a cart item's custom fields.
+export interface CustomFieldDisplay {
+  id: string;
+  label: string;
+  value: unknown;
+  /** Translated option label when the value is one of the field's options. */
+  display: string | null;
+}
+
 @Injectable()
 export class CartService {
   constructor(private prisma: PrismaService) {}
@@ -38,6 +58,37 @@ export class CartService {
    * rely on row order, which is alphabetical by locale ('ar' before 'en') and
    * therefore returns the wrong language for the storefront's active locale.
    */
+  /**
+   * Resolve the values a customer typed into a product's custom fields into
+   * something displayable: the field's label in the requested locale and, for
+   * option fields, the translated option label. Keys the customer's cart no
+   * longer has a definition for are still returned (label = the raw key) so
+   * nothing silently disappears.
+   */
+  private buildCustomFieldDisplay(
+    defs: CustomFieldDef[],
+    values: unknown,
+    locale?: string,
+  ): CustomFieldDisplay[] {
+    if (!values || typeof values !== 'object' || Array.isArray(values)) return [];
+    return Object.entries(values as Record<string, unknown>)
+      .filter(([, v]) => v !== '' && v != null)
+      .map(([fieldId, value]) => {
+        const def = defs.find((d) => d.id === fieldId);
+        const tr = def ? this.pickTranslation(def.translations, locale) : undefined;
+        const display =
+          typeof value === 'string' && tr?.option_labels
+            ? ((tr.option_labels as Record<string, string>)[value] ?? null)
+            : null;
+        return {
+          id: fieldId,
+          label: tr?.label || def?.name || fieldId,
+          value,
+          display,
+        };
+      });
+  }
+
   private pickTranslation<T extends { locale: string }>(
     translations: T[] | undefined,
     locale?: string,
@@ -68,6 +119,9 @@ export class CartService {
       // Per-value image map for the product behind this line, read once and
       // used when the chosen variant is resolved further down.
       let productOptionConfig: unknown = null;
+      // Custom field definitions (with translations) of the product behind
+      // this line, so the cart can show "Label: value" instead of field ids.
+      let customFieldDefs: CustomFieldDef[] = [];
 
       if (item.custom_product_id) {
         // Custom product: fetch from CustomProduct with mockup images and base product
@@ -83,6 +137,7 @@ export class CartService {
               include: {
                 translations: true,
                 images: { take: 1, orderBy: { sort_order: 'asc' as const } },
+                custom_fields: { include: { translations: true } },
               },
             },
           },
@@ -90,6 +145,7 @@ export class CartService {
         // Selected in the same round-trip; used only when the creator has not
         // uploaded a mockup (see the image resolution below).
         const cpOptionConfig = cp?.product?.variant_option_config ?? null;
+        customFieldDefs = cp?.product?.custom_fields ?? [];
 
         if (cp) {
           title =
@@ -154,10 +210,12 @@ export class CartService {
           include: {
             translations: true,
             images: { where: { is_featured: true }, take: 1 },
+            custom_fields: { include: { translations: true } },
           },
         });
 
         if (product) {
+          customFieldDefs = product.custom_fields;
           title = this.pickTranslation(product.translations, locale)?.title || null;
           price = Number(product.base_price);
           productOptionConfig = product.variant_option_config;
@@ -251,6 +309,11 @@ export class CartService {
         customProductId: item.custom_product_id,
         quantity: item.quantity,
         customFields: item.custom_fields,
+        customFieldDisplay: this.buildCustomFieldDisplay(
+          customFieldDefs,
+          item.custom_fields,
+          locale,
+        ),
         title,
         price,
         imageUrl,
