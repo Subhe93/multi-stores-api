@@ -134,6 +134,8 @@ export class UsersController {
       min_order_amount?: number | null;
       require_provider_approval?: boolean;
       require_creator_approval?: boolean;
+      // Platform-wide VAT rate in basis points (2500 = 25 %), 0..10000.
+      default_tax_rate_bp?: number;
     },
   ) {
     return this.usersService.updatePlatformConfig(body);

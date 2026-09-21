@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PricingType, StoreType } from '@prisma/client';
 import { resolveStoreCurrency } from '../../common/money/currency.util';
+import { resolveStoreTaxRateBp } from '../../common/money/tax.util';
 import {
   isKustomEnabledForStore,
   kustomCreatorSelect,
@@ -142,6 +143,10 @@ export class StorefrontService {
       // Independent stores may price in their own currency; everyone else
       // shows the platform default.
       currency: resolveStoreCurrency(store, platformConfig?.default_currency),
+      // Effective VAT rate (basis points): the store override, else the
+      // platform default. Prices are tax inclusive; the storefront only uses
+      // it to show the "Includes VAT" line.
+      tax_rate_bp: resolveStoreTaxRateBp(store, platformConfig),
       // Store type drives the storefront's product mix and checkout flow.
       store_type: store.store_type,
       // Card checkout availability. Marketplace stores need the creator able

@@ -75,6 +75,13 @@ export class CreateOrderDto {
   @IsString()
   stripe_payment_intent_id?: string;
 
+  // The shipping method chosen from the quote for the address country. Must
+  // be one of the ids the quote offers (ORDER_SHIPPING_METHOD_INVALID
+  // otherwise); omitted, the first offered method is used.
+  @IsOptional()
+  @IsString()
+  shipping_method_id?: string;
+
   // Custom field values per cart item (keyed by cart_item_id). Validated per
   // value — without it the whole map bypassed the global ValidationPipe, so
   // arbitrary shapes (and arbitrary strings) were stored on the order item.

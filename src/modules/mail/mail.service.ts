@@ -26,6 +26,8 @@ import {
   absoluteUrl,
   emailPhrases,
   formatMoney,
+  formatTaxLine,
+  formatShippingLine,
   renderOrderItems,
   buildOrderUrl,
   loadOrderForEmail,
@@ -362,6 +364,8 @@ export class MailService {
       store_name: data.storeName ?? '',
       order_number: data.orderNumber,
       total: data.total,
+      shipping_line: data.shippingLine ?? '',
+      tax_line: data.taxLine ?? '',
       payment_line: paymentLine,
       order_button: cta.html,
       order_url_text: cta.text,
@@ -451,6 +455,8 @@ export class MailService {
     const rendered = await this.templates.render('new_order_owner', locale, {
       order_number: data.orderNumber,
       total: data.total,
+      shipping_line: data.shippingLine ?? '',
+      tax_line: data.taxLine ?? '',
       store_name: data.storeName ?? '',
       customer_name: data.customerName ?? '',
       order_button: cta.html,
@@ -528,6 +534,20 @@ export class MailService {
 
     const orderNumber = order.order_number;
     const totalStr = formatMoney(Number(order.total), currency);
+    // "Shipping (<method>): <amount>" — the method name is the order snapshot.
+    const shippingLine = formatShippingLine(
+      Number(order.shipping_cost ?? 0),
+      order.shipping_method_name,
+      currency,
+      locale,
+    );
+    // Printed under the total only when the order carries a VAT rate.
+    const taxLine = formatTaxLine(
+      order.tax_rate_bp,
+      Number(order.tax_amount ?? 0),
+      currency,
+      locale,
+    );
 
     // Identity of the shop the customer actually bought from: it selects the
     // sender and template overrides, and brands the message itself.
@@ -549,6 +569,8 @@ export class MailService {
             ...brand,
             orderNumber,
             total: totalStr,
+            shippingLine,
+            taxLine,
             paid: order.payment_status === 'paid',
             orderUrl,
             itemsHtml: items_html,
@@ -637,6 +659,8 @@ export class MailService {
             ...brand,
             orderNumber,
             total: totalStr,
+            shippingLine,
+            taxLine,
             storeName: order.storeCtx?.name,
             customerName,
             orderAdminUrl,

@@ -92,6 +92,12 @@ export interface KustomMerchantUrls {
   confirmation: string;
   push: string;
   validation?: string;
+  /** Called when the customer changes the shipping address in the iframe. */
+  address_update?: string;
+  /** Called when the customer picks one of our `shipping_options`. */
+  shipping_option_update?: string;
+  /** Called when the customer changes country (markets that allow it). */
+  country_change?: string;
 }
 
 export interface KustomCheckoutOptions {
@@ -99,6 +105,34 @@ export interface KustomCheckoutOptions {
   allow_separate_shipping_address?: boolean;
   phone_mandatory?: boolean;
   require_validate_callback_success?: boolean;
+}
+
+/** A shipping option we offer inside the Kustom iframe. Amounts in minor units. */
+/** Kustom's `shipping_method` classification of a shipping option. */
+export type KustomShippingMethodKind =
+  | 'PickUpStore'
+  | 'Home'
+  | 'BoxReg'
+  | 'BoxUnreg'
+  | 'PickUpPoint'
+  | 'Own'
+  | 'Postal'
+  | 'DHLPackstation'
+  | 'Digital'
+  | 'Undefined';
+
+export interface KustomShippingOption {
+  id: string;
+  name: string;
+  description?: string;
+  promo?: string;
+  price: number;
+  /** Tax included in `price` at `tax_rate`. */
+  tax_amount: number;
+  /** Basis points (2500 = 25 %). */
+  tax_rate: number;
+  preselected?: boolean;
+  shipping_method?: KustomShippingMethodKind;
 }
 
 export interface KustomCheckoutPayload {
@@ -114,6 +148,8 @@ export interface KustomCheckoutPayload {
   billing_address?: KustomAddress;
   shipping_address?: KustomAddress;
   options?: KustomCheckoutOptions;
+  /** Merchant-provided shipping options (omitted = none shown). */
+  shipping_options?: KustomShippingOption[];
 }
 
 /** Checkout API order (`/checkout/v3/orders/{id}`). */
@@ -125,6 +161,32 @@ export interface KustomCheckoutOrder extends KustomCheckoutPayload {
   started_at?: string;
   completed_at?: string;
   last_modified_at?: string;
+  /** The option the customer picked from `shipping_options`, once chosen. */
+  selected_shipping_option?: KustomShippingOption;
+}
+
+/**
+ * Body Kustom posts to our address_update / shipping_option_update /
+ * validation callbacks: the checkout order as it stands. Everything is
+ * optional — the body is untrusted input and only the addresses and the
+ * selected option id are ever read from it.
+ */
+export type KustomCheckoutCallbackBody = Partial<KustomCheckoutOrder> & {
+  shipping_address?: KustomAddress;
+  billing_address?: KustomAddress;
+  selected_shipping_option?: Partial<KustomShippingOption>;
+};
+
+/**
+ * Body of the 200 response to address_update / shipping_option_update: the
+ * re-priced order for the reported address, plus the options to offer.
+ */
+export interface KustomCheckoutUpdateResponse {
+  order_amount: number;
+  order_tax_amount: number;
+  order_lines: KustomOrderLine[];
+  shipping_options: KustomShippingOption[];
+  purchase_currency: string;
 }
 
 /** Order Management API order (`/ordermanagement/v1/orders/{id}`). */
@@ -234,7 +296,7 @@ export class KustomClient {
    * actually sent one — several endpoints reply 201/204 with nothing.
    */
   private async request<T>(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PATCH',
     path: string,
     action: string,
     opts: { body?: unknown; idempotencyKey?: string } = {},
@@ -365,6 +427,24 @@ export class KustomClient {
       throw new KustomApiError(0, 'empty response', 'read order');
     }
     return body;
+  }
+
+  /**
+   * Re-label a completed order with our references (204, no body). Used by
+   * the session-first flow, whose checkout was created before our order id
+   * existed, so the merchant portal shows the real order instead of the
+   * session id.
+   */
+  async updateMerchantReferences(
+    kustomOrderId: string,
+    refs: { merchant_reference1?: string; merchant_reference2?: string },
+  ): Promise<void> {
+    await this.request<void>(
+      'PATCH',
+      `/ordermanagement/v1/orders/${encodeURIComponent(kustomOrderId)}/merchant-references`,
+      'update merchant references',
+      { body: refs },
+    );
   }
 
   /** Stops Kustom's push retries. 204, no body. */

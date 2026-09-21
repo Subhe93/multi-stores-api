@@ -14,6 +14,8 @@ import {
   CreateShippingProfileDto,
   CreateShippingZoneDto,
   UpdateShippingZoneDto,
+  CreateShippingMethodDto,
+  UpdateShippingMethodDto,
   CalculateShippingDto,
   EstimateShippingDto,
 } from './dto/shipping.dto';
@@ -65,7 +67,12 @@ export class ShippingController {
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: UserRole,
   ) {
-    return this.shippingService.addZone(profileId, dto, userId, this.ownerTypeFor(role));
+    return this.shippingService.addZone(
+      profileId,
+      dto,
+      userId,
+      this.ownerTypeFor(role),
+    );
   }
 
   @Put('zones/:id')
@@ -77,7 +84,12 @@ export class ShippingController {
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: UserRole,
   ) {
-    return this.shippingService.updateZone(id, dto, userId, this.ownerTypeFor(role));
+    return this.shippingService.updateZone(
+      id,
+      dto,
+      userId,
+      this.ownerTypeFor(role),
+    );
   }
 
   @Put('profiles/:id/default')
@@ -115,15 +127,67 @@ export class ShippingController {
     return this.shippingService.deleteZone(id, userId, this.ownerTypeFor(role));
   }
 
-  // عام — حساب تكلفة الشحن
+  // ── Methods (owner-scoped like zones; admin bypasses ownership) ───────────
+
+  @Post('zones/:zoneId/methods')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
+  addMethod(
+    @Param('zoneId') zoneId: string,
+    @Body() dto: CreateShippingMethodDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.shippingService.addMethod(
+      zoneId,
+      dto,
+      userId,
+      this.ownerTypeFor(role),
+    );
+  }
+
+  @Put('methods/:id')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
+  updateMethod(
+    @Param('id') id: string,
+    @Body() dto: UpdateShippingMethodDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.shippingService.updateMethod(
+      id,
+      dto,
+      userId,
+      this.ownerTypeFor(role),
+    );
+  }
+
+  @Delete('methods/:id')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
+  deleteMethod(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.shippingService.deleteMethod(
+      id,
+      userId,
+      this.ownerTypeFor(role),
+    );
+  }
+
+  // Public: price one profile for a destination (legacy single-cost shape + methods)
   @Post('calculate')
   calculate(@Body() dto: CalculateShippingDto) {
     return this.shippingService.calculate(dto);
   }
 
-  // عام — تقدير الشحن بناءً على المنتجات والدولة
+  // Public: every shipping method for a set of products and a destination,
+  // plus the legacy cost/estimated_days of the cheapest one.
   @Post('estimate')
   estimate(@Body() dto: EstimateShippingDto) {
-    return this.shippingService.calculateForItems(dto);
+    return this.shippingService.estimate(dto);
   }
 }

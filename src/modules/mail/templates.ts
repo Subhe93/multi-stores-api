@@ -88,6 +88,10 @@ export function passwordResetEmail(resetUrl: string, brand?: EmailBrand): EmailP
 export interface OrderConfirmationData extends EmailBrand {
   orderNumber: string;
   total: string; // already formatted, e.g. "SEK 423.30"
+  // "Shipping (Standard shipping): SEK 49.00" — empty when nothing to show.
+  shippingLine?: string;
+  // "Includes VAT (25 %): SEK 84.66" — empty when the order has no VAT rate.
+  taxLine?: string;
   paid: boolean; // true = paid (card), false = cash on delivery
   orderUrl?: string;
   itemsHtml?: string;
@@ -111,13 +115,17 @@ export function orderConfirmationEmail(data: OrderConfirmationData): EmailParts 
          Your order <strong>${esc(data.orderNumber)}</strong> has been placed. ${paymentLine}
        </p>
        ${itemsHtml}
+       ${data.shippingLine ? `<p style="font-size:13px;color:#3f3f46;margin-bottom:4px;">${esc(data.shippingLine)}</p>` : ''}
        <p style="font-size:14px;color:#3f3f46;">Total: <strong>${esc(data.total)}</strong></p>
+       ${data.taxLine ? `<p style="font-size:12px;color:#71717a;margin-top:-8px;">${esc(data.taxLine)}</p>` : ''}
        ${cta}`,
       data,
     ),
-    text: `Thanks for your order!\n\nOrder ${data.orderNumber} has been placed. ${paymentLine}${itemsText}\nTotal: ${data.total}${
-      data.orderUrl ? `\n\nView your order: ${data.orderUrl}` : ''
-    }`,
+    text: `Thanks for your order!\n\nOrder ${data.orderNumber} has been placed. ${paymentLine}${itemsText}${
+      data.shippingLine ? `\n${data.shippingLine}` : ''
+    }\nTotal: ${data.total}${
+      data.taxLine ? `\n${data.taxLine}` : ''
+    }${data.orderUrl ? `\n\nView your order: ${data.orderUrl}` : ''}`,
   };
 }
 
@@ -264,6 +272,10 @@ export function orderRefundedEmail(data: OrderRefundedData): EmailParts {
 export interface NewOrderOwnerData extends EmailBrand {
   orderNumber: string;
   total: string;
+  // "Shipping (Standard shipping): SEK 49.00" — empty when nothing to show.
+  shippingLine?: string;
+  // "Includes VAT (25 %): SEK 84.66" — empty when the order has no VAT rate.
+  taxLine?: string;
   storeName?: string;
   customerName?: string;
   orderAdminUrl?: string;
@@ -286,6 +298,8 @@ export function newOrderOwnerEmail(data: NewOrderOwnerData): EmailParts {
       `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">
          You have a new order <strong>${esc(data.orderNumber)}</strong> totalling <strong>${esc(data.total)}</strong>.
        </p>
+       ${data.shippingLine ? `<p style="font-size:13px;color:#3f3f46;">${esc(data.shippingLine)}</p>` : ''}
+       ${data.taxLine ? `<p style="font-size:12px;color:#71717a;">${esc(data.taxLine)}</p>` : ''}
        ${customerBit}
        ${data.itemsHtml || ''}
        ${cta}`,
@@ -293,6 +307,8 @@ export function newOrderOwnerEmail(data: NewOrderOwnerData): EmailParts {
     ),
     text:
       `New order ${data.orderNumber}${data.storeName ? ` for ${data.storeName}` : ''}. Total: ${data.total}.` +
+      (data.shippingLine ? `\n${data.shippingLine}` : '') +
+      (data.taxLine ? `\n${data.taxLine}` : '') +
       (data.customerName ? `\nCustomer: ${data.customerName}` : '') +
       (data.itemsText ? `\n\n${data.itemsText}` : '') +
       (data.orderAdminUrl ? `\n\nOpen: ${data.orderAdminUrl}` : ''),

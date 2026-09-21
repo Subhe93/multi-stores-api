@@ -14,6 +14,7 @@ const ITEMS_PHRASES = {
     shipping: 'Shipping',
     discount: 'Discount',
     total: 'Total',
+    includesVat: 'Includes VAT',
     variant: 'Variant',
     tracking: 'Tracking',
     cancelReason: 'Reason',
@@ -30,6 +31,7 @@ const ITEMS_PHRASES = {
     shipping: 'الشحن',
     discount: 'الخصم',
     total: 'الإجمالي',
+    includesVat: 'شامل ضريبة القيمة المضافة',
     variant: 'الخيار',
     tracking: 'رقم التتبّع',
     cancelReason: 'السبب',
@@ -46,6 +48,7 @@ const ITEMS_PHRASES = {
     shipping: 'Kargo',
     discount: 'İndirim',
     total: 'Toplam',
+    includesVat: 'KDV dahil',
     variant: 'Seçenek',
     tracking: 'Takip no',
     cancelReason: 'Neden',
@@ -62,6 +65,7 @@ const ITEMS_PHRASES = {
     shipping: 'Versand',
     discount: 'Rabatt',
     total: 'Gesamt',
+    includesVat: 'Inkl. MwSt.',
     variant: 'Variante',
     tracking: 'Sendungsnr.',
     cancelReason: 'Grund',
@@ -78,6 +82,7 @@ const ITEMS_PHRASES = {
     shipping: 'Livraison',
     discount: 'Remise',
     total: 'Total',
+    includesVat: 'TVA incluse',
     variant: 'Variante',
     tracking: 'Suivi',
     cancelReason: 'Raison',
@@ -94,6 +99,7 @@ const ITEMS_PHRASES = {
     shipping: 'Frakt',
     discount: 'Rabatt',
     total: 'Totalt',
+    includesVat: 'Inkl. moms',
     variant: 'Variant',
     tracking: 'Spårning',
     cancelReason: 'Anledning',
@@ -226,6 +232,47 @@ function variantLabel(options: unknown): string {
  * text block. Image URLs are absolutized against PUBLIC_API_URL so mail clients
  * can fetch them.
  */
+/**
+ * The "Includes VAT (25 %): SEK 55.00" line printed under an order total.
+ * Prices are tax inclusive, so this never changes the total; it is empty
+ * when the order carries no VAT rate.
+ */
+export function formatTaxLine(
+  taxRateBp: number | null | undefined,
+  taxAmount: number | null | undefined,
+  currency: string,
+  locale?: string,
+): string {
+  const rate = Number(taxRateBp || 0);
+  if (!(rate > 0)) return '';
+  const percent = (rate / 100).toLocaleString('en', {
+    maximumFractionDigits: 2,
+  });
+  const amount = formatMoney(Number(taxAmount || 0), currency);
+  return `${emailPhrases(locale).includesVat} (${percent} %): ${amount}`;
+}
+
+/**
+ * The "Shipping (Standard shipping): SEK 49.00" line printed above an order
+ * total. The method name is the order's snapshot (already in the store's
+ * locale); the line is empty when the order neither cost anything to ship
+ * nor recorded a method.
+ */
+export function formatShippingLine(
+  shippingCost: number | null | undefined,
+  methodName: string | null | undefined,
+  currency: string,
+  locale?: string,
+): string {
+  const cost = Number(shippingCost || 0);
+  const name = methodName?.trim();
+  if (!(cost > 0) && !name) return '';
+  const label = name
+    ? `${emailPhrases(locale).shipping} (${name})`
+    : emailPhrases(locale).shipping;
+  return `${label}: ${formatMoney(cost, currency)}`;
+}
+
 export function renderOrderItems(
   items: OrderItemForEmail[],
   currency: string,

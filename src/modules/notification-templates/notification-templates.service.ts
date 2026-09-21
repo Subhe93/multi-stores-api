@@ -96,6 +96,7 @@ export class NotificationTemplatesService {
       variables: [
         'order_number',
         'total',
+        'shipping_line',
         'payment_line',
         'order_button',
         'order_url_text',
@@ -152,6 +153,7 @@ export class NotificationTemplatesService {
       variables: [
         'order_number',
         'total',
+        'shipping_line',
         'store_name',
         'customer_name',
         'order_button',

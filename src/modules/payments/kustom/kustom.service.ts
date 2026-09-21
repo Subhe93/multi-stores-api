@@ -18,6 +18,7 @@ import {
   resolveStoreCurrency,
   toStripeAmount,
 } from '../../../common/money/currency.util';
+import { resolveStoreTaxRateBp } from '../../../common/money/tax.util';
 import { OrdersService } from '../../orders/orders.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { MailService } from '../../mail/mail.service';
@@ -56,13 +57,17 @@ interface Actor {
   role: UserRole;
 }
 
-interface StoreContext {
+export interface StoreContext {
   id: string;
   slug: string;
   customDomain: string | null;
   store_type: StoreType;
   is_active: boolean;
   primaryLocale: string | null;
+  /** Resolved presentment currency (store override or platform default). */
+  currency: string;
+  /** Resolved VAT rate in basis points (store override or platform default). */
+  taxRateBp: number;
   creator: {
     id: string;
     kustom_enabled: boolean;
@@ -113,18 +118,31 @@ export class KustomService implements OnModuleInit {
     return cfg?.kustom_partner_id || null;
   }
 
-  private async loadStoreContext(
-    storeId: string | null,
-  ): Promise<StoreContext | null> {
+  /** Store + creator Kustom fields by id. Public for the session-first flow. */
+  async loadStoreContext(storeId: string | null): Promise<StoreContext | null> {
     if (!storeId) return null;
+    return this.toStoreContext({ id: storeId });
+  }
+
+  /** Same as loadStoreContext, keyed by the storefront slug. */
+  async loadStoreContextBySlug(slug: string): Promise<StoreContext | null> {
+    if (!slug) return null;
+    return this.toStoreContext({ slug });
+  }
+
+  private async toStoreContext(
+    where: { id: string } | { slug: string },
+  ): Promise<StoreContext | null> {
     const store = await this.prisma.store.findUnique({
-      where: { id: storeId },
+      where,
       select: {
         id: true,
         slug: true,
         custom_domain: true,
         store_type: true,
         is_active: true,
+        currency: true,
+        tax_rate_bp: true,
         language_config: { select: { primary_locale: true } },
         creator: {
           select: {
@@ -136,6 +154,9 @@ export class KustomService implements OnModuleInit {
       },
     });
     if (!store) return null;
+    const platformConfig = await this.prisma.platformConfig.findFirst({
+      select: { default_currency: true, default_tax_rate_bp: true },
+    });
     return {
       id: store.id,
       slug: store.slug,
@@ -143,6 +164,8 @@ export class KustomService implements OnModuleInit {
       store_type: store.store_type,
       is_active: store.is_active,
       primaryLocale: store.language_config?.primary_locale ?? null,
+      currency: resolveStoreCurrency(store, platformConfig?.default_currency),
+      taxRateBp: resolveStoreTaxRateBp(store, platformConfig),
       creator: store.creator,
     };
   }
@@ -153,7 +176,7 @@ export class KustomService implements OnModuleInit {
    * an order that was already paid through Kustom must stay manageable —
    * capture, refund, push — even after the creator switches Kustom off.
    */
-  private async credentialsFor(
+  async credentialsFor(
     creator: StoreContext['creator'],
   ): Promise<KustomCredentials | null> {
     const secret = this.crypto.decrypt(creator.kustom_shared_secret);
@@ -187,7 +210,7 @@ export class KustomService implements OnModuleInit {
     return { ctx, client: new KustomClient(creds) };
   }
 
-  private urls(): { storefrontBase: string; apiBase: string } {
+  urls(): { storefrontBase: string; apiBase: string } {
     return {
       storefrontBase:
         this.config.get<string>('STOREFRONT_URL') || 'http://localhost:3003',
@@ -201,8 +224,9 @@ export class KustomService implements OnModuleInit {
    * to the storefront URLs, so all of them must be public https addresses.
    * A localhost or http base is rejected by Kustom with an opaque
    * "BAD_VALUE: push" — fail here with a message that names the fix instead.
+   * Shared with the session-first flow (KustomCheckoutService).
    */
-  private requirePublicUrls(): { storefrontBase: string; apiBase: string } {
+  requirePublicUrls(): { storefrontBase: string; apiBase: string } {
     const bases = this.urls();
     const isPublicHttps = (value: string) =>
       /^https:\/\/[^/\s]+/i.test(value) &&
@@ -228,7 +252,7 @@ export class KustomService implements OnModuleInit {
    * Kustom is a request/config problem (400 with Kustom's message), anything
    * else (network, timeout, 5xx) is an upstream outage (502).
    */
-  private toHttpException(err: unknown, action: string): Error {
+  toHttpException(err: unknown, action: string): Error {
     if (err instanceof KustomApiError) {
       this.logger.error(
         `Kustom error while trying to ${action}: ${err.message}`,
@@ -259,10 +283,8 @@ export class KustomService implements OnModuleInit {
     return err instanceof Error ? err : new Error(message);
   }
 
-  private safeTokenEqual(
-    stored: string | null | undefined,
-    given: string,
-  ): boolean {
+  /** Constant-time secret comparison; false for any missing side. */
+  safeTokenEqual(stored: string | null | undefined, given: string): boolean {
     if (!stored || !given) return false;
     const a = Buffer.from(stored, 'utf8');
     const b = Buffer.from(given, 'utf8');
@@ -346,6 +368,7 @@ export class KustomService implements OnModuleInit {
       customDomain: ctx.customDomain,
       primaryLocale: ctx.primaryLocale,
       pushToken,
+      taxRateBp: ctx.taxRateBp,
       ...this.requirePublicUrls(),
     });
     const client = new KustomClient(creds);
@@ -493,6 +516,23 @@ export class KustomService implements OnModuleInit {
    * Returns Kustom's confirmation snippet for the page to render.
    */
   async getConfirmation(userId: string, orderId: string) {
+    const owner = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { customer: { select: { user_id: true } } },
+    });
+    if (!owner) throw new NotFoundException('Order not found');
+    if (owner.customer.user_id !== userId) {
+      throw new ForbiddenException('You can only confirm your own orders');
+    }
+    return this.confirmOrder(orderId);
+  }
+
+  /**
+   * The confirmation processing itself, for a caller that has already
+   * authorised access to the order (the customer above, or a session token
+   * in the session-first flow).
+   */
+  async confirmOrder(orderId: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       select: {
@@ -505,13 +545,9 @@ export class KustomService implements OnModuleInit {
         payment_method: true,
         kustom_order_id: true,
         store_id: true,
-        customer: { select: { user_id: true } },
       },
     });
     if (!order) throw new NotFoundException('Order not found');
-    if (order.customer.user_id !== userId) {
-      throw new ForbiddenException('You can only confirm your own orders');
-    }
     if (
       order.payment_method !== PaymentMethod.KUSTOM ||
       !order.kustom_order_id
@@ -733,7 +769,7 @@ export class KustomService implements OnModuleInit {
    * markOrderPaid called. Idempotent; safe for push, confirmation and session
    * to all race each other.
    */
-  private async processCompletedCheckout(
+  async processCompletedCheckout(
     order: {
       id: string;
       order_number: string;
@@ -746,12 +782,26 @@ export class KustomService implements OnModuleInit {
   ): Promise<{ paid: boolean; changed: boolean }> {
     const live = await client.getOrder(kustomOrderId);
 
+    // A session-first checkout was created before the order existed, so its
+    // reference is the session id; accept it when that session is the one
+    // this order came from.
+    let viaSession = false;
     if (live.merchant_reference1 !== order.id) {
-      await this.recordMismatch(
-        order.id,
-        `Kustom order ${kustomOrderId} belongs to reference ${String(live.merchant_reference1)}`,
-      );
-      return { paid: false, changed: false };
+      const session =
+        typeof live.merchant_reference1 === 'string'
+          ? await this.prisma.kustomCheckoutSession.findFirst({
+              where: { id: live.merchant_reference1, order_id: order.id },
+              select: { id: true },
+            })
+          : null;
+      if (!session) {
+        await this.recordMismatch(
+          order.id,
+          `Kustom order ${kustomOrderId} belongs to reference ${String(live.merchant_reference1)}`,
+        );
+        return { paid: false, changed: false };
+      }
+      viaSession = true;
     }
     const status = (live.status ?? '').toUpperCase();
     if (!PAID_STATUSES.has(status)) {
@@ -812,6 +862,24 @@ export class KustomService implements OnModuleInit {
     }
 
     await this.syncShippingAddress(order.id, live);
+
+    // Best-effort: label the Kustom order with the real order id/number so
+    // the merchant portal shows it instead of the session id. Later reads
+    // then match on order.id directly; a failure changes nothing here.
+    if (viaSession) {
+      try {
+        await client.updateMerchantReferences(kustomOrderId, {
+          merchant_reference1: order.id,
+          merchant_reference2: order.order_number,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Could not update merchant references of Kustom order ${kustomOrderId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
 
     try {
       await client.acknowledge(kustomOrderId);

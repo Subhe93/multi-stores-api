@@ -13,8 +13,22 @@
  * https://docs.stripe.com/currencies#zero-decimal
  */
 const ZERO_DECIMAL = new Set([
-  'bif', 'clp', 'djf', 'gnf', 'jpy', 'kmf', 'krw', 'mga',
-  'pyg', 'rwf', 'ugx', 'vnd', 'vuv', 'xaf', 'xof', 'xpf',
+  'bif',
+  'clp',
+  'djf',
+  'gnf',
+  'jpy',
+  'kmf',
+  'krw',
+  'mga',
+  'pyg',
+  'rwf',
+  'ugx',
+  'vnd',
+  'vuv',
+  'xaf',
+  'xof',
+  'xpf',
 ]);
 
 /**
@@ -26,17 +40,52 @@ const THREE_DECIMAL = new Set(['bhd', 'jod', 'kwd', 'omr', 'tnd']);
 
 /** Currencies a store may be priced in. Kept explicit so a typo can't reach Stripe. */
 export const SUPPORTED_CURRENCIES = [
-  'AED', 'AUD', 'BGN', 'BRL', 'CAD', 'CHF', 'CNY', 'CZK', 'DKK', 'EGP',
-  'EUR', 'GBP', 'HKD', 'HUF', 'IDR', 'ILS', 'INR', 'ISK', 'JPY', 'KRW',
-  'MAD', 'MXN', 'MYR', 'NOK', 'NZD', 'PHP', 'PLN', 'QAR', 'RON', 'SAR',
-  'SEK', 'SGD', 'THB', 'TRY', 'TWD', 'USD', 'ZAR',
+  'AED',
+  'AUD',
+  'BGN',
+  'BRL',
+  'CAD',
+  'CHF',
+  'CNY',
+  'CZK',
+  'DKK',
+  'EGP',
+  'EUR',
+  'GBP',
+  'HKD',
+  'HUF',
+  'IDR',
+  'ILS',
+  'INR',
+  'ISK',
+  'JPY',
+  'KRW',
+  'MAD',
+  'MXN',
+  'MYR',
+  'NOK',
+  'NZD',
+  'PHP',
+  'PLN',
+  'QAR',
+  'RON',
+  'SAR',
+  'SEK',
+  'SGD',
+  'THB',
+  'TRY',
+  'TWD',
+  'USD',
+  'ZAR',
 ] as const;
 
 export type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
 
 export function isSupportedCurrency(code: string | null | undefined): boolean {
   if (!code) return false;
-  return (SUPPORTED_CURRENCIES as readonly string[]).includes(code.toUpperCase());
+  return (SUPPORTED_CURRENCIES as readonly string[]).includes(
+    code.toUpperCase(),
+  );
 }
 
 /** How many minor units this currency has (2 for most, 0 for JPY-likes). */
@@ -47,6 +96,21 @@ export function currencyDecimals(currency: string): number {
   // amount conversion they behave like two-decimal ones.
   if (THREE_DECIMAL.has(c)) return 2;
   return 2;
+}
+
+/**
+ * Round a major-unit amount to what the database stores (Decimal(10,2) on
+ * every order column, i.e. two decimals for every currency, whole units for
+ * zero-decimal ones when a currency is given). Pricing rounds at the source
+ * with this so a unit price, its line total and the order total are exact in
+ * minor units — the mapper never has to absorb a float gap.
+ */
+export function roundMoney(amount: number, currency?: string): number {
+  const decimals = currency ? currencyDecimals(currency) : 2;
+  const factor = 10 ** decimals;
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round((n + Number.EPSILON) * factor) / factor;
 }
 
 /**
@@ -76,7 +140,10 @@ export function fromStripeAmount(amount: number, currency: string): number {
  * currency even if a stale value is sitting on the row.
  */
 export function resolveStoreCurrency(
-  store: { store_type?: string | null; currency?: string | null } | null | undefined,
+  store:
+    | { store_type?: string | null; currency?: string | null }
+    | null
+    | undefined,
   platformDefault: string | null | undefined,
 ): string {
   const fallback = (platformDefault || 'EUR').toUpperCase();

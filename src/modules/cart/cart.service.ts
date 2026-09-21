@@ -7,6 +7,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
+import { resolveStoreCurrency } from '../../common/money/currency.util';
+import { includedTax, resolveStoreTaxRateBp } from '../../common/money/tax.util';
 import { validateBundleEconomics } from '../bundles/bundle-economics.util';
 
 // Shape of a product custom field as loaded with its translations.
@@ -509,9 +511,79 @@ export class CartService {
       locale,
     );
 
+    // VAT shown in the cart. Base = the coupon-free, shipping-free subtotal:
+    // sum of each line's effective unit price (bundle pricing applied) times
+    // its quantity. Prices are tax inclusive so this is informational only;
+    // the order snapshots the exact figure from its final total at creation.
+    const tax = await this.resolveCartTax(
+      cartWithItems?.items || [],
+      enrichedItems as { price?: number; quantity?: number }[],
+    );
+
     return {
       id: cartWithItems?.id,
       items: enrichedItems,
+      tax_rate_bp: tax.tax_rate_bp,
+      tax_amount: tax.tax_amount,
+    };
+  }
+
+  /**
+   * The store a cart belongs to is not stored on the row, so it is derived
+   * from the first line that resolves to a creator (the storefront keeps one
+   * cart per store). No resolvable line means the platform default applies.
+   */
+  private async resolveCartTax(
+    items: {
+      product_id: string | null;
+      custom_product_id: string | null;
+      variant_id: string | null;
+    }[],
+    enrichedItems: { price?: number; quantity?: number }[],
+  ): Promise<{ tax_rate_bp: number; tax_amount: number }> {
+    const platformConfig = await this.prisma.platformConfig.findFirst({
+      select: { default_currency: true, default_tax_rate_bp: true },
+    });
+
+    let creatorId: string | null = null;
+    for (const item of items) {
+      if (item.custom_product_id) {
+        const cp = await this.prisma.customProduct.findUnique({
+          where: { id: item.custom_product_id },
+          select: { creator_id: true },
+        });
+        creatorId = cp?.creator_id ?? null;
+      } else if (item.variant_id) {
+        const v = await this.prisma.productVariant.findUnique({
+          where: { id: item.variant_id },
+          select: { product: { select: { creator_id: true } } },
+        });
+        creatorId = v?.product.creator_id ?? null;
+      } else if (item.product_id) {
+        const p = await this.prisma.product.findUnique({
+          where: { id: item.product_id },
+          select: { creator_id: true },
+        });
+        creatorId = p?.creator_id ?? null;
+      }
+      if (creatorId) break;
+    }
+
+    const store = creatorId
+      ? await this.prisma.store.findUnique({
+          where: { creator_id: creatorId },
+          select: { tax_rate_bp: true, currency: true, store_type: true },
+        })
+      : null;
+    const taxRateBp = resolveStoreTaxRateBp(store, platformConfig);
+    const currency = resolveStoreCurrency(store, platformConfig?.default_currency);
+    const subtotal = enrichedItems.reduce(
+      (sum, it) => sum + Number(it.price || 0) * Number(it.quantity || 0),
+      0,
+    );
+    return {
+      tax_rate_bp: taxRateBp,
+      tax_amount: includedTax(subtotal, taxRateBp, currency),
     };
   }
 

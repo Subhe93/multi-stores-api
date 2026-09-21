@@ -1,15 +1,19 @@
 import { toStripeAmount } from '../../../common/money/currency.util';
+import { includedTaxMinor } from '../../../common/money/tax.util';
 import type {
   KustomAddress,
   KustomCheckoutPayload,
+  KustomCheckoutUpdateResponse,
   KustomMerchantUrls,
   KustomOrderLine,
+  KustomShippingOption,
 } from './kustom.client';
 
 /**
- * Pure functions that turn one of our orders into the Kustom checkout payload.
- * Nothing here touches the database or the network, so the mapping can be
- * unit-tested and reused for both the create and the update call.
+ * Pure functions that turn one of our orders — or a not-yet-ordered checkout
+ * session — into the Kustom checkout payload. Nothing here touches the
+ * database or the network, so the mapping can be unit-tested and reused for
+ * the create, update and callback responses alike.
  */
 
 type Translation = { locale: string; title: string };
@@ -17,32 +21,40 @@ type Translation = { locale: string; title: string };
 export interface KustomOrderItemInput {
   id: string;
   quantity: number;
-  unit_price: unknown; // Prisma Decimal
-  total_price: unknown; // Prisma Decimal
+  unit_price: unknown; // Prisma Decimal or number
+  total_price: unknown; // Prisma Decimal or number
   product?: { translations?: Translation[] } | null;
   custom_product?: { translations?: Translation[] } | null;
   variant?: { sku?: string | null; options?: unknown } | null;
 }
 
-export interface KustomOrderInput {
-  id: string;
-  order_number: string;
+export interface KustomAddressInput {
+  full_name: string;
+  line1: string;
+  line2?: string | null;
+  city: string;
+  state?: string | null;
+  postal_code: string;
+  country_code: string;
+  phone?: string | null;
+}
+
+/** The amounts every line builder needs; an Order row satisfies it. */
+export interface KustomLinesInput {
   currency: string;
-  subtotal: unknown;
   shipping_cost: unknown;
   discount_amount: unknown;
   total: unknown;
   items: KustomOrderItemInput[];
-  address: {
-    full_name: string;
-    line1: string;
-    line2?: string | null;
-    city: string;
-    state?: string | null;
-    postal_code: string;
-    country_code: string;
-    phone?: string | null;
-  };
+}
+
+export interface KustomOrderInput extends KustomLinesInput {
+  id: string;
+  order_number: string;
+  subtotal: unknown;
+  /** Snapshotted method name; becomes the shipping line's name when set. */
+  shipping_method_name?: string | null;
+  address: KustomAddressInput;
   customer: {
     phone?: string | null;
     user?: { email?: string | null } | null;
@@ -60,6 +72,8 @@ export interface KustomMapperContext {
   /** PUBLIC_API_URL, no trailing slash needed. */
   apiBase: string;
   pushToken: string;
+  /** VAT rate in basis points applied to every line (prices are inclusive). */
+  taxRateBp?: number;
 }
 
 // ── Locale ──────────────────────────────────────────────────────────────────
@@ -207,59 +221,90 @@ function consistentLineAmounts(
   };
 }
 
+/**
+ * Stamp a line with the VAT it includes. Prices are tax inclusive, so the
+ * amounts never change: `total_tax_amount = total - total * 10000 / (10000 + rate)`
+ * rounded to the minor unit, negative for negative (discount) lines.
+ */
+function withTax(
+  line: Omit<KustomOrderLine, 'tax_rate' | 'total_tax_amount'>,
+  taxRateBp: number,
+): KustomOrderLine {
+  return {
+    ...line,
+    tax_rate: taxRateBp,
+    total_tax_amount: includedTaxMinor(line.total_amount, taxRateBp),
+  };
+}
+
+export interface KustomLineOptions {
+  /** VAT rate in basis points; 0 (the default) sends tax-free lines. */
+  taxRateBp?: number;
+  /** Name of the shipping line, e.g. the selected option's localized name. */
+  shippingName?: string;
+}
+
 export function buildKustomOrderLines(
-  order: KustomOrderInput,
+  order: KustomLinesInput,
   locale: string,
+  opts: KustomLineOptions = {},
 ): KustomOrderLine[] {
   const cur = order.currency;
+  const rate = Math.max(0, Math.trunc(opts.taxRateBp ?? 0));
   const lines: KustomOrderLine[] = order.items.map((item) => {
     const amounts = consistentLineAmounts(
       toStripeAmount(Number(item.unit_price), cur),
       toStripeAmount(Number(item.total_price), cur),
       item.quantity,
     );
-    return {
-      type: 'physical',
-      reference: (item.variant?.sku || item.id).slice(0, 64),
-      name: resolveItemName(item, locale),
-      quantity: item.quantity,
-      quantity_unit: 'pcs',
-      // Tax is not modelled per line yet — see API-CONTRACT.md.
-      tax_rate: 0,
-      total_tax_amount: 0,
-      ...amounts,
-    };
+    return withTax(
+      {
+        type: 'physical',
+        reference: (item.variant?.sku || item.id).slice(0, 64),
+        name: resolveItemName(item, locale),
+        quantity: item.quantity,
+        quantity_unit: 'pcs',
+        ...amounts,
+      },
+      rate,
+    );
   });
 
   const shippingMinor = toStripeAmount(Number(order.shipping_cost), cur);
   if (shippingMinor > 0) {
-    lines.push({
-      type: 'shipping_fee',
-      reference: 'shipping',
-      name: 'Shipping',
-      quantity: 1,
-      unit_price: shippingMinor,
-      tax_rate: 0,
-      total_amount: shippingMinor,
-      total_discount_amount: 0,
-      total_tax_amount: 0,
-    });
+    lines.push(
+      withTax(
+        {
+          type: 'shipping_fee',
+          reference: 'shipping',
+          name: (opts.shippingName || 'Shipping').slice(0, 255),
+          quantity: 1,
+          unit_price: shippingMinor,
+          total_amount: shippingMinor,
+          total_discount_amount: 0,
+        },
+        rate,
+      ),
+    );
   }
 
   const discountMinor = toStripeAmount(Number(order.discount_amount), cur);
   if (discountMinor > 0) {
     // Discounts are separate negative lines in Kustom's model.
-    lines.push({
-      type: 'discount',
-      reference: 'discount',
-      name: 'Discount',
-      quantity: 1,
-      unit_price: -discountMinor,
-      tax_rate: 0,
-      total_amount: -discountMinor,
-      total_discount_amount: 0,
-      total_tax_amount: 0,
-    });
+    lines.push(
+      withTax(
+        {
+          type: 'discount',
+          reference: 'discount',
+          name: 'Discount',
+          quantity: 1,
+          unit_price: -discountMinor,
+          total_amount: -discountMinor,
+          total_discount_amount: 0,
+        },
+        rate,
+      ),
+    );
   }
 
   // Kustom also requires order_amount == sum(total_amount). The order total is
@@ -269,20 +314,88 @@ export function buildKustomOrderLines(
   const linesMinor = lines.reduce((s, l) => s + l.total_amount, 0);
   const gap = orderMinor - linesMinor;
   if (gap !== 0) {
-    lines.push({
-      type: gap > 0 ? 'surcharge' : 'discount',
-      reference: 'rounding',
-      name: 'Rounding adjustment',
-      quantity: 1,
-      unit_price: gap,
-      tax_rate: 0,
-      total_amount: gap,
-      total_discount_amount: 0,
-      total_tax_amount: 0,
-    });
+    lines.push(
+      withTax(
+        {
+          type: gap > 0 ? 'surcharge' : 'discount',
+          reference: 'rounding',
+          name: 'Rounding adjustment',
+          quantity: 1,
+          unit_price: gap,
+          total_amount: gap,
+          total_discount_amount: 0,
+        },
+        rate,
+      ),
+    );
   }
 
   return lines;
+}
+
+/** `order_tax_amount` is the sum of the lines, never recomputed from the total. */
+export function sumKustomTax(lines: KustomOrderLine[]): number {
+  return lines.reduce((s, l) => s + l.total_tax_amount, 0);
+}
+
+// ── Shipping options ────────────────────────────────────────────────────────
+
+/**
+ * A shipping method priced for one destination, as the shipping module
+ * quotes it (ShippingService.quoteForItems, one entry per ShippingMethod).
+ */
+export interface ShippingQuoteOption {
+  /** The ShippingMethod id — what the order stores as shipping_method_id. */
+  id: string;
+  name: string;
+  /** Overrides the "<min>–<max> days" text, e.g. "Pick up in store". */
+  description?: string;
+  type: 'delivery' | 'pickup';
+  /** Major units. */
+  cost: number;
+  estimated_days?: { min: number; max: number } | null;
+}
+
+export function formatEstimatedDays(
+  days: { min: number; max: number } | null | undefined,
+): string | undefined {
+  if (!days) return undefined;
+  return days.min === days.max
+    ? `${days.min} days`
+    : `${days.min}–${days.max} days`;
+}
+
+/**
+ * Kustom `shipping_options` for a set of quotes. The selected id (what the
+ * customer picked in the iframe) is preselected when it is still offered,
+ * else the first option — Kustom needs exactly one preselected entry.
+ * Pickup methods are flagged `PickUpStore`, everything else `Home`, so the
+ * iframe can label them accordingly.
+ */
+export function buildKustomShippingOptions(
+  quotes: ShippingQuoteOption[],
+  currency: string,
+  taxRateBp: number,
+  selectedId?: string | null,
+): KustomShippingOption[] {
+  const preselectedId = quotes.some((q) => q.id === selectedId)
+    ? selectedId
+    : quotes[0]?.id;
+  return quotes.map((q) => {
+    const price = toStripeAmount(q.cost, currency);
+    const option: KustomShippingOption = {
+      id: q.id,
+      name: q.name.slice(0, 255),
+      price,
+      tax_rate: taxRateBp,
+      tax_amount: includedTaxMinor(price, taxRateBp),
+      preselected: q.id === preselectedId,
+      shipping_method: q.type === 'pickup' ? 'PickUpStore' : 'Home',
+    };
+    const description = q.description ?? formatEstimatedDays(q.estimated_days);
+    if (description) option.description = description.slice(0, 255);
+    return option;
+  });
 }
 
 // ── URLs ────────────────────────────────────────────────────────────────────
@@ -307,6 +420,10 @@ export function resolveStoreBase(
   return `${storefrontBase.replace(/\/$/, '')}/store/${storeSlug}`;
 }
 
+function apiBaseOf(ctx: { apiBase: string }): string {
+  return `${ctx.apiBase.replace(/\/$/, '')}/api`;
+}
+
 /**
  * Merchant URLs exactly as agreed in API-CONTRACT.md. `{checkout.order.id}` is
  * a literal placeholder Kustom substitutes with its own checkout id.
@@ -320,7 +437,7 @@ export function buildKustomMerchantUrls(
     ctx.storeSlug,
     ctx.customDomain,
   );
-  const api = `${ctx.apiBase.replace(/\/$/, '')}/api`;
+  const api = apiBaseOf(ctx);
   const oid = encodeURIComponent(orderId);
   const token = encodeURIComponent(ctx.pushToken);
   return {
@@ -333,7 +450,7 @@ export function buildKustomMerchantUrls(
   };
 }
 
-// ── Payload ─────────────────────────────────────────────────────────────────
+// ── Payload (order-first flow) ──────────────────────────────────────────────
 
 /** Full create/update body for `/checkout/v3/orders`. */
 export function buildKustomCheckoutPayload(
@@ -344,14 +461,17 @@ export function buildKustomCheckoutPayload(
   const contentLocale = (ctx.primaryLocale ?? 'en').toLowerCase();
   const locale = resolveKustomLocale(ctx.primaryLocale, country);
   const address = buildKustomAddress(order);
-  const lines = buildKustomOrderLines(order, contentLocale);
+  const lines = buildKustomOrderLines(order, contentLocale, {
+    taxRateBp: ctx.taxRateBp ?? 0,
+    shippingName: order.shipping_method_name ?? undefined,
+  });
 
   return {
     purchase_country: country,
     purchase_currency: order.currency.toUpperCase(),
     locale,
     order_amount: toStripeAmount(Number(order.total), order.currency),
-    order_tax_amount: 0,
+    order_tax_amount: sumKustomTax(lines),
     order_lines: lines,
     // Reference1 is what push/validation verify against; reference2 is the
     // human-readable number shown in the Kustom merchant portal.
@@ -379,4 +499,148 @@ export function expectedKustomAmount(order: {
   currency: string;
 }): number {
   return toStripeAmount(Number(order.total), order.currency);
+}
+
+// ── Payload (session-first flow, API-CONTRACT-B.md) ─────────────────────────
+
+export interface KustomSessionMapperContext {
+  storeSlug: string;
+  customDomain?: string | null;
+  primaryLocale: string | null | undefined;
+  storefrontBase: string;
+  apiBase: string;
+  sessionId: string;
+  /**
+   * Storefront secret: returned to the browser, so it only authenticates the
+   * storefront-facing endpoints and the confirmation redirect URL.
+   */
+  token: string;
+  /**
+   * Server-side secret: only ever placed in the merchant URLs Kustom calls
+   * (push, validation, address_update, shipping_option_update). Never
+   * returned to the storefront.
+   */
+  callbackToken: string;
+  taxRateBp: number;
+}
+
+/** A priced checkout session: the quote plus what Kustom should prefill. */
+export interface KustomSessionInput extends KustomLinesInput {
+  /** ISO 3166-1 alpha-2 country the purchase is made in. */
+  purchaseCountry: string;
+  /** `merchant_reference1` — the session id until the order exists. */
+  reference: string;
+  reference2?: string;
+  email?: string | null;
+  phone?: string | null;
+  /** Prefilled billing/shipping address (logged-in customers). */
+  address?: KustomAddressInput | null;
+  /** Options to offer for the current destination; empty until known. */
+  shippingOptions: ShippingQuoteOption[];
+  selectedShippingId?: string | null;
+}
+
+/**
+ * Merchant URLs of the session-first flow, all keyed by session id. The
+ * confirmation page (opened in the shopper's browser) carries the storefront
+ * token; the four server-to-server callbacks carry the callback token only.
+ */
+export function buildKustomSessionMerchantUrls(
+  ctx: KustomSessionMapperContext,
+): KustomMerchantUrls {
+  const base = resolveStoreBase(
+    ctx.storefrontBase,
+    ctx.storeSlug,
+    ctx.customDomain,
+  );
+  const api = `${apiBaseOf(ctx)}/payments/kustom/checkout`;
+  const sid = encodeURIComponent(ctx.sessionId);
+  const token = encodeURIComponent(ctx.token);
+  const callback = encodeURIComponent(ctx.callbackToken);
+  const auth = `session_id=${sid}&token=${callback}`;
+  return {
+    terms: `${base}/legal/terms`,
+    checkout: `${base}/checkout?kustom_session=${sid}`,
+    confirmation: `${base}/checkout/kustom/confirmation?session=${sid}&token=${token}&kustom_order_id={checkout.order.id}`,
+    push: `${api}/push?${auth}&kustom_order_id={checkout.order.id}`,
+    validation: `${api}/validation?${auth}`,
+    address_update: `${api}/address-update?${auth}`,
+    shipping_option_update: `${api}/shipping-option-update?${auth}`,
+  };
+}
+
+/**
+ * Amounts, lines and shipping options of a session — the body of an
+ * address_update / shipping_option_update response, and the money part of
+ * the create/update payload. The selected option's cost is already inside
+ * `total` / `shipping_cost` (the quote priced it), so the shipping_fee line
+ * simply mirrors it.
+ */
+export function buildKustomSessionAmounts(
+  input: KustomSessionInput,
+  ctx: KustomSessionMapperContext,
+): KustomCheckoutUpdateResponse {
+  const contentLocale = (ctx.primaryLocale ?? 'en').toLowerCase();
+  const shippingOptions = buildKustomShippingOptions(
+    input.shippingOptions,
+    input.currency,
+    ctx.taxRateBp,
+    input.selectedShippingId,
+  );
+  const selected = shippingOptions.find((o) => o.preselected);
+  const lines = buildKustomOrderLines(input, contentLocale, {
+    taxRateBp: ctx.taxRateBp,
+    shippingName: selected?.name,
+  });
+  return {
+    order_amount: toStripeAmount(Number(input.total), input.currency),
+    order_tax_amount: sumKustomTax(lines),
+    order_lines: lines,
+    shipping_options: shippingOptions,
+    purchase_currency: input.currency.toUpperCase(),
+  };
+}
+
+/** Full create/update body for a session-first checkout. */
+export function buildKustomSessionPayload(
+  input: KustomSessionInput,
+  ctx: KustomSessionMapperContext,
+): KustomCheckoutPayload {
+  const amounts = buildKustomSessionAmounts(input, ctx);
+  const country = input.purchaseCountry.toUpperCase();
+  let address: KustomAddress | undefined;
+  if (input.address) {
+    address = buildKustomAddress({
+      address: input.address,
+      customer: { phone: input.phone, user: { email: input.email } },
+    });
+  } else if (input.email) {
+    address = { email: input.email, country };
+  }
+
+  const payload: KustomCheckoutPayload = {
+    purchase_country: country,
+    purchase_currency: amounts.purchase_currency,
+    locale: resolveKustomLocale(ctx.primaryLocale, country),
+    order_amount: amounts.order_amount,
+    order_tax_amount: amounts.order_tax_amount,
+    order_lines: amounts.order_lines,
+    merchant_reference1: input.reference,
+    merchant_urls: buildKustomSessionMerchantUrls(ctx),
+    options: {
+      auto_capture: false,
+      allow_separate_shipping_address: true,
+      require_validate_callback_success: true,
+    },
+  };
+  if (input.reference2) payload.merchant_reference2 = input.reference2;
+  if (address) {
+    payload.billing_address = address;
+    payload.shipping_address = address;
+  }
+  // Omitted (not an empty array) until a destination is known.
+  if (amounts.shipping_options.length) {
+    payload.shipping_options = amounts.shipping_options;
+  }
+  return payload;
 }

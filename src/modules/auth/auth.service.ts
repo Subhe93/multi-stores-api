@@ -11,6 +11,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { RegisterDto, LoginDto } from './dto';
 import { UserRole } from '@prisma/client';
 import { MailService } from '../mail/mail.service';
+import { normalizeEmail } from '../../common/email/email.util';
 
 @Injectable()
 export class AuthService {
@@ -21,10 +22,27 @@ export class AuthService {
     private mail: MailService,
   ) {}
 
-  async register(dto: RegisterDto) {
-    const existing = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+  /**
+   * Account lookup by email. New rows are stored normalised (see
+   * normalizeEmail), so the unique index answers the common case; rows
+   * created before normalisation may still be mixed case, hence the
+   * case-insensitive fallback. Existing rows are lower-cased by a separate
+   * one-off data migration, after which the fallback can go.
+   */
+  private async findUserByEmail(email: string) {
+    const normalized = normalizeEmail(email);
+    const exact = await this.prisma.user.findUnique({
+      where: { email: normalized },
     });
+    if (exact) return exact;
+    return this.prisma.user.findFirst({
+      where: { email: { equals: normalized, mode: 'insensitive' } },
+    });
+  }
+
+  async register(dto: RegisterDto) {
+    const email = normalizeEmail(dto.email);
+    const existing = await this.findUserByEmail(email);
     if (existing) {
       throw new ConflictException({ code: 'AUTH_EMAIL_EXISTS', message: 'Email already registered' });
     }
@@ -37,7 +55,7 @@ export class AuthService {
 
     const user = await this.prisma.user.create({
       data: {
-        email: dto.email,
+        email,
         password_hash,
         role: dto.role,
         status: 'ACTIVE',
@@ -87,9 +105,7 @@ export class AuthService {
   }
 
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
+    const user = await this.findUserByEmail(dto.email);
 
     if (!user) {
       throw new UnauthorizedException({ code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid credentials' });
@@ -170,9 +186,7 @@ export class AuthService {
   }
 
   async forgotPassword(email: string, storeSlug?: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { email },
-    });
+    const user = await this.findUserByEmail(email);
 
     // Never reveal whether the email exists — always return the same message.
     if (!user) {

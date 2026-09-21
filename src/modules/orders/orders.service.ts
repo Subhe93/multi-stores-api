@@ -15,6 +15,7 @@ import {
   PaymentMethod,
   PricingType,
   ProductStatus,
+  ShippingMethodType,
   StoreType,
   UserRole,
 } from '@prisma/client';
@@ -24,19 +25,122 @@ import {
   UpdateFulfillmentDto,
 } from './dto/order.dto';
 import { PromotionsService } from '../promotions/promotions.service';
-import { ShippingService } from '../shipping/shipping.service';
+import {
+  ShippingService,
+  type QuotedShippingMethod,
+} from '../shipping/shipping.service';
 import { MailService } from '../mail/mail.service';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
-import { resolveStoreCurrency } from '../../common/money/currency.util';
+import {
+  resolveStoreCurrency,
+  roundMoney,
+} from '../../common/money/currency.util';
+import {
+  includedTaxForOrder,
+  resolveStoreTaxRateBp,
+} from '../../common/money/tax.util';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
 import {
   isKustomEnabledForStore,
   kustomCreatorSelect,
+  type KustomCreatorFields,
 } from '../payments/kustom/kustom.eligibility';
+import {
+  type CartLineLike,
+  type NormalizedCartLine,
+  normalizeCartLine,
+} from '../cart/cart-line';
 
 // Callback run after an order's status becomes SHIPPED. Registered by payment
 // providers that capture on shipment (Kustom); see registerShippedHook.
 type ShippedHook = (orderId: string) => Promise<void>;
+
+/** The store columns order pricing depends on. */
+interface OrderStoreContext {
+  id: string;
+  creator_id: string;
+  store_type: StoreType;
+  currency: string | null;
+  cod_enabled: boolean;
+  is_active: boolean;
+  tax_rate_bp: number | null;
+  /** Store content locale; shipping method names are snapshotted in it. */
+  primary_locale: string | null;
+  creator: KustomCreatorFields;
+}
+
+/** A stock reservation to apply atomically right before the order row. */
+type StockOp = { kind: 'product' | 'variant'; id: string; qty: number };
+
+/** What priceLine() decides for one line. */
+interface PricedLine {
+  unitPrice: number;
+  originalUnitPrice: number | null;
+  providerBasePrice: number;
+  fulfillerId: string;
+  fulfillerType: 'PROVIDER' | 'CREATOR';
+  stockOp: StockOp | null;
+}
+
+type CouponValidation = {
+  promotion_id: string;
+  type: string;
+  value: number;
+  discount_amount: number;
+  free_shipping: boolean;
+};
+
+export type ShippingQuote =
+  | {
+      available: true;
+      /** Cost and days of the chosen method (0 / null when there is none). */
+      cost: number;
+      estimated_days: { min: number; max: number } | null;
+      /** The method the order would use; null when nothing needs shipping. */
+      method: QuotedShippingMethod | null;
+      /** Every method offered for this destination. */
+      methods: QuotedShippingMethod[];
+    }
+  | { available: false; message: string };
+
+export interface OrderQuoteItem {
+  product_id: string | null;
+  variant_id: string | null;
+  custom_product_id: string | null;
+  bundle_offer_id: string | null;
+  quantity: number;
+  unit_price: number;
+  original_unit_price: number | null;
+  total_price: number;
+}
+
+/** Everything an order from these lines would carry, without creating it. */
+export interface OrderQuote {
+  items: OrderQuoteItem[];
+  subtotal: number;
+  shipping_cost: number;
+  discount_amount: number;
+  total: number;
+  currency: string;
+  /** Resolved VAT rate (basis points) and the tax included in `total`. */
+  tax_rate_bp: number;
+  tax_amount: number;
+  /** Null when no destination country was given (shipping not computed). */
+  shipping: ShippingQuote | null;
+  /** The chosen shipping method (what the order would snapshot). */
+  shipping_method_id: string | null;
+  shipping_method_name: string | null;
+  shipping_method_type: ShippingMethodType | null;
+  coupon: CouponValidation | null;
+}
+
+export interface CreateOrderOptions {
+  /**
+   * Price these lines instead of the customer's cart, and leave the cart
+   * untouched. Used by checkouts whose lines never lived in the server cart.
+   */
+  lines?: CartLineLike[];
+}
 
 function deriveCommissionStatus(orderStatus: OrderStatus): CommissionStatus {
   if (orderStatus === OrderStatus.DELIVERED) return CommissionStatus.COMPLETED;
@@ -266,54 +370,16 @@ export class OrdersService {
     return `${prefix}-${timestamp}-${random}`;
   }
 
-  async create(userId: string, dto: CreateOrderDto) {
-    // Card orders reserve stock while they wait for payment. Nothing releases
-    // that reservation when the buyer simply walks away — Stripe only reports
-    // explicit failures — so sweep expired ones here. Doing it on the order
-    // path keeps cleanup proportional to traffic without adding a scheduler.
-    await this.releaseExpiredAwaitingPaymentOrders();
-
-    const customer = await this.prisma.customer.findUnique({
-      where: { user_id: userId },
-    });
-    if (!customer)
-      throw new NotFoundException({
-        code: 'ORDER_CUSTOMER_NOT_FOUND',
-        message: 'Customer not found',
-      });
-
-    // Load the cart
-    const cart = await this.prisma.cart.findUnique({
-      where: { customer_id: customer.id },
-      include: { items: true },
-    });
-
-    if (!cart || cart.items.length === 0) {
-      throw new BadRequestException({
-        code: 'ORDER_CART_EMPTY',
-        message: 'Cart is empty',
-      });
-    }
-
-    // Calculate prices
-    let subtotal = 0;
-    let providerBaseTotal = 0; // what providers are owed (their base prices)
-    let creatorMarginTotal = 0; // what creators are owed (their markup or creator-only revenue)
-    const orderItems: any[] = [];
-
-    // Collected during the loop and decremented atomically before order.create.
-    // Only items whose product/variant tracks inventory go in here — others are
-    // treated as unlimited (consistent with track_inventory=false / null stock).
-    const stockOps: { kind: 'product' | 'variant'; id: string; qty: number }[] =
-      [];
-
-    // The store drives the commission model, the COD gate and — for independent
-    // stores — which Stripe account the customer's card is charged on. It must
-    // be resolved (and every cart line verified against it) before any pricing
-    // happens, otherwise a client could attribute this order to a store that
-    // sells none of these items.
+  /**
+   * The store an order is placed through. It drives the commission model, the
+   * COD gate and — for independent stores — which account the customer is
+   * charged on, so it must be resolved (and every line verified against it)
+   * before any pricing happens; otherwise a client could attribute an order
+   * to a store that sells none of these items.
+   */
+  private async loadOrderStore(storeId: string): Promise<OrderStoreContext> {
     const orderStore = await this.prisma.store.findUnique({
-      where: { id: dto.store_id },
+      where: { id: storeId },
       select: {
         id: true,
         creator_id: true,
@@ -321,6 +387,8 @@ export class OrdersService {
         currency: true,
         cod_enabled: true,
         is_active: true,
+        tax_rate_bp: true,
+        language_config: { select: { primary_locale: true } },
         creator: { select: kustomCreatorSelect },
       },
     });
@@ -336,6 +404,600 @@ export class OrdersService {
         message: 'This store is not accepting orders right now.',
       });
     }
+    const { language_config, ...store } = orderStore;
+    return {
+      ...store,
+      primary_locale: language_config?.primary_locale ?? null,
+    };
+  }
+
+  // Thrown for every line that isn't part of this store's catalogue. The
+  // message is deliberately generic — item ids are not echoed back, and a
+  // foreign product is indistinguishable from an unpublished one.
+  private rejectForeignItem(): never {
+    throw new BadRequestException({
+      code: 'ORDER_ITEM_NOT_SOLD_BY_STORE',
+      message:
+        'One of the items in your cart is not available in this store. Please refresh your cart and try again.',
+    });
+  }
+
+  /**
+   * Price one line exactly as the order will record it: the unit price the
+   * customer pays, what the provider is owed, who fulfils it and whether stock
+   * must be reserved. Shared by create() and quoteLines(), so a quote (a
+   * Kustom checkout session) can never total differently from the order it
+   * turns into.
+   */
+  private async priceLine(
+    item: NormalizedCartLine,
+    orderStore: OrderStoreContext,
+  ): Promise<PricedLine> {
+    const isIndependentStore = orderStore.store_type === StoreType.INDEPENDENT;
+    let unitPrice = 0;
+    let providerBasePrice = 0; // per-unit base owed to provider (0 for creator-only products)
+    let fulfillerId = '';
+    let fulfillerType: 'PROVIDER' | 'CREATOR' = 'PROVIDER';
+    let stockOp: StockOp | null = null;
+
+    if (item.custom_product_id) {
+      // Custom product (with or without a selected variant)
+      const cp = await this.prisma.customProduct.findUnique({
+        where: { id: item.custom_product_id },
+        include: {
+          product: true,
+          selected_variants: item.variant_id
+            ? { where: { variant_id: item.variant_id } }
+            : true,
+        },
+      });
+      if (!cp)
+        throw new NotFoundException(
+          `Custom product ${item.custom_product_id} not found`,
+        );
+
+      // The storefront lists a custom product only when it belongs to this
+      // store's creator and is published — enforce the same rule here.
+      if (
+        cp.creator_id !== orderStore.creator_id ||
+        cp.status !== ProductStatus.PUBLISHED
+      ) {
+        this.rejectForeignItem();
+      }
+
+      let variant: { price_adjustment: any } | null = null;
+      if (item.variant_id) {
+        const variantRow = await this.prisma.productVariant.findUnique({
+          where: { id: item.variant_id },
+          select: { price_adjustment: true, product_id: true },
+        });
+        if (!variantRow)
+          throw new NotFoundException(`Variant ${item.variant_id} not found`);
+        // The variant must belong to the custom product's base product,
+        // otherwise its price adjustment would be borrowed from elsewhere.
+        if (variantRow.product_id !== cp.product_id) this.rejectForeignItem();
+        variant = variantRow;
+      }
+      const variantAdjustment = variant
+        ? Number(variant.price_adjustment || 0)
+        : 0;
+
+      // Compute price based on pricing strategy
+      switch (cp.pricing_type) {
+        case PricingType.SINGLE:
+          // Creator's final_price is THE customer price, regardless of variant
+          unitPrice = Number(cp.final_price);
+          break;
+        case PricingType.PER_VARIANT: {
+          if (variant) {
+            const selected = cp.selected_variants.find(
+              (sv) => sv.variant_id === item.variant_id,
+            );
+            unitPrice = selected?.custom_price
+              ? Number(selected.custom_price)
+              : Number(cp.product.base_price) + variantAdjustment;
+          } else {
+            // No variant chosen on a per-variant product — fall back to final_price
+            unitPrice = Number(cp.final_price) || Number(cp.product.base_price);
+          }
+          break;
+        }
+        case PricingType.MARGIN:
+          unitPrice =
+            Number(cp.product.base_price) +
+            variantAdjustment +
+            Number(cp.margin_amount || 0);
+          break;
+      }
+
+      // Provider base = their product's base price + variant adjustment (if provider exists)
+      if (cp.product.provider_id) {
+        providerBasePrice = Number(cp.product.base_price) + variantAdjustment;
+      }
+
+      // Provider fulfills the product, creator is the seller
+      fulfillerId = cp.product.provider_id || cp.creator_id || '';
+      fulfillerType = cp.product.provider_id ? 'PROVIDER' : 'CREATOR';
+    } else if (item.variant_id) {
+      const variant = await this.prisma.productVariant.findUnique({
+        where: { id: item.variant_id },
+        include: { product: true },
+      });
+      if (!variant)
+        throw new NotFoundException(`Variant ${item.variant_id} not found`);
+
+      // A bare variant line sells the creator's own product: it must belong
+      // to this store's creator and be published. This is what stops another
+      // creator's product being checked out here — and, on an independent
+      // store, charged to this store owner's Stripe account.
+      if (
+        variant.product.creator_id !== orderStore.creator_id ||
+        variant.product.status !== ProductStatus.PUBLISHED ||
+        !variant.is_active
+      ) {
+        this.rejectForeignItem();
+      }
+      // Guard against a variant borrowed from a different product.
+      if (item.product_id && variant.product_id !== item.product_id) {
+        this.rejectForeignItem();
+      }
+
+      unitPrice =
+        Number(variant.product.base_price) + Number(variant.price_adjustment);
+      if (variant.product.provider_id) providerBasePrice = unitPrice;
+      fulfillerId =
+        variant.product.provider_id || variant.product.creator_id || '';
+      fulfillerType = variant.product.provider_id ? 'PROVIDER' : 'CREATOR';
+      // Variants track stock when stock_quantity is non-null.
+      if (variant.stock_quantity != null) {
+        stockOp = { kind: 'variant', id: variant.id, qty: item.quantity };
+      }
+    } else if (item.product_id) {
+      const product = await this.prisma.product.findUnique({
+        where: { id: item.product_id },
+      });
+      if (!product)
+        throw new NotFoundException(`Product ${item.product_id} not found`);
+
+      // Same rule as the variant branch: only this store creator's own
+      // published products are sellable here. Provider catalogue products
+      // (creator_id null) are never sold directly — they reach a storefront
+      // as a CustomProduct.
+      if (
+        product.creator_id !== orderStore.creator_id ||
+        product.status !== ProductStatus.PUBLISHED
+      ) {
+        this.rejectForeignItem();
+      }
+
+      unitPrice = Number(product.base_price);
+      if (product.provider_id) providerBasePrice = unitPrice;
+      fulfillerId = product.provider_id || product.creator_id || '';
+      fulfillerType = product.provider_id ? 'PROVIDER' : 'CREATOR';
+      // Only enforce when the seller actually tracks inventory for this product.
+      if (product.track_inventory && product.stock_quantity != null) {
+        stockOp = { kind: 'product', id: product.id, qty: item.quantity };
+      }
+    } else {
+      // No product, variant or custom product on the line — nothing to price
+      // or attribute. Never let it through as a free item with no fulfiller.
+      this.rejectForeignItem();
+    }
+
+    // Independent stores never sell custom products (provider resells) — not
+    // even creator-only ones (base product without a provider), which would
+    // otherwise slip past the PROVIDER check below.
+    if (isIndependentStore && item.custom_product_id) {
+      throw new BadRequestException({
+        code: 'ORDER_INDEPENDENT_STORE_CUSTOM_ITEM',
+        message:
+          'This store can only sell its own products. Please remove unavailable items from your cart.',
+      });
+    }
+
+    // Independent stores are creator-only: reject any line fulfilled by a
+    // provider (provider products, or custom products backed by a provider).
+    if (isIndependentStore && fulfillerType === 'PROVIDER') {
+      throw new BadRequestException({
+        code: 'ORDER_INDEPENDENT_STORE_PROVIDER_ITEM',
+        message:
+          'This store can only sell its own products. Please remove supplier items from your cart.',
+      });
+    }
+
+    // Apply bundle pricing if this cart line carries a bundle offer
+    let originalUnitPrice: number | null = null;
+    if (item.bundle_offer_id) {
+      const offer = await this.prisma.bundleOffer.findUnique({
+        where: { id: item.bundle_offer_id },
+        include: { bundle: true },
+      });
+      if (!offer || offer.bundle.status !== 'ACTIVE') {
+        throw new BadRequestException({
+          code: 'ORDER_BUNDLE_OFFER_UNAVAILABLE',
+          message: 'Bundle offer is no longer available',
+        });
+      }
+      // A bundle offer only ever lowers the price, so an offer belonging to
+      // another creator would be a straight discount on this store's goods.
+      if (offer.bundle.creator_id !== orderStore.creator_id)
+        this.rejectForeignItem();
+      const pricing = computeBundlePricing(unitPrice, {
+        quantity: offer.quantity,
+        discount_type: offer.discount_type,
+        discount_value: offer.discount_value as any,
+      });
+      // Quantity must be a positive multiple of the bundle's cart quantity
+      if (
+        pricing.cartQuantity <= 0 ||
+        item.quantity % pricing.cartQuantity !== 0
+      ) {
+        throw new BadRequestException(
+          `Bundle requires quantity in multiples of ${pricing.cartQuantity}`,
+        );
+      }
+      originalUnitPrice = unitPrice;
+      unitPrice = pricing.effectiveUnitPrice;
+
+      // Reject the order outright if the bundle discount would force a
+      // sale below provider cost. The previous behaviour silently capped
+      // the provider's payout — that was unfair to providers. With the
+      // economic guard at attach/cart time this case should only trigger
+      // when provider pricing changed after the line entered the cart.
+      if (providerBasePrice > 0 && unitPrice < providerBasePrice) {
+        throw new BadRequestException({
+          code: 'ORDER_BUNDLE_BELOW_PROVIDER_COST',
+          message:
+            'Bundle pricing would sell this item below provider cost. Remove the bundle or adjust pricing.',
+        });
+      }
+    }
+
+    // Money is rounded at the source: every column is Decimal(10,2), so a
+    // unit price such as 9.99 (or a bundle's effective price 33.33...) is
+    // stored to two decimals here, and the line total below is rounded again
+    // from the stored unit price. That keeps unit x quantity, the subtotal
+    // and the order total exact in minor units - what the Kustom mapper
+    // sends and later verifies (expectedKustomAmount) is the stored figure,
+    // never a float that differs from it by a cent.
+    return {
+      unitPrice: roundMoney(unitPrice),
+      originalUnitPrice:
+        originalUnitPrice == null ? null : roundMoney(originalUnitPrice),
+      providerBasePrice: roundMoney(providerBasePrice),
+      fulfillerId,
+      fulfillerType,
+      stockOp,
+    };
+  }
+
+  /** The line total as the order stores it (rounded, never a float sum). */
+  private lineTotal(unitPrice: number, quantity: number): number {
+    return roundMoney(unitPrice * quantity);
+  }
+
+  /**
+   * Shipping, coupon discount and the resulting total for already-priced
+   * lines, applied in the order create() has always applied them: shipping
+   * first (an unreachable destination stops everything), then the coupon
+   * (validated only — the redemption is claimed by create() itself). With no
+   * destination yet (a Kustom session before any address) shipping is
+   * skipped and costs nothing.
+   *
+   * Shipping is quoted as the list of methods for the destination; the one
+   * `shippingMethodId` names is used, else the cheapest offered (ties go to
+   * the first by sort order). A stale id is rejected
+   * (`ORDER_SHIPPING_METHOD_INVALID`) when `strictMethod` is set — what
+   * create() wants — and silently replaced by the default otherwise, so a
+   * Kustom session keeps a valid selection after the country changes.
+   * Method names are resolved in `locale`, defaulting to the store's
+   * primary locale (what the order snapshots).
+   */
+  private async computeTotals(input: {
+    orderStore: OrderStoreContext;
+    lines: NormalizedCartLine[];
+    subtotal: number;
+    providerBaseTotal: number;
+    countryCode: string | null;
+    couponCode?: string | null;
+    shippingMethodId?: string | null;
+    strictMethod?: boolean;
+    locale?: string | null;
+  }): Promise<{
+    shipping: ShippingQuote | null;
+    shippingCost: number;
+    shippingMethod: QuotedShippingMethod | null;
+    discountAmount: number;
+    total: number;
+    couponValidation: CouponValidation | null;
+  }> {
+    const { orderStore, lines, subtotal, providerBaseTotal } = input;
+    const isIndependentStore = orderStore.store_type === StoreType.INDEPENDENT;
+    const productIds = lines
+      .map((item) => item.product_id || item.custom_product_id)
+      .filter(Boolean) as string[];
+    const totalItemCount = lines.reduce((sum, i) => sum + i.quantity, 0);
+
+    // Quote every shipping method for the destination and pick one
+    let shipping: ShippingQuote | null = null;
+    let shippingCost = 0;
+    let shippingMethod: QuotedShippingMethod | null = null;
+    if (input.countryCode) {
+      const quote = await this.shippingService.quoteForItems({
+        product_ids: productIds,
+        country_code: input.countryCode,
+        item_count: totalItemCount,
+        subtotal,
+        locale: input.locale ?? orderStore.primary_locale ?? undefined,
+      });
+      if (!quote.available) {
+        return {
+          shipping: {
+            available: false,
+            message: quote.message || 'Shipping not available to your country',
+          },
+          shippingCost: 0,
+          shippingMethod: null,
+          discountAmount: 0,
+          total: subtotal,
+          couponValidation: null,
+        };
+      }
+      const requested = input.shippingMethodId
+        ? quote.methods.find((m) => m.id === input.shippingMethodId)
+        : undefined;
+      if (input.shippingMethodId && !requested && input.strictMethod) {
+        throw new BadRequestException({
+          code: 'ORDER_SHIPPING_METHOD_INVALID',
+          message:
+            'The selected shipping method is not available for your address. Please choose another one.',
+        });
+      }
+      shippingMethod = requested ?? this.cheapestMethod(quote.methods);
+      shippingCost = roundMoney(shippingMethod?.cost ?? 0);
+      shipping = {
+        available: true,
+        cost: shippingCost,
+        estimated_days: shippingMethod?.estimated_days ?? null,
+        method: shippingMethod,
+        methods: quote.methods,
+      };
+    }
+
+    // Apply coupon discount
+    let discountAmount = 0;
+    let couponValidation: CouponValidation | null = null;
+
+    if (input.couponCode) {
+      couponValidation = await this.promotionsService.validateCoupon({
+        coupon_code: input.couponCode,
+        store_id: orderStore.id,
+        subtotal,
+        item_count: totalItemCount,
+        product_ids: productIds,
+      });
+
+      discountAmount = roundMoney(couponValidation.discount_amount);
+
+      if (couponValidation.free_shipping) {
+        shippingCost = 0;
+      }
+
+      // Cap discount so total never goes negative
+      if (discountAmount > subtotal) {
+        discountAmount = subtotal;
+      }
+
+      // Reject rather than sell below provider cost — the same economic guard
+      // the bundle path applies. Without it a percentage coupon silently
+      // scales the provider's payout below the base price they are owed.
+      if (
+        !isIndependentStore &&
+        subtotal - discountAmount < providerBaseTotal
+      ) {
+        throw new BadRequestException({
+          code: 'ORDER_DISCOUNT_BELOW_PROVIDER_COST',
+          message:
+            'This coupon cannot be applied to the items in your cart. Please remove it and try again.',
+        });
+      }
+    }
+
+    // Every term is already rounded; the rounding here only removes float
+    // noise from the sum so the stored total is exact in minor units.
+    const total = roundMoney(subtotal + shippingCost - discountAmount);
+    return {
+      shipping,
+      shippingCost,
+      shippingMethod,
+      discountAmount,
+      total,
+      couponValidation,
+    };
+  }
+
+  /**
+   * Default shipping method when the customer picked none: the cheapest
+   * offered; among equally priced ones the first, i.e. the lowest sort order
+   * (the shipping module quotes methods in that order).
+   */
+  private cheapestMethod(
+    methods: QuotedShippingMethod[],
+  ): QuotedShippingMethod | null {
+    let best: QuotedShippingMethod | null = null;
+    for (const m of methods) if (!best || m.cost < best.cost) best = m;
+    return best;
+  }
+
+  /**
+   * Price a set of lines for a store without creating anything: the same
+   * per-line pricing, shipping and coupon logic as create(), so the numbers
+   * are the ones an order from these lines would carry. Used by the
+   * Kustom-first checkout, which must show — and later validate — the exact
+   * total before an order exists. Throws the same errors as create() for
+   * foreign / unavailable items and invalid coupons; an unreachable shipping
+   * destination is reported, not thrown. `shippingMethodId` is honoured when
+   * still offered and otherwise replaced by the first method (never thrown);
+   * `locale` only changes the language of the method names.
+   */
+  async quoteLines(
+    storeId: string,
+    lines: CartLineLike[],
+    opts: {
+      countryCode: string | null;
+      couponCode?: string | null;
+      shippingMethodId?: string | null;
+      locale?: string | null;
+    },
+  ): Promise<OrderQuote> {
+    const orderStore = await this.loadOrderStore(storeId);
+    const items = lines.map(normalizeCartLine);
+    if (items.length === 0) {
+      throw new BadRequestException({
+        code: 'ORDER_CART_EMPTY',
+        message: 'Cart is empty',
+      });
+    }
+
+    let subtotal = 0;
+    let providerBaseTotal = 0;
+    const quotedItems: OrderQuoteItem[] = [];
+    for (const item of items) {
+      const priced = await this.priceLine(item, orderStore);
+      const totalPrice = this.lineTotal(priced.unitPrice, item.quantity);
+      const providerBaseForItem = this.lineTotal(
+        Math.min(priced.providerBasePrice, priced.unitPrice),
+        item.quantity,
+      );
+      providerBaseTotal += providerBaseForItem;
+      subtotal += totalPrice;
+      quotedItems.push({
+        product_id: item.product_id,
+        variant_id: item.variant_id,
+        custom_product_id: item.custom_product_id,
+        bundle_offer_id: item.bundle_offer_id,
+        quantity: item.quantity,
+        unit_price: priced.unitPrice,
+        original_unit_price: priced.originalUnitPrice,
+        total_price: totalPrice,
+      });
+    }
+    subtotal = roundMoney(subtotal);
+    providerBaseTotal = roundMoney(providerBaseTotal);
+
+    const totals = await this.computeTotals({
+      orderStore,
+      lines: items,
+      subtotal,
+      providerBaseTotal,
+      countryCode: opts.countryCode,
+      couponCode: opts.couponCode,
+      shippingMethodId: opts.shippingMethodId,
+      strictMethod: false,
+      locale: opts.locale,
+    });
+
+    const platformConfig = await this.prisma.platformConfig.findFirst({
+      select: { default_currency: true, default_tax_rate_bp: true },
+    });
+    const currency = resolveStoreCurrency(
+      orderStore,
+      platformConfig?.default_currency,
+    );
+    const taxRateBp = resolveStoreTaxRateBp(orderStore, platformConfig);
+    return {
+      items: quotedItems,
+      subtotal,
+      shipping_cost: totals.shippingCost,
+      discount_amount: totals.discountAmount,
+      total: totals.total,
+      currency,
+      tax_rate_bp: taxRateBp,
+      tax_amount: includedTaxForOrder(
+        {
+          items: quotedItems,
+          shipping_cost: totals.shippingCost,
+          discount_amount: totals.discountAmount,
+        },
+        taxRateBp,
+        currency,
+      ),
+      shipping: totals.shipping,
+      shipping_method_id: totals.shippingMethod?.id ?? null,
+      shipping_method_name: totals.shippingMethod?.name ?? null,
+      shipping_method_type: totals.shippingMethod?.type ?? null,
+      coupon: totals.couponValidation,
+    };
+  }
+
+  /**
+   * Place an order for the customer's cart — or, when `opts.lines` is given,
+   * for that snapshot instead (a Kustom-first checkout, whose lines never
+   * lived in the server cart). With a snapshot the cart is neither required
+   * nor emptied; everything else (pricing, stock, coupon, commission) is the
+   * same path.
+   */
+  async create(
+    userId: string,
+    dto: CreateOrderDto,
+    opts: CreateOrderOptions = {},
+  ) {
+    // Card orders reserve stock while they wait for payment. Nothing releases
+    // that reservation when the buyer simply walks away — Stripe only reports
+    // explicit failures — so sweep expired ones here. Doing it on the order
+    // path keeps cleanup proportional to traffic without adding a scheduler.
+    // A snapshot order (opts.lines) is created inside Kustom's 3 s validation
+    // callback, where every extra query counts; the sweep runs on the next
+    // cart checkout instead.
+    if (!opts.lines) await this.releaseExpiredAwaitingPaymentOrders();
+
+    const customer = await this.prisma.customer.findUnique({
+      where: { user_id: userId },
+    });
+    if (!customer)
+      throw new NotFoundException({
+        code: 'ORDER_CUSTOMER_NOT_FOUND',
+        message: 'Customer not found',
+      });
+
+    // Source of the lines: the caller's snapshot, else the customer's cart.
+    let cart: { id: string } | null = null;
+    let lines: NormalizedCartLine[];
+    if (opts.lines) {
+      lines = opts.lines.map(normalizeCartLine);
+      if (lines.length === 0) {
+        throw new BadRequestException({
+          code: 'ORDER_CART_EMPTY',
+          message: 'Cart is empty',
+        });
+      }
+    } else {
+      const loaded = await this.prisma.cart.findUnique({
+        where: { customer_id: customer.id },
+        include: { items: true },
+      });
+      if (!loaded || loaded.items.length === 0) {
+        throw new BadRequestException({
+          code: 'ORDER_CART_EMPTY',
+          message: 'Cart is empty',
+        });
+      }
+      cart = { id: loaded.id };
+      lines = loaded.items;
+    }
+
+    // Calculate prices
+    let subtotal = 0;
+    let providerBaseTotal = 0; // what providers are owed (their base prices)
+    let creatorMarginTotal = 0; // what creators are owed (their markup or creator-only revenue)
+    const orderItems: any[] = [];
+
+    // Collected during the loop and decremented atomically before order.create.
+    // Only items whose product/variant tracks inventory go in here — others are
+    // treated as unlimited (consistent with track_inventory=false / null stock).
+    const stockOps: StockOp[] = [];
+
+    const orderStore = await this.loadOrderStore(dto.store_id);
     const isIndependentStore = orderStore.store_type === StoreType.INDEPENDENT;
 
     const requestedPaymentMethod: PaymentMethod =
@@ -377,257 +1039,34 @@ export class OrdersService {
       });
     }
 
-    // Thrown for every line that isn't part of this store's catalogue. The
-    // message is deliberately generic — item ids are not echoed back, and a
-    // foreign product is indistinguishable from an unpublished one.
-    const rejectForeignItem = (): never => {
-      throw new BadRequestException({
-        code: 'ORDER_ITEM_NOT_SOLD_BY_STORE',
-        message:
-          'One of the items in your cart is not available in this store. Please refresh your cart and try again.',
-      });
-    };
+    for (const item of lines) {
+      const priced = await this.priceLine(item, orderStore);
+      const {
+        unitPrice,
+        originalUnitPrice,
+        providerBasePrice,
+        fulfillerId,
+        fulfillerType,
+      } = priced;
+      if (priced.stockOp) stockOps.push(priced.stockOp);
 
-    for (const item of cart.items) {
-      let unitPrice = 0;
-      let providerBasePrice = 0; // per-unit base owed to provider (0 for creator-only products)
-      let fulfillerId = '';
-      let fulfillerType: 'PROVIDER' | 'CREATOR' = 'PROVIDER';
-
-      if (item.custom_product_id) {
-        // Custom product (with or without a selected variant)
-        const cp = await this.prisma.customProduct.findUnique({
-          where: { id: item.custom_product_id },
-          include: {
-            product: true,
-            selected_variants: item.variant_id
-              ? { where: { variant_id: item.variant_id } }
-              : true,
-          },
-        });
-        if (!cp)
-          throw new NotFoundException(
-            `Custom product ${item.custom_product_id} not found`,
-          );
-
-        // The storefront lists a custom product only when it belongs to this
-        // store's creator and is published — enforce the same rule here.
-        if (
-          cp.creator_id !== orderStore.creator_id ||
-          cp.status !== ProductStatus.PUBLISHED
-        ) {
-          rejectForeignItem();
-        }
-
-        let variant: { price_adjustment: any } | null = null;
-        if (item.variant_id) {
-          const variantRow = await this.prisma.productVariant.findUnique({
-            where: { id: item.variant_id },
-            select: { price_adjustment: true, product_id: true },
-          });
-          if (!variantRow)
-            throw new NotFoundException(`Variant ${item.variant_id} not found`);
-          // The variant must belong to the custom product's base product,
-          // otherwise its price adjustment would be borrowed from elsewhere.
-          if (variantRow.product_id !== cp.product_id) rejectForeignItem();
-          variant = variantRow;
-        }
-        const variantAdjustment = variant
-          ? Number(variant.price_adjustment || 0)
-          : 0;
-
-        // Compute price based on pricing strategy
-        switch (cp.pricing_type) {
-          case PricingType.SINGLE:
-            // Creator's final_price is THE customer price, regardless of variant
-            unitPrice = Number(cp.final_price);
-            break;
-          case PricingType.PER_VARIANT: {
-            if (variant) {
-              const selected = cp.selected_variants.find(
-                (sv) => sv.variant_id === item.variant_id,
-              );
-              unitPrice = selected?.custom_price
-                ? Number(selected.custom_price)
-                : Number(cp.product.base_price) + variantAdjustment;
-            } else {
-              // No variant chosen on a per-variant product — fall back to final_price
-              unitPrice =
-                Number(cp.final_price) || Number(cp.product.base_price);
-            }
-            break;
-          }
-          case PricingType.MARGIN:
-            unitPrice =
-              Number(cp.product.base_price) +
-              variantAdjustment +
-              Number(cp.margin_amount || 0);
-            break;
-        }
-
-        // Provider base = their product's base price + variant adjustment (if provider exists)
-        if (cp.product.provider_id) {
-          providerBasePrice = Number(cp.product.base_price) + variantAdjustment;
-        }
-
-        // Provider fulfills the product, creator is the seller
-        fulfillerId = cp.product.provider_id || cp.creator_id || '';
-        fulfillerType = cp.product.provider_id ? 'PROVIDER' : 'CREATOR';
-      } else if (item.variant_id) {
-        const variant = await this.prisma.productVariant.findUnique({
-          where: { id: item.variant_id },
-          include: { product: true },
-        });
-        if (!variant)
-          throw new NotFoundException(`Variant ${item.variant_id} not found`);
-
-        // A bare variant line sells the creator's own product: it must belong
-        // to this store's creator and be published. This is what stops another
-        // creator's product being checked out here — and, on an independent
-        // store, charged to this store owner's Stripe account.
-        if (
-          variant.product.creator_id !== orderStore.creator_id ||
-          variant.product.status !== ProductStatus.PUBLISHED ||
-          !variant.is_active
-        ) {
-          rejectForeignItem();
-        }
-        // Guard against a variant borrowed from a different product.
-        if (item.product_id && variant.product_id !== item.product_id) {
-          rejectForeignItem();
-        }
-
-        unitPrice =
-          Number(variant.product.base_price) + Number(variant.price_adjustment);
-        if (variant.product.provider_id) providerBasePrice = unitPrice;
-        fulfillerId =
-          variant.product.provider_id || variant.product.creator_id || '';
-        fulfillerType = variant.product.provider_id ? 'PROVIDER' : 'CREATOR';
-        // Variants track stock when stock_quantity is non-null.
-        if (variant.stock_quantity != null) {
-          stockOps.push({
-            kind: 'variant',
-            id: variant.id,
-            qty: item.quantity,
-          });
-        }
-      } else if (item.product_id) {
-        const product = await this.prisma.product.findUnique({
-          where: { id: item.product_id },
-        });
-        if (!product)
-          throw new NotFoundException(`Product ${item.product_id} not found`);
-
-        // Same rule as the variant branch: only this store creator's own
-        // published products are sellable here. Provider catalogue products
-        // (creator_id null) are never sold directly — they reach a storefront
-        // as a CustomProduct.
-        if (
-          product.creator_id !== orderStore.creator_id ||
-          product.status !== ProductStatus.PUBLISHED
-        ) {
-          rejectForeignItem();
-        }
-
-        unitPrice = Number(product.base_price);
-        if (product.provider_id) providerBasePrice = unitPrice;
-        fulfillerId = product.provider_id || product.creator_id || '';
-        fulfillerType = product.provider_id ? 'PROVIDER' : 'CREATOR';
-        // Only enforce when the seller actually tracks inventory for this product.
-        if (product.track_inventory && product.stock_quantity != null) {
-          stockOps.push({
-            kind: 'product',
-            id: product.id,
-            qty: item.quantity,
-          });
-        }
-      } else {
-        // No product, variant or custom product on the line — nothing to price
-        // or attribute. Never let it through as a free item with no fulfiller.
-        rejectForeignItem();
-      }
-
-      // Independent stores never sell custom products (provider resells) — not
-      // even creator-only ones (base product without a provider), which would
-      // otherwise slip past the PROVIDER check below.
-      if (isIndependentStore && item.custom_product_id) {
-        throw new BadRequestException({
-          code: 'ORDER_INDEPENDENT_STORE_CUSTOM_ITEM',
-          message:
-            'This store can only sell its own products. Please remove unavailable items from your cart.',
-        });
-      }
-
-      // Independent stores are creator-only: reject any line fulfilled by a
-      // provider (provider products, or custom products backed by a provider).
-      if (isIndependentStore && fulfillerType === 'PROVIDER') {
-        throw new BadRequestException({
-          code: 'ORDER_INDEPENDENT_STORE_PROVIDER_ITEM',
-          message:
-            'This store can only sell its own products. Please remove supplier items from your cart.',
-        });
-      }
-
-      // Apply bundle pricing if this cart line carries a bundle offer
-      let originalUnitPrice: number | null = null;
-      if (item.bundle_offer_id) {
-        const offer = await this.prisma.bundleOffer.findUnique({
-          where: { id: item.bundle_offer_id },
-          include: { bundle: true },
-        });
-        if (!offer || offer.bundle.status !== 'ACTIVE') {
-          throw new BadRequestException({
-            code: 'ORDER_BUNDLE_OFFER_UNAVAILABLE',
-            message: 'Bundle offer is no longer available',
-          });
-        }
-        // A bundle offer only ever lowers the price, so an offer belonging to
-        // another creator would be a straight discount on this store's goods.
-        if (offer.bundle.creator_id !== orderStore.creator_id)
-          rejectForeignItem();
-        const pricing = computeBundlePricing(unitPrice, {
-          quantity: offer.quantity,
-          discount_type: offer.discount_type,
-          discount_value: offer.discount_value as any,
-        });
-        // Quantity must be a positive multiple of the bundle's cart quantity
-        if (
-          pricing.cartQuantity <= 0 ||
-          item.quantity % pricing.cartQuantity !== 0
-        ) {
-          throw new BadRequestException(
-            `Bundle requires quantity in multiples of ${pricing.cartQuantity}`,
-          );
-        }
-        originalUnitPrice = unitPrice;
-        unitPrice = pricing.effectiveUnitPrice;
-
-        // Reject the order outright if the bundle discount would force a
-        // sale below provider cost. The previous behaviour silently capped
-        // the provider's payout — that was unfair to providers. With the
-        // economic guard at attach/cart time this case should only trigger
-        // when provider pricing changed after the line entered the cart.
-        if (providerBasePrice > 0 && unitPrice < providerBasePrice) {
-          throw new BadRequestException({
-            code: 'ORDER_BUNDLE_BELOW_PROVIDER_COST',
-            message:
-              'Bundle pricing would sell this item below provider cost. Remove the bundle or adjust pricing.',
-          });
-        }
-      }
-
-      const totalPrice = unitPrice * item.quantity;
+      const totalPrice = this.lineTotal(unitPrice, item.quantity);
       // Defensive clamp kept for any non-bundle edge case; the bundle path is
       // already guaranteed safe above.
       const cappedProviderBase = Math.min(providerBasePrice, unitPrice);
-      const providerBaseForItem = cappedProviderBase * item.quantity;
+      const providerBaseForItem = this.lineTotal(
+        cappedProviderBase,
+        item.quantity,
+      );
       providerBaseTotal += providerBaseForItem;
       creatorMarginTotal += totalPrice - providerBaseForItem;
       subtotal += totalPrice;
 
       // Build custom field values from cart item's custom_fields JSON
       // Format: { "field-uuid": "value" } or { "field-uuid": "https://...url" }
-      const dtoCustomization = dto.item_customizations?.[item.id];
+      const dtoCustomization = item.id
+        ? dto.item_customizations?.[item.id]
+        : undefined;
       const cartFields = item.custom_fields as Record<string, any> | null;
       let fieldValues: {
         custom_field_id: string;
@@ -720,6 +1159,10 @@ export class OrdersService {
       });
     }
 
+    subtotal = roundMoney(subtotal);
+    providerBaseTotal = roundMoney(providerBaseTotal);
+    creatorMarginTotal = roundMoney(creatorMarginTotal);
+
     // Calculate shipping cost based on product profiles and destination
     const shippingAddress = await this.prisma.address.findUnique({
       where: { id: dto.address_id },
@@ -730,80 +1173,34 @@ export class OrdersService {
         message: 'Shipping address not found',
       });
 
-    const productIds = cart.items
-      .map((item) => item.product_id || item.custom_product_id)
-      .filter(Boolean) as string[];
-
-    const totalItemCount = cart.items.reduce((sum, i) => sum + i.quantity, 0);
-
-    const shippingResult = await this.shippingService.calculateForItems({
-      product_ids: productIds,
-      country_code: shippingAddress.country_code,
-      item_count: totalItemCount,
+    const totals = await this.computeTotals({
+      orderStore,
+      lines,
       subtotal,
+      providerBaseTotal,
+      countryCode: shippingAddress.country_code,
+      couponCode: dto.coupon_code,
+      shippingMethodId: dto.shipping_method_id ?? null,
+      strictMethod: true,
     });
 
-    if (!(shippingResult as any).available) {
+    if (totals.shipping && !totals.shipping.available) {
       throw new BadRequestException(
-        (shippingResult as any).message ||
-          'Shipping not available to your country',
+        totals.shipping.message || 'Shipping not available to your country',
       );
     }
 
-    let shippingCost = (shippingResult as any).cost ?? 0;
-
-    // Apply coupon discount
-    let discountAmount = 0;
+    const shippingCost = totals.shippingCost;
+    // Snapshot of the chosen method (name in the store's primary locale).
+    const shippingMethod = totals.shippingMethod;
+    const discountAmount = totals.discountAmount;
+    const couponValidation = totals.couponValidation;
     // Set once a redemption slot has been reserved, so every failure path
     // below can hand it back instead of burning it on an order that never
     // came into existence.
     let redemptionClaimed: string | null = null;
-    let couponValidation: {
-      promotion_id: string;
-      type: string;
-      value: number;
-      discount_amount: number;
-      free_shipping: boolean;
-    } | null = null;
 
-    if (dto.coupon_code) {
-      const itemCount = cart.items.reduce((sum, i) => sum + i.quantity, 0);
-      const cartProductIds = cart.items
-        .map((i) => i.product_id || i.custom_product_id)
-        .filter(Boolean) as string[];
-      couponValidation = await this.promotionsService.validateCoupon({
-        coupon_code: dto.coupon_code,
-        store_id: orderStore.id,
-        subtotal,
-        item_count: itemCount,
-        product_ids: cartProductIds,
-      });
-
-      discountAmount = couponValidation.discount_amount;
-
-      if (couponValidation.free_shipping) {
-        shippingCost = 0;
-      }
-
-      // Cap discount so total never goes negative
-      if (discountAmount > subtotal) {
-        discountAmount = subtotal;
-      }
-
-      // Reject rather than sell below provider cost — the same economic guard
-      // the bundle path applies. Without it a percentage coupon silently
-      // scales the provider's payout below the base price they are owed.
-      if (
-        !isIndependentStore &&
-        subtotal - discountAmount < providerBaseTotal
-      ) {
-        throw new BadRequestException({
-          code: 'ORDER_DISCOUNT_BELOW_PROVIDER_COST',
-          message:
-            'This coupon cannot be applied to the items in your cart. Please remove it and try again.',
-        });
-      }
-
+    if (couponValidation) {
       // Claim the redemption now, atomically. validateCoupon only reads the
       // counter, so without this two concurrent checkouts both pass its limit
       // check and both redeem the last slot.
@@ -822,7 +1219,7 @@ export class OrdersService {
         redemptionClaimed = couponValidation.promotion_id;
     }
 
-    const total = subtotal + shippingCost - discountAmount;
+    const total = totals.total;
 
     // Extract custom field values before creating order (Prisma doesn't know _custom_field_values)
     const itemFieldValues = orderItems.map((item) => {
@@ -850,6 +1247,21 @@ export class OrdersService {
     const currency = resolveStoreCurrency(
       orderStore,
       platformConfig?.default_currency,
+    );
+    // VAT snapshot. Prices are tax inclusive, so the rate never changes the
+    // total — it records how much of it is tax for receipts and Kustom. It is
+    // the sum of the per-line taxes (items, shipping, minus discount), the
+    // same rule the Kustom mapper applies line by line, so Order.tax_amount
+    // always equals the order_tax_amount Kustom is sent.
+    const taxRateBp = resolveStoreTaxRateBp(orderStore, platformConfig);
+    const taxAmount = includedTaxForOrder(
+      {
+        items: orderItems as { total_price: number }[],
+        shipping_cost: shippingCost,
+        discount_amount: discountAmount,
+      },
+      taxRateBp,
+      currency,
     );
 
     // ── Stock: atomically decrement before creating the order. The conditional
@@ -904,6 +1316,11 @@ export class OrdersService {
           discount_amount: discountAmount,
           total,
           currency,
+          tax_rate_bp: taxRateBp,
+          tax_amount: taxAmount,
+          shipping_method_id: shippingMethod?.id ?? null,
+          shipping_method_name: shippingMethod?.name ?? null,
+          shipping_method_type: shippingMethod?.type ?? null,
           payment_method: paymentMethod,
           payment_status: paymentStatus,
           stripe_payment_id: dto.stripe_payment_intent_id,
@@ -1006,10 +1423,13 @@ export class OrdersService {
       // Don't fail the order for commission errors
     }
 
-    // Empty the cart.
-    await this.prisma.cartItem.deleteMany({
-      where: { cart_id: cart.id },
-    });
+    // Empty the cart. A snapshot order (opts.lines) never touched it, so the
+    // customer keeps whatever is in their real cart.
+    if (cart) {
+      await this.prisma.cartItem.deleteMany({
+        where: { cart_id: cart.id },
+      });
+    }
 
     // Order-related emails — best-effort, never blocks the order flow.
     // COD orders are real at creation, so we notify the customer and the
@@ -1839,6 +2259,34 @@ export class OrdersService {
       },
     });
     return { order, changed: true };
+  }
+
+  /**
+   * Hand back the coupon redemption an order consumed. create() records one
+   * PromotionUsage row per order and counts the redemption (claimRedemption
+   * for limited coupons, recordUsage for unlimited ones); when the order is
+   * abandoned right after creation — a Kustom validation that failed after
+   * create() succeeded — the slot must be freed or the coupon's usage limit
+   * is burnt on an order that will never be paid. Idempotent: the usage row
+   * is deleted with the release, so a second call finds nothing.
+   */
+  async releaseOrderCoupon(orderId: string): Promise<void> {
+    try {
+      const usages = await this.prisma.promotionUsage.findMany({
+        where: { order_id: orderId },
+        select: { id: true, promotion_id: true },
+      });
+      for (const usage of usages) {
+        const removed = await this.prisma.promotionUsage.deleteMany({
+          where: { id: usage.id },
+        });
+        if (removed.count === 1) {
+          await this.promotionsService.releaseRedemption(usage.promotion_id);
+        }
+      }
+    } catch (err) {
+      console.error('[OrderCoupon] Failed to release coupon for', orderId, err);
+    }
   }
 
   async markOrderFailed(

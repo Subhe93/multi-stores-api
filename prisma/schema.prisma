@@ -492,6 +492,40 @@ model ShippingZone {
   estimated_days_max Int
 
   profile ShippingProfile @relation(fields: [profile_id], references: [id], onDelete: Cascade)
+  // Selectable methods offered for this zone. The cost/days columns above are
+  // the legacy single method: they were copied into one "Standard shipping"
+  // method on migration and remain the fallback for a zone with no methods.
+  methods ShippingMethod[]
+}
+
+enum ShippingMethodType {
+  DELIVERY
+  PICKUP
+}
+
+// One shipping option the customer can pick for a zone (e.g. "Standard
+// shipping", "Express", "Pick up in store"). Priced base + per_item * count,
+// free at or above free_threshold.
+model ShippingMethod {
+  id                 String             @id @default(uuid())
+  zone_id            String
+  // Default display name; `translations` holds per-locale overrides keyed by
+  // locale code, e.g. { "sv": "Standardfrakt" }.
+  name               String
+  translations       Json?
+  type               ShippingMethodType @default(DELIVERY)
+  base_cost          Decimal            @db.Decimal(10, 2)
+  per_item_cost      Decimal            @default(0) @db.Decimal(10, 2)
+  free_threshold     Decimal?           @db.Decimal(10, 2)
+  estimated_days_min Int
+  estimated_days_max Int
+  is_active          Boolean            @default(true)
+  sort_order         Int                @default(0)
+  created_at         DateTime           @default(now())
+
+  zone ShippingZone @relation(fields: [zone_id], references: [id], onDelete: Cascade)
+
+  @@index([zone_id])
 }
 
 // ==========================================
@@ -562,6 +596,18 @@ model Order {
   kustom_push_token  String?
   kustom_capture_id  String?
   kustom_captured_at DateTime?
+  // VAT snapshot: the rate resolved for the store at creation (basis points)
+  // and the tax included in `total` at that rate. Prices are tax inclusive,
+  // so this never changes the total — it is what receipts and Kustom show.
+  tax_rate_bp     Int         @default(0)
+  tax_amount      Decimal     @default(0) @db.Decimal(10, 2)
+  // Snapshot of the shipping method the customer chose: the ShippingMethod id
+  // (no FK — methods may be deleted later), its display name in the store's
+  // primary locale (e.g. "Standard shipping") and its type. All null for
+  // orders placed before methods were modelled or with no shipping profile.
+  shipping_method_id   String?
+  shipping_method_name String?
+  shipping_method_type ShippingMethodType?
   notes           String?
   created_at      DateTime    @default(now())
   updated_at      DateTime    @updatedAt
@@ -724,6 +770,10 @@ model PlatformConfig {
   // Order Limits
   min_order_amount Decimal? @db.Decimal(10, 2)
 
+  // Platform-wide VAT rate in basis points (2500 = 25 %). Prices everywhere
+  // are tax inclusive; a store may override this with Store.tax_rate_bp.
+  default_tax_rate_bp Int @default(0)
+
   // Registration Approvals
   require_provider_approval Boolean @default(true)
   require_creator_approval  Boolean @default(true)
@@ -817,6 +867,10 @@ model Store {
   cache_enabled        Boolean  @default(true)
   // Cash on delivery is opt-in per store (off by default).
   cod_enabled          Boolean   @default(false)
+  // VAT override in basis points (2500 = 25 %); null inherits
+  // PlatformConfig.default_tax_rate_bp. Prices are entered tax-inclusive, so
+  // the rate only splits the included tax out for display and for Kustom.
+  tax_rate_bp          Int?
   created_at           DateTime @default(now())
   updated_at           DateTime @updatedAt
 
@@ -827,8 +881,56 @@ model Store {
   menus           Menu[]
   mail_settings   StoreMailSettings?
   mail_templates  StoreNotificationTemplate[]
+  kustom_sessions KustomCheckoutSession[]
 
   @@index([slug])
+}
+
+// Kustom-first checkout: the Kustom iframe is shown before any order exists.
+// The session snapshots what the customer is buying (the same CartLine shape
+// POST /cart/items accepts) plus the address country Kustom reported, so every
+// callback can re-price the purchase without trusting Kustom's amounts. The
+// order is created inside Kustom's validation callback and linked back here.
+model KustomCheckoutSession {
+  id              String   @id @default(uuid())
+  store_id        String
+  // Set when the shopper was logged in; guests get an account at validation.
+  customer_id     String?
+  kustom_order_id String?  @unique
+  // Storefront secret (random 32-byte hex): authenticates PUT /session/:id,
+  // GET /confirmation and the confirmation redirect URL. Returned to the
+  // browser, so it must never unlock a server-side callback.
+  token           String
+  // Server-side secret (random 32-byte hex) carried only in the merchant URLs
+  // Kustom calls (push, validation, address_update, shipping_option_update).
+  // Never returned to the storefront.
+  callback_token  String
+  status          String   @default("open") // open | ordering | ordered | expired
+  locale          String?  @db.VarChar(10)
+  currency        String   @db.VarChar(3)
+  items           Json // CartLine[] snapshot
+  coupon_code     String?
+  notes           String?
+  // Last address country Kustom reported (drives the shipping options).
+  country_code    String?  @db.VarChar(2)
+  // purchase_country sent when the Kustom checkout was created; Kustom does
+  // not accept a different value on update, so every update reuses it.
+  purchase_country String? @db.VarChar(2)
+  // Shipping option the customer selected in the iframe (Kustom option id)
+  // and its cost for the current country.
+  shipping_method_id String?
+  shipping_cost   Decimal  @default(0) @db.Decimal(10, 2)
+  order_id        String?  @unique
+  // True when validation had to create the customer account for a guest;
+  // surfaced on the confirmation page so the shopper knows how to log in.
+  account_created Boolean  @default(false)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+  expires_at      DateTime
+
+  store Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
+
+  @@index([store_id])
 }
 
 // Own SMTP sender for an INDEPENDENT store, so its customers receive mail from
