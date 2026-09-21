@@ -1,5 +1,4 @@
-import { IsString, IsOptional, IsBoolean, IsArray, IsEnum, IsIn, IsInt, IsObject, Matches, Max, Min, MinLength, MaxLength, ValidateIf } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsString, IsOptional, IsBoolean, IsArray, IsEnum, IsIn, IsObject, Matches, MinLength, MaxLength } from 'class-validator';
 import { StoreType } from '@prisma/client';
 import { SUPPORTED_CURRENCIES } from '../../../common/money/currency.util';
 
@@ -97,17 +96,6 @@ export class UpdateStoreDto {
     message: 'currency must be a supported ISO-4217 code',
   })
   currency?: string;
-
-  // VAT override in basis points (2500 = 25 %); null clears the override so
-  // the store inherits the platform default. Prices are tax inclusive, so the
-  // rate only splits the included tax out for display and Kustom.
-  @ValidateIf((_, v) => v !== null)
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  @Max(10000)
-  @Type(() => Number)
-  tax_rate_bp?: number | null;
 }
 
 // Admin-only store update: also allows switching the store type. The creator

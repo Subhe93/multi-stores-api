@@ -12,6 +12,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
+    // A response already on the wire (a streamed file, a manual send) cannot
+    // take a JSON error on top; writing again would only throw
+    // ERR_HTTP_HEADERS_SENT.
+    if (response.headersSent) return;
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message: unknown = 'Internal server error';

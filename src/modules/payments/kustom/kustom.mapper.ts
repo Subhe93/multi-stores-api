@@ -1,5 +1,10 @@
 import { toStripeAmount } from '../../../common/money/currency.util';
-import { includedTaxMinor } from '../../../common/money/tax.util';
+import {
+  addedTaxMinor,
+  allocateLargestRemainder,
+  clampRateBp,
+  includedTaxMinor,
+} from '../../../common/money/tax.util';
 import type {
   KustomAddress,
   KustomCheckoutPayload,
@@ -18,11 +23,20 @@ import type {
 
 type Translation = { locale: string; title: string };
 
+export type KustomTaxPricingMode = 'INCLUSIVE' | 'EXCLUSIVE';
+
 export interface KustomOrderItemInput {
   id: string;
   quantity: number;
   unit_price: unknown; // Prisma Decimal or number
   total_price: unknown; // Prisma Decimal or number
+  /**
+   * Tax of the line as the tax engine computed it: effective rate (basis
+   * points) and the amount (major units) AFTER the order discount share was
+   * taken off the line. An OrderItem row carries both; a quote item too.
+   */
+  tax_rate_bp?: number | null;
+  tax_amount?: unknown;
   product?: { translations?: Translation[] } | null;
   custom_product?: { translations?: Translation[] } | null;
   variant?: { sku?: string | null; options?: unknown } | null;
@@ -44,8 +58,14 @@ export interface KustomLinesInput {
   currency: string;
   shipping_cost: unknown;
   discount_amount: unknown;
+  /** INCLUSIVE: tax inside; EXCLUSIVE: tax already added on top. */
   total: unknown;
   items: KustomOrderItemInput[];
+  /** Defaults to INCLUSIVE (every amount already contains its tax). */
+  tax_pricing_mode?: KustomTaxPricingMode | null;
+  /** Tax of the shipping line (major units) and its rate. */
+  shipping_tax_amount?: unknown;
+  shipping_tax_rate_bp?: number | null;
 }
 
 export interface KustomOrderInput extends KustomLinesInput {
@@ -72,8 +92,6 @@ export interface KustomMapperContext {
   /** PUBLIC_API_URL, no trailing slash needed. */
   apiBase: string;
   pushToken: string;
-  /** VAT rate in basis points applied to every line (prices are inclusive). */
-  taxRateBp?: number;
 }
 
 // ── Locale ──────────────────────────────────────────────────────────────────
@@ -221,113 +239,101 @@ function consistentLineAmounts(
   };
 }
 
-/**
- * Stamp a line with the VAT it includes. Prices are tax inclusive, so the
- * amounts never change: `total_tax_amount = total - total * 10000 / (10000 + rate)`
- * rounded to the minor unit, negative for negative (discount) lines.
- */
-function withTax(
-  line: Omit<KustomOrderLine, 'tax_rate' | 'total_tax_amount'>,
-  taxRateBp: number,
-): KustomOrderLine {
-  return {
-    ...line,
-    tax_rate: taxRateBp,
-    total_tax_amount: includedTaxMinor(line.total_amount, taxRateBp),
-  };
+function pricingModeOf(order: Pick<KustomLinesInput, 'tax_pricing_mode'>) {
+  return order.tax_pricing_mode === 'EXCLUSIVE' ? 'EXCLUSIVE' : 'INCLUSIVE';
 }
 
 export interface KustomLineOptions {
-  /** VAT rate in basis points; 0 (the default) sends tax-free lines. */
-  taxRateBp?: number;
   /** Name of the shipping line, e.g. the selected option's localized name. */
   shippingName?: string;
 }
 
+/**
+ * Order lines from the priced items. Every line carries the tax the engine
+ * computed for it (rate + amount): Kustom checks each line's tax against
+ * its rate, so the order discount — which the engine allocated across the
+ * lines before taxing them — is applied here the same way, as the line's
+ * `total_discount_amount` (same largest-remainder split, same shares),
+ * rather than as a separate negative line that could not carry one rate.
+ * In EXCLUSIVE mode the line amounts sent are gross (net + tax) because
+ * Kustom prices are tax inclusive by definition; the order total already
+ * includes the tax in that mode.
+ */
 export function buildKustomOrderLines(
   order: KustomLinesInput,
   locale: string,
   opts: KustomLineOptions = {},
 ): KustomOrderLine[] {
   const cur = order.currency;
-  const rate = Math.max(0, Math.trunc(opts.taxRateBp ?? 0));
-  const lines: KustomOrderLine[] = order.items.map((item) => {
-    const amounts = consistentLineAmounts(
-      toStripeAmount(Number(item.unit_price), cur),
-      toStripeAmount(Number(item.total_price), cur),
-      item.quantity,
-    );
-    return withTax(
-      {
-        type: 'physical',
-        reference: (item.variant?.sku || item.id).slice(0, 64),
-        name: resolveItemName(item, locale),
-        quantity: item.quantity,
-        quantity_unit: 'pcs',
-        ...amounts,
-      },
-      rate,
-    );
+  const exclusive = pricingModeOf(order) === 'EXCLUSIVE';
+  const minor = (v: unknown) => toStripeAmount(Number(v ?? 0), cur);
+
+  const lineTotals = order.items.map((item) => minor(item.total_price));
+  const discountMinor = Math.min(
+    minor(order.discount_amount),
+    lineTotals.reduce((s, x) => s + x, 0),
+  );
+  const shares = allocateLargestRemainder(discountMinor, lineTotals);
+
+  const lines: KustomOrderLine[] = order.items.map((item, i) => {
+    const taxMinor = minor(item.tax_amount);
+    const rate = clampRateBp(item.tax_rate_bp ?? 0);
+    const totalMinor = lineTotals[i] - shares[i] + (exclusive ? taxMinor : 0);
+    // The unit price must be on the same footing as the line total: gross
+    // in EXCLUSIVE mode, else `quantity * unit_price` undershoots the gross
+    // total and the unit gets bumped (or a phantom discount appears).
+    const netUnitMinor = minor(item.unit_price);
+    const unitMinor = exclusive
+      ? netUnitMinor + addedTaxMinor(netUnitMinor, rate)
+      : netUnitMinor;
+    const amounts = consistentLineAmounts(unitMinor, totalMinor, item.quantity);
+    return {
+      type: 'physical',
+      reference: (item.variant?.sku || item.id).slice(0, 64),
+      name: resolveItemName(item, locale),
+      quantity: item.quantity,
+      quantity_unit: 'pcs',
+      ...amounts,
+      tax_rate: rate,
+      total_tax_amount: taxMinor,
+    };
   });
 
-  const shippingMinor = toStripeAmount(Number(order.shipping_cost), cur);
+  const shippingTax = minor(order.shipping_tax_amount);
+  const shippingMinor =
+    minor(order.shipping_cost) + (exclusive ? shippingTax : 0);
   if (shippingMinor > 0) {
-    lines.push(
-      withTax(
-        {
-          type: 'shipping_fee',
-          reference: 'shipping',
-          name: (opts.shippingName || 'Shipping').slice(0, 255),
-          quantity: 1,
-          unit_price: shippingMinor,
-          total_amount: shippingMinor,
-          total_discount_amount: 0,
-        },
-        rate,
-      ),
-    );
-  }
-
-  const discountMinor = toStripeAmount(Number(order.discount_amount), cur);
-  if (discountMinor > 0) {
-    // Discounts are separate negative lines in Kustom's model.
-    lines.push(
-      withTax(
-        {
-          type: 'discount',
-          reference: 'discount',
-          name: 'Discount',
-          quantity: 1,
-          unit_price: -discountMinor,
-          total_amount: -discountMinor,
-          total_discount_amount: 0,
-        },
-        rate,
-      ),
-    );
+    lines.push({
+      type: 'shipping_fee',
+      reference: 'shipping',
+      name: (opts.shippingName || 'Shipping').slice(0, 255),
+      quantity: 1,
+      unit_price: shippingMinor,
+      total_amount: shippingMinor,
+      total_discount_amount: 0,
+      tax_rate: clampRateBp(order.shipping_tax_rate_bp ?? 0),
+      total_tax_amount: shippingTax,
+    });
   }
 
   // Kustom also requires order_amount == sum(total_amount). The order total is
   // the authoritative figure (it is what validation and push compare against),
-  // so absorb any leftover rounding in a one-off adjustment line.
-  const orderMinor = toStripeAmount(Number(order.total), cur);
+  // so absorb any leftover rounding in a one-off, untaxed adjustment line.
+  const orderMinor = minor(order.total);
   const linesMinor = lines.reduce((s, l) => s + l.total_amount, 0);
   const gap = orderMinor - linesMinor;
   if (gap !== 0) {
-    lines.push(
-      withTax(
-        {
-          type: gap > 0 ? 'surcharge' : 'discount',
-          reference: 'rounding',
-          name: 'Rounding adjustment',
-          quantity: 1,
-          unit_price: gap,
-          total_amount: gap,
-          total_discount_amount: 0,
-        },
-        rate,
-      ),
-    );
+    lines.push({
+      type: gap > 0 ? 'surcharge' : 'discount',
+      reference: 'rounding',
+      name: 'Rounding adjustment',
+      quantity: 1,
+      unit_price: gap,
+      total_amount: gap,
+      total_discount_amount: 0,
+      tax_rate: 0,
+      total_tax_amount: 0,
+    });
   }
 
   return lines;
@@ -370,25 +376,34 @@ export function formatEstimatedDays(
  * customer picked in the iframe) is preselected when it is still offered,
  * else the first option — Kustom needs exactly one preselected entry.
  * Pickup methods are flagged `PickUpStore`, everything else `Home`, so the
- * iframe can label them accordingly.
+ * iframe can label them accordingly. `taxRateBp` is the shipping tax rate
+ * the engine resolved for the order; in EXCLUSIVE mode the option price
+ * sent is gross (cost + tax) since Kustom prices include tax.
  */
 export function buildKustomShippingOptions(
   quotes: ShippingQuoteOption[],
   currency: string,
   taxRateBp: number,
   selectedId?: string | null,
+  pricingMode: KustomTaxPricingMode = 'INCLUSIVE',
 ): KustomShippingOption[] {
   const preselectedId = quotes.some((q) => q.id === selectedId)
     ? selectedId
     : quotes[0]?.id;
+  const rate = clampRateBp(taxRateBp);
   return quotes.map((q) => {
-    const price = toStripeAmount(q.cost, currency);
+    const net = toStripeAmount(q.cost, currency);
+    const tax =
+      pricingMode === 'EXCLUSIVE'
+        ? addedTaxMinor(net, rate)
+        : includedTaxMinor(net, rate);
+    const price = pricingMode === 'EXCLUSIVE' ? net + tax : net;
     const option: KustomShippingOption = {
       id: q.id,
       name: q.name.slice(0, 255),
       price,
-      tax_rate: taxRateBp,
-      tax_amount: includedTaxMinor(price, taxRateBp),
+      tax_rate: rate,
+      tax_amount: tax,
       preselected: q.id === preselectedId,
       shipping_method: q.type === 'pickup' ? 'PickUpStore' : 'Home',
     };
@@ -462,7 +477,6 @@ export function buildKustomCheckoutPayload(
   const locale = resolveKustomLocale(ctx.primaryLocale, country);
   const address = buildKustomAddress(order);
   const lines = buildKustomOrderLines(order, contentLocale, {
-    taxRateBp: ctx.taxRateBp ?? 0,
     shippingName: order.shipping_method_name ?? undefined,
   });
 
@@ -521,7 +535,6 @@ export interface KustomSessionMapperContext {
    * returned to the storefront.
    */
   callbackToken: string;
-  taxRateBp: number;
 }
 
 /** A priced checkout session: the quote plus what Kustom should prefill. */
@@ -584,12 +597,12 @@ export function buildKustomSessionAmounts(
   const shippingOptions = buildKustomShippingOptions(
     input.shippingOptions,
     input.currency,
-    ctx.taxRateBp,
+    clampRateBp(input.shipping_tax_rate_bp ?? 0),
     input.selectedShippingId,
+    pricingModeOf(input),
   );
   const selected = shippingOptions.find((o) => o.preselected);
   const lines = buildKustomOrderLines(input, contentLocale, {
-    taxRateBp: ctx.taxRateBp,
     shippingName: selected?.name,
   });
   return {

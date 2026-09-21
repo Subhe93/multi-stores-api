@@ -1,11 +1,15 @@
 import {
+  ArrayMaxSize,
   IsString,
   IsOptional,
   IsEnum,
   IsArray,
+  IsInt,
   IsObject,
   Matches,
+  Max,
   MaxLength,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -112,4 +116,82 @@ export class UpdateFulfillmentDto {
   @IsOptional()
   @IsString()
   tracking_url?: string;
+}
+
+// One purchase line for `POST /orders/quote` — the shape `POST /cart/items`
+// accepts (CartLine), validated per entry.
+export class QuoteLineDto {
+  @IsOptional()
+  @IsString()
+  product_id?: string | null;
+
+  @IsOptional()
+  @IsString()
+  custom_product_id?: string | null;
+
+  @IsOptional()
+  @IsString()
+  variant_id?: string | null;
+
+  @IsOptional()
+  @IsString()
+  bundle_offer_id?: string | null;
+
+  // Same ceiling as KustomCartLineDto: a quote is public, so it must not be
+  // able to price absurd quantities.
+  @IsInt()
+  @Min(1)
+  @Max(999)
+  @Type(() => Number)
+  quantity: number;
+
+  @IsOptional()
+  @IsObject()
+  custom_fields?: Record<string, unknown> | null;
+}
+
+// `POST /orders/quote`: price lines (or the caller's server cart when
+// omitted and logged in) for a destination, without creating anything.
+export class QuoteOrderDto {
+  @IsString()
+  store_id: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ValidateNested({ each: true })
+  @Type(() => QuoteLineDto)
+  lines?: QuoteLineDto[];
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Za-z]{2}$/, {
+    message: 'country_code must be an ISO 3166-1 alpha-2 code',
+  })
+  country_code?: string;
+
+  // Free-text address state as stored on Address.state (e.g. "Stockholms län"),
+  // not a rate region code — the engine normalises it before matching.
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  region?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  postcode?: string;
+
+  @IsOptional()
+  @IsString()
+  shipping_method_id?: string;
+
+  @IsOptional()
+  @IsString()
+  coupon_code?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  locale?: string;
 }

@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PricingType, StoreType } from '@prisma/client';
 import { resolveStoreCurrency } from '../../common/money/currency.util';
-import { resolveStoreTaxRateBp } from '../../common/money/tax.util';
+import { buildTaxContext } from '../taxes/tax.service';
 import {
   isKustomEnabledForStore,
   kustomCreatorSelect,
@@ -98,6 +98,7 @@ export class StorefrontService {
       });
     const themeConfig = (store.theme_config as any) || {};
     const platformConfig = await this.prisma.platformConfig.findFirst();
+    const taxContext = buildTaxContext(store, platformConfig);
 
     // Kustom readiness is read separately: the creator select above is spread
     // into the response, and the shared secret must never travel with it.
@@ -143,10 +144,15 @@ export class StorefrontService {
       // Independent stores may price in their own currency; everyone else
       // shows the platform default.
       currency: resolveStoreCurrency(store, platformConfig?.default_currency),
-      // Effective VAT rate (basis points): the store override, else the
-      // platform default. Prices are tax inclusive; the storefront only uses
-      // it to show the "Includes VAT" line.
-      tax_rate_bp: resolveStoreTaxRateBp(store, platformConfig),
+      // Tax display settings: who taxes this store's orders, whether the
+      // catalog prices include tax and the registration country the cart
+      // estimates with. Rates themselves come from POST /orders/quote.
+      tax: {
+        pricing_mode: taxContext.pricingMode,
+        display_prices_incl_tax: taxContext.displayPricesInclTax,
+        country: taxContext.taxCountry,
+        registrant: taxContext.registrant,
+      },
       // Store type drives the storefront's product mix and checkout flow.
       store_type: store.store_type,
       // Card checkout availability. Marketplace stores need the creator able

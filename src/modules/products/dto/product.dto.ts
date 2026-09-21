@@ -9,6 +9,7 @@ import {
   IsArray,
   Allow,
   ValidateNested,
+  ValidateIf,
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -156,6 +157,17 @@ export class CreateProductDto {
   @IsString()
   shipping_profile_id?: string;
 
+  // Tax class (platform class or one of the caller's store); null = the
+  // default class of the scope. tax_exempt makes every rate lookup 0 %.
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  tax_class_id?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  tax_exempt?: boolean;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => ProductTranslationDto)
@@ -260,6 +272,17 @@ export class UpdateProductDto {
   @IsOptional()
   @IsString()
   shipping_profile_id?: string;
+
+  // Tax class (platform class or one of the caller's store); null = the
+  // default class of the scope. tax_exempt makes every rate lookup 0 %.
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  tax_class_id?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  tax_exempt?: boolean;
 
   @IsOptional()
   @IsEnum(ProductStatus)

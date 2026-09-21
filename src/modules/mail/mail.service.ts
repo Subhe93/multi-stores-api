@@ -26,7 +26,7 @@ import {
   absoluteUrl,
   emailPhrases,
   formatMoney,
-  formatTaxLine,
+  formatTaxLines,
   formatShippingLine,
   renderOrderItems,
   buildOrderUrl,
@@ -541,13 +541,10 @@ export class MailService {
       currency,
       locale,
     );
-    // Printed under the total only when the order carries a VAT rate.
-    const taxLine = formatTaxLine(
-      order.tax_rate_bp,
-      Number(order.tax_amount ?? 0),
-      currency,
-      locale,
-    );
+    // Itemized under the total, one row per rate; `taxLine` is the joined
+    // text for the {{tax_line}} template variable.
+    const taxLines = formatTaxLines(order, currency, locale);
+    const taxLine = taxLines.join('\n');
 
     // Identity of the shop the customer actually bought from: it selects the
     // sender and template overrides, and brands the message itself.
@@ -571,6 +568,7 @@ export class MailService {
             total: totalStr,
             shippingLine,
             taxLine,
+            taxLines,
             paid: order.payment_status === 'paid',
             orderUrl,
             itemsHtml: items_html,
@@ -661,6 +659,7 @@ export class MailService {
             total: totalStr,
             shippingLine,
             taxLine,
+            taxLines,
             storeName: order.storeCtx?.name,
             customerName,
             orderAdminUrl,

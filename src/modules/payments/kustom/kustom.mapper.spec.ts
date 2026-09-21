@@ -77,15 +77,54 @@ describe('buildKustomOrderLines', () => {
     expect(lines[0].reference).toBe('SKU-1');
   });
 
-  it('adds a negative discount line and still matches the total', () => {
+  it('puts the discount on the line itself and still matches the total', () => {
+    // The tax engine allocates the order discount across the lines before
+    // taxing them; the mapper applies the same share as the line's own
+    // total_discount_amount, so no separate discount line is needed.
     const lines = buildKustomOrderLines(
       order({ discount_amount: 30, total: 269 }),
       'sv',
     );
     assertLineInvariants(lines);
-    const discount = lines.find((l) => l.type === 'discount');
-    expect(discount?.total_amount).toBe(-3000);
+    expect(lines.some((l) => l.type === 'discount')).toBe(false);
+    expect(lines[0]).toMatchObject({
+      unit_price: 12500,
+      total_amount: 22000,
+      total_discount_amount: 3000,
+    });
     expect(lines.reduce((s, l) => s + l.total_amount, 0)).toBe(26900);
+  });
+
+  it('splits a discount across several lines by largest remainder', () => {
+    // 10.00 off two lines of 100 and 50: 6.67 + 3.33 (exact in minor units).
+    const lines = buildKustomOrderLines(
+      order({
+        items: [
+          {
+            id: 'a',
+            quantity: 1,
+            unit_price: 100,
+            total_price: 100,
+            product: { translations: [{ locale: 'en', title: 'A' }] },
+          },
+          {
+            id: 'b',
+            quantity: 1,
+            unit_price: 50,
+            total_price: 50,
+            product: { translations: [{ locale: 'en', title: 'B' }] },
+          },
+        ],
+        shipping_cost: 0,
+        discount_amount: 10,
+        total: 140,
+      }),
+      'en',
+    );
+    assertLineInvariants(lines);
+    expect(lines.map((l) => l.total_discount_amount)).toEqual([667, 333]);
+    expect(lines.reduce((s, l) => s + l.total_amount, 0)).toBe(14000);
+    expect(lines.some((l) => l.reference === 'rounding')).toBe(false);
   });
 
   it('absorbs rounding gaps between unit and line totals', () => {
@@ -226,33 +265,49 @@ describe('splitFullName', () => {
 });
 
 describe('tax', () => {
-  const taxed = () =>
-    buildKustomOrderLines(order({ discount_amount: 30, total: 269 }), 'sv', {
-      taxRateBp: 2500,
+  // What the tax engine stores for this order: 250 - 30 discount = 220 at
+  // 25 % inclusive → 44.00 of tax on the line, 9.80 on the 49 shipping.
+  const taxedOrder = () =>
+    order({
+      discount_amount: 30,
+      total: 269,
+      items: [
+        {
+          id: 'item-1',
+          quantity: 2,
+          unit_price: 125,
+          total_price: 250,
+          tax_rate_bp: 2500,
+          tax_amount: 44,
+          product: { translations: [{ locale: 'sv', title: 'Tröja' }] },
+          variant: { sku: 'SKU-1', options: { size: 'M', color: 'Blå' } },
+        },
+      ],
+      tax_pricing_mode: 'INCLUSIVE',
+      shipping_tax_rate_bp: 2500,
+      shipping_tax_amount: 9.8,
     });
 
-  it('splits 25 % VAT out of every line and sums it into the order', () => {
-    const lines = taxed();
+  it('stamps every line with the tax the engine computed and sums it', () => {
+    const lines = buildKustomOrderLines(taxedOrder(), 'sv');
     assertLineInvariants(lines);
     for (const line of lines) {
       expect(line.tax_rate).toBe(2500);
-      expect(line.total_tax_amount).toBe(
-        Math.round(line.total_amount - (line.total_amount * 10000) / 12500),
-      );
+      // Kustom's own consistency rule: within ±1 of the rate applied to the
+      // (post-discount) line total.
+      expect(
+        Math.abs(
+          line.total_tax_amount -
+            (line.total_amount - (line.total_amount * 10000) / 12500),
+        ),
+      ).toBeLessThanOrEqual(1);
     }
-    // The discount line carries negative tax so the sum stays consistent.
-    const discount = lines.find((l) => l.type === 'discount');
-    expect(discount?.total_tax_amount).toBe(-600);
-
-    const payload = buildKustomCheckoutPayload(
-      order({ discount_amount: 30, total: 269 }),
-      { ...ctx, taxRateBp: 2500 },
-    );
+    const payload = buildKustomCheckoutPayload(taxedOrder(), ctx);
     const sum = payload.order_lines.reduce((s, l) => s + l.total_tax_amount, 0);
     expect(payload.order_tax_amount).toBe(sum);
     // Totals are tax inclusive: the amount never moves.
     expect(payload.order_amount).toBe(26900);
-    expect(payload.order_tax_amount).toBe(5380);
+    expect(payload.order_tax_amount).toBe(4400 + 980);
   });
 
   it('275 kr at 25 % includes 55 kr of VAT (27500 → 5500 minor)', () => {
@@ -264,6 +319,8 @@ describe('tax', () => {
             quantity: 1,
             unit_price: 275,
             total_price: 275,
+            tax_rate_bp: 2500,
+            tax_amount: 55,
             product: { translations: [{ locale: 'sv', title: 'Väska' }] },
           },
         ],
@@ -272,12 +329,75 @@ describe('tax', () => {
         total: 275,
       }),
       'sv',
-      { taxRateBp: 2500 },
     );
     expect(lines).toHaveLength(1);
     expect(lines[0].total_amount).toBe(27500);
     expect(lines[0].total_tax_amount).toBe(5500);
     expect(sumKustomTax(lines)).toBe(5500);
+  });
+
+  it('sends gross line amounts in EXCLUSIVE mode', () => {
+    // Net 200 + 25 % = 250 for the line, 40 + 10 for shipping; the order
+    // total (300) already includes the tax.
+    const lines = buildKustomOrderLines(
+      order({
+        items: [
+          {
+            id: 'item-1',
+            quantity: 2,
+            unit_price: 100,
+            total_price: 200,
+            tax_rate_bp: 2500,
+            tax_amount: 50,
+            product: { translations: [{ locale: 'en', title: 'Lamp' }] },
+          },
+        ],
+        shipping_cost: 40,
+        discount_amount: 0,
+        total: 300,
+        tax_pricing_mode: 'EXCLUSIVE',
+        shipping_tax_rate_bp: 2500,
+        shipping_tax_amount: 10,
+      }),
+      'en',
+    );
+    assertLineInvariants(lines);
+    expect(lines.map((l) => l.total_amount)).toEqual([25000, 5000]);
+    expect(lines.map((l) => l.total_tax_amount)).toEqual([5000, 1000]);
+    expect(lines.reduce((s, l) => s + l.total_amount, 0)).toBe(30000);
+    expect(lines.some((l) => l.reference === 'rounding')).toBe(false);
+  });
+
+  it('sends a gross unit price in EXCLUSIVE mode so no phantom discount appears', () => {
+    // Net 100 × 3 = 300 + 25 % = 375 gross. The unit sent must be the gross
+    // unit (125.00), not the net one bumped by ceil(total / qty), and the
+    // line must carry no discount at all.
+    const lines = buildKustomOrderLines(
+      order({
+        items: [
+          {
+            id: 'item-1',
+            quantity: 3,
+            unit_price: 100,
+            total_price: 300,
+            tax_rate_bp: 2500,
+            tax_amount: 75,
+            product: { translations: [{ locale: 'en', title: 'Lamp' }] },
+          },
+        ],
+        shipping_cost: 0,
+        discount_amount: 0,
+        total: 375,
+        tax_pricing_mode: 'EXCLUSIVE',
+      }),
+      'en',
+    );
+    assertLineInvariants(lines);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].unit_price).toBe(12500);
+    expect(lines[0].total_amount).toBe(37500);
+    expect(lines[0].total_discount_amount).toBe(0);
+    expect(lines[0].total_tax_amount).toBe(7500);
   });
 
   it('sends tax-free lines when the rate is zero', () => {
@@ -389,6 +509,21 @@ describe('buildKustomShippingOptions', () => {
     );
     expect(options[0].preselected).toBe(true);
   });
+
+  it('adds the tax on top of the option price in EXCLUSIVE mode', () => {
+    const options = buildKustomShippingOptions(
+      [{ id: 'standard', name: 'Standard', type: 'delivery', cost: 40 }],
+      'SEK',
+      2500,
+      null,
+      'EXCLUSIVE',
+    );
+    expect(options[0]).toMatchObject({
+      price: 5000,
+      tax_rate: 2500,
+      tax_amount: 1000,
+    });
+  });
 });
 
 describe('buildKustomSessionPayload', () => {
@@ -400,14 +535,20 @@ describe('buildKustomSessionPayload', () => {
     sessionId: 'sess-1',
     token: 'tok',
     callbackToken: 'cb-secret',
-    taxRateBp: 2500,
   };
   const input = {
     currency: 'SEK',
     shipping_cost: 49,
     discount_amount: 0,
     total: 299,
-    items: order().items,
+    items: order().items.map((item) => ({
+      ...item,
+      tax_rate_bp: 2500,
+      tax_amount: 50,
+    })),
+    tax_pricing_mode: 'INCLUSIVE' as const,
+    shipping_tax_rate_bp: 2500,
+    shipping_tax_amount: 9.8,
     purchaseCountry: 'se',
     reference: 'sess-1',
     email: 'anna@example.com',
@@ -434,8 +575,11 @@ describe('buildKustomSessionPayload', () => {
     expect(payload.shipping_options?.[0]).toMatchObject({
       id: 'standard',
       price: 4900,
+      tax_rate: 2500,
+      tax_amount: 980,
       preselected: true,
     });
+    expect(payload.order_tax_amount).toBe(5000 + 980);
     const shippingLine = payload.order_lines.find(
       (l) => l.type === 'shipping_fee',
     );

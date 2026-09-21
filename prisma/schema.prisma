@@ -326,12 +326,18 @@ model Product {
   weight_unit           String?            @default("kg")
   variant_option_config Json?
   shipping_profile_id   String?
+  // Tax class of the product (platform or the owning store's own class);
+  // null = the default class of the scope. tax_exempt short-circuits every
+  // rate lookup to 0 %.
+  tax_class_id          String?
+  tax_exempt            Boolean            @default(false)
   status                ProductStatus      @default(DRAFT)
   is_featured        Boolean            @default(false)
   created_at         DateTime           @default(now())
   updated_at         DateTime           @updatedAt
 
   provider         Provider?            @relation(fields: [provider_id], references: [id])
+  tax_class        TaxClass?            @relation(fields: [tax_class_id], references: [id], onDelete: SetNull)
   creator          Creator?             @relation(fields: [creator_id], references: [id])
   category         Category             @relation(fields: [category_id], references: [id])
   shipping_profile ShippingProfile?     @relation(fields: [shipping_profile_id], references: [id], onDelete: SetNull)
@@ -596,11 +602,20 @@ model Order {
   kustom_push_token  String?
   kustom_capture_id  String?
   kustom_captured_at DateTime?
-  // VAT snapshot: the rate resolved for the store at creation (basis points)
-  // and the tax included in `total` at that rate. Prices are tax inclusive,
-  // so this never changes the total — it is what receipts and Kustom show.
+  // Tax snapshot. tax_rate_bp is the headline rate (highest rate on the
+  // order, basis points) and tax_amount the tax total — both kept for
+  // compatibility; the itemized breakdown is tax_lines (TaxLine[]: label,
+  // rate_bp, taxable_amount, tax_amount in major units). In INCLUSIVE mode
+  // the tax is part of `total`, in EXCLUSIVE mode it was added on top.
   tax_rate_bp     Int         @default(0)
   tax_amount      Decimal     @default(0) @db.Decimal(10, 2)
+  tax_pricing_mode  TaxPricingMode @default(INCLUSIVE)
+  tax_basis_country String?        @db.VarChar(2)
+  tax_lines         Json?
+  // Tax on the shipping line, kept apart so a payment mapper can stamp the
+  // shipping fee with its own rate without re-deriving it from tax_lines.
+  shipping_tax_rate_bp Int      @default(0)
+  shipping_tax_amount  Decimal  @default(0) @db.Decimal(10, 2)
   // Snapshot of the shipping method the customer chose: the ShippingMethod id
   // (no FK — methods may be deleted later), its display name in the store's
   // primary locale (e.g. "Standard shipping") and its type. All null for
@@ -688,6 +703,11 @@ model OrderItem {
   fulfillment_status FulfillmentStatus @default(PENDING)
   tracking_number    String?
   tracking_url       String?
+  // Tax snapshot of the line: class key at the time, effective rate (basis
+  // points) and the tax amount after the order discount was allocated.
+  tax_class_key      String?
+  tax_rate_bp        Int               @default(0)
+  tax_amount         Decimal           @default(0) @db.Decimal(10, 2)
 
   order              Order                  @relation(fields: [order_id], references: [id], onDelete: Cascade)
   product            Product?               @relation(fields: [product_id], references: [id])
@@ -770,9 +790,17 @@ model PlatformConfig {
   // Order Limits
   min_order_amount Decimal? @db.Decimal(10, 2)
 
-  // Platform-wide VAT rate in basis points (2500 = 25 %). Prices everywhere
-  // are tax inclusive; a store may override this with Store.tax_rate_bp.
+  // Legacy platform-wide VAT rate (basis points). Superseded by the TaxRate
+  // table (migration 20260923120000 converted it); no longer written.
   default_tax_rate_bp Int @default(0)
+
+  // Platform tax registrant settings: marketplace orders are taxed by the
+  // platform, so these decide their pricing mode, registration country and
+  // OSS status. tax_rates_seeded_at records the last default-rate seed.
+  default_tax_pricing_mode TaxPricingMode @default(INCLUSIVE)
+  platform_tax_country     String?        @db.VarChar(2)
+  platform_oss_registered  Boolean        @default(false)
+  tax_rates_seeded_at      DateTime?
 
   // Registration Approvals
   require_provider_approval Boolean @default(true)
@@ -867,14 +895,28 @@ model Store {
   cache_enabled        Boolean  @default(true)
   // Cash on delivery is opt-in per store (off by default).
   cod_enabled          Boolean   @default(false)
-  // VAT override in basis points (2500 = 25 %); null inherits
-  // PlatformConfig.default_tax_rate_bp. Prices are entered tax-inclusive, so
-  // the rate only splits the included tax out for display and for Kustom.
+  // Legacy single VAT override (basis points). Superseded by the TaxRate
+  // table (migration 20260923120000 converted it); no longer written.
   tax_rate_bp          Int?
+  // Tax settings of an INDEPENDENT store (the store is the tax registrant).
+  // MARKETPLACE stores are taxed by the platform and ignore these.
+  tax_pricing_mode        TaxPricingMode @default(INCLUSIVE)
+  tax_basis               TaxBasis       @default(SHIPPING)
+  // Registration country (ISO2); null = the platform's.
+  tax_country             String?        @db.VarChar(2)
+  oss_registered          Boolean        @default(false)
+  // false = only the store's own TaxRate rows apply.
+  use_platform_tax_rates  Boolean        @default(true)
+  // null = shipping follows the highest-rate class among the order's lines.
+  shipping_tax_class_id   String?
+  // Catalog display: show prices as tax inclusive.
+  display_prices_incl_tax Boolean        @default(true)
   created_at           DateTime @default(now())
   updated_at           DateTime @updatedAt
 
   creator         Creator  @relation(fields: [creator_id], references: [id], onDelete: Cascade)
+  tax_classes     TaxClass[]
+  tax_rates       TaxRate[]
   language_config StoreLanguageConfig?
   static_pages    StaticPage[]
   pages           Page[]
@@ -911,8 +953,12 @@ model KustomCheckoutSession {
   items           Json // CartLine[] snapshot
   coupon_code     String?
   notes           String?
-  // Last address country Kustom reported (drives the shipping options).
+  // Last address country Kustom reported (drives the shipping options),
+  // plus its region and postcode so the session is taxed for exactly the
+  // destination the order created at validation will snapshot.
   country_code    String?  @db.VarChar(2)
+  region          String?
+  postcode        String?
   // purchase_country sent when the Kustom checkout was created; Kustom does
   // not accept a different value on update, so every update reuses it.
   purchase_country String? @db.VarChar(2)
@@ -984,6 +1030,66 @@ model StoreLanguageConfig {
   fallback_locale   String   @default("en") @db.VarChar(5)
 
   store Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
+}
+
+// ==========================================
+// Taxes (plans/tax-system/API-CONTRACT-TAX.md)
+// ==========================================
+
+enum TaxPricingMode {
+  INCLUSIVE
+  EXCLUSIVE
+}
+
+enum TaxBasis {
+  SHIPPING
+  BILLING
+  STORE
+}
+
+// A tax class groups products that are taxed alike ('standard', 'reduced',
+// 'zero' or a custom slug). store_id null = platform class; exactly one class
+// per scope is the default (used by products with no class).
+model TaxClass {
+  id         String   @id @default(uuid())
+  store_id   String?
+  key        String
+  name       Json     // { "en": "Standard", "sv": "Standard", ... }
+  is_default Boolean  @default(false)
+  sort_order Int      @default(0)
+  created_at DateTime @default(now())
+
+  store    Store?    @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  rates    TaxRate[]
+  products Product[]
+
+  @@unique([store_id, key])
+}
+
+// One rate of a class for a destination. store_id null = platform rate.
+// region: state/province code (exact match), null = any. postcode_pattern:
+// null = any, "123*" prefix or "10000-19999" range. Among matches the most
+// specific wins (postcode > region > country), then the lowest priority;
+// rates with the same priority stack (compound).
+model TaxRate {
+  id                  String   @id @default(uuid())
+  store_id            String?
+  tax_class_id        String
+  country             String   @db.VarChar(2)
+  region              String?
+  postcode_pattern    String?
+  rate_bp             Int      // 2500 = 25 %
+  label               Json     // { "en": "VAT", "sv": "Moms", ... }
+  priority            Int      @default(0)
+  applies_to_shipping Boolean  @default(true)
+  is_active           Boolean  @default(true)
+  created_at          DateTime @default(now())
+
+  store     Store?   @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  tax_class TaxClass @relation(fields: [tax_class_id], references: [id], onDelete: Cascade)
+
+  @@index([country, tax_class_id])
+  @@index([store_id])
 }
 
 model StaticPage {

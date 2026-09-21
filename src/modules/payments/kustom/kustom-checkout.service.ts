@@ -318,6 +318,9 @@ export class KustomCheckoutService {
     ctx: StoreContext,
     opts: {
       countryCode: string | null;
+      /** Region / postcode of the destination, for regional tax rates. */
+      region?: string | null;
+      postcode?: string | null;
       couponCode: string | null;
       selectedShippingId: string | null;
       prefill?: CustomerPrefill | null;
@@ -328,6 +331,8 @@ export class KustomCheckoutService {
     const lines = this.itemsOf(session);
     const quote = await this.orders.quoteLines(session.store_id, lines, {
       countryCode: opts.countryCode,
+      region: opts.countryCode ? (opts.region ?? null) : null,
+      postcode: opts.countryCode ? (opts.postcode ?? null) : null,
       couponCode: opts.couponCode,
       shippingMethodId: opts.selectedShippingId,
       locale: this.sessionLocale(session, ctx),
@@ -357,6 +362,9 @@ export class KustomCheckoutService {
       shipping_cost: quote.shipping_cost,
       discount_amount: quote.discount_amount,
       total: quote.total,
+      tax_pricing_mode: quote.tax_pricing_mode,
+      shipping_tax_amount: quote.shipping_tax_amount,
+      shipping_tax_rate_bp: quote.shipping_tax_rate_bp,
       items: await this.describeItems(quote),
       purchaseCountry:
         opts.purchaseCountry ??
@@ -429,6 +437,8 @@ export class KustomCheckoutService {
       quantity: item.quantity,
       unit_price: item.unit_price,
       total_price: item.total_price,
+      tax_rate_bp: item.tax_rate_bp,
+      tax_amount: item.tax_amount,
       product: item.product_id
         ? (productMap.get(item.product_id) ?? null)
         : null,
@@ -455,7 +465,6 @@ export class KustomCheckoutService {
       sessionId: session.id,
       token: session.token,
       callbackToken: session.callback_token,
-      taxRateBp: ctx.taxRateBp,
     };
   }
 
@@ -497,15 +506,33 @@ export class KustomCheckoutService {
 
   /**
    * What the storefront gets back. Only the storefront token is exposed; the
-   * callback token never leaves the server.
+   * callback token never leaves the server. `totals` mirrors the quote the
+   * checkout was (re)priced with, so the page summary shows the same
+   * itemized taxes the iframe does.
    */
-  private sessionResponse(session: Session, checkout: KustomCheckoutOrder) {
+  private sessionResponse(
+    session: Session,
+    checkout: KustomCheckoutOrder,
+    quote?: OrderQuote,
+  ) {
     return {
       session_id: session.id,
       token: session.token,
       kustom_order_id: session.kustom_order_id ?? checkout.order_id,
       html_snippet: checkout.html_snippet ?? '',
       status: (checkout.status ?? '').toLowerCase(),
+      totals: quote
+        ? {
+            subtotal: quote.subtotal,
+            shipping_cost: quote.shipping_cost,
+            discount_amount: quote.discount_amount,
+            tax_lines: quote.tax_lines,
+            tax_total: quote.tax_total,
+            total: quote.total,
+            pricing_mode: quote.tax_pricing_mode,
+            currency: quote.currency,
+          }
+        : null,
     };
   }
 
@@ -557,6 +584,10 @@ export class KustomCheckoutService {
     const prefill = await this.customerPrefill(customer?.id ?? null);
     let country =
       prefill?.address?.country_code.toUpperCase() ?? this.defaultCountry(ctx);
+    // The prefilled address is what Kustom shows (and reports back) first,
+    // so its region / postcode are the session's until an update says else.
+    let region = prefill?.address ? prefill.address.state || null : null;
+    let postcode = prefill?.address?.postal_code || null;
 
     const session = await this.prisma.kustomCheckoutSession.create({
       data: {
@@ -572,6 +603,8 @@ export class KustomCheckoutService {
         coupon_code: dto.coupon_code?.trim() || null,
         notes: dto.notes?.trim() || null,
         country_code: country,
+        region,
+        postcode,
         expires_at: new Date(Date.now() + SESSION_TTL_MS),
       },
     });
@@ -579,6 +612,8 @@ export class KustomCheckoutService {
     try {
       let priced = await this.priceSession(session, ctx, {
         countryCode: country,
+        region,
+        postcode,
         couponCode: session.coupon_code,
         selectedShippingId: null,
         prefill,
@@ -587,6 +622,8 @@ export class KustomCheckoutService {
         // The assumed destination cannot be shipped to: offer no option yet
         // and let the address Kustom collects decide.
         country = null;
+        region = null;
+        postcode = null;
         priced = await this.priceSession(session, ctx, {
           countryCode: null,
           couponCode: session.coupon_code,
@@ -612,6 +649,8 @@ export class KustomCheckoutService {
         data: {
           kustom_order_id: created.order_id,
           country_code: country,
+          region,
+          postcode,
           // Kustom refuses a different purchase_country on update, so the
           // one the checkout was created with is pinned to the session.
           purchase_country: payload.purchase_country,
@@ -619,7 +658,7 @@ export class KustomCheckoutService {
           shipping_cost: priced.priced.quote.shipping_cost,
         },
       });
-      return this.sessionResponse(stored, created);
+      return this.sessionResponse(stored, created, priced.priced.quote);
     } catch (err) {
       // No checkout exists for this row (or it was never stored); drop it so
       // the storefront starts clean on retry.
@@ -702,14 +741,23 @@ export class KustomCheckoutService {
       couponCode: next.coupon_code,
       purchaseCountry: session.purchase_country,
     };
+    // Re-price for the destination the last callback stored (country,
+    // region and postcode together), so the totals match what validation
+    // will compute for the order.
     let priced = await this.priceSession(next, ctx, {
       ...pricingOpts,
       countryCode: session.country_code,
+      region: session.region,
+      postcode: session.postcode,
       selectedShippingId: session.shipping_method_id,
     });
     let country = session.country_code;
+    let region = session.region;
+    let postcode = session.postcode;
     if (!priced.ok) {
       country = null;
+      region = null;
+      postcode = null;
       priced = await this.priceSession(next, ctx, {
         ...pricingOpts,
         countryCode: null,
@@ -747,7 +795,9 @@ export class KustomCheckoutService {
       const changed =
         expectedKustomAmount(pending) !== payload.order_amount ||
         this.snapshotChanged(session, next);
-      if (!changed) return this.sessionResponse(session, updated);
+      if (!changed) {
+        return this.sessionResponse(session, updated, priced.priced.quote);
+      }
       if (!(await this.detachPendingOrder(session, pending.id))) {
         throw this.orderedConflict();
       }
@@ -760,6 +810,8 @@ export class KustomCheckoutService {
       data: {
         ...data,
         country_code: country,
+        region,
+        postcode,
         shipping_method_id: priced.priced.selectedShippingId,
         shipping_cost: priced.priced.quote.shipping_cost,
       },
@@ -768,7 +820,7 @@ export class KustomCheckoutService {
     const fresh = await this.prisma.kustomCheckoutSession.findUnique({
       where: { id: session.id },
     });
-    return this.sessionResponse(fresh ?? session, updated);
+    return this.sessionResponse(fresh ?? session, updated, priced.priced.quote);
   }
 
   /** True when items, coupon or notes differ between two session states. */
@@ -937,7 +989,7 @@ export class KustomCheckoutService {
     }
 
     const b = this.callbackBody(body);
-    const country = this.countryOf(b) ?? session.country_code;
+    const { country, region, postcode } = this.destinationOf(b, session);
     const selectedId =
       typeof b.selected_shipping_option?.id === 'string'
         ? b.selected_shipping_option.id
@@ -947,6 +999,8 @@ export class KustomCheckoutService {
     try {
       priced = await this.priceSession(session, ctx, {
         countryCode: country,
+        region,
+        postcode,
         couponCode: session.coupon_code,
         selectedShippingId: selectedId,
       });
@@ -981,6 +1035,8 @@ export class KustomCheckoutService {
       where: { id: session.id, status: 'open' },
       data: {
         country_code: country,
+        region,
+        postcode,
         shipping_method_id: priced.priced.selectedShippingId,
         shipping_cost: priced.priced.quote.shipping_cost,
       },
@@ -1047,7 +1103,10 @@ export class KustomCheckoutService {
     try {
       // 1. Recompute from the snapshot and compare with what Kustom holds.
       const b = this.callbackBody(body);
-      const country = this.countryOf(b) ?? session.country_code;
+      // The same destination upsertAddress() stores on the Address row that
+      // create() taxes from (country_code / state / postal_code), so the
+      // session total and the order total are computed from equal inputs.
+      const { country, region, postcode } = this.destinationOf(b, session);
       if (!country) return reject('unavailable');
       const selectedId =
         typeof b.selected_shipping_option?.id === 'string'
@@ -1055,6 +1114,8 @@ export class KustomCheckoutService {
           : session.shipping_method_id;
       const priced = await this.priceSession(session, ctx, {
         countryCode: country,
+        region,
+        postcode,
         couponCode: session.coupon_code,
         selectedShippingId: selectedId,
       });
@@ -1143,6 +1204,8 @@ export class KustomCheckoutService {
               status: 'ordered',
               account_created: resolved.created,
               country_code: country,
+              region,
+              postcode,
               shipping_method_id: priced.priced.selectedShippingId,
               shipping_cost: priced.priced.quote.shipping_cost,
             },
@@ -1275,6 +1338,38 @@ export class KustomCheckoutService {
     if (typeof raw !== 'string') return null;
     const country = raw.trim().toUpperCase().slice(0, 2);
     return /^[A-Z]{2}$/.test(country) ? country : null;
+  }
+
+  /**
+   * The destination a callback reports — country, region and postcode read
+   * from the same address (shipping, else billing) and shaped exactly as
+   * upsertAddress() stores them on the order's Address row — or, when the
+   * body carries no country, the destination the session last stored. The
+   * three always move together: a region left over from an earlier address
+   * must never be combined with a newly reported country.
+   */
+  private destinationOf(
+    b: KustomCheckoutCallbackBody,
+    session: Pick<Session, 'country_code' | 'region' | 'postcode'>,
+  ): {
+    country: string | null;
+    region: string | null;
+    postcode: string | null;
+  } {
+    const country = this.countryOf(b);
+    if (!country) {
+      return {
+        country: session.country_code,
+        region: session.region,
+        postcode: session.postcode,
+      };
+    }
+    const a = b.shipping_address ?? b.billing_address;
+    return {
+      country,
+      region: a?.region || null,
+      postcode: a?.postal_code || null,
+    };
   }
 
   /** Storefront error reason for a failure inside validation. */
@@ -1472,6 +1567,8 @@ export class KustomCheckoutService {
       country_code: a.country.toUpperCase().slice(0, 2),
       phone: a.phone || billing?.phone || null,
     };
+    // `state` is part of the match: the order is taxed from the row's
+    // state / postal_code, so a reused row must carry the reported region.
     const existing = await this.prisma.address.findFirst({
       where: {
         customer_id: data.customer_id,
@@ -1479,6 +1576,7 @@ export class KustomCheckoutService {
         line1: data.line1,
         line2: data.line2,
         city: data.city,
+        state: data.state,
         postal_code: data.postal_code,
         country_code: data.country_code,
       },

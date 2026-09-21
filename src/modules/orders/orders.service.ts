@@ -10,6 +10,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import {
   CommissionStatus,
   FulfillerType,
+  Prisma,
   FulfillmentStatus,
   OrderStatus,
   PaymentMethod,
@@ -17,6 +18,7 @@ import {
   ProductStatus,
   ShippingMethodType,
   StoreType,
+  TaxPricingMode,
   UserRole,
 } from '@prisma/client';
 import {
@@ -36,9 +38,14 @@ import {
   roundMoney,
 } from '../../common/money/currency.util';
 import {
-  includedTaxForOrder,
-  resolveStoreTaxRateBp,
-} from '../../common/money/tax.util';
+  TaxService,
+  taxStoreSelect,
+  type TaxComputeResult,
+  type TaxDestination,
+  type TaxLine,
+  type TaxLineInput,
+  type TaxStoreFields,
+} from '../taxes/tax.service';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
 import {
   isKustomEnabledForStore,
@@ -56,14 +63,13 @@ import {
 type ShippedHook = (orderId: string) => Promise<void>;
 
 /** The store columns order pricing depends on. */
-interface OrderStoreContext {
+interface OrderStoreContext extends TaxStoreFields {
   id: string;
   creator_id: string;
   store_type: StoreType;
   currency: string | null;
   cod_enabled: boolean;
   is_active: boolean;
-  tax_rate_bp: number | null;
   /** Store content locale; shipping method names are snapshotted in it. */
   primary_locale: string | null;
   creator: KustomCreatorFields;
@@ -80,6 +86,9 @@ interface PricedLine {
   fulfillerId: string;
   fulfillerType: 'PROVIDER' | 'CREATOR';
   stockOp: StockOp | null;
+  /** Tax class / exemption of the product behind the line. */
+  taxClassId: string | null;
+  taxExempt: boolean;
 }
 
 type CouponValidation = {
@@ -112,6 +121,10 @@ export interface OrderQuoteItem {
   unit_price: number;
   original_unit_price: number | null;
   total_price: number;
+  /** Effective tax rate (basis points), tax after the discount share, class. */
+  tax_rate_bp: number;
+  tax_amount: number;
+  tax_class_key: string | null;
 }
 
 /** Everything an order from these lines would carry, without creating it. */
@@ -120,11 +133,18 @@ export interface OrderQuote {
   subtotal: number;
   shipping_cost: number;
   discount_amount: number;
+  /** INCLUSIVE: subtotal + shipping - discount; EXCLUSIVE: plus tax_total. */
   total: number;
   currency: string;
-  /** Resolved VAT rate (basis points) and the tax included in `total`. */
+  /** Headline rate (highest on the order) and the tax total — compat. */
   tax_rate_bp: number;
   tax_amount: number;
+  tax_lines: TaxLine[];
+  tax_total: number;
+  tax_pricing_mode: TaxPricingMode;
+  tax_basis_country: string | null;
+  shipping_tax_amount: number;
+  shipping_tax_rate_bp: number;
   /** Null when no destination country was given (shipping not computed). */
   shipping: ShippingQuote | null;
   /** The chosen shipping method (what the order would snapshot). */
@@ -241,6 +261,7 @@ export class OrdersService {
     private promotionsService: PromotionsService,
     private shippingService: ShippingService,
     private mail: MailService,
+    private readonly taxService: TaxService,
   ) {}
 
   /** Register a callback to run once an order's status becomes SHIPPED. */
@@ -381,13 +402,11 @@ export class OrdersService {
     const orderStore = await this.prisma.store.findUnique({
       where: { id: storeId },
       select: {
-        id: true,
+        ...taxStoreSelect,
         creator_id: true,
-        store_type: true,
         currency: true,
         cod_enabled: true,
         is_active: true,
-        tax_rate_bp: true,
         language_config: { select: { primary_locale: true } },
         creator: { select: kustomCreatorSelect },
       },
@@ -439,6 +458,8 @@ export class OrdersService {
     let fulfillerId = '';
     let fulfillerType: 'PROVIDER' | 'CREATOR' = 'PROVIDER';
     let stockOp: StockOp | null = null;
+    let taxClassId: string | null = null;
+    let taxExempt = false;
 
     if (item.custom_product_id) {
       // Custom product (with or without a selected variant)
@@ -518,6 +539,8 @@ export class OrdersService {
       // Provider fulfills the product, creator is the seller
       fulfillerId = cp.product.provider_id || cp.creator_id || '';
       fulfillerType = cp.product.provider_id ? 'PROVIDER' : 'CREATOR';
+      taxClassId = cp.product.tax_class_id;
+      taxExempt = cp.product.tax_exempt;
     } else if (item.variant_id) {
       const variant = await this.prisma.productVariant.findUnique({
         where: { id: item.variant_id },
@@ -548,6 +571,8 @@ export class OrdersService {
       fulfillerId =
         variant.product.provider_id || variant.product.creator_id || '';
       fulfillerType = variant.product.provider_id ? 'PROVIDER' : 'CREATOR';
+      taxClassId = variant.product.tax_class_id;
+      taxExempt = variant.product.tax_exempt;
       // Variants track stock when stock_quantity is non-null.
       if (variant.stock_quantity != null) {
         stockOp = { kind: 'variant', id: variant.id, qty: item.quantity };
@@ -574,6 +599,8 @@ export class OrdersService {
       if (product.provider_id) providerBasePrice = unitPrice;
       fulfillerId = product.provider_id || product.creator_id || '';
       fulfillerType = product.provider_id ? 'PROVIDER' : 'CREATOR';
+      taxClassId = product.tax_class_id;
+      taxExempt = product.tax_exempt;
       // Only enforce when the seller actually tracks inventory for this product.
       if (product.track_inventory && product.stock_quantity != null) {
         stockOp = { kind: 'product', id: product.id, qty: item.quantity };
@@ -668,6 +695,8 @@ export class OrdersService {
       fulfillerId,
       fulfillerType,
       stockOp,
+      taxClassId,
+      taxExempt,
     };
   }
 
@@ -696,9 +725,14 @@ export class OrdersService {
   private async computeTotals(input: {
     orderStore: OrderStoreContext;
     lines: NormalizedCartLine[];
+    /** One entry per line: the priced total and the product's tax fields. */
+    taxLines: TaxLineInput[];
     subtotal: number;
     providerBaseTotal: number;
     countryCode: string | null;
+    /** State / postcode of the destination, for regional rates. */
+    region?: string | null;
+    postcode?: string | null;
     couponCode?: string | null;
     shippingMethodId?: string | null;
     strictMethod?: boolean;
@@ -710,8 +744,39 @@ export class OrdersService {
     discountAmount: number;
     total: number;
     couponValidation: CouponValidation | null;
+    tax: TaxComputeResult;
   }> {
     const { orderStore, lines, subtotal, providerBaseTotal } = input;
+    // Where the goods go: what the tax basis reads (shipping = billing here,
+    // the checkout collects one address). Null country = not known yet, the
+    // engine then estimates with the registration country.
+    const destination: TaxDestination = {
+      country: input.countryCode,
+      region: input.region ?? null,
+      postcode: input.postcode ?? null,
+    };
+    const taxFor = async (shippingCost: number, discountAmount: number) => {
+      const ctx = await this.taxService.contextFor(orderStore);
+      const data = await this.taxService.loadTaxData(ctx);
+      return this.taxService.computeTaxes({
+        ctx,
+        data,
+        currency: resolveStoreCurrency(
+          orderStore,
+          (
+            await this.prisma.platformConfig.findFirst({
+              select: { default_currency: true },
+            })
+          )?.default_currency,
+        ),
+        locale: input.locale ?? orderStore.primary_locale,
+        lines: input.taxLines,
+        shipping_cost: shippingCost,
+        discount_amount: discountAmount,
+        shipping: destination,
+        billing: destination,
+      });
+    };
     const isIndependentStore = orderStore.store_type === StoreType.INDEPENDENT;
     const productIds = lines
       .map((item) => item.product_id || item.custom_product_id)
@@ -731,6 +796,7 @@ export class OrdersService {
         locale: input.locale ?? orderStore.primary_locale ?? undefined,
       });
       if (!quote.available) {
+        const tax = await taxFor(0, 0);
         return {
           shipping: {
             available: false,
@@ -739,8 +805,9 @@ export class OrdersService {
           shippingCost: 0,
           shippingMethod: null,
           discountAmount: 0,
-          total: subtotal,
+          total: tax.total,
           couponValidation: null,
+          tax,
         };
       }
       const requested = input.shippingMethodId
@@ -803,9 +870,13 @@ export class OrdersService {
       }
     }
 
-    // Every term is already rounded; the rounding here only removes float
-    // noise from the sum so the stored total is exact in minor units.
-    const total = roundMoney(subtotal + shippingCost - discountAmount);
+    // Taxes: the discount is allocated across the lines first, every line
+    // and the shipping are taxed and rounded in minor units, and the total
+    // comes back as the sum of those parts — in INCLUSIVE mode that is
+    // exactly subtotal + shipping - discount, in EXCLUSIVE mode the tax is
+    // added on top (what Stripe / COD / Kustom charge).
+    const tax = await taxFor(shippingCost, discountAmount);
+    const total = roundMoney(tax.total);
     return {
       shipping,
       shippingCost,
@@ -813,6 +884,7 @@ export class OrdersService {
       discountAmount,
       total,
       couponValidation,
+      tax,
     };
   }
 
@@ -845,6 +917,8 @@ export class OrdersService {
     lines: CartLineLike[],
     opts: {
       countryCode: string | null;
+      region?: string | null;
+      postcode?: string | null;
       couponCode?: string | null;
       shippingMethodId?: string | null;
       locale?: string | null;
@@ -861,7 +935,11 @@ export class OrdersService {
 
     let subtotal = 0;
     let providerBaseTotal = 0;
-    const quotedItems: OrderQuoteItem[] = [];
+    const quotedItems: Omit<
+      OrderQuoteItem,
+      'tax_rate_bp' | 'tax_amount' | 'tax_class_key'
+    >[] = [];
+    const taxLines: TaxLineInput[] = [];
     for (const item of items) {
       const priced = await this.priceLine(item, orderStore);
       const totalPrice = this.lineTotal(priced.unitPrice, item.quantity);
@@ -881,6 +959,11 @@ export class OrdersService {
         original_unit_price: priced.originalUnitPrice,
         total_price: totalPrice,
       });
+      taxLines.push({
+        amount: totalPrice,
+        tax_class_id: priced.taxClassId,
+        tax_exempt: priced.taxExempt,
+      });
     }
     subtotal = roundMoney(subtotal);
     providerBaseTotal = roundMoney(providerBaseTotal);
@@ -888,9 +971,12 @@ export class OrdersService {
     const totals = await this.computeTotals({
       orderStore,
       lines: items,
+      taxLines,
       subtotal,
       providerBaseTotal,
       countryCode: opts.countryCode,
+      region: opts.region,
+      postcode: opts.postcode,
       couponCode: opts.couponCode,
       shippingMethodId: opts.shippingMethodId,
       strictMethod: false,
@@ -898,36 +984,82 @@ export class OrdersService {
     });
 
     const platformConfig = await this.prisma.platformConfig.findFirst({
-      select: { default_currency: true, default_tax_rate_bp: true },
+      select: { default_currency: true },
     });
     const currency = resolveStoreCurrency(
       orderStore,
       platformConfig?.default_currency,
     );
-    const taxRateBp = resolveStoreTaxRateBp(orderStore, platformConfig);
+    const { tax } = totals;
     return {
-      items: quotedItems,
+      items: quotedItems.map((item, i) => ({
+        ...item,
+        tax_rate_bp: tax.items[i]?.tax_rate_bp ?? 0,
+        tax_amount: tax.items[i]?.tax_amount ?? 0,
+        tax_class_key: tax.items[i]?.tax_class_key ?? null,
+      })),
       subtotal,
       shipping_cost: totals.shippingCost,
       discount_amount: totals.discountAmount,
       total: totals.total,
       currency,
-      tax_rate_bp: taxRateBp,
-      tax_amount: includedTaxForOrder(
-        {
-          items: quotedItems,
-          shipping_cost: totals.shippingCost,
-          discount_amount: totals.discountAmount,
-        },
-        taxRateBp,
-        currency,
-      ),
+      tax_rate_bp: tax.headline_rate_bp,
+      tax_amount: tax.tax_total,
+      tax_lines: tax.tax_lines,
+      tax_total: tax.tax_total,
+      tax_pricing_mode: tax.tax_pricing_mode,
+      tax_basis_country: tax.tax_basis_country,
+      shipping_tax_amount: tax.shipping_tax_amount,
+      shipping_tax_rate_bp: tax.shipping_tax_rate_bp,
       shipping: totals.shipping,
       shipping_method_id: totals.shippingMethod?.id ?? null,
       shipping_method_name: totals.shippingMethod?.name ?? null,
       shipping_method_type: totals.shippingMethod?.type ?? null,
       coupon: totals.couponValidation,
     };
+  }
+
+  /**
+   * `POST /orders/quote`: the full OrderQuote for explicit lines, or — with
+   * no lines and a logged-in customer — for the server cart. Guests must
+   * send lines. Nothing is reserved or claimed; the classic checkout calls
+   * this once the address country is known to show the taxed total.
+   */
+  async quote(
+    userId: string | null,
+    dto: {
+      store_id: string;
+      lines?: CartLineLike[] | null;
+      country_code?: string | null;
+      region?: string | null;
+      postcode?: string | null;
+      shipping_method_id?: string | null;
+      coupon_code?: string | null;
+      locale?: string | null;
+    },
+  ): Promise<OrderQuote> {
+    let lines: CartLineLike[] = dto.lines ?? [];
+    if (!lines.length && userId) {
+      const customer = await this.prisma.customer.findUnique({
+        where: { user_id: userId },
+        select: { cart: { select: { items: true } } },
+      });
+      lines = customer?.cart?.items ?? [];
+    }
+    if (!lines.length) {
+      throw new BadRequestException({
+        code: 'ORDER_CART_EMPTY',
+        message: 'Cart is empty',
+      });
+    }
+    return this.quoteLines(dto.store_id, lines, {
+      countryCode: dto.country_code?.trim().toUpperCase() || null,
+      region: dto.region ?? null,
+      postcode: dto.postcode ?? null,
+      couponCode: dto.coupon_code ?? null,
+      shippingMethodId: dto.shipping_method_id ?? null,
+      locale: dto.locale ?? null,
+    });
   }
 
   /**
@@ -996,6 +1128,8 @@ export class OrdersService {
     // Only items whose product/variant tracks inventory go in here — others are
     // treated as unlimited (consistent with track_inventory=false / null stock).
     const stockOps: StockOp[] = [];
+    // One entry per order item, in order: what the tax engine needs per line.
+    const taxLines: TaxLineInput[] = [];
 
     const orderStore = await this.loadOrderStore(dto.store_id);
     const isIndependentStore = orderStore.store_type === StoreType.INDEPENDENT;
@@ -1061,6 +1195,11 @@ export class OrdersService {
       providerBaseTotal += providerBaseForItem;
       creatorMarginTotal += totalPrice - providerBaseForItem;
       subtotal += totalPrice;
+      taxLines.push({
+        amount: totalPrice,
+        tax_class_id: priced.taxClassId,
+        tax_exempt: priced.taxExempt,
+      });
 
       // Build custom field values from cart item's custom_fields JSON
       // Format: { "field-uuid": "value" } or { "field-uuid": "https://...url" }
@@ -1176,9 +1315,12 @@ export class OrdersService {
     const totals = await this.computeTotals({
       orderStore,
       lines,
+      taxLines,
       subtotal,
       providerBaseTotal,
       countryCode: shippingAddress.country_code,
+      region: shippingAddress.state,
+      postcode: shippingAddress.postal_code,
       couponCode: dto.coupon_code,
       shippingMethodId: dto.shipping_method_id ?? null,
       strictMethod: true,
@@ -1248,21 +1390,17 @@ export class OrdersService {
       orderStore,
       platformConfig?.default_currency,
     );
-    // VAT snapshot. Prices are tax inclusive, so the rate never changes the
-    // total — it records how much of it is tax for receipts and Kustom. It is
-    // the sum of the per-line taxes (items, shipping, minus discount), the
-    // same rule the Kustom mapper applies line by line, so Order.tax_amount
-    // always equals the order_tax_amount Kustom is sent.
-    const taxRateBp = resolveStoreTaxRateBp(orderStore, platformConfig);
-    const taxAmount = includedTaxForOrder(
-      {
-        items: orderItems as { total_price: number }[],
-        shipping_cost: shippingCost,
-        discount_amount: discountAmount,
-      },
-      taxRateBp,
-      currency,
-    );
+    // Tax snapshot: per line (class key, effective rate, amount after the
+    // discount share), shipping, the itemized breakdown and the headline
+    // rate / total for compatibility. Computed by the same engine as the
+    // quote and the Kustom session, so Order.tax_amount always equals the
+    // order_tax_amount Kustom is sent.
+    const { tax } = totals;
+    orderItems.forEach((item, i) => {
+      item.tax_class_key = tax.items[i]?.tax_class_key ?? null;
+      item.tax_rate_bp = tax.items[i]?.tax_rate_bp ?? 0;
+      item.tax_amount = tax.items[i]?.tax_amount ?? 0;
+    });
 
     // ── Stock: atomically decrement before creating the order. The conditional
     // updateMany (where stock_quantity >= qty) is race-safe — if two buyers
@@ -1316,8 +1454,13 @@ export class OrdersService {
           discount_amount: discountAmount,
           total,
           currency,
-          tax_rate_bp: taxRateBp,
-          tax_amount: taxAmount,
+          tax_rate_bp: tax.headline_rate_bp,
+          tax_amount: tax.tax_total,
+          tax_pricing_mode: tax.tax_pricing_mode,
+          tax_basis_country: tax.tax_basis_country,
+          tax_lines: tax.tax_lines as unknown as Prisma.InputJsonValue,
+          shipping_tax_rate_bp: tax.shipping_tax_rate_bp,
+          shipping_tax_amount: tax.shipping_tax_amount,
           shipping_method_id: shippingMethod?.id ?? null,
           shipping_method_name: shippingMethod?.name ?? null,
           shipping_method_type: shippingMethod?.type ?? null,

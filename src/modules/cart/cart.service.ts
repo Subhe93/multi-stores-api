@@ -7,8 +7,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
-import { resolveStoreCurrency } from '../../common/money/currency.util';
-import { includedTax, resolveStoreTaxRateBp } from '../../common/money/tax.util';
+import { resolveStoreCurrency, roundMoney } from '../../common/money/currency.util';
+import { TaxService, taxStoreSelect, type TaxLineInput } from '../taxes/tax.service';
 import { validateBundleEconomics } from '../bundles/bundle-economics.util';
 
 // Shape of a product custom field as loaded with its translations.
@@ -33,7 +33,10 @@ export interface CustomFieldDisplay {
 
 @Injectable()
 export class CartService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly taxService: TaxService,
+  ) {}
 
   private async getOrCreateCart(userId: string) {
     const customer = await this.prisma.customer.findUnique({
@@ -511,27 +514,37 @@ export class CartService {
       locale,
     );
 
-    // VAT shown in the cart. Base = the coupon-free, shipping-free subtotal:
-    // sum of each line's effective unit price (bundle pricing applied) times
-    // its quantity. Prices are tax inclusive so this is informational only;
-    // the order snapshots the exact figure from its final total at creation.
+    // Tax estimate shown in the cart: the coupon-free, shipping-free lines
+    // (effective unit price × quantity) taxed for the registration country,
+    // since no destination is known yet. POST /orders/quote gives the exact
+    // figure once the address is; the order snapshots it at creation.
     const tax = await this.resolveCartTax(
       cartWithItems?.items || [],
       enrichedItems as { price?: number; quantity?: number }[],
+      locale,
     );
 
     return {
       id: cartWithItems?.id,
       items: enrichedItems,
+      // Headline rate + tax total (compat) and the itemized estimate.
       tax_rate_bp: tax.tax_rate_bp,
-      tax_amount: tax.tax_amount,
+      tax_amount: tax.tax_total,
+      tax_lines: tax.tax_lines,
+      tax_total: tax.tax_total,
+      tax_pricing_mode: tax.tax_pricing_mode,
+      tax_estimated: true,
+      // EXCLUSIVE: subtotal + tax; INCLUSIVE: the subtotal itself.
+      total_with_tax: tax.total_with_tax,
     };
   }
 
   /**
    * The store a cart belongs to is not stored on the row, so it is derived
    * from the first line that resolves to a creator (the storefront keeps one
-   * cart per store). No resolvable line means the platform default applies.
+   * cart per store). Each line's tax class / exemption comes from the
+   * product behind it; the engine then estimates with the registration
+   * country (no destination yet).
    */
   private async resolveCartTax(
     items: {
@@ -540,50 +553,143 @@ export class CartService {
       variant_id: string | null;
     }[],
     enrichedItems: { price?: number; quantity?: number }[],
-  ): Promise<{ tax_rate_bp: number; tax_amount: number }> {
+    locale?: string,
+  ): Promise<{
+    tax_rate_bp: number;
+    tax_total: number;
+    tax_lines: { label: string; rate_bp: number; taxable_amount: number; tax_amount: number }[];
+    tax_pricing_mode: 'INCLUSIVE' | 'EXCLUSIVE';
+    total_with_tax: number;
+  }> {
     const platformConfig = await this.prisma.platformConfig.findFirst({
-      select: { default_currency: true, default_tax_rate_bp: true },
+      select: { default_currency: true },
     });
+    const productSelect = {
+      creator_id: true,
+      tax_class_id: true,
+      tax_exempt: true,
+    } as const;
+
+    type TaxProduct = {
+      creator_id: string | null;
+      tax_class_id: string | null;
+      tax_exempt: boolean;
+    };
+    // One query per id kind instead of one per line.
+    const idsOf = (pick: (i: (typeof items)[number]) => string | null) =>
+      Array.from(new Set(items.map(pick).filter(Boolean) as string[]));
+    const customProductIds = idsOf((i) =>
+      i.custom_product_id ? i.custom_product_id : null,
+    );
+    const variantIds = idsOf((i) =>
+      !i.custom_product_id && i.variant_id ? i.variant_id : null,
+    );
+    const productIds = idsOf((i) =>
+      !i.custom_product_id && !i.variant_id && i.product_id
+        ? i.product_id
+        : null,
+    );
+    type CustomRow = { id: string; creator_id: string; product: TaxProduct };
+    type VariantRow = { id: string; product: TaxProduct };
+    type ProductRow = TaxProduct & { id: string };
+    const customProductsQuery: Promise<CustomRow[]> = customProductIds.length
+      ? this.prisma.customProduct.findMany({
+          where: { id: { in: customProductIds } },
+          select: {
+            id: true,
+            creator_id: true,
+            product: { select: productSelect },
+          },
+        })
+      : Promise.resolve([]);
+    const variantsQuery: Promise<VariantRow[]> = variantIds.length
+      ? this.prisma.productVariant.findMany({
+          where: { id: { in: variantIds } },
+          select: { id: true, product: { select: productSelect } },
+        })
+      : Promise.resolve([]);
+    const productsQuery: Promise<ProductRow[]> = productIds.length
+      ? this.prisma.product.findMany({
+          where: { id: { in: productIds } },
+          select: { id: true, ...productSelect },
+        })
+      : Promise.resolve([]);
+    const [customProducts, variants, products] = await Promise.all([
+      customProductsQuery,
+      variantsQuery,
+      productsQuery,
+    ]);
+    const customById = new Map<string, CustomRow>(
+      customProducts.map((cp) => [cp.id, cp]),
+    );
+    const variantById = new Map<string, VariantRow>(
+      variants.map((v) => [v.id, v]),
+    );
+    const productById = new Map<string, ProductRow>(
+      products.map((p) => [p.id, p]),
+    );
 
     let creatorId: string | null = null;
-    for (const item of items) {
+    const taxLines: TaxLineInput[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      let product: TaxProduct | null = null;
+      let lineCreatorId: string | null = null;
       if (item.custom_product_id) {
-        const cp = await this.prisma.customProduct.findUnique({
-          where: { id: item.custom_product_id },
-          select: { creator_id: true },
-        });
-        creatorId = cp?.creator_id ?? null;
+        const cp = customById.get(item.custom_product_id);
+        product = cp?.product ?? null;
+        lineCreatorId = cp?.creator_id ?? null;
       } else if (item.variant_id) {
-        const v = await this.prisma.productVariant.findUnique({
-          where: { id: item.variant_id },
-          select: { product: { select: { creator_id: true } } },
-        });
-        creatorId = v?.product.creator_id ?? null;
+        product = variantById.get(item.variant_id)?.product ?? null;
+        lineCreatorId = product?.creator_id ?? null;
       } else if (item.product_id) {
-        const p = await this.prisma.product.findUnique({
-          where: { id: item.product_id },
-          select: { creator_id: true },
-        });
-        creatorId = p?.creator_id ?? null;
+        product = productById.get(item.product_id) ?? null;
+        lineCreatorId = product?.creator_id ?? null;
       }
-      if (creatorId) break;
+      creatorId = creatorId ?? lineCreatorId;
+      const enriched = enrichedItems[i];
+      taxLines.push({
+        amount: Number(enriched?.price || 0) * Number(enriched?.quantity || 0),
+        tax_class_id: product?.tax_class_id ?? null,
+        tax_exempt: product?.tax_exempt ?? false,
+      });
     }
 
     const store = creatorId
       ? await this.prisma.store.findUnique({
           where: { creator_id: creatorId },
-          select: { tax_rate_bp: true, currency: true, store_type: true },
+          select: { ...taxStoreSelect, currency: true },
         })
       : null;
-    const taxRateBp = resolveStoreTaxRateBp(store, platformConfig);
     const currency = resolveStoreCurrency(store, platformConfig?.default_currency);
-    const subtotal = enrichedItems.reduce(
-      (sum, it) => sum + Number(it.price || 0) * Number(it.quantity || 0),
-      0,
-    );
+    const subtotal = taxLines.reduce((sum, l) => sum + l.amount, 0);
+    if (!store) {
+      return {
+        tax_rate_bp: 0,
+        tax_total: 0,
+        tax_lines: [],
+        tax_pricing_mode: 'INCLUSIVE',
+        total_with_tax: roundMoney(subtotal, currency),
+      };
+    }
+    const ctx = await this.taxService.contextFor(store);
+    const data = await this.taxService.loadTaxData(ctx);
+    const result = this.taxService.computeTaxes({
+      ctx,
+      data,
+      currency,
+      locale,
+      lines: taxLines,
+      shipping_cost: 0,
+      discount_amount: 0,
+      shipping: null,
+    });
     return {
-      tax_rate_bp: taxRateBp,
-      tax_amount: includedTax(subtotal, taxRateBp, currency),
+      tax_rate_bp: result.headline_rate_bp,
+      tax_total: result.tax_total,
+      tax_lines: result.tax_lines,
+      tax_pricing_mode: result.tax_pricing_mode,
+      total_with_tax: result.total,
     };
   }
 

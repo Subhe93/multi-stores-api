@@ -20,6 +20,7 @@ import {
   type ProductForBundleCheck,
 } from '../bundles/bundle-economics.util';
 import { BundleOfferLike } from '../bundles/bundle-pricing.util';
+import { TaxManagementService } from '../taxes/tax-management.service';
 
 @Injectable()
 export class ProductsService {
@@ -27,7 +28,26 @@ export class ProductsService {
     private prisma: PrismaService,
     private bundlesService: BundlesService,
     private readonly revalidation: RevalidationService,
+    private readonly taxes: TaxManagementService,
   ) {}
+
+  /**
+   * A product may only use a platform tax class or a class of the store
+   * that owns it (creator products); provider products get platform classes.
+   */
+  private async assertTaxClassAllowed(
+    taxClassId: string | null | undefined,
+    creatorId: string | null | undefined,
+  ): Promise<void> {
+    if (!taxClassId) return;
+    const store = creatorId
+      ? await this.prisma.store.findUnique({
+          where: { creator_id: creatorId },
+          select: { id: true },
+        })
+      : null;
+    await this.taxes.assertClassAssignable(taxClassId, store?.id ?? null);
+  }
 
   // Refresh the creator's storefront cache after a product mutation. Provider
   // products can appear across many stores, so those rely on the time-based
@@ -271,7 +291,9 @@ export class ProductsService {
       productData.creator_id = creator.id;
     }
 
-    // إنشاء المنتج
+    await this.assertTaxClassAllowed(dto.tax_class_id, productData.creator_id);
+
+    // Create the product
     const product = await this.prisma.product.create({
       data: productData,
       include: this.productIncludes,
@@ -488,7 +510,9 @@ export class ProductsService {
 
     const { translations, attributes, tags, bundle_ids, creator_category_ids, variants, images, ...data } = dto;
 
-    // تحديث المنتج
+    await this.assertTaxClassAllowed(dto.tax_class_id, product.creator_id);
+
+    // Update the product
     await this.prisma.product.update({
       where: { id },
       data,
@@ -643,6 +667,8 @@ export class ProductsService {
           weight_unit: source.weight_unit,
           variant_option_config: source.variant_option_config ?? undefined,
           shipping_profile_id: source.shipping_profile_id,
+          tax_class_id: source.tax_class_id,
+          tax_exempt: source.tax_exempt,
           // Force safe defaults for the clone.
           status: ProductStatus.DRAFT,
           is_featured: false,

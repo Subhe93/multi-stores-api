@@ -15,6 +15,8 @@ const ITEMS_PHRASES = {
     discount: 'Discount',
     total: 'Total',
     includesVat: 'Includes VAT',
+    includes: 'Includes',
+    tax: 'Tax',
     variant: 'Variant',
     tracking: 'Tracking',
     cancelReason: 'Reason',
@@ -32,6 +34,8 @@ const ITEMS_PHRASES = {
     discount: 'الخصم',
     total: 'الإجمالي',
     includesVat: 'شامل ضريبة القيمة المضافة',
+    includes: 'شامل',
+    tax: 'الضريبة',
     variant: 'الخيار',
     tracking: 'رقم التتبّع',
     cancelReason: 'السبب',
@@ -49,6 +53,8 @@ const ITEMS_PHRASES = {
     discount: 'İndirim',
     total: 'Toplam',
     includesVat: 'KDV dahil',
+    includes: 'Dahil',
+    tax: 'Vergi',
     variant: 'Seçenek',
     tracking: 'Takip no',
     cancelReason: 'Neden',
@@ -66,6 +72,8 @@ const ITEMS_PHRASES = {
     discount: 'Rabatt',
     total: 'Gesamt',
     includesVat: 'Inkl. MwSt.',
+    includes: 'Inkl.',
+    tax: 'Steuer',
     variant: 'Variante',
     tracking: 'Sendungsnr.',
     cancelReason: 'Grund',
@@ -83,6 +91,8 @@ const ITEMS_PHRASES = {
     discount: 'Remise',
     total: 'Total',
     includesVat: 'TVA incluse',
+    includes: 'Inclus',
+    tax: 'Taxe',
     variant: 'Variante',
     tracking: 'Suivi',
     cancelReason: 'Raison',
@@ -100,6 +110,8 @@ const ITEMS_PHRASES = {
     discount: 'Rabatt',
     total: 'Totalt',
     includesVat: 'Inkl. moms',
+    includes: 'Inkl.',
+    tax: 'Skatt',
     variant: 'Variant',
     tracking: 'Spårning',
     cancelReason: 'Anledning',
@@ -232,24 +244,61 @@ function variantLabel(options: unknown): string {
  * text block. Image URLs are absolutized against PUBLIC_API_URL so mail clients
  * can fetch them.
  */
+/** One entry of Order.tax_lines (major units). */
+export interface OrderTaxLine {
+  label: string;
+  rate_bp: number;
+  taxable_amount: number;
+  tax_amount: number;
+}
+
+function formatPercent(rateBp: number): string {
+  return (rateBp / 100).toLocaleString('en', { maximumFractionDigits: 2 });
+}
+
 /**
- * The "Includes VAT (25 %): SEK 55.00" line printed under an order total.
- * Prices are tax inclusive, so this never changes the total; it is empty
- * when the order carries no VAT rate.
+ * The itemized tax lines printed under an order total, one per rate:
+ * "Inkl. Moms (25 %): SEK 55.00" for tax-inclusive orders (the total never
+ * changes), "Moms (25 %): SEK 55.00" for tax-exclusive ones (the tax was
+ * added). Orders from before the itemized snapshot fall back to a single
+ * line from the headline rate and total. Empty when there is no tax.
  */
-export function formatTaxLine(
-  taxRateBp: number | null | undefined,
-  taxAmount: number | null | undefined,
+export function formatTaxLines(
+  order: {
+    tax_lines?: unknown;
+    tax_pricing_mode?: 'INCLUSIVE' | 'EXCLUSIVE' | null;
+    tax_rate_bp?: number | null;
+    tax_amount?: unknown;
+  },
   currency: string,
   locale?: string,
-): string {
-  const rate = Number(taxRateBp || 0);
-  if (!(rate > 0)) return '';
-  const percent = (rate / 100).toLocaleString('en', {
-    maximumFractionDigits: 2,
-  });
-  const amount = formatMoney(Number(taxAmount || 0), currency);
-  return `${emailPhrases(locale).includesVat} (${percent} %): ${amount}`;
+): string[] {
+  const phrases = emailPhrases(locale);
+  const inclusive = order.tax_pricing_mode !== 'EXCLUSIVE';
+  const lines: OrderTaxLine[] = Array.isArray(order.tax_lines)
+    ? (order.tax_lines as unknown[])
+        .filter((l): l is OrderTaxLine => !!l && typeof l === 'object')
+        .map((l) => ({
+          label: String(l.label || phrases.tax),
+          rate_bp: Number(l.rate_bp) || 0,
+          taxable_amount: Number(l.taxable_amount) || 0,
+          tax_amount: Number(l.tax_amount) || 0,
+        }))
+    : [];
+  if (lines.length === 0) {
+    const rate = Number(order.tax_rate_bp || 0);
+    const amount = Number(order.tax_amount || 0);
+    if (!(rate > 0) || !(amount > 0)) return [];
+    return [
+      `${phrases.includesVat} (${formatPercent(rate)} %): ${formatMoney(amount, currency)}`,
+    ];
+  }
+  return lines
+    .filter((l) => l.tax_amount !== 0)
+    .map((l) => {
+      const body = `${l.label} (${formatPercent(l.rate_bp)} %): ${formatMoney(l.tax_amount, currency)}`;
+      return inclusive ? `${phrases.includes} ${body}` : body;
+    });
 }
 
 /**

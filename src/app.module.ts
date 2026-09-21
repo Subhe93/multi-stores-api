@@ -18,6 +18,7 @@ import { VariantsModule } from './modules/variants/variants.module';
 import { ShippingModule } from './modules/shipping/shipping.module';
 import { CartModule } from './modules/cart/cart.module';
 import { OrdersModule } from './modules/orders/orders.module';
+import { TaxesModule } from './modules/taxes/taxes.module';
 import { CommissionsModule } from './modules/commissions/commissions.module';
 import { StoresModule } from './modules/stores/stores.module';
 import { StorefrontModule } from './modules/storefront/storefront.module';
@@ -63,6 +64,7 @@ import { NotificationTemplatesModule } from './modules/notification-templates/no
     ShippingModule,
     CartModule,
     OrdersModule,
+    TaxesModule,
     CommissionsModule,
     StoresModule,
     StorefrontModule,

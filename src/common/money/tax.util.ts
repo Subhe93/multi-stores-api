@@ -1,85 +1,50 @@
 import { currencyDecimals } from './currency.util';
 
 /**
- * VAT is platform-wide and prices are always tax inclusive: the rate never
- * changes what the customer pays, it only says how much of an amount is tax.
- * Rates are basis points (2500 = 25 %). A store may override the platform
- * default; null on the store means "inherit".
+ * Minor-unit tax arithmetic shared by the tax engine (modules/taxes) and the
+ * payment mappers. Rates are basis points (2500 = 25 %). Everything here is
+ * pure: rate resolution lives in TaxService.
  */
 
-const MAX_RATE_BP = 10_000;
+export const MAX_RATE_BP = 10_000;
 
-function clampRate(value: unknown): number | null {
-  if (value === null || value === undefined) return null;
+export function clampRateBp(value: unknown): number {
   const n = Number(value);
-  if (!Number.isFinite(n)) return null;
+  if (!Number.isFinite(n)) return 0;
   return Math.min(MAX_RATE_BP, Math.max(0, Math.trunc(n)));
 }
 
-/** The single place a store's effective VAT rate is decided. */
-export function resolveStoreTaxRateBp(
-  store: { tax_rate_bp?: number | null } | null | undefined,
-  platformConfig: { default_tax_rate_bp?: number | null } | null | undefined,
-): number {
-  return (
-    clampRate(store?.tax_rate_bp) ??
-    clampRate(platformConfig?.default_tax_rate_bp) ??
-    0
-  );
+/** Symmetric rounding: the magnitude is rounded, then the sign restored. */
+export function roundSymmetric(value: number): number {
+  return Math.sign(value) * Math.round(Math.abs(value));
 }
 
 /**
  * Tax included in a minor-unit amount at `rateBp`:
  * `amount - amount * 10000 / (10000 + rate)`, rounded to the nearest minor
- * unit. Negative amounts (discount lines) yield negative tax, so a sum of
- * line taxes stays consistent with the tax of the sum.
+ * unit. Negative amounts yield negative tax, so a sum of line taxes stays
+ * consistent with the tax of the sum. Rounding is symmetric because
+ * Math.round(-2.5) is -2 but Math.round(2.5) is 3, which would make the tax
+ * of a negative line differ from minus the tax of the same positive amount.
  */
 export function includedTaxMinor(amountMinor: number, rateBp: number): number {
-  const rate = clampRate(rateBp) ?? 0;
+  const rate = clampRateBp(rateBp);
   if (rate === 0 || !amountMinor) return 0;
   const raw = amountMinor - (amountMinor * MAX_RATE_BP) / (MAX_RATE_BP + rate);
-  // Symmetric rounding: Math.round(-2.5) is -2 but Math.round(2.5) is 3, which
-  // would make the tax of a discount line differ from minus the tax of the
-  // same positive amount. Round the magnitude, then restore the sign.
-  return Math.sign(raw) * Math.round(Math.abs(raw));
+  return roundSymmetric(raw);
 }
 
-/** The money parts of an order that carry tax, in major units. */
-export interface TaxedOrderParts {
-  items: { total_price: unknown }[];
-  shipping_cost: unknown;
-  discount_amount: unknown;
-}
-
-/**
- * Tax included in an order as the sum of its parts — one rounded figure per
- * item line, one for shipping and a negative one for the discount — which is
- * exactly how the Kustom mapper stamps its order lines (see
- * buildKustomOrderLines / sumKustomTax). Order.tax_amount is computed with
- * this so it always equals the `order_tax_amount` sent to Kustom; a single
- * rounding of the total could differ from the line sum by a minor unit.
- * Returned in major units, rounded to the currency's minor unit.
- */
-export function includedTaxForOrder(
-  parts: TaxedOrderParts,
-  rateBp: number,
-  currency: string,
-): number {
-  const factor = 10 ** currencyDecimals(currency);
-  const minor = (major: unknown) => Math.round(Number(major) * factor);
-  let taxMinor = 0;
-  for (const item of parts.items) {
-    taxMinor += includedTaxMinor(minor(item.total_price), rateBp);
-  }
-  taxMinor += includedTaxMinor(minor(parts.shipping_cost), rateBp);
-  taxMinor += includedTaxMinor(-minor(parts.discount_amount), rateBp);
-  return taxMinor / factor;
+/** Tax added on top of a minor-unit net amount at `rateBp`, rounded. */
+export function addedTaxMinor(amountMinor: number, rateBp: number): number {
+  const rate = clampRateBp(rateBp);
+  if (rate === 0 || !amountMinor) return 0;
+  return roundSymmetric((amountMinor * rate) / MAX_RATE_BP);
 }
 
 /**
  * Same as includedTaxMinor for a major-unit amount: the result is rounded to
  * the currency's minor unit (two decimals for most, whole units for JPY-likes)
- * and returned in major units — the value that goes into Order.tax_amount.
+ * and returned in major units.
  */
 export function includedTax(
   amountMajor: number,
@@ -89,4 +54,38 @@ export function includedTax(
   const factor = 10 ** currencyDecimals(currency);
   const minor = Math.round(Number(amountMajor) * factor);
   return includedTaxMinor(minor, rateBp) / factor;
+}
+
+/**
+ * Split an integer `total` across `weights` proportionally, in integers that
+ * sum to exactly `total` (largest-remainder method: floors first, then the
+ * leftover units go to the largest fractional parts, earlier index on ties).
+ * Used to allocate an order discount across its lines before tax, and by the
+ * Kustom mapper to put the very same share on each line. Zero weights (or an
+ * all-zero weight list) receive nothing.
+ */
+export function allocateLargestRemainder(
+  total: number,
+  weights: number[],
+): number[] {
+  const n = weights.length;
+  if (n === 0) return [];
+  const sum = weights.reduce((s, w) => s + Math.max(0, w), 0);
+  const target = Math.trunc(total);
+  if (sum <= 0 || target === 0) return weights.map(() => 0);
+  const sign = Math.sign(target);
+  const abs = Math.abs(target);
+  const exact = weights.map((w) => (Math.max(0, w) * abs) / sum);
+  const floors = exact.map((x) => Math.floor(x));
+  let leftover = abs - floors.reduce((s, x) => s + x, 0);
+  const order = exact
+    .map((x, i) => ({ i, frac: x - floors[i] }))
+    .sort((a, b) => b.frac - a.frac || a.i - b.i);
+  for (const { i } of order) {
+    if (leftover <= 0) break;
+    if (weights[i] <= 0) continue;
+    floors[i] += 1;
+    leftover -= 1;
+  }
+  return floors.map((x) => x * sign);
 }

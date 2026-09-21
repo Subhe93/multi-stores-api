@@ -85,13 +85,36 @@ export function passwordResetEmail(resetUrl: string, brand?: EmailBrand): EmailP
 // the template doesn't need a loop construct. Helpers in order-mail.helpers.ts
 // produce those blocks from the loaded order.
 
+/**
+ * The tax rows under a total: one <p> per itemized line, falling back to
+ * the joined text so a caller passing only `taxLine` still renders.
+ */
+function taxRows(
+  data: { taxLine?: string; taxLines?: string[] },
+  extraStyle = '',
+): string {
+  const lines = data.taxLines?.length
+    ? data.taxLines
+    : data.taxLine
+      ? data.taxLine.split('\n').filter(Boolean)
+      : [];
+  return lines
+    .map(
+      (line, i) =>
+        `<p style="font-size:12px;color:#71717a;margin-bottom:2px;${i === 0 ? extraStyle : ''}">${esc(line)}</p>`,
+    )
+    .join('');
+}
+
 export interface OrderConfirmationData extends EmailBrand {
   orderNumber: string;
   total: string; // already formatted, e.g. "SEK 423.30"
   // "Shipping (Standard shipping): SEK 49.00" — empty when nothing to show.
   shippingLine?: string;
-  // "Includes VAT (25 %): SEK 84.66" — empty when the order has no VAT rate.
+  // Joined tax text ("Inkl. Moms (25 %): SEK 84.66") — empty when untaxed.
   taxLine?: string;
+  // One entry per rate, rendered as separate rows.
+  taxLines?: string[];
   paid: boolean; // true = paid (card), false = cash on delivery
   orderUrl?: string;
   itemsHtml?: string;
@@ -117,7 +140,7 @@ export function orderConfirmationEmail(data: OrderConfirmationData): EmailParts 
        ${itemsHtml}
        ${data.shippingLine ? `<p style="font-size:13px;color:#3f3f46;margin-bottom:4px;">${esc(data.shippingLine)}</p>` : ''}
        <p style="font-size:14px;color:#3f3f46;">Total: <strong>${esc(data.total)}</strong></p>
-       ${data.taxLine ? `<p style="font-size:12px;color:#71717a;margin-top:-8px;">${esc(data.taxLine)}</p>` : ''}
+       ${taxRows(data, 'margin-top:-8px;')}
        ${cta}`,
       data,
     ),
@@ -274,8 +297,10 @@ export interface NewOrderOwnerData extends EmailBrand {
   total: string;
   // "Shipping (Standard shipping): SEK 49.00" — empty when nothing to show.
   shippingLine?: string;
-  // "Includes VAT (25 %): SEK 84.66" — empty when the order has no VAT rate.
+  // Joined tax text ("Inkl. Moms (25 %): SEK 84.66") — empty when untaxed.
   taxLine?: string;
+  // One entry per rate, rendered as separate rows.
+  taxLines?: string[];
   storeName?: string;
   customerName?: string;
   orderAdminUrl?: string;
@@ -299,7 +324,7 @@ export function newOrderOwnerEmail(data: NewOrderOwnerData): EmailParts {
          You have a new order <strong>${esc(data.orderNumber)}</strong> totalling <strong>${esc(data.total)}</strong>.
        </p>
        ${data.shippingLine ? `<p style="font-size:13px;color:#3f3f46;">${esc(data.shippingLine)}</p>` : ''}
-       ${data.taxLine ? `<p style="font-size:12px;color:#71717a;">${esc(data.taxLine)}</p>` : ''}
+       ${taxRows(data)}
        ${customerBit}
        ${data.itemsHtml || ''}
        ${cta}`,

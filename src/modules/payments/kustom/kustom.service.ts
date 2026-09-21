@@ -18,7 +18,6 @@ import {
   resolveStoreCurrency,
   toStripeAmount,
 } from '../../../common/money/currency.util';
-import { resolveStoreTaxRateBp } from '../../../common/money/tax.util';
 import { OrdersService } from '../../orders/orders.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { MailService } from '../../mail/mail.service';
@@ -66,8 +65,6 @@ export interface StoreContext {
   primaryLocale: string | null;
   /** Resolved presentment currency (store override or platform default). */
   currency: string;
-  /** Resolved VAT rate in basis points (store override or platform default). */
-  taxRateBp: number;
   creator: {
     id: string;
     kustom_enabled: boolean;
@@ -142,7 +139,6 @@ export class KustomService implements OnModuleInit {
         store_type: true,
         is_active: true,
         currency: true,
-        tax_rate_bp: true,
         language_config: { select: { primary_locale: true } },
         creator: {
           select: {
@@ -155,7 +151,7 @@ export class KustomService implements OnModuleInit {
     });
     if (!store) return null;
     const platformConfig = await this.prisma.platformConfig.findFirst({
-      select: { default_currency: true, default_tax_rate_bp: true },
+      select: { default_currency: true },
     });
     return {
       id: store.id,
@@ -165,7 +161,6 @@ export class KustomService implements OnModuleInit {
       is_active: store.is_active,
       primaryLocale: store.language_config?.primary_locale ?? null,
       currency: resolveStoreCurrency(store, platformConfig?.default_currency),
-      taxRateBp: resolveStoreTaxRateBp(store, platformConfig),
       creator: store.creator,
     };
   }
@@ -368,7 +363,6 @@ export class KustomService implements OnModuleInit {
       customDomain: ctx.customDomain,
       primaryLocale: ctx.primaryLocale,
       pushToken,
-      taxRateBp: ctx.taxRateBp,
       ...this.requirePublicUrls(),
     });
     const client = new KustomClient(creds);

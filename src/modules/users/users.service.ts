@@ -371,19 +371,11 @@ export class UsersService {
     min_order_amount?: number | null;
     require_provider_approval?: boolean;
     require_creator_approval?: boolean;
-    default_tax_rate_bp?: number;
   }) {
-    // The body is an untyped object (no DTO class), so the global
-    // ValidationPipe never sees it — check the VAT rate here.
-    if (data.default_tax_rate_bp !== undefined) {
-      const rate = Number(data.default_tax_rate_bp);
-      if (!Number.isInteger(rate) || rate < 0 || rate > 10000) {
-        throw new BadRequestException({
-          code: 'PLATFORM_TAX_RATE_INVALID',
-          message: 'default_tax_rate_bp must be an integer between 0 and 10000',
-        });
-      }
-      data.default_tax_rate_bp = rate;
+    // Tax settings live in the TaxRate table and /taxes/admin/settings; the
+    // legacy default_tax_rate_bp is no longer accepted here.
+    if ('default_tax_rate_bp' in data) {
+      delete (data as Record<string, unknown>).default_tax_rate_bp;
     }
     let config = await this.prisma.platformConfig.findFirst();
     if (!config) {
