@@ -89,6 +89,9 @@ async function bootstrap() {
       );
     },
     credentials: true,
+    // Let browser clients read the attachment filename of file downloads
+    // (backup dumps, tax CSV reports) on cross-origin responses.
+    exposedHeaders: ['Content-Disposition'],
   });
 
   const port = process.env.PORT || 3001;

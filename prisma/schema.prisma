@@ -840,7 +840,55 @@ model PlatformConfig {
   smtp_pass   String?
   mail_from   String?
 
+  // Scheduled database backups (plans/backups/API-CONTRACT.md). Slot = time
+  // (HH:mm, server local time) every day, or on backup_weekday when WEEKLY.
+  // backup_retention keeps the N most recent SCHEDULED backups on disk.
+  backup_enabled         Boolean   @default(false)
+  backup_frequency       String    @default("DAILY") // DAILY | WEEKLY
+  backup_time            String    @default("03:00") // HH:mm, server local time
+  backup_weekday         Int       @default(0)       // 0=Sunday … 6, used when WEEKLY
+  backup_retention       Int       @default(14)      // keep N most recent SCHEDULED backups
+  backup_include_uploads Boolean   @default(true)
+  backup_last_run_at     DateTime?
+
   updated_at       DateTime @updatedAt
+}
+
+// ── Backups ──────────────────────────────────────────────────────────────────
+// One row per backup run (manual, scheduled, or the automatic one taken before
+// a restore). Files live under BACKUP_DIR and are never served statically;
+// db_file / uploads_file hold absolute paths.
+
+enum BackupKind {
+  MANUAL
+  SCHEDULED
+  PRE_RESTORE
+}
+
+enum BackupStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model Backup {
+  id                 String       @id @default(uuid())
+  kind               BackupKind
+  status             BackupStatus @default(PENDING)
+  db_file            String?      // absolute path of the pg_dump custom-format file
+  db_size_bytes      BigInt?
+  uploads_file       String?      // absolute path of the uploads tar.gz
+  uploads_size_bytes BigInt?
+  includes_uploads   Boolean      @default(false)
+  note               String?      // free text from the admin
+  error              String?      // code + stderr tail (<= 2 KB) when FAILED
+  created_by         String?      // User.id (null for the scheduler)
+  started_at         DateTime?
+  finished_at        DateTime?
+  created_at         DateTime     @default(now())
+
+  @@index([created_at])
 }
 
 // Platform-level legal pages (privacy, terms, refund policy, shipping policy).

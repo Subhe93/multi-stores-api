@@ -40,6 +40,7 @@ import { PaymentsModule } from './modules/payments/payments.module';
 import { MailModule } from './modules/mail/mail.module';
 import { LegalModule } from './modules/legal/legal.module';
 import { NotificationTemplatesModule } from './modules/notification-templates/notification-templates.module';
+import { BackupsModule } from './modules/backups/backups.module';
 
 @Module({
   imports: [
@@ -87,6 +88,7 @@ import { NotificationTemplatesModule } from './modules/notification-templates/no
     MailModule,
     LegalModule,
     NotificationTemplatesModule,
+    BackupsModule,
   ],
   providers: [
     // ThrottlerModule alone throttles nothing — only routes that explicitly
