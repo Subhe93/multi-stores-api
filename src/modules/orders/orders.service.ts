@@ -2477,6 +2477,48 @@ export class OrdersService {
     }
   }
 
+  /**
+   * A paid-by-authorization order (Kustom) whose authorization was cancelled
+   * or expired before anything was captured: no money ever moved, so the
+   * order is cancelled, its stock returned and its commission written off.
+   * Idempotent; refuses anything that was captured or is already terminal.
+   */
+  async markAuthorizationReleased(orderId: string, note: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true, status: true, payment_status: true },
+    });
+    if (!order) return null;
+    if (
+      order.payment_status !== 'paid' ||
+      order.status === OrderStatus.CANCELLED ||
+      order.status === OrderStatus.REFUNDED ||
+      order.status === OrderStatus.RETURNED ||
+      order.status === OrderStatus.DELIVERED
+    ) {
+      return { changed: false };
+    }
+    const flip = await this.prisma.order.updateMany({
+      where: { id: orderId, payment_status: 'paid' },
+      data: { payment_status: 'failed', status: OrderStatus.CANCELLED },
+    });
+    if (flip.count === 0) return { changed: false };
+    await this.prisma.orderTimeline.create({
+      data: {
+        order_id: orderId,
+        status: 'PAYMENT_CANCELLED',
+        note,
+        actor: 'system',
+      },
+    });
+    await this.prisma.orderCommission.updateMany({
+      where: { order_id: orderId },
+      data: { status: deriveCommissionStatus(OrderStatus.CANCELLED) },
+    });
+    await this.restoreOrderItemsStock(orderId);
+    return { changed: true };
+  }
+
   async markOrderFailed(
     orderId: string,
     reason = 'Stripe reported the payment failed',

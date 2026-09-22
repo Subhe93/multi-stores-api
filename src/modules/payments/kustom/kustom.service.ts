@@ -1299,6 +1299,38 @@ export class KustomService implements OnModuleInit {
   }
 
   /**
+   * Kustom sends no push when an authorization is cancelled (portal) or
+   * expires, so our order would stay "paid, awaiting capture" forever. When
+   * a live read shows the authorization gone with nothing captured, bring
+   * the order to CANCELLED / payment failed. Returns the sync applied.
+   */
+  private async syncReleasedAuthorization(
+    order: {
+      id: string;
+      payment_status: string | null;
+      kustom_captured_at: Date | null;
+    },
+    live: KustomManagementOrder,
+  ): Promise<'authorization_released' | null> {
+    const status = (live.status ?? '').toUpperCase();
+    if (PAID_STATUSES.has(status)) return null;
+    if ((live.captured_amount ?? 0) > 0 || order.kustom_captured_at)
+      return null;
+    if (order.payment_status !== 'paid') return null;
+    const result = await this.orders.markAuthorizationReleased(
+      order.id,
+      `Kustom authorization ${status.toLowerCase() || 'released'} before capture; no money was taken`,
+    );
+    if (result?.changed) {
+      this.logger.warn(
+        `Order ${order.id}: Kustom authorization ${status} with nothing captured — order cancelled`,
+      );
+      return 'authorization_released';
+    }
+    return null;
+  }
+
+  /**
    * Live state of the order on Kustom's side, for the dashboard: lets the
    * merchant see whether the authorization is still open, captured elsewhere
    * (portal) or gone, without exposing credentials.
@@ -1314,7 +1346,9 @@ export class KustomService implements OnModuleInit {
     }
     const money = (minor: number | undefined) =>
       fromStripeAmount(minor ?? 0, order.currency);
+    const synced = await this.syncReleasedAuthorization(order, live);
     return {
+      synced,
       kustom_order_id: order.kustom_order_id,
       status: (live.status ?? '').toUpperCase(),
       fraud_status: live.fraud_status ?? null,
@@ -1391,6 +1425,9 @@ export class KustomService implements OnModuleInit {
         if (live) {
           const status = (live.status ?? '').toUpperCase();
           const remaining = live.remaining_authorized_amount ?? 0;
+          // Keep our order honest: a cancelled/expired authorization with
+          // nothing captured means the customer was never charged.
+          await this.syncReleasedAuthorization(order, live);
           throw new BadRequestException({
             code: 'KUSTOM_AUTHORIZATION_UNAVAILABLE',
             message: `Kustom cannot capture this order: status ${status || 'unknown'}, captured ${fromStripeAmount(live.captured_amount ?? 0, order.currency)} ${order.currency}, remaining authorized ${fromStripeAmount(remaining, order.currency)} ${order.currency}. Check the order in the Kustom portal.`,
