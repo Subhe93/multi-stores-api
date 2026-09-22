@@ -282,11 +282,20 @@ export class KustomService implements OnModuleInit {
       this.logger.error(
         `Kustom error while trying to ${action}: ${err.message}`,
       );
-      if (err.status === 401 || err.status === 403) {
+      // 401 is always bad credentials. 403 is only that when Kustom sends no
+      // business error code — otherwise it is a refused operation (e.g.
+      // CAPTURE_NOT_ALLOWED) and the merchant must see Kustom's reason.
+      if (err.status === 401 || (err.status === 403 && !err.errorCode)) {
         return new BadRequestException({
           code: 'KUSTOM_CREDENTIALS_REJECTED',
           message:
             'Kustom rejected the store credentials. Check the Kustom settings.',
+        });
+      }
+      if (err.status === 403) {
+        return new BadRequestException({
+          code: 'KUSTOM_REFUSED',
+          message: `Kustom refused to ${action}: ${err.message.replace(/^Kustom .*? failed with HTTP 403: /, '')}`,
         });
       }
       if (err.status === 409) {
@@ -1289,6 +1298,47 @@ export class KustomService implements OnModuleInit {
     return { ...order, kustom_order_id: order.kustom_order_id };
   }
 
+  /**
+   * Live state of the order on Kustom's side, for the dashboard: lets the
+   * merchant see whether the authorization is still open, captured elsewhere
+   * (portal) or gone, without exposing credentials.
+   */
+  async getLiveStatus(orderId: string, actor: Actor) {
+    const order = await this.loadManagedOrder(orderId, actor);
+    const { client } = await this.clientForStore(order.store_id);
+    let live: KustomManagementOrder;
+    try {
+      live = await client.getOrder(order.kustom_order_id);
+    } catch (err) {
+      throw this.toHttpException(err, 'read the order');
+    }
+    const money = (minor: number | undefined) =>
+      fromStripeAmount(minor ?? 0, order.currency);
+    return {
+      kustom_order_id: order.kustom_order_id,
+      status: (live.status ?? '').toUpperCase(),
+      fraud_status: live.fraud_status ?? null,
+      currency: order.currency,
+      order_amount: money(live.order_amount),
+      captured_amount: money(live.captured_amount),
+      refunded_amount: money(live.refunded_amount),
+      remaining_authorized_amount: money(live.remaining_authorized_amount),
+      expires_at: live.expires_at ?? null,
+      payment_method:
+        live.initial_payment_method?.description ??
+        live.initial_payment_method?.type ??
+        null,
+      captures: (live.captures ?? []).map((c) => ({
+        capture_id: c.capture_id ?? null,
+        amount: money(c.captured_amount),
+      })),
+      refunds: (live.refunds ?? []).map((r) => ({
+        refund_id: r.refund_id ?? null,
+        amount: money(r.refunded_amount),
+      })),
+    };
+  }
+
   /** Capture the full authorized amount. Idempotent per order. */
   async captureOrder(orderId: string, actor: Actor | null = null) {
     const order = await this.loadManagedOrder(orderId, actor);
@@ -1334,6 +1384,17 @@ export class KustomService implements OnModuleInit {
         if (live && (live.captured_amount ?? 0) >= amount) {
           await this.markCaptured(order.id, null, actor);
           return { captured: false, capture_id: null, already_captured: true };
+        }
+        // Nothing (or not enough) captured and Kustom still refuses: the
+        // authorization is gone (cancelled / expired / released in the
+        // portal). Say so instead of a generic error.
+        if (live) {
+          const status = (live.status ?? '').toUpperCase();
+          const remaining = live.remaining_authorized_amount ?? 0;
+          throw new BadRequestException({
+            code: 'KUSTOM_AUTHORIZATION_UNAVAILABLE',
+            message: `Kustom cannot capture this order: status ${status || 'unknown'}, captured ${fromStripeAmount(live.captured_amount ?? 0, order.currency)} ${order.currency}, remaining authorized ${fromStripeAmount(remaining, order.currency)} ${order.currency}. Check the order in the Kustom portal.`,
+          });
         }
       }
       throw this.toHttpException(err, 'capture the payment');

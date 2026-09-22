@@ -118,6 +118,18 @@ export class KustomController {
 
   // ── Order management (owning creator or admin) ──────────────────────────
 
+  // Live order state from Kustom (status, captured / remaining amounts).
+  @Get('orders/:orderId/status')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.CREATOR, UserRole.ADMIN)
+  liveStatus(
+    @Param('orderId') orderId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.kustom.getLiveStatus(orderId, { userId, role });
+  }
+
   @Post('orders/:orderId/capture')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.CREATOR, UserRole.ADMIN)
