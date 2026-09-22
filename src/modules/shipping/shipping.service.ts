@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, ShippingMethodType } from '@prisma/client';
+import { Prisma, ShippingMethodType, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   CreateShippingProfileDto,
@@ -16,6 +16,15 @@ import {
 } from './dto/shipping.dto';
 
 type OwnerType = 'provider' | 'creator';
+
+/**
+ * The profile owner a request acts as: the Provider.id / Creator.id the
+ * `provider_id` / `creator_id` columns reference (never the User.id).
+ */
+export interface ShippingOwner {
+  ownerType: OwnerType;
+  ownerId: string;
+}
 
 /** One shipping method priced for a destination (API-CONTRACT-C). */
 export interface QuotedShippingMethod {
@@ -139,6 +148,51 @@ function cheapestOf<T extends { cost: number }>(methods: T[]): T | null {
 export class ShippingService {
   constructor(private prisma: PrismaService) {}
 
+  // ── Owner resolution ──────────────────────────────────────────────────────
+
+  /**
+   * Map the authenticated user to the shipping profile owner. Profiles are
+   * keyed by Provider.id / Creator.id, so the User.id must be resolved through
+   * the role's profile row. Admins own nothing: `undefined` skips ownership
+   * checks in the owner-scoped methods.
+   */
+  async resolveOwner(
+    userId: string,
+    role: UserRole,
+  ): Promise<ShippingOwner | undefined> {
+    if (role === UserRole.PROVIDER) {
+      const provider = await this.prisma.provider.findUnique({
+        where: { user_id: userId },
+        select: { id: true },
+      });
+      if (!provider) throw this.ownerNotFound();
+      return { ownerType: 'provider', ownerId: provider.id };
+    }
+    if (role === UserRole.CREATOR) {
+      const creator = await this.prisma.creator.findUnique({
+        where: { user_id: userId },
+        select: { id: true },
+      });
+      if (!creator) throw this.ownerNotFound();
+      return { ownerType: 'creator', ownerId: creator.id };
+    }
+    return undefined;
+  }
+
+  /** Like resolveOwner() for routes only providers/creators may call. */
+  async requireOwner(userId: string, role: UserRole): Promise<ShippingOwner> {
+    const owner = await this.resolveOwner(userId, role);
+    if (!owner) throw this.ownerNotFound();
+    return owner;
+  }
+
+  private ownerNotFound() {
+    return new NotFoundException({
+      code: 'SHIPPING_OWNER_NOT_FOUND',
+      message: 'Provider or creator profile not found for this user',
+    });
+  }
+
   // ── Profiles ──────────────────────────────────────────────────────────────
 
   async createProfile(
@@ -221,6 +275,8 @@ export class ShippingService {
       ownerType === 'provider'
         ? { provider_id: ownerId }
         : { creator_id: ownerId };
+    // Only the owner's own profile may become their default.
+    await this.assertProfileOwned(id, ownerId, ownerType);
     // Clear current default, then set the new one
     await this.prisma.shippingProfile.updateMany({
       where,

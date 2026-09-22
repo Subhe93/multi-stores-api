@@ -23,108 +23,123 @@ import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '@prisma/client';
 
+// Every owner-scoped route resolves the requester's User.id to the
+// Provider.id / Creator.id that ShippingProfile.provider_id / creator_id
+// reference (see ShippingService.resolveOwner). Admin routes resolve to no
+// owner, which bypasses ownership checks in the service.
 @Controller('shipping')
 export class ShippingController {
   constructor(private shippingService: ShippingService) {}
 
-  // Map the requester's role to the profile owner column used for scoping.
-  // Admin gets no owner type — ownership checks are bypassed for them.
-  private ownerTypeFor(role: UserRole): 'provider' | 'creator' | undefined {
-    if (role === UserRole.PROVIDER) return 'provider';
-    if (role === UserRole.CREATOR) return 'creator';
-    return undefined;
-  }
-
   @Post('profiles')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR)
-  createProfile(
+  async createProfile(
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: UserRole,
     @Body() dto: CreateShippingProfileDto,
   ) {
-    const ownerType = role === UserRole.PROVIDER ? 'provider' : 'creator';
-    return this.shippingService.createProfile(userId, ownerType, dto);
+    const { ownerId, ownerType } = await this.shippingService.requireOwner(
+      userId,
+      role,
+    );
+    return this.shippingService.createProfile(ownerId, ownerType, dto);
   }
 
   @Get('profiles')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR)
-  getProfiles(
+  async getProfiles(
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: UserRole,
   ) {
-    const ownerType = role === UserRole.PROVIDER ? 'provider' : 'creator';
-    return this.shippingService.getProfiles(userId, ownerType);
+    const { ownerId, ownerType } = await this.shippingService.requireOwner(
+      userId,
+      role,
+    );
+    return this.shippingService.getProfiles(ownerId, ownerType);
   }
 
   @Post('profiles/:profileId/zones')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
-  addZone(
+  async addZone(
     @Param('profileId') profileId: string,
     @Body() dto: CreateShippingZoneDto,
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: UserRole,
   ) {
+    const owner = await this.shippingService.resolveOwner(userId, role);
     return this.shippingService.addZone(
       profileId,
       dto,
-      userId,
-      this.ownerTypeFor(role),
+      owner?.ownerId,
+      owner?.ownerType,
     );
   }
 
   @Put('zones/:id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
-  updateZone(
+  async updateZone(
     @Param('id') id: string,
     @Body() dto: UpdateShippingZoneDto,
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: UserRole,
   ) {
+    const owner = await this.shippingService.resolveOwner(userId, role);
     return this.shippingService.updateZone(
       id,
       dto,
-      userId,
-      this.ownerTypeFor(role),
+      owner?.ownerId,
+      owner?.ownerType,
     );
   }
 
   @Put('profiles/:id/default')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR)
-  setDefaultProfile(
+  async setDefaultProfile(
     @Param('id') id: string,
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: UserRole,
   ) {
-    const ownerType = role === UserRole.PROVIDER ? 'provider' : 'creator';
-    return this.shippingService.setDefaultProfile(id, userId, ownerType);
+    const { ownerId, ownerType } = await this.shippingService.requireOwner(
+      userId,
+      role,
+    );
+    return this.shippingService.setDefaultProfile(id, ownerId, ownerType);
   }
 
   @Delete('profiles/:id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR)
-  deleteProfile(
+  async deleteProfile(
     @Param('id') id: string,
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: UserRole,
   ) {
-    const ownerType = role === UserRole.PROVIDER ? 'provider' : 'creator';
-    return this.shippingService.deleteProfile(id, userId, ownerType);
+    const { ownerId, ownerType } = await this.shippingService.requireOwner(
+      userId,
+      role,
+    );
+    return this.shippingService.deleteProfile(id, ownerId, ownerType);
   }
 
   @Delete('zones/:id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
-  deleteZone(
+  async deleteZone(
     @Param('id') id: string,
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: UserRole,
   ) {
-    return this.shippingService.deleteZone(id, userId, this.ownerTypeFor(role));
+    const owner = await this.shippingService.resolveOwner(userId, role);
+    return this.shippingService.deleteZone(
+      id,
+      owner?.ownerId,
+      owner?.ownerType,
+    );
   }
 
   // ── Methods (owner-scoped like zones; admin bypasses ownership) ───────────
@@ -132,49 +147,52 @@ export class ShippingController {
   @Post('zones/:zoneId/methods')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
-  addMethod(
+  async addMethod(
     @Param('zoneId') zoneId: string,
     @Body() dto: CreateShippingMethodDto,
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: UserRole,
   ) {
+    const owner = await this.shippingService.resolveOwner(userId, role);
     return this.shippingService.addMethod(
       zoneId,
       dto,
-      userId,
-      this.ownerTypeFor(role),
+      owner?.ownerId,
+      owner?.ownerType,
     );
   }
 
   @Put('methods/:id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
-  updateMethod(
+  async updateMethod(
     @Param('id') id: string,
     @Body() dto: UpdateShippingMethodDto,
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: UserRole,
   ) {
+    const owner = await this.shippingService.resolveOwner(userId, role);
     return this.shippingService.updateMethod(
       id,
       dto,
-      userId,
-      this.ownerTypeFor(role),
+      owner?.ownerId,
+      owner?.ownerType,
     );
   }
 
   @Delete('methods/:id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
-  deleteMethod(
+  async deleteMethod(
     @Param('id') id: string,
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: UserRole,
   ) {
+    const owner = await this.shippingService.resolveOwner(userId, role);
     return this.shippingService.deleteMethod(
       id,
-      userId,
-      this.ownerTypeFor(role),
+      owner?.ownerId,
+      owner?.ownerType,
     );
   }
 
