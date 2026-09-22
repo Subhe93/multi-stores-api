@@ -53,6 +53,9 @@ import {
 // authorized on the creator's account and the order may be treated as paid.
 const PAID_STATUSES = new Set(['AUTHORIZED', 'PART_CAPTURED', 'CAPTURED']);
 
+/** When a store wants its Kustom authorizations captured. */
+type KustomCaptureMode = 'on_shipment' | 'immediate';
+
 const CHECKOUT_COMPLETE = 'checkout_complete';
 
 /** What createSession loads: the order with everything the payload needs. */
@@ -109,7 +112,9 @@ export interface StoreContext {
  * Order-first, like Stripe: our order exists (payment_method KUSTOM,
  * awaiting_payment) before the Kustom session is created for it. Payment is
  * only authorized at checkout; it is captured when the order ships (via the
- * OrdersService shipped hook) or manually. Kustom's push notification is not
+ * OrdersService shipped hook) or manually — or, when the store chose
+ * `kustom_capture_mode = immediate`, right after the purchase is confirmed.
+ * Kustom's push notification is not
  * signed, so every money decision re-reads the order from Kustom with the
  * creator's own credentials and cross-checks our order id and total.
  */
@@ -1003,7 +1008,51 @@ export class KustomService implements OnModuleInit {
         }`,
       );
     }
+
+    if (status !== 'CAPTURED') {
+      await this.captureImmediatelyIfConfigured(order.id);
+    }
     return { paid: true, changed };
+  }
+
+  /**
+   * Stores set to `kustom_capture_mode = immediate` want the money taken as
+   * soon as the purchase is confirmed rather than at shipment. Never throws:
+   * the order is already paid, and a failed capture is retried by the
+   * shipped hook or a manual click, exactly like the default mode.
+   */
+  private async captureImmediatelyIfConfigured(orderId: string): Promise<void> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { store_id: true, kustom_captured_at: true },
+    });
+    if (!order?.store_id || order.kustom_captured_at) return;
+    const store = await this.prisma.store.findUnique({
+      where: { id: order.store_id },
+      select: { creator: { select: { kustom_capture_mode: true } } },
+    });
+    if (
+      this.normalizeCaptureMode(store?.creator?.kustom_capture_mode) !==
+      'immediate'
+    ) {
+      return;
+    }
+    try {
+      await this.captureOrder(orderId, null);
+      this.logger.log(`Order ${orderId}: Kustom payment captured immediately`);
+    } catch (err) {
+      this.logger.warn(
+        `Order ${orderId}: immediate Kustom capture failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  private normalizeCaptureMode(
+    value: string | null | undefined,
+  ): KustomCaptureMode {
+    return value === 'immediate' ? 'immediate' : 'on_shipment';
   }
 
   /**
@@ -1135,6 +1184,7 @@ export class KustomService implements OnModuleInit {
       select: {
         id: true,
         kustom_environment: true,
+        kustom_capture_mode: true,
         ...kustomCreatorSelect,
         store: { select: { id: true, store_type: true, currency: true } },
       },
@@ -1165,6 +1215,7 @@ export class KustomService implements OnModuleInit {
       // The secret is never returned, only whether one is stored.
       secret_configured: secretConfigured,
       environment: this.normalizeEnvironment(creator.kustom_environment),
+      capture_mode: this.normalizeCaptureMode(creator.kustom_capture_mode),
       currency: creator.storeCurrency,
       currency_supported: currencySupported,
       ready:
@@ -1187,6 +1238,7 @@ export class KustomService implements OnModuleInit {
       kustom_shared_secret?: string | null;
       kustom_environment?: string;
       kustom_enabled?: boolean;
+      kustom_capture_mode?: KustomCaptureMode;
     } = {};
     // Only touch provided fields; an explicit empty string clears the value.
     if (dto.merchant_id !== undefined)
@@ -1197,6 +1249,8 @@ export class KustomService implements OnModuleInit {
     if (dto.environment !== undefined)
       data.kustom_environment = dto.environment;
     if (dto.enabled !== undefined) data.kustom_enabled = dto.enabled;
+    if (dto.capture_mode !== undefined)
+      data.kustom_capture_mode = dto.capture_mode;
 
     await this.prisma.creator.update({ where: { id: creator.id }, data });
     // The storefront caches getStore (which carries kustom_enabled) per store,

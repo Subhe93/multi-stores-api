@@ -36,6 +36,11 @@ export class UpdateKustomSettingsDto {
   @IsOptional()
   @IsBoolean()
   enabled?: boolean;
+
+  // When to capture the authorization; see Creator.kustom_capture_mode.
+  @IsOptional()
+  @IsIn(['on_shipment', 'immediate'])
+  capture_mode?: 'on_shipment' | 'immediate';
 }
 
 // Refund amount in MAJOR units of the order currency; omitted means a full

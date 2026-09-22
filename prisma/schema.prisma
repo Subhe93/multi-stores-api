@@ -110,6 +110,10 @@ model Creator {
   kustom_shared_secret String?
   kustom_environment   String  @default("playground") // 'playground' | 'production'
   kustom_enabled       Boolean @default(false)
+  // When the authorization is captured: 'on_shipment' (Klarna's default model,
+  // captured when the order ships or manually) or 'immediate' (captured as
+  // soon as the purchase is confirmed).
+  kustom_capture_mode  String  @default("on_shipment")
   verified          Boolean  @default(false)
   created_at        DateTime @default(now())
   updated_at        DateTime @updatedAt
