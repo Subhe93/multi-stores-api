@@ -49,6 +49,35 @@ export class ProductsService {
     await this.taxes.assertClassAssignable(taxClassId, store?.id ?? null);
   }
 
+  /**
+   * A product may only use a shipping profile of its own owner: the provider
+   * for provider products, the creator for creator products. A product with
+   * no owner (admin-created) only needs the profile to exist. null/undefined
+   * is left alone (clears / keeps the current profile).
+   */
+  private async assertShippingProfileAllowed(
+    profileId: string | null | undefined,
+    owner: { provider_id?: string | null; creator_id?: string | null },
+  ): Promise<void> {
+    if (!profileId) return;
+    const profile = await this.prisma.shippingProfile.findUnique({
+      where: { id: profileId },
+      select: { provider_id: true, creator_id: true },
+    });
+    const allowed =
+      !!profile &&
+      (owner.provider_id
+        ? profile.provider_id === owner.provider_id
+        : owner.creator_id
+          ? profile.creator_id === owner.creator_id
+          : true);
+    if (!allowed)
+      throw new BadRequestException({
+        code: 'SHIPPING_PROFILE_INVALID',
+        message: 'The selected shipping profile does not belong to you.',
+      });
+  }
+
   // Refresh the creator's storefront cache after a product mutation. Provider
   // products can appear across many stores, so those rely on the time-based
   // revalidate fallback instead.
@@ -325,6 +354,10 @@ export class ProductsService {
     }
 
     await this.assertTaxClassAllowed(dto.tax_class_id, productData.creator_id);
+    await this.assertShippingProfileAllowed(
+      dto.shipping_profile_id,
+      productData,
+    );
 
     // Create the product
     const product = await this.prisma.product.create({
@@ -573,6 +606,7 @@ export class ProductsService {
     } = dto;
 
     await this.assertTaxClassAllowed(dto.tax_class_id, product.creator_id);
+    await this.assertShippingProfileAllowed(dto.shipping_profile_id, product);
 
     // Update the product
     await this.prisma.product.update({
@@ -716,6 +750,9 @@ export class ProductsService {
       });
 
     await this.checkOwnership(source, userId, userRole);
+    // The clone keeps the source's profile; refuse if that profile is not the
+    // owner's any more (e.g. it was deleted or re-assigned).
+    await this.assertShippingProfileAllowed(source.shipping_profile_id, source);
 
     const newProduct = await this.prisma.$transaction(async (tx) => {
       // Create the bare product first so we have an id for child rows.

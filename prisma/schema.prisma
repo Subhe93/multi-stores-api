@@ -78,9 +78,10 @@ model Provider {
   created_at        DateTime @default(now())
   updated_at        DateTime @updatedAt
 
-  user       User        @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  products   Product[]
-  promotions Promotion[]
+  user              User              @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  products          Product[]
+  promotions        Promotion[]
+  shipping_profiles ShippingProfile[]
 }
 
 // ==========================================
@@ -120,6 +121,7 @@ model Creator {
   promotions         Promotion[]
   bundles            Bundle[]
   creator_categories CreatorCategory[]
+  shipping_profiles  ShippingProfile[]
 }
 
 // ==========================================
@@ -482,8 +484,16 @@ model ShippingProfile {
   is_default  Boolean @default(false)
   created_at  DateTime @default(now())
 
+  // Owner: exactly one of provider / creator. Deleting the owner removes
+  // their profiles (zones / methods cascade from the profile; products fall
+  // back to null via Product.shipping_profile_id ON DELETE SET NULL).
+  provider Provider? @relation(fields: [provider_id], references: [id], onDelete: Cascade)
+  creator  Creator?  @relation(fields: [creator_id], references: [id], onDelete: Cascade)
   zones    ShippingZone[]
   products Product[]
+
+  @@index([provider_id])
+  @@index([creator_id])
 }
 
 model ShippingZone {
