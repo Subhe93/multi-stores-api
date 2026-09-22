@@ -1,4 +1,8 @@
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UserRole } from '@prisma/client';
 import { CreateBlockDto, UpdateBlockDto } from './dto/block.dto';
@@ -46,7 +50,9 @@ export class PageBuilderService {
     const { translations, ...data } = dto;
 
     if (translations) {
-      await this.prisma.pageBlockTranslation.deleteMany({ where: { block_id: id } });
+      await this.prisma.pageBlockTranslation.deleteMany({
+        where: { block_id: id },
+      });
     }
 
     return this.prisma.pageBlock.update({
@@ -97,25 +103,45 @@ export class PageBuilderService {
    * Block content (including raw_html) renders on the public storefront, so an
    * unchecked block or page id was a cross-tenant stored-XSS vector.
    */
-  private async assertOwnsBlock(blockId: string, userId: string, userRole: UserRole) {
+  private async assertOwnsBlock(
+    blockId: string,
+    userId: string,
+    userRole: UserRole,
+  ) {
     const block = await this.prisma.pageBlock.findUnique({
       where: { id: blockId },
       select: { page: { select: { store_id: true } } },
     });
-    if (!block) throw new NotFoundException({ code: 'PAGE_BUILDER_BLOCK_NOT_FOUND', message: 'Block not found' });
+    if (!block)
+      throw new NotFoundException({
+        code: 'PAGE_BUILDER_BLOCK_NOT_FOUND',
+        message: 'Block not found',
+      });
     await this.assertOwnsStore(block.page.store_id, userId, userRole);
   }
 
-  private async assertOwnsPage(pageId: string, userId: string, userRole: UserRole) {
+  private async assertOwnsPage(
+    pageId: string,
+    userId: string,
+    userRole: UserRole,
+  ) {
     const page = await this.prisma.staticPage.findUnique({
       where: { id: pageId },
       select: { store_id: true },
     });
-    if (!page) throw new NotFoundException({ code: 'PAGE_BUILDER_PAGE_NOT_FOUND', message: 'Page not found' });
+    if (!page)
+      throw new NotFoundException({
+        code: 'PAGE_BUILDER_PAGE_NOT_FOUND',
+        message: 'Page not found',
+      });
     await this.assertOwnsStore(page.store_id, userId, userRole);
   }
 
-  private async assertOwnsStore(storeId: string, userId: string, userRole: UserRole) {
+  private async assertOwnsStore(
+    storeId: string,
+    userId: string,
+    userRole: UserRole,
+  ) {
     if (userRole === UserRole.ADMIN) return;
 
     const creator = await this.prisma.creator.findUnique({

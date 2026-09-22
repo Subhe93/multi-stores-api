@@ -7,11 +7,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
-import {
-  CreateMenuDto,
-  SetMenuItemsDto,
-  UpdateMenuDto,
-} from './dto/menus.dto';
+import { CreateMenuDto, SetMenuItemsDto, UpdateMenuDto } from './dto/menus.dto';
 
 @Injectable()
 export class MenusService {
@@ -25,12 +21,20 @@ export class MenusService {
       where: { user_id: userId },
       select: { id: true },
     });
-    if (!creator) throw new NotFoundException({ code: 'MENU_CREATOR_NOT_FOUND', message: 'Creator not found' });
+    if (!creator)
+      throw new NotFoundException({
+        code: 'MENU_CREATOR_NOT_FOUND',
+        message: 'Creator not found',
+      });
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creator.id },
       select: { id: true },
     });
-    if (!store) throw new NotFoundException({ code: 'MENU_STORE_NOT_FOUND', message: 'Store not found' });
+    if (!store)
+      throw new NotFoundException({
+        code: 'MENU_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
     return store.id;
   }
 
@@ -39,8 +43,16 @@ export class MenusService {
       where: { id: menuId },
       select: { id: true, store_id: true },
     });
-    if (!menu) throw new NotFoundException({ code: 'MENU_NOT_FOUND', message: 'Menu not found' });
-    if (menu.store_id !== storeId) throw new ForbiddenException({ code: 'MENU_NOT_OWNED', message: 'Not your menu' });
+    if (!menu)
+      throw new NotFoundException({
+        code: 'MENU_NOT_FOUND',
+        message: 'Menu not found',
+      });
+    if (menu.store_id !== storeId)
+      throw new ForbiddenException({
+        code: 'MENU_NOT_OWNED',
+        message: 'Not your menu',
+      });
   }
 
   // ── Menu CRUD ───────────────────────────────────────────
@@ -71,8 +83,14 @@ export class MenusService {
         include: { items: true },
       });
     } catch (err) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        throw new ConflictException({ code: 'MENU_KEY_ALREADY_EXISTS', message: 'A menu with this key already exists' });
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException({
+          code: 'MENU_KEY_ALREADY_EXISTS',
+          message: 'A menu with this key already exists',
+        });
       }
       throw err;
     }
@@ -93,8 +111,14 @@ export class MenusService {
       await this.revalidation.revalidateStoreById(storeId);
       return updated;
     } catch (err) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        throw new ConflictException({ code: 'MENU_KEY_ALREADY_EXISTS', message: 'A menu with this key already exists' });
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException({
+          code: 'MENU_KEY_ALREADY_EXISTS',
+          message: 'A menu with this key already exists',
+        });
       }
       throw err;
     }

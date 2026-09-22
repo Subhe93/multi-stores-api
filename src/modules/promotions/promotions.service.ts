@@ -9,7 +9,14 @@ import {
   UpdatePromotionDto,
   ValidateCouponDto,
 } from './dto/promotion.dto';
-import { UserRole } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
+
+/** The coupon conditions JSON as validateCoupon reads it. */
+interface PromotionConditions {
+  min_amount?: number;
+  min_quantity?: number;
+  product_ids?: string[];
+}
 
 @Injectable()
 export class PromotionsService {
@@ -18,7 +25,7 @@ export class PromotionsService {
   async create(userId: string, userRole: UserRole, dto: CreatePromotionDto) {
     const { translations, ...data } = dto;
 
-    const promotionData: any = {
+    const promotionData: Prisma.PromotionUncheckedCreateInput = {
       ...data,
       starts_at: new Date(data.starts_at),
       expires_at: data.expires_at ? new Date(data.expires_at) : null,
@@ -30,13 +37,21 @@ export class PromotionsService {
       const provider = await this.prisma.provider.findUnique({
         where: { user_id: userId },
       });
-      if (!provider) throw new NotFoundException({ code: 'PROMOTION_PROVIDER_NOT_FOUND', message: 'Provider not found' });
+      if (!provider)
+        throw new NotFoundException({
+          code: 'PROMOTION_PROVIDER_NOT_FOUND',
+          message: 'Provider not found',
+        });
       promotionData.provider_id = provider.id;
     } else if (userRole === UserRole.CREATOR) {
       const creator = await this.prisma.creator.findUnique({
         where: { user_id: userId },
       });
-      if (!creator) throw new NotFoundException({ code: 'PROMOTION_CREATOR_NOT_FOUND', message: 'Creator not found' });
+      if (!creator)
+        throw new NotFoundException({
+          code: 'PROMOTION_CREATOR_NOT_FOUND',
+          message: 'Creator not found',
+        });
       promotionData.creator_id = creator.id;
     }
 
@@ -48,19 +63,27 @@ export class PromotionsService {
 
   async findByOwner(userId: string, userRole: UserRole, page = 1, limit = 20) {
     const skip = (page - 1) * limit;
-    let where: any = {};
+    const where: Prisma.PromotionWhereInput = {};
 
     if (userRole === UserRole.PROVIDER) {
       const provider = await this.prisma.provider.findUnique({
         where: { user_id: userId },
       });
-      if (!provider) throw new NotFoundException({ code: 'PROMOTION_PROVIDER_NOT_FOUND', message: 'Provider not found' });
+      if (!provider)
+        throw new NotFoundException({
+          code: 'PROMOTION_PROVIDER_NOT_FOUND',
+          message: 'Provider not found',
+        });
       where.provider_id = provider.id;
     } else if (userRole === UserRole.CREATOR) {
       const creator = await this.prisma.creator.findUnique({
         where: { user_id: userId },
       });
-      if (!creator) throw new NotFoundException({ code: 'PROMOTION_CREATOR_NOT_FOUND', message: 'Creator not found' });
+      if (!creator)
+        throw new NotFoundException({
+          code: 'PROMOTION_CREATOR_NOT_FOUND',
+          message: 'Creator not found',
+        });
       where.creator_id = creator.id;
     }
 
@@ -75,7 +98,10 @@ export class PromotionsService {
       this.prisma.promotion.count({ where }),
     ]);
 
-    return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+    return {
+      data,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
   }
 
   async findById(id: string, userId?: string, role?: UserRole) {
@@ -83,16 +109,28 @@ export class PromotionsService {
       where: { id },
       include: { translations: true, usages: { take: 20 } },
     });
-    if (!promo) throw new NotFoundException({ code: 'PROMOTION_NOT_FOUND', message: 'Promotion not found' });
+    if (!promo)
+      throw new NotFoundException({
+        code: 'PROMOTION_NOT_FOUND',
+        message: 'Promotion not found',
+      });
 
     // Same ownership rule the update/delete paths already enforce — the read
     // exposes the promotion's terms and its redemption history.
     if (role !== UserRole.ADMIN) {
       const owner =
         role === UserRole.CREATOR
-          ? (await this.prisma.creator.findUnique({ where: { user_id: userId! } }))?.id
+          ? (
+              await this.prisma.creator.findUnique({
+                where: { user_id: userId! },
+              })
+            )?.id
           : role === UserRole.PROVIDER
-            ? (await this.prisma.provider.findUnique({ where: { user_id: userId! } }))?.id
+            ? (
+                await this.prisma.provider.findUnique({
+                  where: { user_id: userId! },
+                })
+              )?.id
             : undefined;
       const owns =
         !!owner &&
@@ -100,27 +138,49 @@ export class PromotionsService {
           ? promo.creator_id === owner
           : promo.provider_id === owner);
       if (!owns) {
-        throw new NotFoundException({ code: 'PROMOTION_NOT_FOUND', message: 'Promotion not found' });
+        throw new NotFoundException({
+          code: 'PROMOTION_NOT_FOUND',
+          message: 'Promotion not found',
+        });
       }
     }
     return promo;
   }
 
-  async update(id: string, dto: UpdatePromotionDto, userId?: string, role?: UserRole) {
+  async update(
+    id: string,
+    dto: UpdatePromotionDto,
+    userId?: string,
+    role?: UserRole,
+  ) {
     const promo = await this.prisma.promotion.findUnique({ where: { id } });
-    if (!promo) throw new NotFoundException({ code: 'PROMOTION_NOT_FOUND', message: 'Promotion not found' });
+    if (!promo)
+      throw new NotFoundException({
+        code: 'PROMOTION_NOT_FOUND',
+        message: 'Promotion not found',
+      });
 
     // Ownership check
     if (userId && role) {
       if (role === UserRole.CREATOR) {
-        const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
+        const creator = await this.prisma.creator.findUnique({
+          where: { user_id: userId },
+        });
         if (!creator || promo.creator_id !== creator.id) {
-          throw new BadRequestException({ code: 'PROMOTION_EDIT_NOT_OWNED', message: 'You can only edit your own promotions' });
+          throw new BadRequestException({
+            code: 'PROMOTION_EDIT_NOT_OWNED',
+            message: 'You can only edit your own promotions',
+          });
         }
       } else if (role === UserRole.PROVIDER) {
-        const provider = await this.prisma.provider.findUnique({ where: { user_id: userId } });
+        const provider = await this.prisma.provider.findUnique({
+          where: { user_id: userId },
+        });
         if (!provider || promo.provider_id !== provider.id) {
-          throw new BadRequestException({ code: 'PROMOTION_EDIT_NOT_OWNED', message: 'You can only edit your own promotions' });
+          throw new BadRequestException({
+            code: 'PROMOTION_EDIT_NOT_OWNED',
+            message: 'You can only edit your own promotions',
+          });
         }
       }
     }
@@ -146,18 +206,32 @@ export class PromotionsService {
 
   async delete(id: string, userId?: string, role?: UserRole) {
     const promo = await this.prisma.promotion.findUnique({ where: { id } });
-    if (!promo) throw new NotFoundException({ code: 'PROMOTION_NOT_FOUND', message: 'Promotion not found' });
+    if (!promo)
+      throw new NotFoundException({
+        code: 'PROMOTION_NOT_FOUND',
+        message: 'Promotion not found',
+      });
 
     if (userId && role) {
       if (role === UserRole.CREATOR) {
-        const creator = await this.prisma.creator.findUnique({ where: { user_id: userId } });
+        const creator = await this.prisma.creator.findUnique({
+          where: { user_id: userId },
+        });
         if (!creator || promo.creator_id !== creator.id) {
-          throw new BadRequestException({ code: 'PROMOTION_DELETE_NOT_OWNED', message: 'You can only delete your own promotions' });
+          throw new BadRequestException({
+            code: 'PROMOTION_DELETE_NOT_OWNED',
+            message: 'You can only delete your own promotions',
+          });
         }
       } else if (role === UserRole.PROVIDER) {
-        const provider = await this.prisma.provider.findUnique({ where: { user_id: userId } });
+        const provider = await this.prisma.provider.findUnique({
+          where: { user_id: userId },
+        });
         if (!provider || promo.provider_id !== provider.id) {
-          throw new BadRequestException({ code: 'PROMOTION_DELETE_NOT_OWNED', message: 'You can only delete your own promotions' });
+          throw new BadRequestException({
+            code: 'PROMOTION_DELETE_NOT_OWNED',
+            message: 'You can only delete your own promotions',
+          });
         }
       }
     }
@@ -171,7 +245,10 @@ export class PromotionsService {
     });
 
     if (!promo) {
-      throw new BadRequestException({ code: 'PROMOTION_COUPON_INVALID', message: 'Invalid coupon code' });
+      throw new BadRequestException({
+        code: 'PROMOTION_COUPON_INVALID',
+        message: 'Invalid coupon code',
+      });
     }
 
     // Scope the coupon to its owner. `coupon_code` is globally unique, so
@@ -183,45 +260,66 @@ export class PromotionsService {
 
     // Check if active
     if (promo.status !== 'ACTIVE') {
-      throw new BadRequestException({ code: 'PROMOTION_COUPON_NOT_ACTIVE', message: 'Coupon is not active' });
+      throw new BadRequestException({
+        code: 'PROMOTION_COUPON_NOT_ACTIVE',
+        message: 'Coupon is not active',
+      });
     }
 
     // Check dates
     const now = new Date();
     if (promo.starts_at > now) {
-      throw new BadRequestException({ code: 'PROMOTION_COUPON_NOT_YET_VALID', message: 'Coupon not yet valid' });
+      throw new BadRequestException({
+        code: 'PROMOTION_COUPON_NOT_YET_VALID',
+        message: 'Coupon not yet valid',
+      });
     }
     if (promo.expires_at && promo.expires_at < now) {
-      throw new BadRequestException({ code: 'PROMOTION_COUPON_EXPIRED', message: 'Coupon has expired' });
+      throw new BadRequestException({
+        code: 'PROMOTION_COUPON_EXPIRED',
+        message: 'Coupon has expired',
+      });
     }
 
     // Check usage limit
     if (promo.usage_limit && promo.usage_count >= promo.usage_limit) {
-      throw new BadRequestException({ code: 'PROMOTION_COUPON_USAGE_LIMIT_REACHED', message: 'Coupon usage limit reached' });
+      throw new BadRequestException({
+        code: 'PROMOTION_COUPON_USAGE_LIMIT_REACHED',
+        message: 'Coupon usage limit reached',
+      });
     }
 
     // Check conditions
-    const conditions = promo.conditions as any;
-    if (conditions?.min_amount && dto.subtotal && dto.subtotal < conditions.min_amount) {
+    const conditions = promo.conditions as PromotionConditions | null;
+    if (
+      conditions?.min_amount &&
+      dto.subtotal &&
+      dto.subtotal < conditions.min_amount
+    ) {
       throw new BadRequestException(
         `Minimum order amount is ${conditions.min_amount}`,
       );
     }
-    if (conditions?.min_quantity && dto.item_count && dto.item_count < conditions.min_quantity) {
+    if (
+      conditions?.min_quantity &&
+      dto.item_count &&
+      dto.item_count < conditions.min_quantity
+    ) {
       throw new BadRequestException(
         `Minimum ${conditions.min_quantity} items required`,
       );
     }
 
     // Check product targeting
-    if (conditions?.product_ids?.length > 0 && dto.product_ids?.length) {
+    if ((conditions?.product_ids?.length ?? 0) > 0 && dto.product_ids?.length) {
       const hasMatch = dto.product_ids.some((pid: string) =>
-        conditions.product_ids.includes(pid),
+        conditions!.product_ids!.includes(pid),
       );
       if (!hasMatch) {
-        throw new BadRequestException(
-          { code: 'PROMOTION_COUPON_NOT_APPLICABLE', message: 'This coupon does not apply to the products in your cart' },
-        );
+        throw new BadRequestException({
+          code: 'PROMOTION_COUPON_NOT_APPLICABLE',
+          message: 'This coupon does not apply to the products in your cart',
+        });
       }
     }
 
@@ -280,7 +378,10 @@ export class PromotionsService {
           where: { id: { in: ids }, provider_id: promo.provider_id },
         }),
         this.prisma.customProduct.count({
-          where: { id: { in: ids }, product: { provider_id: promo.provider_id } },
+          where: {
+            id: { in: ids },
+            product: { provider_id: promo.provider_id },
+          },
         }),
       ]);
       if (ownCount === 0 && customCount === 0) notApplicable();
@@ -321,7 +422,11 @@ export class PromotionsService {
         data: { usage_count: { decrement: 1 } },
       });
     } catch (err) {
-      console.error('[Promotion] Failed to release redemption', promotionId, err);
+      console.error(
+        '[Promotion] Failed to release redemption',
+        promotionId,
+        err,
+      );
     }
   }
 

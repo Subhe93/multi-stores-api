@@ -31,6 +31,8 @@ export class TemplatesController {
     @Param('id') id: string,
     @Body() dto: ImportKitDto,
   ) {
-    return this.service.importKit(userId, id, { withDemoData: dto.withDemoData });
+    return this.service.importKit(userId, id, {
+      withDemoData: dto.withDemoData,
+    });
   }
 }

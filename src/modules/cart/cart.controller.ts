@@ -23,10 +23,7 @@ export class CartController {
   constructor(private cartService: CartService) {}
 
   @Get()
-  getCart(
-    @CurrentUser('id') userId: string,
-    @Query('locale') locale?: string,
-  ) {
+  getCart(@CurrentUser('id') userId: string, @Query('locale') locale?: string) {
     return this.cartService.getCart(userId, locale);
   }
 

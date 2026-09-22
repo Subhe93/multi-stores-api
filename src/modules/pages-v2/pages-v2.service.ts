@@ -56,12 +56,20 @@ export class PagesV2Service {
       where: { user_id: userId },
       select: { id: true },
     });
-    if (!creator) throw new NotFoundException({ code: 'PAGE_CREATOR_NOT_FOUND', message: 'Creator not found' });
+    if (!creator)
+      throw new NotFoundException({
+        code: 'PAGE_CREATOR_NOT_FOUND',
+        message: 'Creator not found',
+      });
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creator.id },
       select: { id: true },
     });
-    if (!store) throw new NotFoundException({ code: 'PAGE_STORE_NOT_FOUND', message: 'Store not found' });
+    if (!store)
+      throw new NotFoundException({
+        code: 'PAGE_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
     return store.id;
   }
 
@@ -84,22 +92,52 @@ export class PagesV2Service {
   private defaultPageTitle(type: PageType, locale: string): string {
     const titles: Partial<Record<PageType, Record<string, string>>> = {
       [PageType.HOME]: {
-        en: 'Home', ar: 'الرئيسية', de: 'Startseite', fr: 'Accueil', sv: 'Startsida', tr: 'Ana Sayfa',
+        en: 'Home',
+        ar: 'الرئيسية',
+        de: 'Startseite',
+        fr: 'Accueil',
+        sv: 'Startsida',
+        tr: 'Ana Sayfa',
       },
       [PageType.PRODUCT_TEMPLATE]: {
-        en: 'Product page', ar: 'صفحة المنتج', de: 'Produktseite', fr: 'Page produit', sv: 'Produktsida', tr: 'Ürün sayfası',
+        en: 'Product page',
+        ar: 'صفحة المنتج',
+        de: 'Produktseite',
+        fr: 'Page produit',
+        sv: 'Produktsida',
+        tr: 'Ürün sayfası',
       },
       [PageType.HEADER]: {
-        en: 'Header', ar: 'الترويسة', de: 'Kopfzeile', fr: 'En-tête', sv: 'Sidhuvud', tr: 'Üst bilgi',
+        en: 'Header',
+        ar: 'الترويسة',
+        de: 'Kopfzeile',
+        fr: 'En-tête',
+        sv: 'Sidhuvud',
+        tr: 'Üst bilgi',
       },
       [PageType.FOOTER]: {
-        en: 'Footer', ar: 'التذييل', de: 'Fußzeile', fr: 'Pied de page', sv: 'Sidfot', tr: 'Alt bilgi',
+        en: 'Footer',
+        ar: 'التذييل',
+        de: 'Fußzeile',
+        fr: 'Pied de page',
+        sv: 'Sidfot',
+        tr: 'Alt bilgi',
       },
       [PageType.CATALOG_TEMPLATE]: {
-        en: 'All products', ar: 'كل المنتجات', de: 'Alle Produkte', fr: 'Tous les produits', sv: 'Alla produkter', tr: 'Tüm ürünler',
+        en: 'All products',
+        ar: 'كل المنتجات',
+        de: 'Alle Produkte',
+        fr: 'Tous les produits',
+        sv: 'Alla produkter',
+        tr: 'Tüm ürünler',
       },
       [PageType.COLLECTION_TEMPLATE]: {
-        en: 'Collection page', ar: 'صفحة التصنيف', de: 'Kollektionsseite', fr: 'Page de collection', sv: 'Kollektionssida', tr: 'Koleksiyon sayfası',
+        en: 'Collection page',
+        ar: 'صفحة التصنيف',
+        de: 'Kollektionsseite',
+        fr: 'Page de collection',
+        sv: 'Kollektionssida',
+        tr: 'Koleksiyon sayfası',
       },
     };
     const byLocale = titles[type];
@@ -111,17 +149,36 @@ export class PagesV2Service {
       where: { id: pageId },
       select: { id: true, store_id: true },
     });
-    if (!page) throw new NotFoundException({ code: 'PAGE_NOT_FOUND', message: 'Page not found' });
-    if (page.store_id !== storeId) throw new ForbiddenException({ code: 'PAGE_FORBIDDEN', message: 'Not your page' });
+    if (!page)
+      throw new NotFoundException({
+        code: 'PAGE_NOT_FOUND',
+        message: 'Page not found',
+      });
+    if (page.store_id !== storeId)
+      throw new ForbiddenException({
+        code: 'PAGE_FORBIDDEN',
+        message: 'Not your page',
+      });
   }
 
-  private async assertSectionBelongsToStore(sectionId: string, storeId: string): Promise<{ pageId: string }> {
+  private async assertSectionBelongsToStore(
+    sectionId: string,
+    storeId: string,
+  ): Promise<{ pageId: string }> {
     const section = await this.prisma.pageSection.findUnique({
       where: { id: sectionId },
       select: { id: true, page_id: true, page: { select: { store_id: true } } },
     });
-    if (!section) throw new NotFoundException({ code: 'PAGE_SECTION_NOT_FOUND', message: 'Section not found' });
-    if (section.page.store_id !== storeId) throw new ForbiddenException({ code: 'PAGE_SECTION_FORBIDDEN', message: 'Not your section' });
+    if (!section)
+      throw new NotFoundException({
+        code: 'PAGE_SECTION_NOT_FOUND',
+        message: 'Section not found',
+      });
+    if (section.page.store_id !== storeId)
+      throw new ForbiddenException({
+        code: 'PAGE_SECTION_FORBIDDEN',
+        message: 'Not your section',
+      });
     return { pageId: section.page_id };
   }
 
@@ -172,10 +229,16 @@ export class PagesV2Service {
       throw new BadRequestException(`${dto.type} page cannot have a slug`);
     }
     if (!slugless && !dto.slug) {
-      throw new BadRequestException({ code: 'PAGE_SLUG_REQUIRED', message: 'slug is required for this page type' });
+      throw new BadRequestException({
+        code: 'PAGE_SLUG_REQUIRED',
+        message: 'slug is required for this page type',
+      });
     }
     if (dto.type === PageType.STATIC && !dto.static_kind) {
-      throw new BadRequestException({ code: 'PAGE_STATIC_KIND_REQUIRED', message: 'static_kind is required for STATIC pages' });
+      throw new BadRequestException({
+        code: 'PAGE_STATIC_KIND_REQUIRED',
+        message: 'static_kind is required for STATIC pages',
+      });
     }
 
     // (store_id, type, static_kind) is unique — catch duplicate singletons early.
@@ -184,7 +247,8 @@ export class PagesV2Service {
         where: { store_id: storeId, type: dto.type },
         select: { id: true },
       });
-      if (existing) throw new ConflictException(`${dto.type} page already exists`);
+      if (existing)
+        throw new ConflictException(`${dto.type} page already exists`);
     }
 
     try {
@@ -202,8 +266,14 @@ export class PagesV2Service {
         include: { translations: true },
       });
     } catch (err) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        throw new ConflictException({ code: 'PAGE_SLUG_OR_KIND_EXISTS', message: 'A page with this slug or kind already exists' });
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException({
+          code: 'PAGE_SLUG_OR_KIND_EXISTS',
+          message: 'A page with this slug or kind already exists',
+        });
       }
       throw err;
     }
@@ -264,7 +334,10 @@ export class PagesV2Service {
       page?.type === PageType.CATALOG_TEMPLATE ||
       page?.type === PageType.COLLECTION_TEMPLATE
     ) {
-      throw new BadRequestException({ code: 'PAGE_CANNOT_BE_DELETED', message: 'This page cannot be deleted' });
+      throw new BadRequestException({
+        code: 'PAGE_CANNOT_BE_DELETED',
+        message: 'This page cannot be deleted',
+      });
     }
     return this.prisma.page.delete({ where: { id: pageId } });
   }
@@ -289,7 +362,9 @@ export class PagesV2Service {
         slug: null,
         is_required: true,
         translations: {
-          create: [{ locale, title: this.defaultPageTitle(PageType.HOME, locale) }],
+          create: [
+            { locale, title: this.defaultPageTitle(PageType.HOME, locale) },
+          ],
         },
       },
       include: { translations: true },
@@ -326,7 +401,12 @@ export class PagesV2Service {
         slug: null,
         is_required: true,
         translations: {
-          create: [{ locale, title: this.defaultPageTitle(PageType.PRODUCT_TEMPLATE, locale) }],
+          create: [
+            {
+              locale,
+              title: this.defaultPageTitle(PageType.PRODUCT_TEMPLATE, locale),
+            },
+          ],
         },
         sections: {
           create: [
@@ -368,7 +448,9 @@ export class PagesV2Service {
         slug: null,
         is_required: true,
         translations: {
-          create: [{ locale, title: this.defaultPageTitle(PageType.HEADER, locale) }],
+          create: [
+            { locale, title: this.defaultPageTitle(PageType.HEADER, locale) },
+          ],
         },
         sections: {
           create: [
@@ -412,7 +494,9 @@ export class PagesV2Service {
         slug: null,
         is_required: true,
         translations: {
-          create: [{ locale, title: this.defaultPageTitle(PageType.FOOTER, locale) }],
+          create: [
+            { locale, title: this.defaultPageTitle(PageType.FOOTER, locale) },
+          ],
         },
         sections: {
           create: [
@@ -459,7 +543,9 @@ export class PagesV2Service {
    */
   private async ensureListingTemplate(
     userId: string,
-    type: typeof PageType.CATALOG_TEMPLATE | typeof PageType.COLLECTION_TEMPLATE,
+    type:
+      | typeof PageType.CATALOG_TEMPLATE
+      | typeof PageType.COLLECTION_TEMPLATE,
   ) {
     const storeId = await this.resolveCreatorStoreId(userId);
     const locale = await this.storePrimaryLocale(storeId);
@@ -491,7 +577,9 @@ export class PagesV2Service {
               {
                 section_key: 'product-listing',
                 sort_order: 0,
-                settings: { ...PRODUCT_LISTING_DEFAULT_SETTINGS } as Prisma.InputJsonValue,
+                settings: {
+                  ...PRODUCT_LISTING_DEFAULT_SETTINGS,
+                } as Prisma.InputJsonValue,
               },
             ],
           },
@@ -519,7 +607,8 @@ export class PagesV2Service {
 
     const sortOrder =
       dto.sort_order ??
-      ((await this.prisma.pageSection.count({ where: { page_id: pageId } })) ?? 0);
+      (await this.prisma.pageSection.count({ where: { page_id: pageId } })) ??
+      0;
 
     return this.prisma.pageSection.create({
       data: {
@@ -540,12 +629,17 @@ export class PagesV2Service {
     });
   }
 
-  async updateSection(userId: string, sectionId: string, dto: UpdateSectionDto) {
+  async updateSection(
+    userId: string,
+    sectionId: string,
+    dto: UpdateSectionDto,
+  ) {
     const storeId = await this.resolveCreatorStoreId(userId);
     await this.assertSectionBelongsToStore(sectionId, storeId);
 
     const data: Prisma.PageSectionUpdateInput = {};
-    if (dto.settings !== undefined) data.settings = dto.settings as Prisma.InputJsonValue;
+    if (dto.settings !== undefined)
+      data.settings = dto.settings as Prisma.InputJsonValue;
     if (dto.sort_order !== undefined) data.sort_order = dto.sort_order;
     if (dto.is_hidden !== undefined) data.is_hidden = dto.is_hidden;
 
@@ -553,7 +647,9 @@ export class PagesV2Service {
       if (dto.translations) {
         for (const tr of dto.translations) {
           await tx.pageSectionTranslation.upsert({
-            where: { section_id_locale: { section_id: sectionId, locale: tr.locale } },
+            where: {
+              section_id_locale: { section_id: sectionId, locale: tr.locale },
+            },
             update: { content: tr.content as Prisma.InputJsonValue },
             create: {
               section_id: sectionId,
@@ -577,7 +673,11 @@ export class PagesV2Service {
     return this.prisma.pageSection.delete({ where: { id: sectionId } });
   }
 
-  async reorderSections(userId: string, pageId: string, dto: ReorderSectionsDto) {
+  async reorderSections(
+    userId: string,
+    pageId: string,
+    dto: ReorderSectionsDto,
+  ) {
     const storeId = await this.resolveCreatorStoreId(userId);
     await this.assertPageBelongsToStore(pageId, storeId);
 
@@ -588,7 +688,10 @@ export class PagesV2Service {
       select: { id: true },
     });
     if (owned.length !== dto.section_ids.length) {
-      throw new BadRequestException({ code: 'PAGE_SECTION_IDS_INVALID', message: 'section_ids contains entries not on this page' });
+      throw new BadRequestException({
+        code: 'PAGE_SECTION_IDS_INVALID',
+        message: 'section_ids contains entries not on this page',
+      });
     }
 
     await this.prisma.$transaction(
@@ -623,7 +726,11 @@ export class PagesV2Service {
         },
       },
     });
-    if (!page) throw new NotFoundException({ code: 'PAGE_NOT_FOUND', message: 'Page not found' });
+    if (!page)
+      throw new NotFoundException({
+        code: 'PAGE_NOT_FOUND',
+        message: 'Page not found',
+      });
 
     const snapshot = {
       page: {
@@ -638,7 +745,10 @@ export class PagesV2Service {
         section_key: s.section_key,
         settings: s.settings,
         sort_order: s.sort_order,
-        translations: s.translations.map((t) => ({ locale: t.locale, content: t.content })),
+        translations: s.translations.map((t) => ({
+          locale: t.locale,
+          content: t.content,
+        })),
       })),
     };
 
@@ -696,7 +806,10 @@ export class PagesV2Service {
       select: { page_id: true, snapshot: true },
     });
     if (!version || version.page_id !== pageId) {
-      throw new NotFoundException({ code: 'PAGE_VERSION_NOT_FOUND', message: 'Version not found' });
+      throw new NotFoundException({
+        code: 'PAGE_VERSION_NOT_FOUND',
+        message: 'Version not found',
+      });
     }
 
     const snapshot = version.snapshot as {
@@ -713,7 +826,10 @@ export class PagesV2Service {
         section_key: string;
         settings: Record<string, unknown>;
         sort_order: number;
-        translations: Array<{ locale: string; content: Record<string, unknown> }>;
+        translations: Array<{
+          locale: string;
+          content: Record<string, unknown>;
+        }>;
       }>;
     };
 

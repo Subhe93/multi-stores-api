@@ -13,7 +13,12 @@ import {
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { ProductType, CustomizationType, ProductStatus } from '@prisma/client';
+import {
+  ProductType,
+  CustomizationType,
+  ProductStatus,
+  Prisma,
+} from '@prisma/client';
 
 export class ProductTranslationDto {
   @IsString()
@@ -42,7 +47,7 @@ export class ProductAttributeValueDto {
   template_id: string;
 
   @Allow()
-  value: any;
+  value: Prisma.InputJsonValue;
 }
 
 // One variant in the product save payload. Carrying the existing `id` lets the

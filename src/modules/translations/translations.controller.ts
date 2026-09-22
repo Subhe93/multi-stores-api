@@ -1,8 +1,16 @@
-import { Controller, Get, Post, Body, UseGuards, Request } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  UseGuards,
+  Request,
+} from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { TranslationsService } from './translations.service';
 import { AutoTranslateDto, BulkTranslateDto } from './dto/translation.dto';
 import { Roles } from '../../common/decorators';
+import type { RequestUser } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '@prisma/client';
 import { IsString } from 'class-validator';
@@ -26,20 +34,34 @@ export class TranslationsController {
 
   // Full overview of translation status for all creator entities
   @Get('overview')
-  getOverview(@Request() req: any) {
+  getOverview(@Request() req: { user: RequestUser }) {
     return this.translationsService.getOverview(req.user.id);
   }
 
   // Translate a single entity (reads from DB and saves back)
   @Post('auto-translate')
-  autoTranslate(@Body() dto: AutoTranslateDto, @Request() req: any) {
-    return this.translationsService.autoTranslate(dto, req.user.id, req.user.role);
+  autoTranslate(
+    @Body() dto: AutoTranslateDto,
+    @Request() req: { user: RequestUser },
+  ) {
+    return this.translationsService.autoTranslate(
+      dto,
+      req.user.id,
+      req.user.role,
+    );
   }
 
   // Bulk translate all entities of given types for a store
   @Post('bulk-translate')
-  bulkTranslate(@Body() dto: BulkTranslateDto, @Request() req: any) {
-    return this.translationsService.bulkTranslate(dto, req.user.id, req.user.role);
+  bulkTranslate(
+    @Body() dto: BulkTranslateDto,
+    @Request() req: { user: RequestUser },
+  ) {
+    return this.translationsService.bulkTranslate(
+      dto,
+      req.user.id,
+      req.user.role,
+    );
   }
 
   // Translate raw text — used by dashboard forms before entity is saved

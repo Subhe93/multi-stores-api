@@ -1,6 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { CreateCustomFieldDto, UpdateCustomFieldDto } from './dto/custom-field.dto';
+import {
+  CreateCustomFieldDto,
+  UpdateCustomFieldDto,
+} from './dto/custom-field.dto';
 
 @Injectable()
 export class CustomFieldsService {
@@ -10,7 +13,11 @@ export class CustomFieldsService {
     const product = await this.prisma.product.findUnique({
       where: { id: productId },
     });
-    if (!product) throw new NotFoundException({ code: 'CUSTOM_FIELD_PRODUCT_NOT_FOUND', message: 'Product not found' });
+    if (!product)
+      throw new NotFoundException({
+        code: 'CUSTOM_FIELD_PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
 
     const { translations, ...data } = dto;
 

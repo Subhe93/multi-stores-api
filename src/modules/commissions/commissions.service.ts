@@ -1,5 +1,10 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
-import { CommissionStatus, FulfillerType, Prisma, UserRole } from '@prisma/client';
+import {
+  CommissionStatus,
+  FulfillerType,
+  Prisma,
+  UserRole,
+} from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
@@ -58,8 +63,16 @@ export class CommissionsService {
     let where: { order: any } | null = null;
 
     if (role === 'provider') {
-      const provider = await this.prisma.provider.findUnique({ where: { user_id: userId } });
-      if (!provider) return { total_earnings: 0, this_month: 0, pending: 0, total_orders: 0 };
+      const provider = await this.prisma.provider.findUnique({
+        where: { user_id: userId },
+      });
+      if (!provider)
+        return {
+          total_earnings: 0,
+          this_month: 0,
+          pending: 0,
+          total_orders: 0,
+        };
       where = {
         order: { items: { some: { fulfiller_id: provider.id } } },
       };
@@ -69,19 +82,27 @@ export class CommissionsService {
         include: { store: true },
       });
       if (!creator?.store) {
-        return { total_earnings: 0, this_month: 0, pending: 0, total_orders: 0 };
+        return {
+          total_earnings: 0,
+          this_month: 0,
+          pending: 0,
+          total_orders: 0,
+        };
       }
       where = {
         order: { store_id: creator.store.id },
       };
     }
 
-    const allCommissions = await this.prisma.orderCommission.findMany({ where });
+    const allCommissions = await this.prisma.orderCommission.findMany({
+      where,
+    });
 
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    const amountField = role === 'provider' ? 'provider_amount' : 'creator_amount';
+    const amountField =
+      role === 'provider' ? 'provider_amount' : 'creator_amount';
 
     const totalEarnings = allCommissions.reduce(
       (sum, c) => sum + Number(c[amountField]),
@@ -134,7 +155,10 @@ export class CommissionsService {
         monthCreator += crea;
       }
 
-      if (c.status === CommissionStatus.PENDING || c.status === CommissionStatus.PROCESSING) {
+      if (
+        c.status === CommissionStatus.PENDING ||
+        c.status === CommissionStatus.PROCESSING
+      ) {
         pendingPlatform += plat;
       } else if (c.status === CommissionStatus.COMPLETED) {
         paidPlatform += plat;
@@ -180,9 +204,15 @@ export class CommissionsService {
           {
             customer: {
               OR: [
-                { first_name: { contains: params.search, mode: 'insensitive' } },
+                {
+                  first_name: { contains: params.search, mode: 'insensitive' },
+                },
                 { last_name: { contains: params.search, mode: 'insensitive' } },
-                { user: { email: { contains: params.search, mode: 'insensitive' } } },
+                {
+                  user: {
+                    email: { contains: params.search, mode: 'insensitive' },
+                  },
+                },
               ],
             },
           },
@@ -233,8 +263,10 @@ export class CommissionsService {
     for (const r of rows) {
       if (r.order.store_id) storeIds.add(r.order.store_id);
       for (const it of r.order.items) {
-        if (it.fulfiller_type === FulfillerType.PROVIDER) providerIds.add(it.fulfiller_id);
-        else if (it.fulfiller_type === FulfillerType.CREATOR) creatorFulfillerIds.add(it.fulfiller_id);
+        if (it.fulfiller_type === FulfillerType.PROVIDER)
+          providerIds.add(it.fulfiller_id);
+        else if (it.fulfiller_type === FulfillerType.CREATOR)
+          creatorFulfillerIds.add(it.fulfiller_id);
       }
     }
 
@@ -244,7 +276,7 @@ export class CommissionsService {
             where: { id: { in: [...providerIds] } },
             select: { id: true, company_name: true },
           })
-        : Promise.resolve([]),
+        : Promise.resolve<{ id: string; company_name: string }[]>([]),
       storeIds.size > 0
         ? this.prisma.store.findMany({
             where: { id: { in: [...storeIds] } },
@@ -255,13 +287,20 @@ export class CommissionsService {
               creator: { select: { id: true, display_name: true } },
             },
           })
-        : Promise.resolve([]),
+        : Promise.resolve<
+            {
+              id: string;
+              name: string;
+              slug: string;
+              creator: { id: string; display_name: string };
+            }[]
+          >([]),
       creatorFulfillerIds.size > 0
         ? this.prisma.creator.findMany({
             where: { id: { in: [...creatorFulfillerIds] } },
             select: { id: true, display_name: true },
           })
-        : Promise.resolve([]),
+        : Promise.resolve<{ id: string; display_name: string }[]>([]),
     ]);
 
     const providerMap = new Map<string, string>(
@@ -275,7 +314,9 @@ export class CommissionsService {
     );
 
     const data = rows.map((r) => {
-      const storeInfo = r.order.store_id ? storeMap.get(r.order.store_id) : null;
+      const storeInfo = r.order.store_id
+        ? storeMap.get(r.order.store_id)
+        : null;
       const providerNames = new Set<string>();
       for (const it of r.order.items) {
         if (it.fulfiller_type === FulfillerType.PROVIDER) {

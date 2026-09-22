@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
@@ -15,10 +16,16 @@ export class NotificationsService {
         orderBy: { created_at: 'desc' },
       }),
       this.prisma.notification.count({ where: { user_id: userId } }),
-      this.prisma.notification.count({ where: { user_id: userId, is_read: false } }),
+      this.prisma.notification.count({
+        where: { user_id: userId, is_read: false },
+      }),
     ]);
 
-    return { data, unread_count: unread, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+    return {
+      data,
+      unread_count: unread,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
   }
 
   // Scoped to the caller and returns only a status: the notification body can
@@ -46,7 +53,13 @@ export class NotificationsService {
     return { message: 'All notifications marked as read' };
   }
 
-  async create(userId: string, type: string, title: string, body: string, data?: any) {
+  async create(
+    userId: string,
+    type: string,
+    title: string,
+    body: string,
+    data?: Prisma.InputJsonValue,
+  ) {
     return this.prisma.notification.create({
       data: { user_id: userId, type, title, body, data },
     });

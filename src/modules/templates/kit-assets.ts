@@ -46,7 +46,10 @@ function placeholderSvg(key: string): string {
  * import never leaves broken images. Filesystem work — call before the DB
  * transaction.
  */
-export function materialiseKitAssets(kit: Kit, storeId: string): Record<string, string> {
+export function materialiseKitAssets(
+  kit: Kit,
+  storeId: string,
+): Record<string, string> {
   const destDir = path.join(UPLOAD_ROOT, 'template-imports', storeId);
   fs.mkdirSync(destDir, { recursive: true });
   const srcDir = path.join(ASSETS_ROOT, kit.id);
@@ -57,9 +60,12 @@ export function materialiseKitAssets(kit: Kit, storeId: string): Record<string, 
       const src = path.resolve(srcDir, asset.file);
       // Guard against path escaping the kit's asset dir (defensive — kit data
       // is trusted, but keep it tight).
-      const useBundled = src.startsWith(path.resolve(srcDir) + path.sep) && fs.existsSync(src);
+      const useBundled =
+        src.startsWith(path.resolve(srcDir) + path.sep) && fs.existsSync(src);
 
-      const ext = useBundled ? path.extname(asset.file).toLowerCase() || '.svg' : '.svg';
+      const ext = useBundled
+        ? path.extname(asset.file).toLowerCase() || '.svg'
+        : '.svg';
       const filename = `${randomUUID()}${ext}`;
       const destPath = path.join(destDir, filename);
 

@@ -159,7 +159,14 @@ export class ProductsController {
     @Param('id') id: string,
     @CurrentUser('id') userId: string,
     @CurrentUser('role') userRole: UserRole,
-    @Body() body: { url: string; alt_text?: string; sort_order?: number; is_featured?: boolean; variant_id?: string },
+    @Body()
+    body: {
+      url: string;
+      alt_text?: string;
+      sort_order?: number;
+      is_featured?: boolean;
+      variant_id?: string;
+    },
   ) {
     return this.productsService.addImage(
       id,

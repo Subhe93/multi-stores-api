@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UpdateNotificationTemplateDto } from './dto/notification-template.dto';
 
@@ -6,7 +10,10 @@ type Localized = Record<string, string>;
 
 /** `{{var}}` placeholder substitution. Missing vars resolve to ''. */
 function substitute(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key) => vars[key] ?? '');
+  return template.replace(
+    /\{\{\s*(\w+)\s*\}\}/g,
+    (_match: string, key: string) => vars[key] ?? '',
+  );
 }
 
 /**
@@ -90,87 +97,88 @@ export class NotificationTemplatesService {
    * receives at send time. The dashboard reads this so adding a new event
    * doesn't require shipping a UI change.
    */
-  static readonly EVENT_CATALOG: Array<{ event: string; variables: string[] }> = [
-    {
-      event: 'order_confirmation',
-      variables: [
-        'order_number',
-        'total',
-        'shipping_line',
-        'payment_line',
-        'order_button',
-        'order_url_text',
-        'items_html',
-        'items_text',
-      ],
-    },
-    {
-      event: 'order_shipped',
-      variables: [
-        'order_number',
-        'tracking_number',
-        'tracking_url',
-        'order_button',
-        'order_url_text',
-        'items_html',
-        'items_text',
-      ],
-    },
-    {
-      event: 'order_delivered',
-      variables: [
-        'order_number',
-        'order_button',
-        'order_url_text',
-        'items_html',
-        'items_text',
-      ],
-    },
-    {
-      event: 'order_cancelled',
-      variables: [
-        'order_number',
-        'reason',
-        'order_button',
-        'order_url_text',
-        'items_html',
-        'items_text',
-      ],
-    },
-    {
-      event: 'order_refunded',
-      variables: [
-        'order_number',
-        'refund_amount',
-        'order_button',
-        'order_url_text',
-        'items_html',
-        'items_text',
-      ],
-    },
-    {
-      event: 'new_order_owner',
-      variables: [
-        'order_number',
-        'total',
-        'shipping_line',
-        'store_name',
-        'customer_name',
-        'order_button',
-        'order_url_text',
-        'items_html',
-        'items_text',
-      ],
-    },
-    {
-      event: 'welcome',
-      variables: ['name', 'login_url'],
-    },
-    {
-      event: 'password_reset',
-      variables: ['reset_url'],
-    },
-  ];
+  static readonly EVENT_CATALOG: Array<{ event: string; variables: string[] }> =
+    [
+      {
+        event: 'order_confirmation',
+        variables: [
+          'order_number',
+          'total',
+          'shipping_line',
+          'payment_line',
+          'order_button',
+          'order_url_text',
+          'items_html',
+          'items_text',
+        ],
+      },
+      {
+        event: 'order_shipped',
+        variables: [
+          'order_number',
+          'tracking_number',
+          'tracking_url',
+          'order_button',
+          'order_url_text',
+          'items_html',
+          'items_text',
+        ],
+      },
+      {
+        event: 'order_delivered',
+        variables: [
+          'order_number',
+          'order_button',
+          'order_url_text',
+          'items_html',
+          'items_text',
+        ],
+      },
+      {
+        event: 'order_cancelled',
+        variables: [
+          'order_number',
+          'reason',
+          'order_button',
+          'order_url_text',
+          'items_html',
+          'items_text',
+        ],
+      },
+      {
+        event: 'order_refunded',
+        variables: [
+          'order_number',
+          'refund_amount',
+          'order_button',
+          'order_url_text',
+          'items_html',
+          'items_text',
+        ],
+      },
+      {
+        event: 'new_order_owner',
+        variables: [
+          'order_number',
+          'total',
+          'shipping_line',
+          'store_name',
+          'customer_name',
+          'order_button',
+          'order_url_text',
+          'items_html',
+          'items_text',
+        ],
+      },
+      {
+        event: 'welcome',
+        variables: ['name', 'login_url'],
+      },
+      {
+        event: 'password_reset',
+        variables: ['reset_url'],
+      },
+    ];
 
   events() {
     return NotificationTemplatesService.EVENT_CATALOG;
@@ -211,7 +219,9 @@ export class NotificationTemplatesService {
       where: { event },
     });
     if (t) return t;
-    const known = NotificationTemplatesService.EVENT_CATALOG.some((e) => e.event === event);
+    const known = NotificationTemplatesService.EVENT_CATALOG.some(
+      (e) => e.event === event,
+    );
     if (!known) throw new NotFoundException('Template not found');
     return {
       id: '',
@@ -230,7 +240,9 @@ export class NotificationTemplatesService {
    * merge per-locale fields into the stored JSON.
    */
   async update(event: string, dto: UpdateNotificationTemplateDto) {
-    const known = NotificationTemplatesService.EVENT_CATALOG.some((e) => e.event === event);
+    const known = NotificationTemplatesService.EVENT_CATALOG.some(
+      (e) => e.event === event,
+    );
     if (!known) throw new NotFoundException('Unknown event');
 
     const existing = await this.prisma.notificationTemplate.findUnique({
@@ -249,7 +261,8 @@ export class NotificationTemplatesService {
       ...((existing?.body_text as Localized) || {}),
       ...(dto.body_text || {}),
     };
-    const enabled = dto.enabled !== undefined ? dto.enabled : existing?.enabled ?? true;
+    const enabled =
+      dto.enabled !== undefined ? dto.enabled : (existing?.enabled ?? true);
 
     return this.prisma.notificationTemplate.upsert({
       where: { event },
@@ -310,7 +323,9 @@ export class NotificationTemplatesService {
   async listForStore(userId: string) {
     const store = await this.requireIndependentStore(userId);
     const [own, platform] = await Promise.all([
-      this.prisma.storeNotificationTemplate.findMany({ where: { store_id: store.id } }),
+      this.prisma.storeNotificationTemplate.findMany({
+        where: { store_id: store.id },
+      }),
       this.prisma.notificationTemplate.findMany(),
     ]);
     const byEvent = new Map(own.map((r) => [r.event, r]));
@@ -335,7 +350,9 @@ export class NotificationTemplatesService {
    */
   async getForStore(userId: string, event: string) {
     const store = await this.requireIndependentStore(userId);
-    const known = NotificationTemplatesService.EVENT_CATALOG.some((e) => e.event === event);
+    const known = NotificationTemplatesService.EVENT_CATALOG.some(
+      (e) => e.event === event,
+    );
     if (!known) throw new NotFoundException('Unknown event');
 
     const own = await this.prisma.storeNotificationTemplate.findUnique({
@@ -364,7 +381,9 @@ export class NotificationTemplatesService {
     dto: UpdateNotificationTemplateDto,
   ) {
     const store = await this.requireIndependentStore(userId);
-    const known = NotificationTemplatesService.EVENT_CATALOG.some((e) => e.event === event);
+    const known = NotificationTemplatesService.EVENT_CATALOG.some(
+      (e) => e.event === event,
+    );
     if (!known) throw new NotFoundException('Unknown event');
 
     const existing = await this.prisma.storeNotificationTemplate.findUnique({
@@ -384,7 +403,8 @@ export class NotificationTemplatesService {
       ...((existing?.body_text as Localized) || {}),
       ...(dto.body_text || {}),
     };
-    const enabled = dto.enabled !== undefined ? dto.enabled : existing?.enabled ?? true;
+    const enabled =
+      dto.enabled !== undefined ? dto.enabled : (existing?.enabled ?? true);
 
     return this.prisma.storeNotificationTemplate.upsert({
       where: { store_id_event: { store_id: store.id, event } },

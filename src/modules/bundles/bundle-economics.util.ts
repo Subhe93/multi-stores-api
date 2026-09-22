@@ -70,6 +70,7 @@ export function formatViolationsMessage(
     const name = v.productTitle || v.productId;
     return `"${name}": offer #${v.offerIndex + 1} would sell at ${v.effectiveUnitPrice.toFixed(2)} but provider cost is ${v.providerBase.toFixed(2)} (shortfall ${v.shortfall.toFixed(2)})`;
   });
-  const more = violations.length > 3 ? ` and ${violations.length - 3} more` : '';
+  const more =
+    violations.length > 3 ? ` and ${violations.length - 3} more` : '';
   return `Bundle would sell below provider cost: ${lines.join('; ')}${more}`;
 }

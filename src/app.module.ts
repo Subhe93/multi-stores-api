@@ -5,6 +5,7 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule } from './prisma/prisma.module';
 import { CryptoModule } from './common/crypto/crypto.module';
 import { RevalidationModule } from './common/revalidation/revalidation.module';
+import { CorsModule } from './common/cors/cors.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ProvidersModule } from './modules/providers/providers.module';
 import { CreatorsModule } from './modules/creators/creators.module';
@@ -51,6 +52,7 @@ import { NotificationTemplatesModule } from './modules/notification-templates/no
     PrismaModule,
     CryptoModule,
     RevalidationModule,
+    CorsModule,
     AuthModule,
     UsersModule,
     ProvidersModule,

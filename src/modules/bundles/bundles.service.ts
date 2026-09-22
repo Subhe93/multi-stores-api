@@ -50,7 +50,11 @@ export class BundlesService {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
     });
-    if (!creator) throw new NotFoundException({ code: 'BUNDLE_CREATOR_PROFILE_NOT_FOUND', message: 'Creator profile not found' });
+    if (!creator)
+      throw new NotFoundException({
+        code: 'BUNDLE_CREATOR_PROFILE_NOT_FOUND',
+        message: 'Creator profile not found',
+      });
     return creator.id;
   }
 
@@ -188,12 +192,7 @@ export class BundlesService {
     });
   }
 
-  async findByOwner(
-    userId: string,
-    page = 1,
-    limit = 20,
-    q?: string,
-  ) {
+  async findByOwner(userId: string, page = 1, limit = 20, q?: string) {
     const creatorId = await this.resolveCreatorId(userId);
     const skip = (page - 1) * limit;
 
@@ -231,9 +230,16 @@ export class BundlesService {
       where: { id },
       include: bundleInclude,
     });
-    if (!bundle) throw new NotFoundException({ code: 'BUNDLE_NOT_FOUND', message: 'Bundle not found' });
+    if (!bundle)
+      throw new NotFoundException({
+        code: 'BUNDLE_NOT_FOUND',
+        message: 'Bundle not found',
+      });
     if (bundle.creator_id !== creatorId) {
-      throw new ForbiddenException({ code: 'BUNDLE_ACCESS_NOT_OWNED', message: 'You can only access your own bundles' });
+      throw new ForbiddenException({
+        code: 'BUNDLE_ACCESS_NOT_OWNED',
+        message: 'You can only access your own bundles',
+      });
     }
     return bundle;
   }
@@ -245,14 +251,23 @@ export class BundlesService {
       where: { id },
       select: {
         creator_id: true,
-        offers: { select: { quantity: true, discount_type: true, discount_value: true } },
+        offers: {
+          select: { quantity: true, discount_type: true, discount_value: true },
+        },
         products: { select: { product_id: true } },
         custom_products: { select: { custom_product_id: true } },
       },
     });
-    if (!existing) throw new NotFoundException({ code: 'BUNDLE_NOT_FOUND', message: 'Bundle not found' });
+    if (!existing)
+      throw new NotFoundException({
+        code: 'BUNDLE_NOT_FOUND',
+        message: 'Bundle not found',
+      });
     if (existing.creator_id !== creatorId) {
-      throw new ForbiddenException({ code: 'BUNDLE_EDIT_NOT_OWNED', message: 'You can only edit your own bundles' });
+      throw new ForbiddenException({
+        code: 'BUNDLE_EDIT_NOT_OWNED',
+        message: 'You can only edit your own bundles',
+      });
     }
 
     // Economic check uses incoming changes where provided, otherwise falls back
@@ -270,9 +285,11 @@ export class BundlesService {
           discount_type: o.discount_type,
           discount_value: o.discount_value as unknown as number,
         }));
-    const effectiveProductIds = dto.product_ids ?? existing.products.map((p) => p.product_id);
+    const effectiveProductIds =
+      dto.product_ids ?? existing.products.map((p) => p.product_id);
     const effectiveCustomIds =
-      dto.custom_product_ids ?? existing.custom_products.map((cp) => cp.custom_product_id);
+      dto.custom_product_ids ??
+      existing.custom_products.map((cp) => cp.custom_product_id);
 
     await this.assertBundleEconomicallyValid(
       effectiveOffers,
@@ -293,7 +310,9 @@ export class BundlesService {
 
     if (dto.offers) {
       // Cascade deletes child offer translations.
-      ops.push(this.prisma.bundleOffer.deleteMany({ where: { bundle_id: id } }));
+      ops.push(
+        this.prisma.bundleOffer.deleteMany({ where: { bundle_id: id } }),
+      );
       for (const o of dto.offers) {
         ops.push(
           this.prisma.bundleOffer.create({
@@ -376,9 +395,16 @@ export class BundlesService {
       where: { id },
       select: { creator_id: true },
     });
-    if (!existing) throw new NotFoundException({ code: 'BUNDLE_NOT_FOUND', message: 'Bundle not found' });
+    if (!existing)
+      throw new NotFoundException({
+        code: 'BUNDLE_NOT_FOUND',
+        message: 'Bundle not found',
+      });
     if (existing.creator_id !== creatorId) {
-      throw new ForbiddenException({ code: 'BUNDLE_DELETE_NOT_OWNED', message: 'You can only delete your own bundles' });
+      throw new ForbiddenException({
+        code: 'BUNDLE_DELETE_NOT_OWNED',
+        message: 'You can only delete your own bundles',
+      });
     }
 
     // Preserve historical attribution: if any order item references one of this

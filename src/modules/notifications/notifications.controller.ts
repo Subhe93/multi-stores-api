@@ -14,7 +14,11 @@ export class NotificationsController {
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
-    return this.notificationsService.findByUser(userId, page ? +page : undefined, limit ? +limit : undefined);
+    return this.notificationsService.findByUser(
+      userId,
+      page ? +page : undefined,
+      limit ? +limit : undefined,
+    );
   }
 
   @Put(':id/read')

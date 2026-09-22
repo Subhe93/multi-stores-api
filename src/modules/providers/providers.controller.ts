@@ -10,7 +10,10 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ProvidersService } from './providers.service';
-import { CreateProviderDto, UpdateProviderDto } from './dto/create-provider.dto';
+import {
+  CreateProviderDto,
+  UpdateProviderDto,
+} from './dto/create-provider.dto';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '@prisma/client';

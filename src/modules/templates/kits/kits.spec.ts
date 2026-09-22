@@ -5,23 +5,61 @@ import { substituteAssets } from './asset-substitution';
 // (multi-stores-web/src/themes/minimal/theme.ts). Kits may only reference
 // these. Kept here as the API's contract with the theme; update both together.
 const VALID_SECTION_KEYS = new Set([
-  'hero-banner', 'hero-slider', 'aurora-hero', 'bento-grid', 'animated-features',
-  'marquee-text', 'rich-text', 'image-gallery', 'gallery-slider',
-  'image-with-text', 'faq-list', 'call-to-action', 'trust-badges', 'testimonials',
-  'logo-list', 'logo-marquee', 'sticky-cta-bar', 'stats-bar', 'feature-grid', 'steps',
-  'comparison-table', 'countdown', 'video', 'spacer', 'embed-code', 'map',
-  'layout-columns', 'newsletter-signup', 'social-icons', 'featured-products',
-  'product-slider', 'collection-products', 'product-page', 'product-gallery',
-  'product-details', 'product-tabs', 'add-to-cart', 'header-bar', 'footer-columns',
-  'copyright-bar', 'announcement-bar', 'mega-menu', 'mobile-bottom-nav',
+  'hero-banner',
+  'hero-slider',
+  'aurora-hero',
+  'bento-grid',
+  'animated-features',
+  'marquee-text',
+  'rich-text',
+  'image-gallery',
+  'gallery-slider',
+  'image-with-text',
+  'faq-list',
+  'call-to-action',
+  'trust-badges',
+  'testimonials',
+  'logo-list',
+  'logo-marquee',
+  'sticky-cta-bar',
+  'stats-bar',
+  'feature-grid',
+  'steps',
+  'comparison-table',
+  'countdown',
+  'video',
+  'spacer',
+  'embed-code',
+  'map',
+  'layout-columns',
+  'newsletter-signup',
+  'social-icons',
+  'featured-products',
+  'product-slider',
+  'collection-products',
+  'product-page',
+  'product-gallery',
+  'product-details',
+  'product-tabs',
+  'add-to-cart',
+  'header-bar',
+  'footer-columns',
+  'copyright-bar',
+  'announcement-bar',
+  'mega-menu',
+  'mobile-bottom-nav',
 ]);
 
 const ASSET_PREFIX = '@asset/';
 
 // Collect every "@asset/<key>" reference found anywhere in a value.
-function collectAssetRefs(value: unknown, out: Set<string> = new Set()): Set<string> {
+function collectAssetRefs(
+  value: unknown,
+  out: Set<string> = new Set(),
+): Set<string> {
   if (typeof value === 'string') {
-    if (value.startsWith(ASSET_PREFIX)) out.add(value.slice(ASSET_PREFIX.length));
+    if (value.startsWith(ASSET_PREFIX))
+      out.add(value.slice(ASSET_PREFIX.length));
   } else if (Array.isArray(value)) {
     value.forEach((v) => collectAssetRefs(v, out));
   } else if (value && typeof value === 'object') {

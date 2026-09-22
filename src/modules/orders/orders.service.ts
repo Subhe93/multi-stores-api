@@ -62,6 +62,49 @@ import {
 // providers that capture on shipment (Kustom); see registerShippedHook.
 type ShippedHook = (orderId: string) => Promise<void>;
 
+/**
+ * The relations resolveOrderItemImage() reads from an order line. Every
+ * read path includes a superset of these (all fields optional so partial
+ * includes still type-check).
+ */
+interface OrderItemImageSource {
+  custom_product?: {
+    mockup_images?: { url: string }[] | null;
+    product?: {
+      variant_option_config?: unknown;
+      images?: { url: string }[] | null;
+    } | null;
+  } | null;
+  variant?: {
+    product?: {
+      variant_option_config?: unknown;
+      images?: { url: string }[] | null;
+    } | null;
+    options?: unknown;
+    images?: { url: string }[] | null;
+  } | null;
+  product?: {
+    variant_option_config?: unknown;
+    images?: { url: string }[] | null;
+  } | null;
+}
+
+/** A custom field value a customer submitted for one order line. */
+interface PendingFieldValue {
+  custom_field_id: string;
+  value?: string;
+  file_url?: string;
+}
+
+/**
+ * An order line as create() accumulates it before order.create():
+ * the Prisma row plus the field values, which are split off (and deleted
+ * from the object) right before the insert.
+ */
+type PendingOrderItem = Prisma.OrderItemUncheckedCreateWithoutOrderInput & {
+  _custom_field_values?: PendingFieldValue[];
+};
+
 /** The store columns order pricing depends on. */
 interface OrderStoreContext extends TaxStoreFields {
   id: string;
@@ -340,7 +383,7 @@ export class OrdersService {
    * image already behaves — changing a colour photo later also changes it on
    * past orders.
    */
-  private resolveOrderItemImage(item: any): string | null {
+  private resolveOrderItemImage(item: OrderItemImageSource): string | null {
     const mockup = item?.custom_product?.mockup_images?.[0]?.url;
     if (mockup) return mockup;
 
@@ -379,7 +422,7 @@ export class OrdersService {
       ...rest,
       items: items.map((it) => ({
         ...(it as object),
-        image_url: this.resolveOrderItemImage(it),
+        image_url: this.resolveOrderItemImage(it as OrderItemImageSource),
       })),
     } as T;
   }
@@ -652,7 +695,7 @@ export class OrdersService {
       const pricing = computeBundlePricing(unitPrice, {
         quantity: offer.quantity,
         discount_type: offer.discount_type,
-        discount_value: offer.discount_value as any,
+        discount_value: offer.discount_value,
       });
       // Quantity must be a positive multiple of the bundle's cart quantity
       if (
@@ -1122,7 +1165,7 @@ export class OrdersService {
     let subtotal = 0;
     let providerBaseTotal = 0; // what providers are owed (their base prices)
     let creatorMarginTotal = 0; // what creators are owed (their markup or creator-only revenue)
-    const orderItems: any[] = [];
+    const orderItems: PendingOrderItem[] = [];
 
     // Collected during the loop and decremented atomically before order.create.
     // Only items whose product/variant tracks inventory go in here — others are
@@ -1441,7 +1484,9 @@ export class OrdersService {
     }
 
     // Create order
-    let order;
+    let order: Prisma.OrderGetPayload<{
+      include: { items: true; timeline: true; address: true };
+    }>;
     try {
       order = await this.prisma.order.create({
         data: {
@@ -1501,8 +1546,8 @@ export class OrdersService {
       const fieldValues = itemFieldValues[i];
       if (fieldValues?.length) {
         await this.prisma.orderCustomFieldValue.createMany({
-          data: fieldValues.map((fv: any) => ({
-            order_item_id: order.items[i]!.id,
+          data: fieldValues.map((fv) => ({
+            order_item_id: order.items[i].id,
             custom_field_id: fv.custom_field_id,
             value: fv.value,
             file_url: fv.file_url,

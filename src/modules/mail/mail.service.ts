@@ -64,12 +64,30 @@ function withDisplayName(from: string, name: string): string {
  * its own SMTP stays fully white-label.
  */
 const FOOTER_PHRASES: Record<string, { sentTo: string; powered: string }> = {
-  en: { sentTo: 'This email was sent to {email} on behalf of {store}.', powered: 'Delivered by {platform}' },
-  ar: { sentTo: 'أُرسل هذا البريد إلى {email} بالنيابة عن متجر {store}.', powered: 'يُرسل عبر منصة {platform}' },
-  tr: { sentTo: 'Bu e-posta {store} adına {email} adresine gönderildi.', powered: '{platform} tarafından iletildi' },
-  de: { sentTo: 'Diese E-Mail wurde im Auftrag von {store} an {email} gesendet.', powered: 'Zugestellt über {platform}' },
-  fr: { sentTo: 'Cet e-mail a été envoyé à {email} de la part de {store}.', powered: 'Distribué par {platform}' },
-  sv: { sentTo: 'Det här mejlet skickades till {email} på uppdrag av {store}.', powered: 'Levereras av {platform}' },
+  en: {
+    sentTo: 'This email was sent to {email} on behalf of {store}.',
+    powered: 'Delivered by {platform}',
+  },
+  ar: {
+    sentTo: 'أُرسل هذا البريد إلى {email} بالنيابة عن متجر {store}.',
+    powered: 'يُرسل عبر منصة {platform}',
+  },
+  tr: {
+    sentTo: 'Bu e-posta {store} adına {email} adresine gönderildi.',
+    powered: '{platform} tarafından iletildi',
+  },
+  de: {
+    sentTo: 'Diese E-Mail wurde im Auftrag von {store} an {email} gesendet.',
+    powered: 'Zugestellt über {platform}',
+  },
+  fr: {
+    sentTo: 'Cet e-mail a été envoyé à {email} de la part de {store}.',
+    powered: 'Distribué par {platform}',
+  },
+  sv: {
+    sentTo: 'Det här mejlet skickades till {email} på uppdrag av {store}.',
+    powered: 'Levereras av {platform}',
+  },
 };
 
 function escapeHtml(v: string): string {
@@ -89,7 +107,7 @@ function appendPlatformFooter(
   footer: { storeName?: string; customerEmail?: string; locale?: string },
 ): string {
   const lang = (footer.locale || 'en').slice(0, 2).toLowerCase();
-  const phrases = FOOTER_PHRASES[lang] || FOOTER_PHRASES.en!;
+  const phrases = FOOTER_PHRASES[lang] || FOOTER_PHRASES.en;
   const lines: string[] = [];
   if (footer.customerEmail && footer.storeName) {
     lines.push(
@@ -100,7 +118,13 @@ function appendPlatformFooter(
       ),
     );
   }
-  lines.push(sub(phrases.powered, '{platform}', `<strong>${escapeHtml(platformName)}</strong>`));
+  lines.push(
+    sub(
+      phrases.powered,
+      '{platform}',
+      `<strong>${escapeHtml(platformName)}</strong>`,
+    ),
+  );
   const block =
     `<div dir="${lang === 'ar' ? 'rtl' : 'ltr'}" style="max-width:560px;margin:16px auto 0;padding:12px 16px 20px;border-top:1px solid #e4e4e7;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.7;color:#a1a1aa;text-align:center;">` +
     lines.map((l) => `<p style="margin:2px 0;">${l}</p>`).join('') +
@@ -141,7 +165,9 @@ export class MailService {
    * store switched back to marketplace immediately reverts to the platform
    * sender without anyone having to clear its settings.
    */
-  private async resolveStoreConfig(storeId: string): Promise<SmtpConfig | null> {
+  private async resolveStoreConfig(
+    storeId: string,
+  ): Promise<SmtpConfig | null> {
     const store = await this.prisma.store.findUnique({
       where: { id: storeId },
       select: { store_type: true, name: true, mail_settings: true },
@@ -224,7 +250,13 @@ export class MailService {
    * transport on every message.
    */
   private transporterFor(cfg: SmtpConfig): nodemailer.Transporter {
-    const signature = JSON.stringify([cfg.host, cfg.port, cfg.secure, cfg.user, cfg.pass]);
+    const signature = JSON.stringify([
+      cfg.host,
+      cfg.port,
+      cfg.secure,
+      cfg.user,
+      cfg.pass,
+    ]);
     const cached = this.transporters.get(signature);
     if (cached) return cached;
     const transporter = nodemailer.createTransport({
@@ -273,9 +305,15 @@ export class MailService {
      * when the message actually goes out through the platform sender — a store
      * sending under its own SMTP stays fully white-label.
      */
-    brandFooter?: { storeName?: string; customerEmail?: string; locale?: string };
+    brandFooter?: {
+      storeName?: string;
+      customerEmail?: string;
+      locale?: string;
+    };
   }): Promise<{ sent: boolean }> {
-    const storeCfg = opts.storeId ? await this.resolveStoreConfig(opts.storeId) : null;
+    const storeCfg = opts.storeId
+      ? await this.resolveStoreConfig(opts.storeId)
+      : null;
 
     if (storeCfg) {
       const ok = await this.trySend(storeCfg, opts);
@@ -297,7 +335,11 @@ export class MailService {
     }
     const html =
       opts.brandFooter && platformCfg.platformName
-        ? appendPlatformFooter(opts.html, platformCfg.platformName, opts.brandFooter)
+        ? appendPlatformFooter(
+            opts.html,
+            platformCfg.platformName,
+            opts.brandFooter,
+          )
         : opts.html;
     return { sent: await this.trySend(platformCfg, { ...opts, html }) };
   }
@@ -360,115 +402,217 @@ export class MailService {
     const paymentLine = data.paid ? phrases.paid : phrases.cod;
     const cta = this.orderCta(data.orderUrl, phrases.viewOrder);
 
-    const rendered = await this.templates.render('order_confirmation', locale, {
-      store_name: data.storeName ?? '',
-      order_number: data.orderNumber,
-      total: data.total,
-      shipping_line: data.shippingLine ?? '',
-      tax_line: data.taxLine ?? '',
-      payment_line: paymentLine,
-      order_button: cta.html,
-      order_url_text: cta.text,
-      items_html: data.itemsHtml ?? '',
-      items_text: data.itemsText ?? '',
-    }, data.storeId);
-    const brandFooter = { storeName: data.storeName, customerEmail: to, locale };
-    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
-    return this.send({ to, ...orderConfirmationEmail(data), storeId: data.storeId, brandFooter });
+    const rendered = await this.templates.render(
+      'order_confirmation',
+      locale,
+      {
+        store_name: data.storeName ?? '',
+        order_number: data.orderNumber,
+        total: data.total,
+        shipping_line: data.shippingLine ?? '',
+        tax_line: data.taxLine ?? '',
+        payment_line: paymentLine,
+        order_button: cta.html,
+        order_url_text: cta.text,
+        items_html: data.itemsHtml ?? '',
+        items_text: data.itemsText ?? '',
+      },
+      data.storeId,
+    );
+    const brandFooter = {
+      storeName: data.storeName,
+      customerEmail: to,
+      locale,
+    };
+    if (rendered)
+      return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+    return this.send({
+      to,
+      ...orderConfirmationEmail(data),
+      storeId: data.storeId,
+      brandFooter,
+    });
   }
 
   async sendOrderShipped(to: string, data: OrderShippedData, locale?: string) {
     const phrases = emailPhrases(locale);
     const cta = this.orderCta(data.orderUrl, phrases.viewOrder);
 
-    const rendered = await this.templates.render('order_shipped', locale, {
-      store_name: data.storeName ?? '',
-      order_number: data.orderNumber,
-      tracking_number: data.trackingNumber ?? '',
-      tracking_url: data.trackingUrl ?? '',
-      order_button: cta.html,
-      order_url_text: cta.text,
-      items_html: data.itemsHtml ?? '',
-      items_text: data.itemsText ?? '',
-    }, data.storeId);
-    const brandFooter = { storeName: data.storeName, customerEmail: to, locale };
-    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
-    return this.send({ to, ...orderShippedEmail(data), storeId: data.storeId, brandFooter });
+    const rendered = await this.templates.render(
+      'order_shipped',
+      locale,
+      {
+        store_name: data.storeName ?? '',
+        order_number: data.orderNumber,
+        tracking_number: data.trackingNumber ?? '',
+        tracking_url: data.trackingUrl ?? '',
+        order_button: cta.html,
+        order_url_text: cta.text,
+        items_html: data.itemsHtml ?? '',
+        items_text: data.itemsText ?? '',
+      },
+      data.storeId,
+    );
+    const brandFooter = {
+      storeName: data.storeName,
+      customerEmail: to,
+      locale,
+    };
+    if (rendered)
+      return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+    return this.send({
+      to,
+      ...orderShippedEmail(data),
+      storeId: data.storeId,
+      brandFooter,
+    });
   }
 
-  async sendOrderDelivered(to: string, data: OrderDeliveredData, locale?: string) {
+  async sendOrderDelivered(
+    to: string,
+    data: OrderDeliveredData,
+    locale?: string,
+  ) {
     const phrases = emailPhrases(locale);
     const cta = this.orderCta(data.orderUrl, phrases.viewOrder);
 
-    const rendered = await this.templates.render('order_delivered', locale, {
-      store_name: data.storeName ?? '',
-      order_number: data.orderNumber,
-      order_button: cta.html,
-      order_url_text: cta.text,
-      items_html: data.itemsHtml ?? '',
-      items_text: data.itemsText ?? '',
-    }, data.storeId);
-    const brandFooter = { storeName: data.storeName, customerEmail: to, locale };
-    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
-    return this.send({ to, ...orderDeliveredEmail(data), storeId: data.storeId, brandFooter });
+    const rendered = await this.templates.render(
+      'order_delivered',
+      locale,
+      {
+        store_name: data.storeName ?? '',
+        order_number: data.orderNumber,
+        order_button: cta.html,
+        order_url_text: cta.text,
+        items_html: data.itemsHtml ?? '',
+        items_text: data.itemsText ?? '',
+      },
+      data.storeId,
+    );
+    const brandFooter = {
+      storeName: data.storeName,
+      customerEmail: to,
+      locale,
+    };
+    if (rendered)
+      return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+    return this.send({
+      to,
+      ...orderDeliveredEmail(data),
+      storeId: data.storeId,
+      brandFooter,
+    });
   }
 
-  async sendOrderCancelled(to: string, data: OrderCancelledData, locale?: string) {
+  async sendOrderCancelled(
+    to: string,
+    data: OrderCancelledData,
+    locale?: string,
+  ) {
     const phrases = emailPhrases(locale);
     const cta = this.orderCta(data.orderUrl, phrases.viewOrder);
 
-    const rendered = await this.templates.render('order_cancelled', locale, {
-      store_name: data.storeName ?? '',
-      order_number: data.orderNumber,
-      reason: data.reason ?? '',
-      order_button: cta.html,
-      order_url_text: cta.text,
-      items_html: data.itemsHtml ?? '',
-      items_text: data.itemsText ?? '',
-    }, data.storeId);
-    const brandFooter = { storeName: data.storeName, customerEmail: to, locale };
-    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
-    return this.send({ to, ...orderCancelledEmail(data), storeId: data.storeId, brandFooter });
+    const rendered = await this.templates.render(
+      'order_cancelled',
+      locale,
+      {
+        store_name: data.storeName ?? '',
+        order_number: data.orderNumber,
+        reason: data.reason ?? '',
+        order_button: cta.html,
+        order_url_text: cta.text,
+        items_html: data.itemsHtml ?? '',
+        items_text: data.itemsText ?? '',
+      },
+      data.storeId,
+    );
+    const brandFooter = {
+      storeName: data.storeName,
+      customerEmail: to,
+      locale,
+    };
+    if (rendered)
+      return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+    return this.send({
+      to,
+      ...orderCancelledEmail(data),
+      storeId: data.storeId,
+      brandFooter,
+    });
   }
 
-  async sendOrderRefunded(to: string, data: OrderRefundedData, locale?: string) {
+  async sendOrderRefunded(
+    to: string,
+    data: OrderRefundedData,
+    locale?: string,
+  ) {
     const phrases = emailPhrases(locale);
     const cta = this.orderCta(data.orderUrl, phrases.viewOrder);
 
-    const rendered = await this.templates.render('order_refunded', locale, {
-      store_name: data.storeName ?? '',
-      order_number: data.orderNumber,
-      refund_amount: data.refundAmount ?? '',
-      order_button: cta.html,
-      order_url_text: cta.text,
-      items_html: data.itemsHtml ?? '',
-      items_text: data.itemsText ?? '',
-    }, data.storeId);
-    const brandFooter = { storeName: data.storeName, customerEmail: to, locale };
-    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
-    return this.send({ to, ...orderRefundedEmail(data), storeId: data.storeId, brandFooter });
+    const rendered = await this.templates.render(
+      'order_refunded',
+      locale,
+      {
+        store_name: data.storeName ?? '',
+        order_number: data.orderNumber,
+        refund_amount: data.refundAmount ?? '',
+        order_button: cta.html,
+        order_url_text: cta.text,
+        items_html: data.itemsHtml ?? '',
+        items_text: data.itemsText ?? '',
+      },
+      data.storeId,
+    );
+    const brandFooter = {
+      storeName: data.storeName,
+      customerEmail: to,
+      locale,
+    };
+    if (rendered)
+      return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+    return this.send({
+      to,
+      ...orderRefundedEmail(data),
+      storeId: data.storeId,
+      brandFooter,
+    });
   }
 
-  async sendNewOrderToOwner(to: string, data: NewOrderOwnerData, locale?: string) {
+  async sendNewOrderToOwner(
+    to: string,
+    data: NewOrderOwnerData,
+    locale?: string,
+  ) {
     const cta = this.orderCta(data.orderAdminUrl, 'Open order');
 
-    const rendered = await this.templates.render('new_order_owner', locale, {
-      order_number: data.orderNumber,
-      total: data.total,
-      shipping_line: data.shippingLine ?? '',
-      tax_line: data.taxLine ?? '',
-      store_name: data.storeName ?? '',
-      customer_name: data.customerName ?? '',
-      order_button: cta.html,
-      order_url_text: cta.text,
-      items_html: data.itemsHtml ?? '',
-      items_text: data.itemsText ?? '',
-    }, data.storeId);
+    const rendered = await this.templates.render(
+      'new_order_owner',
+      locale,
+      {
+        order_number: data.orderNumber,
+        total: data.total,
+        shipping_line: data.shippingLine ?? '',
+        tax_line: data.taxLine ?? '',
+        store_name: data.storeName ?? '',
+        customer_name: data.customerName ?? '',
+        order_button: cta.html,
+        order_url_text: cta.text,
+        items_html: data.itemsHtml ?? '',
+        items_text: data.itemsText ?? '',
+      },
+      data.storeId,
+    );
     // Owner notification: platform attribution only (no "sent to" line — the
     // recipient is the store owner, not a customer).
     const brandFooter = { locale };
-    if (rendered) return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
-    return this.send({ to, ...newOrderOwnerEmail(data), storeId: data.storeId, brandFooter });
+    if (rendered)
+      return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+    return this.send({
+      to,
+      ...newOrderOwnerEmail(data),
+      storeId: data.storeId,
+      brandFooter,
+    });
   }
 
   // Signup is a platform event, not a store one — it goes out under the
@@ -522,7 +666,11 @@ export class MailService {
     const publicBase =
       this.config.get<string>('PUBLIC_API_URL') || 'http://localhost:3001';
 
-    const orderUrl = buildOrderUrl(order.storeCtx?.slug, order.id, storefrontBase);
+    const orderUrl = buildOrderUrl(
+      order.storeCtx?.slug,
+      order.id,
+      storefrontBase,
+    );
     const orderAdminUrl = `${dashboardBase.replace(/\/$/, '')}/creator/orders/${order.id}`;
 
     const { items_html, items_text } = renderOrderItems(
@@ -599,7 +747,13 @@ export class MailService {
         if (!customerEmail) return;
         await this.sendOrderDelivered(
           customerEmail,
-          { ...brand, orderNumber, orderUrl, itemsHtml: items_html, itemsText: items_text },
+          {
+            ...brand,
+            orderNumber,
+            orderUrl,
+            itemsHtml: items_html,
+            itemsText: items_text,
+          },
           locale,
         );
         return;
@@ -648,7 +802,10 @@ export class MailService {
             where: { id: order.customer.id },
             select: { first_name: true, last_name: true },
           });
-          const full = [c?.first_name, c?.last_name].filter(Boolean).join(' ').trim();
+          const full = [c?.first_name, c?.last_name]
+            .filter(Boolean)
+            .join(' ')
+            .trim();
           customerName = full || undefined;
         }
         await this.sendNewOrderToOwner(
@@ -871,7 +1028,7 @@ export class MailService {
         from: cfg.from,
         to,
         subject: 'Test email from your store',
-        html: '<p>Your store\'s email sender is working. ✅</p>',
+        html: "<p>Your store's email sender is working. ✅</p>",
         text: "Your store's email sender is working.",
       });
       await this.prisma.storeMailSettings.update({
@@ -881,7 +1038,9 @@ export class MailService {
       return { sent: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.logger.error(`Store ${store.id} test email to ${to} failed: ${message}`);
+      this.logger.error(
+        `Store ${store.id} test email to ${to} failed: ${message}`,
+      );
       throw new BadRequestException(`SMTP error: ${message}`);
     }
   }

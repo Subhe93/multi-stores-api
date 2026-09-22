@@ -12,7 +12,7 @@ import {
   ProductVariantSyncDto,
   ProductImageSyncDto,
 } from './dto/product.dto';
-import { UserRole, ProductStatus } from '@prisma/client';
+import { UserRole, ProductStatus, ProductType, Prisma } from '@prisma/client';
 import { BundlesService } from '../bundles/bundles.service';
 import {
   validateBundleEconomics,
@@ -77,7 +77,9 @@ export class ProductsService {
         },
       },
     });
-    const allViolations = [] as ReturnType<typeof validateBundleEconomics>['violations'];
+    const allViolations = [] as ReturnType<
+      typeof validateBundleEconomics
+    >['violations'];
     for (const b of bundles) {
       const offers: BundleOfferLike[] = b.offers.map((o) => ({
         quantity: o.quantity,
@@ -100,8 +102,14 @@ export class ProductsService {
     },
     variants: true,
     tags: true,
-    custom_fields: { include: { translations: true }, orderBy: { sort_order: 'asc' as const } },
-    faqs: { include: { translations: true }, orderBy: { sort_order: 'asc' as const } },
+    custom_fields: {
+      include: { translations: true },
+      orderBy: { sort_order: 'asc' as const },
+    },
+    faqs: {
+      include: { translations: true },
+      orderBy: { sort_order: 'asc' as const },
+    },
     category: { include: { translations: true } },
     shipping_profile: { include: { zones: true } },
     creator_categories: {
@@ -160,11 +168,17 @@ export class ProductsService {
       select: { id: true, creator_id: true },
     });
     if (found.length !== bundleIds.length) {
-      throw new NotFoundException({ code: 'PRODUCT_BUNDLES_NOT_FOUND', message: 'One or more bundles do not exist' });
+      throw new NotFoundException({
+        code: 'PRODUCT_BUNDLES_NOT_FOUND',
+        message: 'One or more bundles do not exist',
+      });
     }
     for (const b of found) {
       if (b.creator_id !== creatorId) {
-        throw new ForbiddenException({ code: 'PRODUCT_BUNDLES_NOT_OWNED', message: 'You can only attach your own bundles' });
+        throw new ForbiddenException({
+          code: 'PRODUCT_BUNDLES_NOT_OWNED',
+          message: 'You can only attach your own bundles',
+        });
       }
     }
   }
@@ -252,13 +266,15 @@ export class ProductsService {
       if (variants !== undefined) {
         const variantImageRows = variants.flatMap((v, i) =>
           v.image_url
-            ? [{
-                product_id: productId,
-                variant_id: variantIds[i]!,
-                url: v.image_url,
-                sort_order: 1000 + i,
-                is_featured: false,
-              }]
+            ? [
+                {
+                  product_id: productId,
+                  variant_id: variantIds[i],
+                  url: v.image_url,
+                  sort_order: 1000 + i,
+                  is_featured: false,
+                },
+              ]
             : [],
         );
         if (variantImageRows.length > 0) {
@@ -269,9 +285,18 @@ export class ProductsService {
   }
 
   async create(userId: string, userRole: UserRole, dto: CreateProductDto) {
-    const { translations, attributes, tags, bundle_ids, creator_category_ids, variants, images, ...data } = dto;
+    const {
+      translations,
+      attributes,
+      tags,
+      bundle_ids,
+      creator_category_ids,
+      variants,
+      images,
+      ...data
+    } = dto;
 
-    const productData: any = {
+    const productData: Prisma.ProductUncheckedCreateInput = {
       ...data,
       translations: { create: translations },
     };
@@ -281,13 +306,21 @@ export class ProductsService {
       const provider = await this.prisma.provider.findUnique({
         where: { user_id: userId },
       });
-      if (!provider) throw new NotFoundException({ code: 'PRODUCT_PROVIDER_PROFILE_NOT_FOUND', message: 'Provider profile not found' });
+      if (!provider)
+        throw new NotFoundException({
+          code: 'PRODUCT_PROVIDER_PROFILE_NOT_FOUND',
+          message: 'Provider profile not found',
+        });
       productData.provider_id = provider.id;
     } else if (userRole === UserRole.CREATOR) {
       const creator = await this.prisma.creator.findUnique({
         where: { user_id: userId },
       });
-      if (!creator) throw new NotFoundException({ code: 'PRODUCT_CREATOR_PROFILE_NOT_FOUND', message: 'Creator profile not found' });
+      if (!creator)
+        throw new NotFoundException({
+          code: 'PRODUCT_CREATOR_PROFILE_NOT_FOUND',
+          message: 'Creator profile not found',
+        });
       productData.creator_id = creator.id;
     }
 
@@ -339,7 +372,10 @@ export class ProductsService {
       userRole === UserRole.CREATOR &&
       productData.creator_id
     ) {
-      await this.assertBundlesOwnedByCreator(bundle_ids, productData.creator_id);
+      await this.assertBundlesOwnedByCreator(
+        bundle_ids,
+        productData.creator_id,
+      );
       const base = Number(product.base_price);
       await this.assertProductCompatibleWithBundles(
         {
@@ -379,10 +415,11 @@ export class ProductsService {
   }) {
     const { page = 1, limit = 20, ...rest } = filters;
     const skip = (page - 1) * limit;
-    const where: any = {};
+    const where: Prisma.ProductWhereInput = {};
 
     if (rest.category_id) where.category_id = rest.category_id;
-    if (rest.product_type) where.product_type = rest.product_type;
+    if (rest.product_type)
+      where.product_type = rest.product_type as ProductType;
     if (rest.status) where.status = rest.status;
     if (rest.provider_id) where.provider_id = rest.provider_id;
     if (rest.creator_id) where.creator_id = rest.creator_id;
@@ -438,7 +475,11 @@ export class ProductsService {
       const creator = await this.prisma.creator.findUnique({
         where: { user_id: userId },
       });
-      if (!creator) throw new NotFoundException({ code: 'PRODUCT_CREATOR_PROFILE_NOT_FOUND', message: 'Creator profile not found' });
+      if (!creator)
+        throw new NotFoundException({
+          code: 'PRODUCT_CREATOR_PROFILE_NOT_FOUND',
+          message: 'Creator profile not found',
+        });
 
       return this.findAll({ ...filters, creator_id: creator.id });
     }
@@ -446,7 +487,11 @@ export class ProductsService {
     const provider = await this.prisma.provider.findUnique({
       where: { user_id: userId },
     });
-    if (!provider) throw new NotFoundException({ code: 'PRODUCT_PROVIDER_PROFILE_NOT_FOUND', message: 'Provider profile not found' });
+    if (!provider)
+      throw new NotFoundException({
+        code: 'PRODUCT_PROVIDER_PROFILE_NOT_FOUND',
+        message: 'Provider profile not found',
+      });
 
     return this.findAll({ ...filters, provider_id: provider.id });
   }
@@ -457,7 +502,11 @@ export class ProductsService {
       include: this.productIncludes,
     });
 
-    if (!product) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
+    if (!product)
+      throw new NotFoundException({
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
 
     // cost_price is the provider's confidential margin input — a creator
     // browsing the catalogue to import must never see it.
@@ -503,12 +552,25 @@ export class ProductsService {
     dto: UpdateProductDto,
   ) {
     const product = await this.prisma.product.findUnique({ where: { id } });
-    if (!product) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
+    if (!product)
+      throw new NotFoundException({
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
 
     // التحقق من الملكية
     await this.checkOwnership(product, userId, userRole);
 
-    const { translations, attributes, tags, bundle_ids, creator_category_ids, variants, images, ...data } = dto;
+    const {
+      translations,
+      attributes,
+      tags,
+      bundle_ids,
+      creator_category_ids,
+      variants,
+      images,
+      ...data
+    } = dto;
 
     await this.assertTaxClassAllowed(dto.tax_class_id, product.creator_id);
 
@@ -612,7 +674,11 @@ export class ProductsService {
 
   async delete(id: string, userId: string, userRole: UserRole) {
     const product = await this.prisma.product.findUnique({ where: { id } });
-    if (!product) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
+    if (!product)
+      throw new NotFoundException({
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
 
     await this.checkOwnership(product, userId, userRole);
 
@@ -643,7 +709,11 @@ export class ProductsService {
         faqs: { include: { translations: true } },
       },
     });
-    if (!source) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
+    if (!source)
+      throw new NotFoundException({
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
 
     await this.checkOwnership(source, userId, userRole);
 
@@ -693,7 +763,10 @@ export class ProductsService {
       // Tags — flat copy.
       if (source.tags.length > 0) {
         await tx.productTag.createMany({
-          data: source.tags.map((t) => ({ product_id: created.id, tag: t.tag })),
+          data: source.tags.map((t) => ({
+            product_id: created.id,
+            tag: t.tag,
+          })),
         });
       }
 
@@ -703,7 +776,7 @@ export class ProductsService {
           data: source.attributes.map((a) => ({
             product_id: created.id,
             template_id: a.template_id,
-            value: a.value as any,
+            value: a.value as Prisma.InputJsonValue,
           })),
         });
       }
@@ -720,7 +793,7 @@ export class ProductsService {
             compare_at_price: v.compare_at_price,
             stock_quantity: v.stock_quantity,
             is_active: v.is_active,
-            options: v.options as any,
+            options: v.options as Prisma.InputJsonValue,
           },
         });
         variantIdMap[v.id] = newVariant.id;
@@ -731,7 +804,9 @@ export class ProductsService {
         await tx.productImage.createMany({
           data: source.images.map((img) => ({
             product_id: created.id,
-            variant_id: img.variant_id ? variantIdMap[img.variant_id] ?? null : null,
+            variant_id: img.variant_id
+              ? (variantIdMap[img.variant_id] ?? null)
+              : null,
             url: img.url,
             alt_text: img.alt_text,
             sort_order: img.sort_order,
@@ -749,16 +824,16 @@ export class ProductsService {
             type: cf.type,
             is_required: cf.is_required,
             placeholder: cf.placeholder,
-            options: cf.options as any,
-            validation_rules: cf.validation_rules as any,
-            linked_validation: cf.linked_validation as any,
+            options: cf.options as Prisma.InputJsonValue,
+            validation_rules: cf.validation_rules as Prisma.InputJsonValue,
+            linked_validation: cf.linked_validation as Prisma.InputJsonValue,
             sort_order: cf.sort_order,
             translations: {
               create: cf.translations.map((t) => ({
                 locale: t.locale,
                 label: t.label,
                 placeholder: t.placeholder,
-                option_labels: t.option_labels as any,
+                option_labels: t.option_labels as Prisma.InputJsonValue,
               })),
             },
           },
@@ -795,7 +870,11 @@ export class ProductsService {
     userRole: UserRole,
   ) {
     const product = await this.prisma.product.findUnique({ where: { id } });
-    if (!product) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
+    if (!product)
+      throw new NotFoundException({
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
 
     await this.checkOwnership(product, userId, userRole);
 
@@ -825,7 +904,14 @@ export class ProductsService {
       });
     }
     return this.prisma.productImage.create({
-      data: { product_id: productId, url, alt_text: altText, sort_order: sortOrder ?? 0, is_featured: isFeatured ?? false, variant_id: variantId },
+      data: {
+        product_id: productId,
+        url,
+        alt_text: altText,
+        sort_order: sortOrder ?? 0,
+        is_featured: isFeatured ?? false,
+        variant_id: variantId,
+      },
     });
   }
 
@@ -841,7 +927,11 @@ export class ProductsService {
       where: { id: imageId },
       select: { product_id: true },
     });
-    if (!image) throw new NotFoundException({ code: 'PRODUCT_IMAGE_NOT_FOUND', message: 'Image not found' });
+    if (!image)
+      throw new NotFoundException({
+        code: 'PRODUCT_IMAGE_NOT_FOUND',
+        message: 'Image not found',
+      });
     await this.assertOwnsProductById(image.product_id, userId, userRole);
     return this.prisma.productImage.delete({ where: { id: imageId } });
   }
@@ -865,7 +955,10 @@ export class ProductsService {
       imageIds
         .filter((id) => ownedIds.has(id))
         .map((id, i) =>
-          this.prisma.productImage.update({ where: { id }, data: { sort_order: i } }),
+          this.prisma.productImage.update({
+            where: { id },
+            data: { sort_order: i },
+          }),
         ),
     );
     return this.getImages(productId);
@@ -885,7 +978,11 @@ export class ProductsService {
       where: { id: productId },
       select: { provider_id: true, creator_id: true },
     });
-    if (!product) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
+    if (!product)
+      throw new NotFoundException({
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
     await this.checkOwnership(product, userId, userRole);
   }
 
@@ -914,19 +1011,27 @@ export class ProductsService {
       },
     });
 
-    if (!product) throw new NotFoundException({ code: 'PRODUCT_NOT_FOUND', message: 'Product not found' });
+    if (!product)
+      throw new NotFoundException({
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
 
     // Only published provider products can be imported into a creator store —
     // drafts, archived items, and creator-own products are not importable.
     if (!product.provider_id || product.status !== ProductStatus.PUBLISHED) {
       throw new BadRequestException({
         code: 'PRODUCT_NOT_IMPORTABLE',
-        message: 'This product cannot be imported — only published provider products are available for import.',
+        message:
+          'This product cannot be imported — only published provider products are available for import.',
       });
     }
 
     // Fallback to provider's default shipping profile if none assigned
-    if (!(product as any).shipping_profile && product.provider_id) {
+    if (
+      !(product as { shipping_profile?: unknown }).shipping_profile &&
+      product.provider_id
+    ) {
       const defaultProfile = await this.prisma.shippingProfile.findFirst({
         where: { provider_id: product.provider_id, is_default: true },
         include: { zones: true },
@@ -940,7 +1045,7 @@ export class ProductsService {
   }
 
   private async checkOwnership(
-    product: any,
+    product: { provider_id: string | null; creator_id: string | null },
     userId: string,
     userRole: UserRole,
   ) {
@@ -951,7 +1056,10 @@ export class ProductsService {
         where: { user_id: userId },
       });
       if (product.provider_id !== provider?.id) {
-        throw new ForbiddenException({ code: 'PRODUCT_FORBIDDEN', message: 'Not your product' });
+        throw new ForbiddenException({
+          code: 'PRODUCT_FORBIDDEN',
+          message: 'Not your product',
+        });
       }
     }
 
@@ -960,7 +1068,10 @@ export class ProductsService {
         where: { user_id: userId },
       });
       if (product.creator_id !== creator?.id) {
-        throw new ForbiddenException({ code: 'PRODUCT_FORBIDDEN', message: 'Not your product' });
+        throw new ForbiddenException({
+          code: 'PRODUCT_FORBIDDEN',
+          message: 'Not your product',
+        });
       }
     }
   }

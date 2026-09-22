@@ -38,7 +38,10 @@ export class StoresController {
   @Put('by-creator/:creatorId')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
-  adminUpdate(@Param('creatorId') creatorId: string, @Body() dto: AdminUpdateStoreDto) {
+  adminUpdate(
+    @Param('creatorId') creatorId: string,
+    @Body() dto: AdminUpdateStoreDto,
+  ) {
     return this.storesService.adminUpdateByCreatorId(creatorId, dto);
   }
 
@@ -106,7 +109,10 @@ export class StoresController {
   @Put('my/languages')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.CREATOR)
-  updateLanguages(@CurrentUser('id') userId: string, @Body() dto: UpdateLanguageDto) {
+  updateLanguages(
+    @CurrentUser('id') userId: string,
+    @Body() dto: UpdateLanguageDto,
+  ) {
     return this.storesService.updateLanguages(userId, dto);
   }
 

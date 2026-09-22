@@ -29,7 +29,11 @@ export class UsersController {
     @Query('status') status?: UserStatus,
     @Query('search') search?: string,
   ) {
-    return this.usersService.findAll(page ? +page : undefined, limit ? +limit : undefined, { role, status, search });
+    return this.usersService.findAll(
+      page ? +page : undefined,
+      limit ? +limit : undefined,
+      { role, status, search },
+    );
   }
 
   @Get('users/stats')
@@ -95,18 +99,12 @@ export class UsersController {
   }
 
   @Put('users/:id/status')
-  updateStatus(
-    @Param('id') id: string,
-    @Body('status') status: UserStatus,
-  ) {
+  updateStatus(@Param('id') id: string, @Body('status') status: UserStatus) {
     return this.usersService.updateStatus(id, status);
   }
 
   @Put('users/:id/password')
-  resetPassword(
-    @Param('id') id: string,
-    @Body('password') password: string,
-  ) {
+  resetPassword(@Param('id') id: string, @Body('password') password: string) {
     return this.usersService.resetPassword(id, password);
   }
 
@@ -123,7 +121,8 @@ export class UsersController {
 
   @Put('platform-config')
   updatePlatformConfig(
-    @Body() body: {
+    @Body()
+    body: {
       commission_type?: string;
       commission_value?: number;
       default_currency?: string;

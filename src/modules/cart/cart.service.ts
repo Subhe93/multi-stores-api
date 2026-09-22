@@ -3,15 +3,45 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
+import { BundleOffer, CartItem } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
-import { resolveStoreCurrency, roundMoney } from '../../common/money/currency.util';
-import { TaxService, taxStoreSelect, type TaxLineInput } from '../taxes/tax.service';
+import {
+  resolveStoreCurrency,
+  roundMoney,
+} from '../../common/money/currency.util';
+import {
+  TaxService,
+  taxStoreSelect,
+  type TaxLineInput,
+} from '../taxes/tax.service';
 import { validateBundleEconomics } from '../bundles/bundle-economics.util';
 
 // Shape of a product custom field as loaded with its translations.
+/** One cart line as GET /cart returns it (enrichCartItems output). */
+export interface EnrichedCartItem {
+  id: string;
+  productId: string | null;
+  variantId: string | null;
+  customProductId: string | null;
+  quantity: number;
+  customFields: unknown;
+  customFieldDisplay: CustomFieldDisplay[];
+  title: string | null;
+  price: number;
+  imageUrl: string | null;
+  variant: string | null;
+  currency: string;
+  bundleOfferId: string | null;
+  bundleOriginalUnitPrice: number | null;
+  bundleTitle: string | null;
+  bundleLabel: string | null;
+  bundleStickerText: string | null;
+  bundleCartQuantity: number | null;
+}
+
 interface CustomFieldDef {
   id: string;
   name: string;
@@ -42,7 +72,11 @@ export class CartService {
     const customer = await this.prisma.customer.findUnique({
       where: { user_id: userId },
     });
-    if (!customer) throw new NotFoundException({ code: 'CART_CUSTOMER_NOT_FOUND', message: 'Customer not found' });
+    if (!customer)
+      throw new NotFoundException({
+        code: 'CART_CUSTOMER_NOT_FOUND',
+        message: 'Customer not found',
+      });
 
     let cart = await this.prisma.cart.findUnique({
       where: { customer_id: customer.id },
@@ -75,12 +109,15 @@ export class CartService {
     values: unknown,
     locale?: string,
   ): CustomFieldDisplay[] {
-    if (!values || typeof values !== 'object' || Array.isArray(values)) return [];
+    if (!values || typeof values !== 'object' || Array.isArray(values))
+      return [];
     return Object.entries(values as Record<string, unknown>)
       .filter(([, v]) => v !== '' && v != null)
       .map(([fieldId, value]) => {
         const def = defs.find((d) => d.id === fieldId);
-        const tr = def ? this.pickTranslation(def.translations, locale) : undefined;
+        const tr = def
+          ? this.pickTranslation(def.translations, locale)
+          : undefined;
         const display =
           typeof value === 'string' && tr?.option_labels
             ? ((tr.option_labels as Record<string, string>)[value] ?? null)
@@ -110,8 +147,8 @@ export class CartService {
    * Enrich raw cart items with product data (title, price, image, variant info).
    * `locale` selects which translation to surface for the item title.
    */
-  private async enrichCartItems(items: any[], locale?: string): Promise<any[]> {
-    const enriched: any[] = [];
+  private async enrichCartItems(items: CartItem[], locale?: string) {
+    const enriched: EnrichedCartItem[] = [];
     const config = await this.prisma.platformConfig.findFirst();
     const platformCurrency = config?.default_currency || 'EUR';
 
@@ -120,7 +157,7 @@ export class CartService {
       let price = 0;
       let imageUrl: string | null = null;
       let variantLabel: string | null = null;
-      let currency = platformCurrency;
+      const currency = platformCurrency;
       // Per-value image map for the product behind this line, read once and
       // used when the chosen variant is resolved further down.
       let productOptionConfig: unknown = null;
@@ -189,7 +226,7 @@ export class CartService {
             case 'PER_VARIANT': {
               if (item.variant_id) {
                 const sv = cp.selected_variants.find(
-                  (s: any) => s.variant_id === item.variant_id,
+                  (s) => s.variant_id === item.variant_id,
                 );
                 price = sv?.custom_price
                   ? Number(sv.custom_price)
@@ -221,7 +258,8 @@ export class CartService {
 
         if (product) {
           customFieldDefs = product.custom_fields;
-          title = this.pickTranslation(product.translations, locale)?.title || null;
+          title =
+            this.pickTranslation(product.translations, locale)?.title || null;
           price = Number(product.base_price);
           productOptionConfig = product.variant_option_config;
           imageUrl = product.images[0]?.url || null;
@@ -287,7 +325,7 @@ export class CartService {
           const pricing = computeBundlePricing(price, {
             quantity: offer.quantity,
             discount_type: offer.discount_type,
-            discount_value: offer.discount_value as any,
+            discount_value: offer.discount_value,
           });
           bundleOfferId = offer.id;
           bundleOriginalUnitPrice = price;
@@ -358,24 +396,36 @@ export class CartService {
       },
     });
     if (!offer) {
-      throw new BadRequestException({ code: 'CART_BUNDLE_OFFER_NOT_FOUND', message: 'Bundle offer not found' });
+      throw new BadRequestException({
+        code: 'CART_BUNDLE_OFFER_NOT_FOUND',
+        message: 'Bundle offer not found',
+      });
     }
     if (offer.bundle.status !== 'ACTIVE') {
-      throw new BadRequestException({ code: 'CART_BUNDLE_NOT_ACTIVE', message: 'Bundle is not active' });
+      throw new BadRequestException({
+        code: 'CART_BUNDLE_NOT_ACTIVE',
+        message: 'Bundle is not active',
+      });
     }
     if (productId) {
       const linked = offer.bundle.products.some(
         (p) => p.product_id === productId,
       );
       if (!linked) {
-        throw new BadRequestException({ code: 'CART_BUNDLE_NOT_AVAILABLE_FOR_PRODUCT', message: 'Bundle is not available for this product' });
+        throw new BadRequestException({
+          code: 'CART_BUNDLE_NOT_AVAILABLE_FOR_PRODUCT',
+          message: 'Bundle is not available for this product',
+        });
       }
     } else if (customProductId) {
       const linked = offer.bundle.custom_products.some(
         (p) => p.custom_product_id === customProductId,
       );
       if (!linked) {
-        throw new BadRequestException({ code: 'CART_BUNDLE_NOT_AVAILABLE_FOR_PRODUCT', message: 'Bundle is not available for this product' });
+        throw new BadRequestException({
+          code: 'CART_BUNDLE_NOT_AVAILABLE_FOR_PRODUCT',
+          message: 'Bundle is not available for this product',
+        });
       }
     }
 
@@ -426,7 +476,7 @@ export class CartService {
           case 'PER_VARIANT': {
             if (variantId) {
               const sv = cp.selected_variants.find(
-                (s: any) => s.variant_id === variantId,
+                (s) => s.variant_id === variantId,
               );
               unitPrice = sv?.custom_price
                 ? Number(sv.custom_price)
@@ -435,7 +485,7 @@ export class CartService {
               // No variant chosen yet — use the cheapest declared so the
               // check stays conservative (most likely to surface a loss).
               const customPrices = cp.selected_variants
-                .map((sv: any) => Number(sv.custom_price ?? 0))
+                .map((sv) => Number(sv.custom_price ?? 0))
                 .filter((n) => n > 0);
               unitPrice = customPrices.length
                 ? Math.min(...customPrices)
@@ -484,7 +534,7 @@ export class CartService {
    * doesn't get a surprise at checkout.
    */
   private assertBundleQuantityValid(
-    offer: { quantity: number; discount_type: any; discount_value: any },
+    offer: Pick<BundleOffer, 'quantity' | 'discount_type' | 'discount_value'>,
     quantity: number,
   ) {
     const pricing = computeBundlePricing(1, {
@@ -557,7 +607,12 @@ export class CartService {
   ): Promise<{
     tax_rate_bp: number;
     tax_total: number;
-    tax_lines: { label: string; rate_bp: number; taxable_amount: number; tax_amount: number }[];
+    tax_lines: {
+      label: string;
+      rate_bp: number;
+      taxable_amount: number;
+      tax_amount: number;
+    }[];
     tax_pricing_mode: 'INCLUSIVE' | 'EXCLUSIVE';
     total_with_tax: number;
   }> {
@@ -661,7 +716,10 @@ export class CartService {
           select: { ...taxStoreSelect, currency: true },
         })
       : null;
-    const currency = resolveStoreCurrency(store, platformConfig?.default_currency);
+    const currency = resolveStoreCurrency(
+      store,
+      platformConfig?.default_currency,
+    );
     const subtotal = taxLines.reduce((sum, l) => sum + l.amount, 0);
     if (!store) {
       return {
@@ -756,7 +814,11 @@ export class CartService {
     const item = await this.prisma.cartItem.findFirst({
       where: { id: itemId, cart_id: cart.id },
     });
-    if (!item) throw new NotFoundException({ code: 'CART_ITEM_NOT_FOUND', message: 'Cart item not found' });
+    if (!item)
+      throw new NotFoundException({
+        code: 'CART_ITEM_NOT_FOUND',
+        message: 'Cart item not found',
+      });
 
     const data: { quantity?: number; bundle_offer_id?: string | null } = {};
     if (typeof dto.quantity === 'number') {
@@ -828,7 +890,7 @@ export class CartService {
     };
   }
 
-  async removeCoupon(userId: string) {
-    return { message: 'Coupon removed' };
+  removeCoupon(_userId: string) {
+    return Promise.resolve({ message: 'Coupon removed' });
   }
 }

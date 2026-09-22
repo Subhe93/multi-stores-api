@@ -1,4 +1,8 @@
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UserRole } from '@prisma/client';
 import { CreateVariantDto, UpdateVariantDto } from './dto/variant.dto';
@@ -16,7 +20,11 @@ export class VariantsService {
     const product = await this.prisma.product.findUnique({
       where: { id: productId },
     });
-    if (!product) throw new NotFoundException({ code: 'VARIANT_PRODUCT_NOT_FOUND', message: 'Product not found' });
+    if (!product)
+      throw new NotFoundException({
+        code: 'VARIANT_PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
     await this.assertOwnsProduct(product, userId, userRole);
 
     return this.prisma.productVariant.create({
@@ -42,7 +50,11 @@ export class VariantsService {
       include: { images: true },
     });
 
-    if (!variant) throw new NotFoundException({ code: 'VARIANT_NOT_FOUND', message: 'Variant not found' });
+    if (!variant)
+      throw new NotFoundException({
+        code: 'VARIANT_NOT_FOUND',
+        message: 'Variant not found',
+      });
     return variant;
   }
 
@@ -92,7 +104,11 @@ export class VariantsService {
       where: { id: variantId },
       select: { product: { select: { provider_id: true, creator_id: true } } },
     });
-    if (!variant) throw new NotFoundException({ code: 'VARIANT_NOT_FOUND', message: 'Variant not found' });
+    if (!variant)
+      throw new NotFoundException({
+        code: 'VARIANT_NOT_FOUND',
+        message: 'Variant not found',
+      });
     await this.assertOwnsProduct(variant.product, userId, userRole);
   }
 
@@ -108,7 +124,10 @@ export class VariantsService {
         where: { user_id: userId },
       });
       if (!provider || product.provider_id !== provider.id) {
-        throw new ForbiddenException({ code: 'VARIANT_FORBIDDEN', message: 'Not your product' });
+        throw new ForbiddenException({
+          code: 'VARIANT_FORBIDDEN',
+          message: 'Not your product',
+        });
       }
       return;
     }
@@ -118,11 +137,17 @@ export class VariantsService {
         where: { user_id: userId },
       });
       if (!creator || product.creator_id !== creator.id) {
-        throw new ForbiddenException({ code: 'VARIANT_FORBIDDEN', message: 'Not your product' });
+        throw new ForbiddenException({
+          code: 'VARIANT_FORBIDDEN',
+          message: 'Not your product',
+        });
       }
       return;
     }
 
-    throw new ForbiddenException({ code: 'VARIANT_FORBIDDEN', message: 'Not your product' });
+    throw new ForbiddenException({
+      code: 'VARIANT_FORBIDDEN',
+      message: 'Not your product',
+    });
   }
 }

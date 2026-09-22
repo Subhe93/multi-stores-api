@@ -9,7 +9,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PaymentMethod, StoreType, UserRole } from '@prisma/client';
+import { PaymentMethod, Prisma, StoreType, UserRole } from '@prisma/client';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CryptoService } from '../../../common/crypto/crypto.service';
@@ -43,12 +43,41 @@ import {
   kustomCreatorSelect,
 } from './kustom.eligibility';
 import { UpdateKustomSettingsDto } from './dto/kustom.dto';
+import {
+  TaxService,
+  type TaxDestination,
+  type TaxLineInput,
+} from '../../taxes/tax.service';
 
 // Kustom order statuses (Order Management API) that mean the money is
 // authorized on the creator's account and the order may be treated as paid.
 const PAID_STATUSES = new Set(['AUTHORIZED', 'PART_CAPTURED', 'CAPTURED']);
 
 const CHECKOUT_COMPLETE = 'checkout_complete';
+
+/** What createSession loads: the order with everything the payload needs. */
+const sessionOrderInclude = {
+  items: {
+    include: {
+      product: { include: { translations: true } },
+      custom_product: {
+        include: {
+          translations: true,
+          // Tax class / exemption of a custom product live on the product
+          // behind it (what OrdersService.priceLine reads).
+          product: { select: { tax_class_id: true, tax_exempt: true } },
+        },
+      },
+      variant: { select: { sku: true, options: true } },
+    },
+  },
+  address: true,
+  customer: { include: { user: { select: { email: true } } } },
+} satisfies Prisma.OrderInclude;
+
+type SessionOrder = Prisma.OrderGetPayload<{
+  include: typeof sessionOrderInclude;
+}>;
 
 /** Who is asking for a capture/refund; null means an internal caller. */
 interface Actor {
@@ -96,6 +125,7 @@ export class KustomService implements OnModuleInit {
     private notifications: NotificationsService,
     private mail: MailService,
     private revalidation: RevalidationService,
+    private taxService: TaxService,
   ) {}
 
   // OrdersService cannot inject this service (PaymentsModule imports
@@ -289,18 +319,6 @@ export class KustomService implements OnModuleInit {
 
   // ── Session (customer) ──────────────────────────────────────────────────
 
-  private readonly sessionOrderInclude = {
-    items: {
-      include: {
-        product: { include: { translations: true } },
-        custom_product: { include: { translations: true } },
-        variant: { select: { sku: true, options: true } },
-      },
-    },
-    address: true,
-    customer: { include: { user: { select: { email: true } } } },
-  } as const;
-
   /**
    * Create — or reuse — the Kustom checkout session for one of the customer's
    * own orders and return the HTML snippet to embed. Idempotent: an existing
@@ -310,7 +328,7 @@ export class KustomService implements OnModuleInit {
   async createSession(userId: string, orderId: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: this.sessionOrderInclude,
+      include: sessionOrderInclude,
     });
     if (!order) throw new NotFoundException('Order not found');
     if (order.customer.user_id !== userId) {
@@ -356,6 +374,21 @@ export class KustomService implements OnModuleInit {
         where: { id: order.id },
         data: { kustom_push_token: pushToken },
       });
+    }
+
+    // Orders placed before the tax system existed carry no tax snapshot
+    // (tax_lines is null; taxed orders store an array, possibly empty).
+    // Kustom validates each line's tax against the order totals, so once the
+    // store's tax context resolves a registration country the snapshot is
+    // computed now, with the inputs create() would use, and persisted before
+    // the payload is built — so payload, confirmation and capture all read
+    // the same numbers. The local row is refreshed in place.
+    if (order.tax_lines === null) {
+      const refreshed = await this.backfillTaxSnapshot(
+        order,
+        ctx.primaryLocale,
+      );
+      if (refreshed) Object.assign(order, refreshed);
     }
 
     const payload = buildKustomCheckoutPayload(order, {
@@ -425,6 +458,83 @@ export class KustomService implements OnModuleInit {
       html_snippet: created.html_snippet ?? '',
       status: (created.status ?? '').toLowerCase(),
     };
+  }
+
+  /**
+   * Tax backfill for a pre-tax-system order (tax_lines null): recompute the
+   * snapshot with the same engine and inputs OrdersService.create() uses
+   * (line totals + product tax class / exemption, shipping cost, discount,
+   * address country / state / postcode, store pricing mode), persist it on
+   * the order and its items, and return the reloaded row. Null — nothing
+   * written — when the store has no registration country (its orders are
+   * never taxed, exactly as create() would leave them) or the order has no
+   * store. Order.total is deliberately left as the customer accepted it.
+   */
+  private async backfillTaxSnapshot(
+    order: SessionOrder,
+    locale: string | null,
+  ): Promise<SessionOrder | null> {
+    if (!order.store_id) return null;
+    const taxCtx = await this.taxService.resolveStoreTaxContext(order.store_id);
+    if (!taxCtx.taxCountry) return null;
+
+    const data = await this.taxService.loadTaxData(taxCtx);
+    const destination: TaxDestination = {
+      country: order.address.country_code,
+      region: order.address.state,
+      postcode: order.address.postal_code,
+    };
+    const lines: TaxLineInput[] = order.items.map((item) => {
+      const product = item.product ?? item.custom_product?.product ?? null;
+      return {
+        amount: Number(item.total_price),
+        tax_class_id: product?.tax_class_id ?? null,
+        tax_exempt: product?.tax_exempt ?? false,
+      };
+    });
+    const tax = this.taxService.computeTaxes({
+      ctx: taxCtx,
+      data,
+      currency: order.currency,
+      locale,
+      lines,
+      shipping_cost: Number(order.shipping_cost),
+      discount_amount: Number(order.discount_amount),
+      shipping: destination,
+      billing: destination,
+    });
+
+    await this.prisma.$transaction([
+      this.prisma.order.update({
+        where: { id: order.id },
+        data: {
+          tax_rate_bp: tax.headline_rate_bp,
+          tax_amount: tax.tax_total,
+          tax_pricing_mode: tax.tax_pricing_mode,
+          tax_basis_country: tax.tax_basis_country,
+          tax_lines: tax.tax_lines as unknown as Prisma.InputJsonValue,
+          shipping_tax_rate_bp: tax.shipping_tax_rate_bp,
+          shipping_tax_amount: tax.shipping_tax_amount,
+        },
+      }),
+      ...order.items.map((item, i) =>
+        this.prisma.orderItem.update({
+          where: { id: item.id },
+          data: {
+            tax_class_key: tax.items[i]?.tax_class_key ?? null,
+            tax_rate_bp: tax.items[i]?.tax_rate_bp ?? 0,
+            tax_amount: tax.items[i]?.tax_amount ?? 0,
+          },
+        }),
+      ),
+    ]);
+    this.logger.log(
+      `Order ${order.id}: tax snapshot backfilled before the Kustom session (${tax.tax_pricing_mode}, ${tax.tax_lines.length} line(s))`,
+    );
+    return this.prisma.order.findUnique({
+      where: { id: order.id },
+      include: sessionOrderInclude,
+    });
   }
 
   /**

@@ -11,7 +11,11 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { OrdersService } from './orders.service';
-import { CreateOrderDto, UpdateOrderStatusDto, UpdateFulfillmentDto } from './dto/order.dto';
+import {
+  CreateOrderDto,
+  UpdateOrderStatusDto,
+  UpdateFulfillmentDto,
+} from './dto/order.dto';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { OrderStatus, UserRole } from '@prisma/client';
@@ -38,7 +42,11 @@ export class OrdersController {
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
-    return this.ordersService.findByCustomer(userId, page ? +page : undefined, limit ? +limit : undefined);
+    return this.ordersService.findByCustomer(
+      userId,
+      page ? +page : undefined,
+      limit ? +limit : undefined,
+    );
   }
 
   // All orders — Admin sees all, Provider/Creator sees their own
@@ -66,10 +74,20 @@ export class OrdersController {
     }
 
     if (role === UserRole.ADMIN) {
-      return this.ordersService.findAll(page ? +page : undefined, limit ? +limit : undefined, statusFilter);
+      return this.ordersService.findAll(
+        page ? +page : undefined,
+        limit ? +limit : undefined,
+        statusFilter,
+      );
     }
     // Provider/Creator — find relevant orders
-    return this.ordersService.findByRole(userId, role, page ? +page : undefined, limit ? +limit : undefined, statusFilter);
+    return this.ordersService.findByRole(
+      userId,
+      role,
+      page ? +page : undefined,
+      limit ? +limit : undefined,
+      statusFilter,
+    );
   }
 
   // Provider/Creator — الطلبات الواردة
@@ -125,6 +143,12 @@ export class OrdersController {
     @CurrentUser('id') userId: string,
     @CurrentUser('role') userRole: UserRole,
   ) {
-    return this.ordersService.updateFulfillment(orderId, itemId, dto, userId, userRole);
+    return this.ordersService.updateFulfillment(
+      orderId,
+      itemId,
+      dto,
+      userId,
+      userRole,
+    );
   }
 }

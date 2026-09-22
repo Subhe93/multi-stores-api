@@ -5,7 +5,12 @@ import { v1ceNfcKit } from './v1ce-nfc';
 import { namezGiftsKit } from './namez-gifts';
 
 // The template-kit catalog. Add a new kit by importing its definition here.
-export const KITS: Kit[] = [shoesModernKit, techMinimalKit, v1ceNfcKit, namezGiftsKit];
+export const KITS: Kit[] = [
+  shoesModernKit,
+  techMinimalKit,
+  v1ceNfcKit,
+  namezGiftsKit,
+];
 
 export function listKitSummaries(): KitSummary[] {
   return KITS.map((k) => ({

@@ -1,12 +1,50 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { PricingType, StoreType } from '@prisma/client';
+import { PricingType, Prisma, ProductVariant, StoreType } from '@prisma/client';
 import { resolveStoreCurrency } from '../../common/money/currency.util';
 import { buildTaxContext } from '../taxes/tax.service';
 import {
   isKustomEnabledForStore,
   kustomCreatorSelect,
 } from '../payments/kustom/kustom.eligibility';
+
+/** The legacy freeform Store.theme_config JSON as getStore() reads it. */
+interface LegacyThemeConfig {
+  primaryColor?: string | null;
+  secondaryColor?: string | null;
+  fontFamily?: string | null;
+  typography?: Record<string, unknown>;
+  header?: Record<string, unknown>;
+  templateId?: string | null;
+  socials?: Record<string, unknown>;
+  contact?: Record<string, unknown>;
+  seo?: Record<string, unknown>;
+  translations?: Record<string, unknown>;
+  hero?: Record<string, unknown>;
+}
+
+/** The part of Promotion.conditions the storefront badges read. */
+interface PromotionConditions {
+  product_ids?: string[];
+}
+
+/** A variant row plus the custom price its CustomProductVariant carries. */
+type PricedVariant = ProductVariant & { _custom_price?: number };
+
+/** What the custom-product price helpers read; every query includes more. */
+interface CustomProductPricingSource {
+  pricing_type: PricingType;
+  final_price: Prisma.Decimal | null;
+  margin_amount?: Prisma.Decimal | null;
+  selected_variants?:
+    | {
+        variant_id: string;
+        custom_price: Prisma.Decimal | null;
+        variant: ProductVariant;
+      }[]
+    | null;
+  product: { base_price: Prisma.Decimal; variants?: ProductVariant[] | null };
+}
 
 @Injectable()
 export class StorefrontService {
@@ -21,20 +59,21 @@ export class StorefrontService {
     creatorId: string,
     opts: { productId?: string; customProductId?: string },
   ) {
-    const where: any = {
-      creator_id: creatorId,
-      status: 'ACTIVE',
-      OR: [] as any[],
-    };
+    const or: Prisma.BundleWhereInput[] = [];
     if (opts.productId) {
-      where.OR.push({ products: { some: { product_id: opts.productId } } });
+      or.push({ products: { some: { product_id: opts.productId } } });
     }
     if (opts.customProductId) {
-      where.OR.push({
+      or.push({
         custom_products: { some: { custom_product_id: opts.customProductId } },
       });
     }
-    if (where.OR.length === 0) return [];
+    if (or.length === 0) return [];
+    const where: Prisma.BundleWhereInput = {
+      creator_id: creatorId,
+      status: 'ACTIVE',
+      OR: or,
+    };
 
     return this.prisma.bundle.findMany({
       where,
@@ -96,7 +135,7 @@ export class StorefrontService {
         code: 'STOREFRONT_STORE_NOT_FOUND',
         message: 'Store not found',
       });
-    const themeConfig = (store.theme_config as any) || {};
+    const themeConfig = (store.theme_config as LegacyThemeConfig | null) || {};
     const platformConfig = await this.prisma.platformConfig.findFirst();
     const taxContext = buildTaxContext(store, platformConfig);
 
@@ -179,8 +218,8 @@ export class StorefrontService {
       pages: mergedPages,
       // New theme system: storefront resolves the registry by theme_key and
       // merges theme_customizations on top.
-      theme_key: (store as any).theme_key || 'minimal',
-      theme_customizations: (store as any).theme_customizations || {},
+      theme_key: store.theme_key || 'minimal',
+      theme_customizations: store.theme_customizations || {},
       // Legacy theme object — retained until the storefront fully migrates to
       // the registry-based system. Reads from theme_config (the old freeform JSON).
       theme: {
@@ -261,7 +300,7 @@ export class StorefrontService {
     }
 
     // Creator's own products (creator_id set on Product)
-    const ownWhere: any = {
+    const ownWhere: Prisma.ProductWhereInput = {
       creator_id: store.creator.id,
       status: 'PUBLISHED',
     };
@@ -285,7 +324,7 @@ export class StorefrontService {
     }
 
     // Custom products (creator took a provider product and added their design)
-    const customWhere: any = {
+    const customWhere: Prisma.CustomProductWhereInput = {
       creator_id: store.creator.id,
       status: 'PUBLISHED',
     };
@@ -301,7 +340,7 @@ export class StorefrontService {
       if (creatorCategory.match_rule === 'TAGS') {
         // Tag membership lives on the underlying provider Product.
         customWhere.product = {
-          ...(customWhere.product || {}),
+          ...(customWhere.product as Prisma.ProductWhereInput | undefined),
           tags: { some: { tag: { in: creatorCategory.match_tags } } },
         };
       } else {
@@ -317,6 +356,22 @@ export class StorefrontService {
     // custom products (provider resells) on their storefront.
     const isIndependent = store.store_type === StoreType.INDEPENDENT;
 
+    const customProductInclude = {
+      translations: true,
+      mockup_images: { take: 1, orderBy: { sort_order: 'asc' } },
+      selected_variants: { include: { variant: true } },
+      product: {
+        include: {
+          images: { take: 1, orderBy: { sort_order: 'asc' } },
+          variants: { where: { is_active: true } },
+          category: { include: { translations: true } },
+        },
+      },
+    } satisfies Prisma.CustomProductInclude;
+    type ListedCustomProduct = Prisma.CustomProductGetPayload<{
+      include: typeof customProductInclude;
+    }>;
+
     const [ownProducts, customProducts] = await Promise.all([
       this.prisma.product.findMany({
         where: ownWhere,
@@ -329,21 +384,10 @@ export class StorefrontService {
         orderBy: { created_at: 'desc' },
       }),
       isIndependent
-        ? []
+        ? Promise.resolve<ListedCustomProduct[]>([])
         : this.prisma.customProduct.findMany({
             where: customWhere,
-            include: {
-              translations: true,
-              mockup_images: { take: 1, orderBy: { sort_order: 'asc' } },
-              selected_variants: { include: { variant: true } },
-              product: {
-                include: {
-                  images: { take: 1, orderBy: { sort_order: 'asc' } },
-                  variants: { where: { is_active: true } },
-                  category: { include: { translations: true } },
-                },
-              },
-            },
+            include: customProductInclude,
             orderBy: { created_at: 'desc' },
           }),
     ]);
@@ -373,13 +417,13 @@ export class StorefrontService {
     });
 
     // Normalize own products too (Decimal → Number)
-    const mappedOwn = ownProducts.map((p: any) => ({
+    const mappedOwn = ownProducts.map((p) => ({
       ...p,
       base_price: Number(p.base_price),
       compare_at_price: p.compare_at_price
         ? Number(p.compare_at_price)
         : undefined,
-      variants: (p.variants || []).map((v: any) => ({
+      variants: (p.variants || []).map((v) => ({
         ...v,
         price: Number(p.base_price) + Number(v.price_adjustment || 0),
         compare_at_price: v.compare_at_price
@@ -407,7 +451,7 @@ export class StorefrontService {
     const attachPromos = (productId: string) =>
       allPromos
         .filter((p) => {
-          const conds = p.conditions as any;
+          const conds = p.conditions as PromotionConditions | null;
           if (!conds?.product_ids?.length) return true;
           return conds.product_ids.includes(productId);
         })
@@ -418,7 +462,7 @@ export class StorefrontService {
           translations: p.translations,
         }));
 
-    const ownWithPromos = mappedOwn.map((p: any) => ({
+    const ownWithPromos = mappedOwn.map((p) => ({
       ...p,
       promotions: attachPromos(p.id),
     }));
@@ -455,7 +499,7 @@ export class StorefrontService {
     // Filter: only promotions with no product targeting OR targeting this product
     return promotions
       .filter((p) => {
-        const conds = p.conditions as any;
+        const conds = p.conditions as PromotionConditions | null;
         if (!conds?.product_ids?.length) return true; // applies to all
         return conds.product_ids.includes(productId);
       })
@@ -470,7 +514,7 @@ export class StorefrontService {
       }));
   }
 
-  async getProduct(slug: string, productSlug: string, locale?: string) {
+  async getProduct(slug: string, productSlug: string, _locale?: string) {
     const store = await this.prisma.store.findUnique({
       where: { slug },
       include: { creator: true },
@@ -522,7 +566,7 @@ export class StorefrontService {
       const prodBasePrice = Number(product.base_price);
 
       // If no product-level shipping profile, fall back to provider's default
-      let shippingProfile = (product as any).shipping_profile;
+      let shippingProfile = product.shipping_profile;
       if (!shippingProfile && product.provider_id) {
         const defaultProfile = await this.prisma.shippingProfile.findFirst({
           where: { provider_id: product.provider_id, is_default: true },
@@ -546,7 +590,7 @@ export class StorefrontService {
         compare_at_price: product.compare_at_price
           ? Number(product.compare_at_price)
           : undefined,
-        variants: (product.variants || []).map((v: any) => ({
+        variants: (product.variants || []).map((v) => ({
           ...v,
           price: prodBasePrice + Number(v.price_adjustment || 0),
           compare_at_price: v.compare_at_price
@@ -554,9 +598,9 @@ export class StorefrontService {
             : undefined,
           stock: v.stock_quantity ?? 999,
         })),
-        creator_categories: ((product as any).creator_categories || [])
-          .map((pcc: any) => pcc.creator_category)
-          .filter((cc: any) => cc && cc.is_active !== false),
+        creator_categories: (product.creator_categories || [])
+          .map((pcc) => pcc.creator_category)
+          .filter((cc) => cc && cc.is_active !== false),
         promotions,
         bundles,
       };
@@ -644,7 +688,7 @@ export class StorefrontService {
     const baseProduct = customProduct.product;
 
     // Resolve shipping profile (fallback to provider default)
-    let shippingProfile = (baseProduct as any).shipping_profile;
+    let shippingProfile = baseProduct.shipping_profile;
     if (!shippingProfile && baseProduct.provider_id) {
       const defaultProfile = await this.prisma.shippingProfile.findFirst({
         where: { provider_id: baseProduct.provider_id, is_default: true },
@@ -684,9 +728,9 @@ export class StorefrontService {
       variants,
       tags: baseProduct.tags,
       category: baseProduct.category,
-      creator_categories: ((customProduct as any).creator_categories || [])
-        .map((cpcc: any) => cpcc.creator_category)
-        .filter((cc: any) => cc && cc.is_active !== false),
+      creator_categories: (customProduct.creator_categories || [])
+        .map((cpcc) => cpcc.creator_category)
+        .filter((cc) => cc && cc.is_active !== false),
       custom_fields: customerFields,
       faqs: [...(customProduct.faqs || []), ...baseProduct.faqs],
       field_values: customProduct.field_values,
@@ -990,7 +1034,7 @@ export class StorefrontService {
             : undefined,
           stock: v.stock_quantity ?? undefined,
           sku: v.sku ?? undefined,
-          images: (v as any).images || [],
+          images: v.images || [],
         })),
         faqs: own.faqs,
       };
@@ -1077,7 +1121,7 @@ export class StorefrontService {
     // Only rows with a published snapshot qualify. Singleton types are
     // looked up by (store, type) alone, so if a duplicate draft row ever
     // exists (e.g. two concurrent ensures) the published one still wins.
-    const whereType: any = {
+    const whereType: Prisma.PageWhereInput = {
       store_id: store.id,
       type: opts.type,
       published_version_id: { not: null },
@@ -1102,19 +1146,19 @@ export class StorefrontService {
 
   // ── Price computation helpers ──────────────────────────
 
-  private computeVariants(cp: any) {
+  private computeVariants(cp: CustomProductPricingSource) {
     const hasSelectedVariants =
       cp.selected_variants && cp.selected_variants.length > 0;
 
     // Determine which variants to show
-    const sourceVariants = hasSelectedVariants
-      ? cp.selected_variants.map((sv: any) => ({
+    const sourceVariants: PricedVariant[] = hasSelectedVariants
+      ? cp.selected_variants!.map((sv) => ({
           ...sv.variant,
           _custom_price: sv.custom_price ? Number(sv.custom_price) : undefined,
         }))
       : cp.product.variants || [];
 
-    return sourceVariants.map((v: any) => {
+    return sourceVariants.map((v) => {
       const price = this.computeVariantPrice(cp, v);
       return {
         ...v,
@@ -1128,24 +1172,28 @@ export class StorefrontService {
     });
   }
 
-  private computeVariantPrice(cp: any, variant: any): number {
+  private computeVariantPrice(
+    cp: CustomProductPricingSource,
+    variant: PricedVariant,
+  ): number {
     switch (cp.pricing_type) {
       case PricingType.SINGLE:
         return Number(cp.final_price) + Number(variant.price_adjustment || 0);
 
-      case PricingType.PER_VARIANT:
+      case PricingType.PER_VARIANT: {
         // custom_price from CustomProductVariant
         if (variant._custom_price !== undefined) {
           return variant._custom_price;
         }
         // Fallback: look up from selected_variants
         const sv = cp.selected_variants?.find(
-          (s: any) => s.variant_id === variant.id,
+          (s) => s.variant_id === variant.id,
         );
         return sv?.custom_price
           ? Number(sv.custom_price)
           : Number(cp.product.base_price) +
               Number(variant.price_adjustment || 0);
+      }
 
       case PricingType.MARGIN:
         return (
@@ -1159,12 +1207,15 @@ export class StorefrontService {
     }
   }
 
-  private computeDisplayPrice(cp: any, variants: any[]): number {
+  private computeDisplayPrice(
+    cp: CustomProductPricingSource,
+    variants: { price: number }[],
+  ): number {
     if (cp.pricing_type === PricingType.SINGLE) {
       return Number(cp.final_price);
     }
     if (variants.length > 0) {
-      return Math.min(...variants.map((v: any) => v.price));
+      return Math.min(...variants.map((v) => v.price));
     }
     return Number(cp.final_price) || 0;
   }

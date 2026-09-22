@@ -30,10 +30,7 @@ export class BundlesController {
   @Post()
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.CREATOR)
-  create(
-    @CurrentUser('id') userId: string,
-    @Body() dto: CreateBundleDto,
-  ) {
+  create(@CurrentUser('id') userId: string, @Body() dto: CreateBundleDto) {
     return this.bundlesService.create(userId, dto);
   }
 
@@ -57,10 +54,7 @@ export class BundlesController {
   @Get(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.CREATOR)
-  findOne(
-    @Param('id') id: string,
-    @CurrentUser('id') userId: string,
-  ) {
+  findOne(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.bundlesService.findById(id, userId);
   }
 
@@ -78,10 +72,7 @@ export class BundlesController {
   @Delete(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.CREATOR)
-  remove(
-    @Param('id') id: string,
-    @CurrentUser('id') userId: string,
-  ) {
+  remove(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.bundlesService.delete(id, userId);
   }
 }

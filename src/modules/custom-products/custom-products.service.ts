@@ -5,7 +5,13 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { ImportMode, PricingType, ProductStatus, StoreType, UserRole } from '@prisma/client';
+import {
+  ImportMode,
+  PricingType,
+  ProductStatus,
+  StoreType,
+  UserRole,
+} from '@prisma/client';
 import {
   CreateCustomProductDto,
   UpdateCustomProductDto,
@@ -44,7 +50,9 @@ export class CustomProductsService {
         },
       },
     });
-    const allViolations = [] as ReturnType<typeof validateBundleEconomics>['violations'];
+    const allViolations = [] as ReturnType<
+      typeof validateBundleEconomics
+    >['violations'];
     for (const b of bundles) {
       const offers: BundleOfferLike[] = b.offers.map((o) => ({
         quantity: o.quantity,
@@ -72,7 +80,8 @@ export class CustomProductsService {
     if (store?.store_type === StoreType.INDEPENDENT) {
       throw new BadRequestException({
         code: 'CUSTOM_PRODUCT_INDEPENDENT_STORE',
-        message: 'Independent stores sell their own products only, so custom products are not available.',
+        message:
+          'Independent stores sell their own products only, so custom products are not available.',
       });
     }
   }
@@ -83,14 +92,24 @@ export class CustomProductsService {
       where: { id: customProductId },
       include: { creator: { select: { user_id: true } } },
     });
-    if (!cp) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_NOT_FOUND', message: 'Custom product not found' });
+    if (!cp)
+      throw new NotFoundException({
+        code: 'CUSTOM_PRODUCT_NOT_FOUND',
+        message: 'Custom product not found',
+      });
     if (cp.creator.user_id !== userId) {
-      throw new ForbiddenException({ code: 'CUSTOM_PRODUCT_NOT_OWNED', message: 'You do not own this custom product' });
+      throw new ForbiddenException({
+        code: 'CUSTOM_PRODUCT_NOT_OWNED',
+        message: 'You do not own this custom product',
+      });
     }
     return cp;
   }
 
-  private async assertProviderOwnsBase(customProductId: string, userId: string) {
+  private async assertProviderOwnsBase(
+    customProductId: string,
+    userId: string,
+  ) {
     const cp = await this.prisma.customProduct.findUnique({
       where: { id: customProductId },
       include: {
@@ -99,9 +118,16 @@ export class CustomProductsService {
         translations: true,
       },
     });
-    if (!cp) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_NOT_FOUND', message: 'Custom product not found' });
+    if (!cp)
+      throw new NotFoundException({
+        code: 'CUSTOM_PRODUCT_NOT_FOUND',
+        message: 'Custom product not found',
+      });
     if (!cp.product.provider || cp.product.provider.user_id !== userId) {
-      throw new ForbiddenException({ code: 'CUSTOM_PRODUCT_BASE_NOT_OWNED', message: 'You do not own this base product' });
+      throw new ForbiddenException({
+        code: 'CUSTOM_PRODUCT_BASE_NOT_OWNED',
+        message: 'You do not own this base product',
+      });
     }
     return cp;
   }
@@ -112,7 +138,10 @@ export class CustomProductsService {
         translations: true,
         images: { orderBy: { sort_order: 'asc' as const } },
         variants: { where: { is_active: true } },
-        custom_fields: { include: { translations: true }, orderBy: { sort_order: 'asc' as const } },
+        custom_fields: {
+          include: { translations: true },
+          orderBy: { sort_order: 'asc' as const },
+        },
       },
     },
     mockup_images: true,
@@ -120,7 +149,10 @@ export class CustomProductsService {
     creator: { select: { display_name: true } },
     selected_variants: { include: { variant: true } },
     field_values: { include: { custom_field: true } },
-    faqs: { include: { translations: true }, orderBy: { sort_order: 'asc' as const } },
+    faqs: {
+      include: { translations: true },
+      orderBy: { sort_order: 'asc' as const },
+    },
     bundles: {
       include: {
         bundle: {
@@ -188,7 +220,9 @@ export class CustomProductsService {
           slug: { in: slugs },
           custom_product: {
             creator_id: creatorId,
-            ...(excludeCustomProductId ? { id: { not: excludeCustomProductId } } : {}),
+            ...(excludeCustomProductId
+              ? { id: { not: excludeCustomProductId } }
+              : {}),
           },
         },
         select: { slug: true },
@@ -226,7 +260,11 @@ export class CustomProductsService {
       where: { user_id: userId },
       select: { id: true },
     });
-    if (!creator) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_CREATOR_NOT_FOUND', message: 'Creator not found' });
+    if (!creator)
+      throw new NotFoundException({
+        code: 'CUSTOM_PRODUCT_CREATOR_NOT_FOUND',
+        message: 'Creator not found',
+      });
 
     const [customConflict, productConflict] = await Promise.all([
       this.prisma.customProduct.findFirst({
@@ -266,13 +304,17 @@ export class CustomProductsService {
       select: { id: true, creator_id: true },
     });
     if (found.length !== bundleIds.length) {
-      throw new BadRequestException({ code: 'CUSTOM_PRODUCT_BUNDLE_NOT_EXIST', message: 'One or more bundles do not exist' });
+      throw new BadRequestException({
+        code: 'CUSTOM_PRODUCT_BUNDLE_NOT_EXIST',
+        message: 'One or more bundles do not exist',
+      });
     }
     for (const b of found) {
       if (b.creator_id !== creatorId) {
-        throw new ForbiddenException(
-          { code: 'CUSTOM_PRODUCT_BUNDLE_NOT_OWNED', message: 'You can only attach your own bundles' },
-        );
+        throw new ForbiddenException({
+          code: 'CUSTOM_PRODUCT_BUNDLE_NOT_OWNED',
+          message: 'You can only attach your own bundles',
+        });
       }
     }
   }
@@ -281,7 +323,11 @@ export class CustomProductsService {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
     });
-    if (!creator) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_CREATOR_NOT_FOUND', message: 'Creator not found' });
+    if (!creator)
+      throw new NotFoundException({
+        code: 'CUSTOM_PRODUCT_CREATOR_NOT_FOUND',
+        message: 'Creator not found',
+      });
 
     // Independent stores cannot create custom products (own products only).
     await this.assertStoreAllowsCustomProducts(creator.id);
@@ -292,11 +338,19 @@ export class CustomProductsService {
       where: { id: dto.product_id },
       select: { status: true, provider_id: true },
     });
-    if (!baseProduct) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_BASE_PRODUCT_NOT_FOUND', message: 'Product not found' });
-    if (!baseProduct.provider_id || baseProduct.status !== ProductStatus.PUBLISHED) {
+    if (!baseProduct)
+      throw new NotFoundException({
+        code: 'CUSTOM_PRODUCT_BASE_PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
+    if (
+      !baseProduct.provider_id ||
+      baseProduct.status !== ProductStatus.PUBLISHED
+    ) {
       throw new BadRequestException({
         code: 'CUSTOM_PRODUCT_BASE_NOT_IMPORTABLE',
-        message: 'This product cannot be imported — only published provider products are available for import.',
+        message:
+          'This product cannot be imported — only published provider products are available for import.',
       });
     }
 
@@ -308,7 +362,15 @@ export class CustomProductsService {
     // storefront URL space.
     await this.assertSlugsAvailable(creator.id, dto.translations);
 
-    const { translations, selected_variants, field_values, mockup_image_urls, bundle_ids, creator_category_ids, ...data } = dto;
+    const {
+      translations,
+      selected_variants,
+      field_values,
+      mockup_image_urls,
+      bundle_ids,
+      creator_category_ids,
+      ...data
+    } = dto;
 
     if (bundle_ids && bundle_ids.length > 0) {
       await this.assertBundlesOwnedByCreator(bundle_ids, creator.id);
@@ -349,7 +411,11 @@ export class CustomProductsService {
         where: { id: dto.product_id },
         include: { variants: { where: { is_active: true } } },
       });
-      if (!product) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_BASE_PRODUCT_NOT_FOUND', message: 'Product not found' });
+      if (!product)
+        throw new NotFoundException({
+          code: 'CUSTOM_PRODUCT_BASE_PRODUCT_NOT_FOUND',
+          message: 'Product not found',
+        });
 
       variantRows = product.variants.map((v) => ({
         variant_id: v.id,
@@ -365,14 +431,19 @@ export class CustomProductsService {
         where: { id: dto.product_id },
         include: { variants: { where: { is_active: true } } },
       });
-      if (!product) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_BASE_PRODUCT_NOT_FOUND', message: 'Product not found' });
+      if (!product)
+        throw new NotFoundException({
+          code: 'CUSTOM_PRODUCT_BASE_PRODUCT_NOT_FOUND',
+          message: 'Product not found',
+        });
 
       if (product.variants.length > 0) {
         // Product has variants — require at least one selected
         if (!selected_variants || selected_variants.length === 0) {
-          throw new BadRequestException(
-            { code: 'CUSTOM_PRODUCT_VARIANT_REQUIRED', message: 'At least one variant must be selected in CUSTOMIZE mode' },
-          );
+          throw new BadRequestException({
+            code: 'CUSTOM_PRODUCT_VARIANT_REQUIRED',
+            message: 'At least one variant must be selected in CUSTOMIZE mode',
+          });
         }
 
         const validVariantIds = new Set(product.variants.map((v) => v.id));
@@ -449,7 +520,11 @@ export class CustomProductsService {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
     });
-    if (!creator) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_CREATOR_NOT_FOUND', message: 'Creator not found' });
+    if (!creator)
+      throw new NotFoundException({
+        code: 'CUSTOM_PRODUCT_CREATOR_NOT_FOUND',
+        message: 'Creator not found',
+      });
 
     const skip = (page - 1) * limit;
     const [data, total] = await Promise.all([
@@ -495,7 +570,10 @@ export class CustomProductsService {
         allowed = !!provider && cp.product?.provider_id === provider.id;
       }
       if (!allowed) {
-        throw new NotFoundException({ code: 'CUSTOM_PRODUCT_NOT_FOUND', message: 'Custom product not found' });
+        throw new NotFoundException({
+          code: 'CUSTOM_PRODUCT_NOT_FOUND',
+          message: 'Custom product not found',
+        });
       }
     }
     return cp;
@@ -510,7 +588,11 @@ export class CustomProductsService {
       where: { id },
       include: this.includes,
     });
-    if (!cp) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_NOT_FOUND', message: 'Custom product not found' });
+    if (!cp)
+      throw new NotFoundException({
+        code: 'CUSTOM_PRODUCT_NOT_FOUND',
+        message: 'Custom product not found',
+      });
     return cp;
   }
 
@@ -522,11 +604,18 @@ export class CustomProductsService {
         product: { select: { provider_id: true, base_price: true } },
       },
     });
-    if (!existing) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_NOT_FOUND', message: 'Custom product not found' });
+    if (!existing)
+      throw new NotFoundException({
+        code: 'CUSTOM_PRODUCT_NOT_FOUND',
+        message: 'Custom product not found',
+      });
 
     // Ownership check
     if (userId && existing.creator.user_id !== userId) {
-      throw new ForbiddenException({ code: 'CUSTOM_PRODUCT_NOT_OWNED', message: 'You do not own this custom product' });
+      throw new ForbiddenException({
+        code: 'CUSTOM_PRODUCT_NOT_OWNED',
+        message: 'You do not own this custom product',
+      });
     }
 
     // Independent stores cannot edit custom products (own products only) —
@@ -562,7 +651,10 @@ export class CustomProductsService {
       dto.status === ProductStatus.PUBLISHED &&
       existing.product.provider_id
     ) {
-      throw new ForbiddenException({ code: 'CUSTOM_PRODUCT_PUBLISH_AWAITING_REVIEW', message: 'Cannot publish a product that is awaiting provider review' });
+      throw new ForbiddenException({
+        code: 'CUSTOM_PRODUCT_PUBLISH_AWAITING_REVIEW',
+        message: 'Cannot publish a product that is awaiting provider review',
+      });
     }
 
     // If product is REJECTED, content edits should go to DRAFT (not stay rejected) so the
@@ -574,28 +666,50 @@ export class CustomProductsService {
       existing.product.provider_id &&
       dto.status === ProductStatus.PUBLISHED
     ) {
-      throw new ForbiddenException({ code: 'CUSTOM_PRODUCT_PUBLISH_REJECTED', message: 'Cannot publish a rejected product without resubmitting for review' });
+      throw new ForbiddenException({
+        code: 'CUSTOM_PRODUCT_PUBLISH_REJECTED',
+        message:
+          'Cannot publish a rejected product without resubmitting for review',
+      });
     }
 
     const pricingType = dto.pricing_type ?? existing.pricing_type;
 
     // Validate pricing if pricing-related fields changed
-    if (dto.pricing_type || dto.final_price !== undefined || dto.margin_amount !== undefined) {
+    if (
+      dto.pricing_type ||
+      dto.final_price !== undefined ||
+      dto.margin_amount !== undefined
+    ) {
       this.validatePricing(pricingType, {
         final_price: dto.final_price ?? Number(existing.final_price),
-        margin_amount: dto.margin_amount ?? (existing.margin_amount ? Number(existing.margin_amount) : undefined),
+        margin_amount:
+          dto.margin_amount ??
+          (existing.margin_amount ? Number(existing.margin_amount) : undefined),
         selected_variants: dto.selected_variants,
         pricing_type: pricingType,
       });
     }
 
     // Reject any slug already in use by another product/custom-product of
-     // this creator (excluding the current custom product being updated).
+    // this creator (excluding the current custom product being updated).
     if (dto.translations && dto.translations.length > 0) {
-      await this.assertSlugsAvailable(existing.creator_id, dto.translations, id);
+      await this.assertSlugsAvailable(
+        existing.creator_id,
+        dto.translations,
+        id,
+      );
     }
 
-    const { translations, selected_variants, field_values, mockup_image_urls, bundle_ids, creator_category_ids, ...data } = dto;
+    const {
+      translations,
+      selected_variants,
+      field_values,
+      mockup_image_urls,
+      bundle_ids,
+      creator_category_ids,
+      ...data
+    } = dto;
 
     // Cross-check: if the price is changing and the product has SINGLE
     // pricing, re-validate every already-attached bundle even when bundle_ids
@@ -606,10 +720,12 @@ export class CustomProductsService {
       data.final_price !== undefined &&
       bundle_ids === undefined
     ) {
-      const currentAttachments = await this.prisma.bundleCustomProduct.findMany({
-        where: { custom_product_id: id },
-        select: { bundle_id: true },
-      });
+      const currentAttachments = await this.prisma.bundleCustomProduct.findMany(
+        {
+          where: { custom_product_id: id },
+          select: { bundle_id: true },
+        },
+      );
       const currentBundleIds = currentAttachments.map((a) => a.bundle_id);
       if (currentBundleIds.length > 0) {
         const nextFinal = Number(data.final_price);
@@ -634,10 +750,7 @@ export class CustomProductsService {
     }
 
     if (bundle_ids) {
-      await this.assertBundlesOwnedByCreator(
-        bundle_ids,
-        existing.creator_id,
-      );
+      await this.assertBundlesOwnedByCreator(bundle_ids, existing.creator_id);
       // Economic check is only meaningful for SINGLE pricing. For
       // PER_VARIANT/MARGIN the price depends on the chosen variant, so we
       // accept the attachment and let runtime order validation handle each
@@ -754,7 +867,10 @@ export class CustomProductsService {
 
     // Notify provider if product was auto-reverted to PENDING_REVIEW after edit
     if (autoRevertedToReview && existing.product.provider_id) {
-      await this.notifyProviderOfSubmission(updated.id, 'CUSTOM_PRODUCT_RESUBMITTED');
+      await this.notifyProviderOfSubmission(
+        updated.id,
+        'CUSTOM_PRODUCT_RESUBMITTED',
+      );
     }
 
     return creator_category_ids !== undefined ? this.loadById(id) : updated;
@@ -787,7 +903,11 @@ export class CustomProductsService {
         faqs: { include: { translations: true } },
       },
     });
-    if (!source) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_NOT_FOUND', message: 'Custom product not found' });
+    if (!source)
+      throw new NotFoundException({
+        code: 'CUSTOM_PRODUCT_NOT_FOUND',
+        message: 'Custom product not found',
+      });
 
     const created = await this.prisma.$transaction(async (tx) => {
       const newCp = await tx.customProduct.create({
@@ -885,7 +1005,10 @@ export class CustomProductsService {
     // Independent stores cannot publish custom products (own products only).
     await this.assertStoreAllowsCustomProducts(cp.creator_id);
 
-    if (cp.status !== ProductStatus.DRAFT && cp.status !== ProductStatus.REJECTED) {
+    if (
+      cp.status !== ProductStatus.DRAFT &&
+      cp.status !== ProductStatus.REJECTED
+    ) {
       throw new BadRequestException(
         `Cannot submit a custom product with status ${cp.status}`,
       );
@@ -961,7 +1084,10 @@ export class CustomProductsService {
   /** Provider rejects a custom product with a reason → REJECTED. */
   async reject(id: string, userId: string, reason: string) {
     if (!reason || !reason.trim()) {
-      throw new BadRequestException({ code: 'CUSTOM_PRODUCT_REJECTION_REASON_REQUIRED', message: 'Rejection reason is required' });
+      throw new BadRequestException({
+        code: 'CUSTOM_PRODUCT_REJECTION_REASON_REQUIRED',
+        message: 'Rejection reason is required',
+      });
     }
 
     const cp = await this.assertProviderOwnsBase(id, userId);
@@ -1001,7 +1127,11 @@ export class CustomProductsService {
     const provider = await this.prisma.provider.findUnique({
       where: { user_id: userId },
     });
-    if (!provider) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_PROVIDER_NOT_FOUND', message: 'Provider not found' });
+    if (!provider)
+      throw new NotFoundException({
+        code: 'CUSTOM_PRODUCT_PROVIDER_NOT_FOUND',
+        message: 'Provider not found',
+      });
 
     const skip = (page - 1) * limit;
     const where = {
@@ -1048,7 +1178,9 @@ export class CustomProductsService {
     await this.notificationsService.create(
       cp.product.provider.user_id,
       type,
-      isResubmit ? 'Custom product re-submitted' : 'New custom product to review',
+      isResubmit
+        ? 'Custom product re-submitted'
+        : 'New custom product to review',
       `${creatorName} ${isResubmit ? 'updated' : 'submitted'} "${title}" for your review`,
       { custom_product_id: customProductId },
     );
@@ -1058,7 +1190,14 @@ export class CustomProductsService {
 
   // FAQ answers render on the storefront via dangerouslySetInnerHTML, so an
   // unchecked id let any creator inject content onto another creator's product.
-  async createFaq(customProductId: string, userId: string, dto: { sort_order?: number; translations: { locale: string; question: string; answer: string }[] }) {
+  async createFaq(
+    customProductId: string,
+    userId: string,
+    dto: {
+      sort_order?: number;
+      translations: { locale: string; question: string; answer: string }[];
+    },
+  ) {
     await this.assertCreatorOwns(customProductId, userId);
     return this.prisma.customProductFaq.create({
       data: {
@@ -1078,30 +1217,52 @@ export class CustomProductsService {
     });
   }
 
-  async updateFaq(faqId: string, userId: string, dto: { sort_order?: number; translations?: { locale: string; question: string; answer: string }[] }) {
-    const faq = await this.prisma.customProductFaq.findUnique({ where: { id: faqId } });
-    if (!faq) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_FAQ_NOT_FOUND', message: 'FAQ not found' });
+  async updateFaq(
+    faqId: string,
+    userId: string,
+    dto: {
+      sort_order?: number;
+      translations?: { locale: string; question: string; answer: string }[];
+    },
+  ) {
+    const faq = await this.prisma.customProductFaq.findUnique({
+      where: { id: faqId },
+    });
+    if (!faq)
+      throw new NotFoundException({
+        code: 'CUSTOM_PRODUCT_FAQ_NOT_FOUND',
+        message: 'FAQ not found',
+      });
     await this.assertCreatorOwns(faq.custom_product_id, userId);
 
     if (dto.translations && dto.translations.length > 0) {
-      await this.prisma.customProductFaqTranslation.deleteMany({ where: { faq_id: faqId } });
+      await this.prisma.customProductFaqTranslation.deleteMany({
+        where: { faq_id: faqId },
+      });
     }
 
     return this.prisma.customProductFaq.update({
       where: { id: faqId },
       data: {
         ...(dto.sort_order !== undefined && { sort_order: dto.sort_order }),
-        ...(dto.translations && dto.translations.length > 0 && {
-          translations: { create: dto.translations },
-        }),
+        ...(dto.translations &&
+          dto.translations.length > 0 && {
+            translations: { create: dto.translations },
+          }),
       },
       include: { translations: true },
     });
   }
 
   async deleteFaq(faqId: string, userId: string) {
-    const faq = await this.prisma.customProductFaq.findUnique({ where: { id: faqId } });
-    if (!faq) throw new NotFoundException({ code: 'CUSTOM_PRODUCT_FAQ_NOT_FOUND', message: 'FAQ not found' });
+    const faq = await this.prisma.customProductFaq.findUnique({
+      where: { id: faqId },
+    });
+    if (!faq)
+      throw new NotFoundException({
+        code: 'CUSTOM_PRODUCT_FAQ_NOT_FOUND',
+        message: 'FAQ not found',
+      });
     await this.assertCreatorOwns(faq.custom_product_id, userId);
     return this.prisma.customProductFaq.delete({ where: { id: faqId } });
   }
@@ -1118,16 +1279,18 @@ export class CustomProductsService {
     switch (pricingType) {
       case PricingType.SINGLE:
         if (data.final_price === undefined || data.final_price === null) {
-          throw new BadRequestException(
-            { code: 'CUSTOM_PRODUCT_FINAL_PRICE_REQUIRED', message: 'final_price is required when pricing_type is SINGLE' },
-          );
+          throw new BadRequestException({
+            code: 'CUSTOM_PRODUCT_FINAL_PRICE_REQUIRED',
+            message: 'final_price is required when pricing_type is SINGLE',
+          });
         }
         break;
       case PricingType.MARGIN:
         if (data.margin_amount === undefined || data.margin_amount === null) {
-          throw new BadRequestException(
-            { code: 'CUSTOM_PRODUCT_MARGIN_AMOUNT_REQUIRED', message: 'margin_amount is required when pricing_type is MARGIN' },
-          );
+          throw new BadRequestException({
+            code: 'CUSTOM_PRODUCT_MARGIN_AMOUNT_REQUIRED',
+            message: 'margin_amount is required when pricing_type is MARGIN',
+          });
         }
         break;
       case PricingType.PER_VARIANT:
@@ -1136,9 +1299,11 @@ export class CustomProductsService {
             (sv) => sv.custom_price === undefined || sv.custom_price === null,
           );
           if (missing.length > 0) {
-            throw new BadRequestException(
-              { code: 'CUSTOM_PRODUCT_VARIANT_PRICE_REQUIRED', message: 'custom_price is required for each variant when pricing_type is PER_VARIANT' },
-            );
+            throw new BadRequestException({
+              code: 'CUSTOM_PRODUCT_VARIANT_PRICE_REQUIRED',
+              message:
+                'custom_price is required for each variant when pricing_type is PER_VARIANT',
+            });
           }
         }
         break;

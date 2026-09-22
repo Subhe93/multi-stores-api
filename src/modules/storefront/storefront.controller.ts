@@ -77,10 +77,7 @@ export class StorefrontController {
   }
 
   @Get(':slug/pages/:pageSlug')
-  getPage(
-    @Param('slug') slug: string,
-    @Param('pageSlug') pageSlug: string,
-  ) {
+  getPage(@Param('slug') slug: string, @Param('pageSlug') pageSlug: string) {
     return this.storefrontService.getPage(slug, pageSlug);
   }
 
@@ -93,7 +90,9 @@ export class StorefrontController {
 
   @Get(':slug/v2/product-template')
   getProductTemplate(@Param('slug') slug: string) {
-    return this.storefrontService.getPublishedPage(slug, { type: 'PRODUCT_TEMPLATE' });
+    return this.storefrontService.getPublishedPage(slug, {
+      type: 'PRODUCT_TEMPLATE',
+    });
   }
 
   // Listing templates — published snapshots for the /products catalog and the
@@ -101,12 +100,16 @@ export class StorefrontController {
   // the storefront then renders its built-in listing markup.
   @Get(':slug/v2/catalog-template')
   getCatalogTemplate(@Param('slug') slug: string) {
-    return this.storefrontService.getPublishedPage(slug, { type: 'CATALOG_TEMPLATE' });
+    return this.storefrontService.getPublishedPage(slug, {
+      type: 'CATALOG_TEMPLATE',
+    });
   }
 
   @Get(':slug/v2/collection-template')
   getCollectionTemplate(@Param('slug') slug: string) {
-    return this.storefrontService.getPublishedPage(slug, { type: 'COLLECTION_TEMPLATE' });
+    return this.storefrontService.getPublishedPage(slug, {
+      type: 'COLLECTION_TEMPLATE',
+    });
   }
 
   // Store-wide chrome — published snapshots of the HEADER and FOOTER pages.

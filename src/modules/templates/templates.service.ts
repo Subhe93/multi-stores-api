@@ -35,7 +35,11 @@ export class TemplatesService {
 
   getKit(id: string) {
     const kit = findKit(id);
-    if (!kit) throw new NotFoundException({ code: 'TEMPLATE_NOT_FOUND', message: 'Template not found' });
+    if (!kit)
+      throw new NotFoundException({
+        code: 'TEMPLATE_NOT_FOUND',
+        message: 'Template not found',
+      });
     return {
       id: kit.id,
       name: kit.name,
@@ -56,9 +60,17 @@ export class TemplatesService {
    * reviews before publishing. The replacement is intentional — the dashboard
    * shows a confirmation before calling this.
    */
-  async importKit(userId: string, kitId: string, opts: { withDemoData?: boolean }): Promise<ImportKitResult> {
+  async importKit(
+    userId: string,
+    kitId: string,
+    opts: { withDemoData?: boolean },
+  ): Promise<ImportKitResult> {
     const kit = findKit(kitId);
-    if (!kit) throw new NotFoundException({ code: 'TEMPLATE_NOT_FOUND', message: 'Template not found' });
+    if (!kit)
+      throw new NotFoundException({
+        code: 'TEMPLATE_NOT_FOUND',
+        message: 'Template not found',
+      });
 
     const storeId = await this.resolveCreatorStoreId(userId);
     const store = await this.prisma.store.findUnique({
@@ -88,7 +100,8 @@ export class TemplatesService {
         where: { id: storeId },
         data: {
           theme_key: kit.themeKey,
-          theme_customizations: kit.themeCustomizations as Prisma.InputJsonValue,
+          theme_customizations:
+            kit.themeCustomizations as Prisma.InputJsonValue,
         },
       });
 
@@ -99,7 +112,14 @@ export class TemplatesService {
         // Snapshot the current page before the destructive replace so the
         // creator can undo the import from the builder's History/restore.
         if (existingId) await this.snapshotPage(tx, existingId, backupLabel);
-        const page = await this.upsertPage(tx, storeId, kitPage, existingId, locales, kit.fallbackLocale);
+        const page = await this.upsertPage(
+          tx,
+          storeId,
+          kitPage,
+          existingId,
+          locales,
+          kit.fallbackLocale,
+        );
         await tx.pageSection.deleteMany({ where: { page_id: page.id } });
 
         let order = 0;
@@ -131,7 +151,13 @@ export class TemplatesService {
       //    slug) look populated. Best-effort: needs a platform category to
       //    exist; the category alone is still created otherwise.
       if (opts.withDemoData && kit.demoData) {
-        result.demoDataCreated = await this.createDemoData(tx, kit, storeId, assetMap, locales);
+        result.demoDataCreated = await this.createDemoData(
+          tx,
+          kit,
+          storeId,
+          assetMap,
+          locales,
+        );
       }
     });
 
@@ -152,13 +178,18 @@ export class TemplatesService {
     const demo = kit.demoData;
     if (!demo) return false;
 
-    const store = await tx.store.findUnique({ where: { id: storeId }, select: { creator_id: true } });
+    const store = await tx.store.findUnique({
+      where: { id: storeId },
+      select: { creator_id: true },
+    });
     if (!store) return false;
     const creatorId = store.creator_id;
 
     // Upsert the creator category by (creator_id, slug).
     const existingCat = await tx.creatorCategory.findUnique({
-      where: { creator_id_slug: { creator_id: creatorId, slug: demo.category.slug } },
+      where: {
+        creator_id_slug: { creator_id: creatorId, slug: demo.category.slug },
+      },
       select: { id: true },
     });
     if (existingCat) return true; // already seeded — don't duplicate products
@@ -170,14 +201,22 @@ export class TemplatesService {
         match_rule: 'MANUAL',
         match_tags: [],
         is_active: true,
-        translations: { create: demo.category.translations.map((t) => ({ locale: t.locale, name: t.name })) },
+        translations: {
+          create: demo.category.translations.map((t) => ({
+            locale: t.locale,
+            name: t.name,
+          })),
+        },
       },
       select: { id: true },
     });
 
     // Products require a platform category (Category) — pick any active one.
     // Without one we can't create products, but the category above still helps.
-    const platformCategory = await tx.category.findFirst({ where: { is_active: true }, select: { id: true } });
+    const platformCategory = await tx.category.findFirst({
+      where: { is_active: true },
+      select: { id: true },
+    });
     if (!platformCategory) return true;
 
     let index = 0;
@@ -185,8 +224,13 @@ export class TemplatesService {
       index += 1;
       const baseTitle = p.title.en || `product-${index}`;
       const slug =
-        baseTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) +
-        '-' + storeId.slice(0, 6);
+        baseTitle
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, '')
+          .slice(0, 60) +
+        '-' +
+        storeId.slice(0, 6);
       const imageUrls = (p.images || [])
         .map((ref) => substituteAssets(ref, assetMap))
         .filter((u): u is string => typeof u === 'string' && u.length > 0);
@@ -203,14 +247,19 @@ export class TemplatesService {
             create: locales.map((loc) => ({
               locale: loc,
               title: p.title[loc] ?? p.title[kit.fallbackLocale] ?? baseTitle,
-              description: p.description?.[loc] ?? p.description?.[kit.fallbackLocale] ?? '',
+              description:
+                p.description?.[loc] ??
+                p.description?.[kit.fallbackLocale] ??
+                '',
               slug, // shared across locales (canonical) — unique per product
             })),
           },
           images: imageUrls.length
             ? { create: imageUrls.map((url, i) => ({ url, sort_order: i })) }
             : undefined,
-          creator_categories: { create: [{ creator_category_id: category.id }] },
+          creator_categories: {
+            create: [{ creator_category_id: category.id }],
+          },
         },
       });
     }
@@ -239,14 +288,24 @@ export class TemplatesService {
   ): Promise<string | null> {
     let row: { id: string } | null;
     if (SINGLETON_TYPES.includes(kitPage.type)) {
-      row = await tx.page.findFirst({ where: { store_id: storeId, type: kitPage.type }, select: { id: true } });
+      row = await tx.page.findFirst({
+        where: { store_id: storeId, type: kitPage.type },
+        select: { id: true },
+      });
     } else if (kitPage.type === PageType.STATIC) {
       row = await tx.page.findFirst({
-        where: { store_id: storeId, type: PageType.STATIC, static_kind: kitPage.static_kind ?? null },
+        where: {
+          store_id: storeId,
+          type: PageType.STATIC,
+          static_kind: kitPage.static_kind ?? null,
+        },
         select: { id: true },
       });
     } else {
-      row = await tx.page.findFirst({ where: { store_id: storeId, slug: kitPage.slug ?? null }, select: { id: true } });
+      row = await tx.page.findFirst({
+        where: { store_id: storeId, slug: kitPage.slug ?? null },
+        select: { id: true },
+      });
     }
     return row?.id ?? null;
   }
@@ -254,12 +313,19 @@ export class TemplatesService {
   /** Capture the page's current sections + content + seo/translations as a
    *  PageVersion restore point (not published). No-op for empty pages. Shape
    *  mirrors PagesV2Service.publish so restoreVersion can rebuild from it. */
-  private async snapshotPage(tx: Prisma.TransactionClient, pageId: string, label: string) {
+  private async snapshotPage(
+    tx: Prisma.TransactionClient,
+    pageId: string,
+    label: string,
+  ) {
     const page = await tx.page.findUnique({
       where: { id: pageId },
       include: {
         translations: true,
-        sections: { include: { translations: true }, orderBy: { sort_order: 'asc' } },
+        sections: {
+          include: { translations: true },
+          orderBy: { sort_order: 'asc' },
+        },
       },
     });
     if (!page || page.sections.length === 0) return;
@@ -277,12 +343,20 @@ export class TemplatesService {
         section_key: s.section_key,
         settings: s.settings,
         sort_order: s.sort_order,
-        translations: s.translations.map((t) => ({ locale: t.locale, content: t.content })),
+        translations: s.translations.map((t) => ({
+          locale: t.locale,
+          content: t.content,
+        })),
       })),
     };
 
     await tx.pageVersion.create({
-      data: { page_id: pageId, label, snapshot: snapshot as Prisma.InputJsonValue, published_at: null },
+      data: {
+        page_id: pageId,
+        label,
+        snapshot: snapshot as Prisma.InputJsonValue,
+        published_at: null,
+      },
     });
   }
 
@@ -319,7 +393,11 @@ export class TemplatesService {
         if (!tr) continue;
         await tx.pageTranslation.upsert({
           where: { page_id_locale: { page_id: page.id, locale } },
-          update: { title: tr.title, meta_title: tr.meta_title, meta_description: tr.meta_description },
+          update: {
+            title: tr.title,
+            meta_title: tr.meta_title,
+            meta_description: tr.meta_description,
+          },
           create: {
             page_id: page.id,
             locale,
@@ -339,12 +417,20 @@ export class TemplatesService {
       where: { user_id: userId },
       select: { id: true },
     });
-    if (!creator) throw new NotFoundException({ code: 'TEMPLATE_CREATOR_NOT_FOUND', message: 'Creator not found' });
+    if (!creator)
+      throw new NotFoundException({
+        code: 'TEMPLATE_CREATOR_NOT_FOUND',
+        message: 'Creator not found',
+      });
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creator.id },
       select: { id: true },
     });
-    if (!store) throw new NotFoundException({ code: 'TEMPLATE_STORE_NOT_FOUND', message: 'Store not found' });
+    if (!store)
+      throw new NotFoundException({
+        code: 'TEMPLATE_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
     return store.id;
   }
 }

@@ -10,7 +10,10 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ProductFaqsService } from './product-faqs.service';
-import { CreateProductFaqDto, UpdateProductFaqDto } from './dto/product-faq.dto';
+import {
+  CreateProductFaqDto,
+  UpdateProductFaqDto,
+} from './dto/product-faq.dto';
 import { Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '@prisma/client';

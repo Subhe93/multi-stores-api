@@ -4,7 +4,7 @@ import {
   UnauthorizedException,
   ForbiddenException,
 } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
+import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -44,11 +44,17 @@ export class AuthService {
     const email = normalizeEmail(dto.email);
     const existing = await this.findUserByEmail(email);
     if (existing) {
-      throw new ConflictException({ code: 'AUTH_EMAIL_EXISTS', message: 'Email already registered' });
+      throw new ConflictException({
+        code: 'AUTH_EMAIL_EXISTS',
+        message: 'Email already registered',
+      });
     }
 
     if (dto.role === UserRole.ADMIN) {
-      throw new ForbiddenException({ code: 'AUTH_CANNOT_REGISTER_ADMIN', message: 'Cannot register as admin' });
+      throw new ForbiddenException({
+        code: 'AUTH_CANNOT_REGISTER_ADMIN',
+        message: 'Cannot register as admin',
+      });
     }
 
     const password_hash = await bcrypt.hash(dto.password, 12);
@@ -81,7 +87,11 @@ export class AuthService {
       });
     } else if (dto.role === UserRole.PROVIDER) {
       await this.prisma.provider.create({
-        data: { user_id: user.id, company_name: dto.first_name || 'My Company', country: 'US' },
+        data: {
+          user_id: user.id,
+          company_name: dto.first_name || 'My Company',
+          country: 'US',
+        },
       });
     } else if (dto.role === UserRole.CREATOR) {
       await this.prisma.creator.create({
@@ -94,8 +104,8 @@ export class AuthService {
     // Welcome email — best-effort, never blocks signup. Locale falls back to
     // the request's Accept-Language path via MailService → DB template lookup.
     const loginUrl =
-      (this.configService.get<string>('STOREFRONT_URL') || 'http://localhost:3003') +
-      '/auth/login';
+      (this.configService.get<string>('STOREFRONT_URL') ||
+        'http://localhost:3003') + '/auth/login';
     void this.mail.sendWelcome(user.email, {
       name: dto.first_name,
       loginUrl,
@@ -108,16 +118,28 @@ export class AuthService {
     const user = await this.findUserByEmail(dto.email);
 
     if (!user) {
-      throw new UnauthorizedException({ code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid credentials' });
+      throw new UnauthorizedException({
+        code: 'AUTH_INVALID_CREDENTIALS',
+        message: 'Invalid credentials',
+      });
     }
 
-    const passwordValid = await bcrypt.compare(dto.password, user.password_hash);
+    const passwordValid = await bcrypt.compare(
+      dto.password,
+      user.password_hash,
+    );
     if (!passwordValid) {
-      throw new UnauthorizedException({ code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid credentials' });
+      throw new UnauthorizedException({
+        code: 'AUTH_INVALID_CREDENTIALS',
+        message: 'Invalid credentials',
+      });
     }
 
     if (user.status !== 'ACTIVE') {
-      throw new ForbiddenException({ code: 'AUTH_ACCOUNT_NOT_ACTIVE', message: 'Account is not active' });
+      throw new ForbiddenException({
+        code: 'AUTH_ACCOUNT_NOT_ACTIVE',
+        message: 'Account is not active',
+      });
     }
 
     const tokens = await this.generateTokens(user.id, user.email, user.role);
@@ -135,7 +157,7 @@ export class AuthService {
 
   async refreshToken(refreshToken: string) {
     try {
-      const payload = this.jwtService.verify(refreshToken, {
+      const payload = this.jwtService.verify<{ sub: string }>(refreshToken, {
         secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
       });
 
@@ -159,7 +181,10 @@ export class AuthService {
 
       return this.generateTokens(user.id, user.email, user.role);
     } catch {
-      throw new UnauthorizedException({ code: 'AUTH_INVALID_REFRESH_TOKEN', message: 'Invalid refresh token' });
+      throw new UnauthorizedException({
+        code: 'AUTH_INVALID_REFRESH_TOKEN',
+        message: 'Invalid refresh token',
+      });
     }
   }
 
@@ -198,7 +223,7 @@ export class AuthService {
       { sub: user.id, type: 'password_reset' },
       {
         secret: this.configService.get<string>('JWT_SECRET')!,
-        expiresIn: '1h' as any,
+        expiresIn: '1h',
       },
     );
 
@@ -236,7 +261,10 @@ export class AuthService {
    * The store domain is derived server-side from the DB — never from raw client
    * input — so this can't be turned into an open redirect.
    */
-  private async buildResetUrl(token: string, storeSlug?: string): Promise<string> {
+  private async buildResetUrl(
+    token: string,
+    storeSlug?: string,
+  ): Promise<string> {
     const platformBase =
       this.configService.get<string>('STOREFRONT_URL') ||
       'http://localhost:3003';
@@ -265,12 +293,18 @@ export class AuthService {
 
   async resetPassword(token: string, newPassword: string) {
     try {
-      const payload = this.jwtService.verify(token, {
-        secret: this.configService.get<string>('JWT_SECRET')!,
-      });
+      const payload = this.jwtService.verify<{ sub: string; type?: string }>(
+        token,
+        {
+          secret: this.configService.get<string>('JWT_SECRET')!,
+        },
+      );
 
       if (payload.type !== 'password_reset') {
-        throw new UnauthorizedException({ code: 'AUTH_INVALID_RESET_TOKEN', message: 'Invalid reset token' });
+        throw new UnauthorizedException({
+          code: 'AUTH_INVALID_RESET_TOKEN',
+          message: 'Invalid reset token',
+        });
       }
 
       // Ensure the token still exists in sessions (i.e. wasn't already used).
@@ -279,7 +313,10 @@ export class AuthService {
       });
 
       if (!session || session.expires_at < new Date()) {
-        throw new UnauthorizedException({ code: 'AUTH_RESET_TOKEN_EXPIRED', message: 'Reset token expired or already used' });
+        throw new UnauthorizedException({
+          code: 'AUTH_RESET_TOKEN_EXPIRED',
+          message: 'Reset token expired or already used',
+        });
       }
 
       const password_hash = await bcrypt.hash(newPassword, 12);
@@ -295,16 +332,31 @@ export class AuthService {
 
       return { message: 'Password reset successfully' };
     } catch {
-      throw new UnauthorizedException({ code: 'AUTH_INVALID_OR_EXPIRED_RESET_TOKEN', message: 'Invalid or expired reset token' });
+      throw new UnauthorizedException({
+        code: 'AUTH_INVALID_OR_EXPIRED_RESET_TOKEN',
+        message: 'Invalid or expired reset token',
+      });
     }
   }
 
-  async changePassword(userId: string, currentPassword: string, newPassword: string) {
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+  ) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new UnauthorizedException({ code: 'AUTH_USER_NOT_FOUND', message: 'User not found' });
+    if (!user)
+      throw new UnauthorizedException({
+        code: 'AUTH_USER_NOT_FOUND',
+        message: 'User not found',
+      });
 
     const valid = await bcrypt.compare(currentPassword, user.password_hash);
-    if (!valid) throw new UnauthorizedException({ code: 'AUTH_CURRENT_PASSWORD_INCORRECT', message: 'Current password is incorrect' });
+    if (!valid)
+      throw new UnauthorizedException({
+        code: 'AUTH_CURRENT_PASSWORD_INCORRECT',
+        message: 'Current password is incorrect',
+      });
 
     const password_hash = await bcrypt.hash(newPassword, 12);
     await this.prisma.user.update({
@@ -338,21 +390,21 @@ export class AuthService {
     return user;
   }
 
-  private async generateTokens(
-    userId: string,
-    email: string,
-    role: UserRole,
-  ) {
+  private async generateTokens(userId: string, email: string, role: UserRole) {
     const payload = { sub: userId, email, role };
 
     const [access_token, refresh_token] = await Promise.all([
       this.jwtService.signAsync(payload, {
         secret: this.configService.get<string>('JWT_SECRET')!,
-        expiresIn: this.configService.get<string>('JWT_EXPIRES_IN') as any,
+        expiresIn: this.configService.get<string>(
+          'JWT_EXPIRES_IN',
+        ) as JwtSignOptions['expiresIn'],
       }),
       this.jwtService.signAsync(payload, {
         secret: this.configService.get<string>('JWT_REFRESH_SECRET')!,
-        expiresIn: this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') as any,
+        expiresIn: this.configService.get<string>(
+          'JWT_REFRESH_EXPIRES_IN',
+        ) as JwtSignOptions['expiresIn'],
       }),
     ]);
 

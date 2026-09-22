@@ -29,7 +29,10 @@ export class UploadsService {
     folder: string = 'general',
   ): Promise<{ url: string; file_type: string; file_size: number }> {
     if (!file) {
-      throw new BadRequestException({ code: 'UPLOAD_NO_FILE', message: 'No file provided' });
+      throw new BadRequestException({
+        code: 'UPLOAD_NO_FILE',
+        message: 'No file provided',
+      });
     }
 
     const ext = path.extname(file.originalname).toLowerCase();
@@ -40,7 +43,10 @@ export class UploadsService {
 
     const maxSize = 50 * 1024 * 1024; // 50MB
     if (file.size > maxSize) {
-      throw new BadRequestException({ code: 'UPLOAD_FILE_TOO_LARGE', message: 'File too large (max 50MB)' });
+      throw new BadRequestException({
+        code: 'UPLOAD_FILE_TOO_LARGE',
+        message: 'File too large (max 50MB)',
+      });
     }
 
     const safeFolder = this.sanitizeFolder(folder);
@@ -91,7 +97,10 @@ export class UploadsService {
         .webp({ quality: WEBP_QUALITY })
         .toBuffer();
     } catch {
-      throw new BadRequestException({ code: 'UPLOAD_IMAGE_PROCESS_FAILED', message: 'Could not process image — file may be corrupt' });
+      throw new BadRequestException({
+        code: 'UPLOAD_IMAGE_PROCESS_FAILED',
+        message: 'Could not process image — file may be corrupt',
+      });
     }
   }
 
@@ -111,7 +120,7 @@ export class UploadsService {
    * path is checked to still be inside the uploads directory — previously
    * `../../` in the url escaped it and could unlink any file the process owns.
    */
-  async deleteFile(fileUrl: string): Promise<void> {
+  deleteFile(fileUrl: string): Promise<void> {
     const filePath = path.resolve(process.cwd(), '.' + path.sep + fileUrl);
     const root = path.resolve(this.uploadDir);
     if (filePath !== root && !filePath.startsWith(root + path.sep)) {
@@ -123,5 +132,6 @@ export class UploadsService {
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
+    return Promise.resolve();
   }
 }

@@ -1,11 +1,17 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { join } from 'path';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
+import { CorsOriginService } from './common/cors/cors-origin.service';
+import {
+  matchesAllowedOrigin,
+  parseAllowedOrigins,
+} from './common/cors/cors-origin.matcher';
 
 async function bootstrap() {
   // rawBody keeps the unparsed request body available (req.rawBody) on every
@@ -23,7 +29,7 @@ async function bootstrap() {
     prefix: '/uploads/',
     maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year in ms
     immutable: true,
-    setHeaders: (res, filePath) => {
+    setHeaders: (res: Response, filePath: string) => {
       res.setHeader('X-Content-Type-Options', 'nosniff');
       // An SVG is a document: navigating straight to an uploaded one would run
       // any script inside it on this origin. Forcing a download kills that path
@@ -52,15 +58,14 @@ async function bootstrap() {
 
   app.useGlobalFilters(new AllExceptionsFilter());
 
-  // Stores can be served from creator-owned custom domains, so a hard-coded
-  // allowlist isn't possible by default. Set CORS_ALLOWED_ORIGINS (comma
-  // separated) to pin the origins once the deployment's domains are known;
-  // without it we keep reflecting the request origin, which is safe here only
-  // because authentication is Bearer-token rather than cookie based.
-  const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? '')
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean);
+  // CORS. CORS_ALLOWED_ORIGINS (comma separated) accepts exact origins and
+  // one-level wildcards ("https://*.iwings-digital.com"). Origins outside the
+  // list are then checked against the stores' custom domains (cached 5 min,
+  // hits and misses alike), so a creator-owned storefront domain works without
+  // a redeploy. Without the list we keep reflecting the request origin, which
+  // is safe here only because authentication is Bearer-token, not cookie based.
+  const allowedOrigins = parseAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS);
+  const corsOrigins = app.get(CorsOriginService);
 
   if (allowedOrigins.length === 0) {
     console.warn(
@@ -74,7 +79,14 @@ async function bootstrap() {
       if (!origin) return callback(null, true);
       if (origin.startsWith('http://localhost:')) return callback(null, true);
       if (allowedOrigins.length === 0) return callback(null, true);
-      return callback(null, allowedOrigins.includes(origin));
+      if (matchesAllowedOrigin(origin, allowedOrigins)) {
+        return callback(null, true);
+      }
+      corsOrigins.isStoreOrigin(origin).then(
+        (allowed) => callback(null, allowed),
+        (err: unknown) =>
+          callback(err instanceof Error ? err : new Error(String(err))),
+      );
     },
     credentials: true,
   });
@@ -83,4 +95,4 @@ async function bootstrap() {
   await app.listen(port);
   console.log(`API running on http://localhost:${port}/api`);
 }
-bootstrap();
+void bootstrap();

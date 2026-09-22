@@ -66,6 +66,11 @@ export class PageBuilderController {
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: UserRole,
   ) {
-    return this.pageBuilderService.reorderBlocks(pageId, blockIds, userId, role);
+    return this.pageBuilderService.reorderBlocks(
+      pageId,
+      blockIds,
+      userId,
+      role,
+    );
   }
 }

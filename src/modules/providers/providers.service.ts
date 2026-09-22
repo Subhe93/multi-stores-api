@@ -1,6 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { CreateProviderDto, UpdateProviderDto } from './dto/create-provider.dto';
+import {
+  CreateProviderDto,
+  UpdateProviderDto,
+} from './dto/create-provider.dto';
 
 @Injectable()
 export class ProvidersService {
@@ -19,7 +22,11 @@ export class ProvidersService {
     const provider = await this.prisma.provider.findUnique({
       where: { user_id: userId },
     });
-    if (!provider) throw new NotFoundException({ code: 'PROVIDER_PROFILE_NOT_FOUND', message: 'Provider profile not found' });
+    if (!provider)
+      throw new NotFoundException({
+        code: 'PROVIDER_PROFILE_NOT_FOUND',
+        message: 'Provider profile not found',
+      });
     return provider;
   }
 
@@ -28,7 +35,11 @@ export class ProvidersService {
       where: { id },
       include: { user: { select: { email: true, status: true } } },
     });
-    if (!provider) throw new NotFoundException({ code: 'PROVIDER_NOT_FOUND', message: 'Provider not found' });
+    if (!provider)
+      throw new NotFoundException({
+        code: 'PROVIDER_NOT_FOUND',
+        message: 'Provider not found',
+      });
     return provider;
   }
 
@@ -69,7 +80,11 @@ export class ProvidersService {
       where: { user_id: userId },
       select: { id: true },
     });
-    if (!provider) throw new NotFoundException({ code: 'PROVIDER_PROFILE_NOT_FOUND', message: 'Provider profile not found' });
+    if (!provider)
+      throw new NotFoundException({
+        code: 'PROVIDER_PROFILE_NOT_FOUND',
+        message: 'Provider profile not found',
+      });
 
     const skip = (page - 1) * limit;
 
@@ -87,7 +102,9 @@ export class ProvidersService {
         skip,
         take: limit,
         include: {
-          creator: { select: { display_name: true, avatar_url: true, verified: true } },
+          creator: {
+            select: { display_name: true, avatar_url: true, verified: true },
+          },
           language_config: { select: { primary_locale: true } },
           _count: { select: { static_pages: true } },
         },
@@ -120,7 +137,11 @@ export class ProvidersService {
       where: { user_id: userId },
       select: { id: true },
     });
-    if (!provider) throw new NotFoundException({ code: 'PROVIDER_PROFILE_NOT_FOUND', message: 'Provider profile not found' });
+    if (!provider)
+      throw new NotFoundException({
+        code: 'PROVIDER_PROFILE_NOT_FOUND',
+        message: 'Provider profile not found',
+      });
 
     const store = await this.prisma.store.findUnique({
       where: { id: storeId },
@@ -142,7 +163,11 @@ export class ProvidersService {
         },
       },
     });
-    if (!store) throw new NotFoundException({ code: 'PROVIDER_STORE_NOT_FOUND', message: 'Store not found' });
+    if (!store)
+      throw new NotFoundException({
+        code: 'PROVIDER_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
 
     const usesProvider = await this.prisma.customProduct.findFirst({
       where: {
@@ -152,7 +177,10 @@ export class ProvidersService {
       select: { id: true },
     });
     if (!usesProvider) {
-      throw new NotFoundException({ code: 'PROVIDER_STORE_NOT_USING_PRODUCTS', message: 'Store does not use your products' });
+      throw new NotFoundException({
+        code: 'PROVIDER_STORE_NOT_USING_PRODUCTS',
+        message: 'Store does not use your products',
+      });
     }
 
     const customProducts = await this.prisma.customProduct.findMany({

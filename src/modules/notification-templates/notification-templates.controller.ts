@@ -1,4 +1,12 @@
-import { Controller, Get, Put, Delete, Param, Body, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Put,
+  Delete,
+  Param,
+  Body,
+  UseGuards,
+} from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { NotificationTemplatesService } from './notification-templates.service';
 import { UpdateNotificationTemplateDto } from './dto/notification-template.dto';

@@ -12,7 +12,7 @@ const BRAND = 'Multi Stores';
 
 // Escape interpolated values as defense-in-depth, so a future user-controlled
 // field can't inject markup into the email body or break out of an attribute.
-function esc(s: unknown): string {
+function esc(s: string | number | boolean | null | undefined): string {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -63,7 +63,10 @@ function button(label: string, url: string): string {
   return `<a href="${esc(url)}" style="display:inline-block;background:#18181b;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 20px;border-radius:8px;">${esc(label)}</a>`;
 }
 
-export function passwordResetEmail(resetUrl: string, brand?: EmailBrand): EmailParts {
+export function passwordResetEmail(
+  resetUrl: string,
+  brand?: EmailBrand,
+): EmailParts {
   const name = brand?.platformName || BRAND;
   return {
     subject: `Reset your ${name} password`,
@@ -121,7 +124,9 @@ export interface OrderConfirmationData extends EmailBrand {
   itemsText?: string;
 }
 
-export function orderConfirmationEmail(data: OrderConfirmationData): EmailParts {
+export function orderConfirmationEmail(
+  data: OrderConfirmationData,
+): EmailParts {
   const paymentLine = data.paid
     ? 'Your payment was received.'
     : 'You chose cash on delivery — please pay the courier on arrival.';
@@ -345,7 +350,10 @@ export interface WelcomeData {
   loginUrl?: string;
 }
 
-export function welcomeEmail(data: WelcomeData, brand?: EmailBrand): EmailParts {
+export function welcomeEmail(
+  data: WelcomeData,
+  brand?: EmailBrand,
+): EmailParts {
   const platform = brand?.platformName || BRAND;
   const greeting = data.name ? `Hi ${esc(data.name)},` : 'Hi there,';
   const cta = data.loginUrl

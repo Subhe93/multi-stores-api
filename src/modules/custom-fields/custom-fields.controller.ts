@@ -10,7 +10,10 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { CustomFieldsService } from './custom-fields.service';
-import { CreateCustomFieldDto, UpdateCustomFieldDto } from './dto/custom-field.dto';
+import {
+  CreateCustomFieldDto,
+  UpdateCustomFieldDto,
+} from './dto/custom-field.dto';
 import { Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '@prisma/client';

@@ -79,7 +79,11 @@ export class AuthController {
     @CurrentUser('id') userId: string,
     @Body() dto: ChangePasswordDto,
   ) {
-    return this.authService.changePassword(userId, dto.current_password, dto.new_password);
+    return this.authService.changePassword(
+      userId,
+      dto.current_password,
+      dto.new_password,
+    );
   }
 
   @Get('me')

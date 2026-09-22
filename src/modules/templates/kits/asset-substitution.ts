@@ -15,7 +15,9 @@ export function substituteAssets<T>(value: T, map: Record<string, string>): T {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => substituteAssets(item, map)) as unknown as T;
+    return (value as unknown[]).map((item) =>
+      substituteAssets(item, map),
+    ) as unknown as T;
   }
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {};

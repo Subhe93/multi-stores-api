@@ -150,10 +150,7 @@ export class PagesV2Controller {
   }
 
   @Get(':id/versions')
-  listVersions(
-    @CurrentUser('id') userId: string,
-    @Param('id') pageId: string,
-  ) {
+  listVersions(@CurrentUser('id') userId: string, @Param('id') pageId: string) {
     return this.service.listVersions(userId, pageId);
   }
 

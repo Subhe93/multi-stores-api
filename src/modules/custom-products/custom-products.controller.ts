@@ -11,11 +11,21 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { CustomProductsService } from './custom-products.service';
-import { CreateCustomProductDto, UpdateCustomProductDto } from './dto/custom-product.dto';
+import {
+  CreateCustomProductDto,
+  UpdateCustomProductDto,
+} from './dto/custom-product.dto';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '@prisma/client';
-import { IsString, IsOptional, IsArray, ValidateNested, IsInt, Min } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsArray,
+  ValidateNested,
+  IsInt,
+  Min,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 class FaqTranslationDto {
@@ -26,12 +36,19 @@ class FaqTranslationDto {
 
 class CreateCustomProductFaqDto {
   @IsOptional() @IsInt() @Min(0) @Type(() => Number) sort_order?: number;
-  @IsArray() @ValidateNested({ each: true }) @Type(() => FaqTranslationDto) translations: FaqTranslationDto[];
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => FaqTranslationDto)
+  translations: FaqTranslationDto[];
 }
 
 class UpdateCustomProductFaqDto {
   @IsOptional() @IsInt() @Min(0) @Type(() => Number) sort_order?: number;
-  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => FaqTranslationDto) translations?: FaqTranslationDto[];
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => FaqTranslationDto)
+  translations?: FaqTranslationDto[];
 }
 
 class RejectCustomProductDto {
@@ -171,10 +188,7 @@ export class CustomProductsController {
   }
 
   @Delete('faqs/:faqId')
-  deleteFaq(
-    @Param('faqId') faqId: string,
-    @CurrentUser('id') userId: string,
-  ) {
+  deleteFaq(@Param('faqId') faqId: string, @CurrentUser('id') userId: string) {
     return this.customProductsService.deleteFaq(faqId, userId);
   }
 }

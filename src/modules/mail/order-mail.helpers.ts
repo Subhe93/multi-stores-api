@@ -125,7 +125,7 @@ const ITEMS_PHRASES = {
 export type EmailLocale = keyof typeof ITEMS_PHRASES;
 
 export function pickLocale(locale?: string): EmailLocale {
-  if (locale && (locale in ITEMS_PHRASES)) return locale as EmailLocale;
+  if (locale && locale in ITEMS_PHRASES) return locale as EmailLocale;
   return 'en';
 }
 
@@ -136,7 +136,7 @@ export function emailPhrases(locale?: string) {
 // HTML escape — defense-in-depth for translated product names that flow into the
 // email body. Same pair lives in templates.ts; kept duplicated here so this file
 // is independently importable.
-function esc(s: unknown): string {
+function esc(s: string | number | boolean | null | undefined): string {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -203,7 +203,10 @@ export const orderWithItemsInclude = {
 
 type Translation = { locale: string; title: string };
 
-function pickTitle(translations: Translation[] | undefined, locale: string): string {
+function pickTitle(
+  translations: Translation[] | undefined,
+  locale: string,
+): string {
   if (!translations?.length) return '';
   return (
     translations.find((t) => t.locale === locale)?.title ||
@@ -228,7 +231,10 @@ interface OrderItemForEmail {
   custom_product?: {
     translations?: Translation[];
     mockup_images?: { url: string }[];
-    product?: { images?: { url: string }[]; variant_option_config?: unknown } | null;
+    product?: {
+      images?: { url: string }[];
+      variant_option_config?: unknown;
+    } | null;
   } | null;
 }
 
@@ -400,13 +406,20 @@ export function renderOrderItems(
 export function absoluteUrl(maybeRelative: string, base: string): string {
   if (/^https?:\/\//i.test(maybeRelative)) return maybeRelative;
   const cleanBase = base.replace(/\/$/, '');
-  const cleanPath = maybeRelative.startsWith('/') ? maybeRelative : `/${maybeRelative}`;
+  const cleanPath = maybeRelative.startsWith('/')
+    ? maybeRelative
+    : `/${maybeRelative}`;
   return `${cleanBase}${cleanPath}`;
 }
 
-export function buildOrderUrl(storeSlug: string | undefined, orderId: string, storefrontBase: string): string {
+export function buildOrderUrl(
+  storeSlug: string | undefined,
+  orderId: string,
+  storefrontBase: string,
+): string {
   const cleanBase = storefrontBase.replace(/\/$/, '');
-  if (storeSlug) return `${cleanBase}/store/${storeSlug}/account/orders/${orderId}`;
+  if (storeSlug)
+    return `${cleanBase}/store/${storeSlug}/account/orders/${orderId}`;
   return `${cleanBase}/account/orders/${orderId}`;
 }
 

@@ -12,6 +12,17 @@ import {
   TranslatableEntity,
 } from './dto/translation.dto';
 
+/** The columns the translation overview reads from any translatable entity. */
+interface OverviewEntity {
+  id: string;
+  slug?: string | null;
+  translations?: {
+    locale: string;
+    title?: string | null;
+    name?: string | null;
+  }[];
+}
+
 @Injectable()
 export class TranslationsService {
   private readonly logger = new Logger(TranslationsService.name);
@@ -26,14 +37,19 @@ export class TranslationsService {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
     });
-    if (!creator) throw new NotFoundException({ code: 'TRANSLATION_CREATOR_NOT_FOUND', message: 'Creator not found' });
+    if (!creator)
+      throw new NotFoundException({
+        code: 'TRANSLATION_CREATOR_NOT_FOUND',
+        message: 'Creator not found',
+      });
 
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creator.id },
       include: { language_config: true },
     });
     const primaryLocale = store?.language_config?.primary_locale ?? 'en';
-    const secondaryLocales: string[] = store?.language_config?.secondary_locales ?? [];
+    const secondaryLocales: string[] =
+      store?.language_config?.secondary_locales ?? [];
 
     const [products, customProducts, pages] = await Promise.all([
       this.prisma.product.findMany({
@@ -55,15 +71,15 @@ export class TranslationsService {
         : Promise.resolve([]),
     ]);
 
-    const mapEntity = (entities: any[], type: string) =>
+    const mapEntity = (entities: OverviewEntity[], type: string) =>
       entities.map((e) => {
         const t = e.translations ?? [];
-        const primaryT = t.find((x: any) => x.locale === primaryLocale) ?? t[0];
+        const primaryT = t.find((x) => x.locale === primaryLocale) ?? t[0];
         return {
           id: e.id,
           type,
           title: primaryT?.title ?? primaryT?.name ?? e.slug ?? 'Untitled',
-          translated_locales: t.map((x: any) => x.locale) as string[],
+          translated_locales: t.map((x) => x.locale),
         };
       });
 
@@ -80,19 +96,36 @@ export class TranslationsService {
   /**
    * Translate a single entity from source to target locale.
    */
-  async autoTranslate(dto: AutoTranslateDto, userId: string, userRole: UserRole) {
+  async autoTranslate(
+    dto: AutoTranslateDto,
+    userId: string,
+    userRole: UserRole,
+  ) {
     const { entity_type, entity_id, source_locale, target_locale } = dto;
     await this.assertOwnsEntity(entity_type, entity_id, userId, userRole);
 
-    const sourceText = await this.getSourceTranslation(entity_type, entity_id, source_locale);
+    const sourceText = await this.getSourceTranslation(
+      entity_type,
+      entity_id,
+      source_locale,
+    );
     if (!sourceText) {
       throw new NotFoundException(
         `No ${source_locale} translation found for ${entity_type} ${entity_id}`,
       );
     }
 
-    const translated = await this.translateFields(sourceText, source_locale, target_locale);
-    await this.saveTranslation(entity_type, entity_id, target_locale, translated);
+    const translated = await this.translateFields(
+      sourceText,
+      source_locale,
+      target_locale,
+    );
+    await this.saveTranslation(
+      entity_type,
+      entity_id,
+      target_locale,
+      translated,
+    );
 
     return { entity_type, entity_id, source_locale, target_locale, translated };
   }
@@ -100,8 +133,16 @@ export class TranslationsService {
   /**
    * Translate raw text directly — used by dashboard forms before entity is saved.
    */
-  async translateSingleText(text: string, sourceLocale: string, targetLocale: string) {
-    const translated = await this.callMyMemory(text, sourceLocale, targetLocale);
+  async translateSingleText(
+    text: string,
+    sourceLocale: string,
+    targetLocale: string,
+  ) {
+    const translated = await this.callMyMemory(
+      text,
+      sourceLocale,
+      targetLocale,
+    );
     return { translated };
   }
 
@@ -109,63 +150,101 @@ export class TranslationsService {
    * Bulk translate all entities of specified types for a store.
    * entity_types: 'products' | 'custom_products' | 'designs' | 'pages' | 'all'
    */
-  async bulkTranslate(dto: BulkTranslateDto, userId: string, userRole: UserRole) {
+  async bulkTranslate(
+    dto: BulkTranslateDto,
+    userId: string,
+    userRole: UserRole,
+  ) {
     const store = await this.prisma.store.findUnique({
       where: { id: dto.store_id },
       include: { language_config: true, creator: true },
     });
-    if (!store) throw new NotFoundException({ code: 'TRANSLATION_STORE_NOT_FOUND', message: 'Store not found' });
+    if (!store)
+      throw new NotFoundException({
+        code: 'TRANSLATION_STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
     // Otherwise any creator could overwrite a rival store's whole catalogue of
     // translations and run up its external translation-API usage.
     this.assertOwnsStore(store.creator.user_id, userId, userRole);
 
-    const sourceLocale = dto.source_locale || store.language_config?.primary_locale || 'en';
+    const sourceLocale =
+      dto.source_locale || store.language_config?.primary_locale || 'en';
     const entityTypes = dto.entity_types ?? ['products'];
 
-    const results: Record<string, { total: number; translated: number; skipped: number }> = {};
+    const results: Record<
+      string,
+      { total: number; translated: number; skipped: number }
+    > = {};
 
     if (entityTypes.includes('products') || entityTypes.includes('all')) {
       results.products = await this.bulkTranslateProducts(
-        store.creator.id, sourceLocale, dto.target_locale,
+        store.creator.id,
+        sourceLocale,
+        dto.target_locale,
       );
     }
 
-    if (entityTypes.includes('custom_products') || entityTypes.includes('all')) {
+    if (
+      entityTypes.includes('custom_products') ||
+      entityTypes.includes('all')
+    ) {
       results.custom_products = await this.bulkTranslateCustomProducts(
-        store.creator.id, sourceLocale, dto.target_locale,
+        store.creator.id,
+        sourceLocale,
+        dto.target_locale,
       );
     }
 
     if (entityTypes.includes('pages') || entityTypes.includes('all')) {
       results.pages = await this.bulkTranslatePages(
-        store.id, sourceLocale, dto.target_locale,
+        store.id,
+        sourceLocale,
+        dto.target_locale,
       );
     }
 
-    return { store_id: dto.store_id, target_locale: dto.target_locale, results };
+    return {
+      store_id: dto.store_id,
+      target_locale: dto.target_locale,
+      results,
+    };
   }
 
   // ──────────────────────────────────────────────────────────
   // Private bulk helpers
   // ──────────────────────────────────────────────────────────
 
-  private async bulkTranslateProducts(creatorId: string, sourceLocale: string, targetLocale: string) {
+  private async bulkTranslateProducts(
+    creatorId: string,
+    sourceLocale: string,
+    targetLocale: string,
+  ) {
     const products = await this.prisma.product.findMany({
       where: { creator_id: creatorId },
       include: { translations: true },
     });
 
-    let translated = 0, skipped = 0;
+    let translated = 0,
+      skipped = 0;
 
     for (const product of products) {
-      const source = product.translations.find((t) => t.locale === sourceLocale);
-      const existing = product.translations.find((t) => t.locale === targetLocale);
-      if (!source || existing) { skipped++; continue; }
+      const source = product.translations.find(
+        (t) => t.locale === sourceLocale,
+      );
+      const existing = product.translations.find(
+        (t) => t.locale === targetLocale,
+      );
+      if (!source || existing) {
+        skipped++;
+        continue;
+      }
 
       try {
         const result = await this.translateFields(
           { title: source.title, description: source.description },
-          sourceLocale, targetLocale,
+          sourceLocale,
+          targetLocale,
         );
         await this.prisma.productTranslation.create({
           data: {
@@ -186,23 +265,32 @@ export class TranslationsService {
     return { total: products.length, translated, skipped };
   }
 
-  private async bulkTranslateCustomProducts(creatorId: string, sourceLocale: string, targetLocale: string) {
+  private async bulkTranslateCustomProducts(
+    creatorId: string,
+    sourceLocale: string,
+    targetLocale: string,
+  ) {
     const items = await this.prisma.customProduct.findMany({
       where: { creator_id: creatorId },
       include: { translations: true },
     });
 
-    let translated = 0, skipped = 0;
+    let translated = 0,
+      skipped = 0;
 
     for (const item of items) {
       const source = item.translations.find((t) => t.locale === sourceLocale);
       const existing = item.translations.find((t) => t.locale === targetLocale);
-      if (!source || existing) { skipped++; continue; }
+      if (!source || existing) {
+        skipped++;
+        continue;
+      }
 
       try {
         const result = await this.translateFields(
           { title: source.title, description: source.description ?? '' },
-          sourceLocale, targetLocale,
+          sourceLocale,
+          targetLocale,
         );
         await this.prisma.customProductTranslation.create({
           data: {
@@ -223,27 +311,39 @@ export class TranslationsService {
     return { total: items.length, translated, skipped };
   }
 
-  private async bulkTranslatePages(storeId: string, sourceLocale: string, targetLocale: string) {
+  private async bulkTranslatePages(
+    storeId: string,
+    sourceLocale: string,
+    targetLocale: string,
+  ) {
     const pages = await this.prisma.staticPage.findMany({
       where: { store_id: storeId },
       include: { translations: true },
     });
 
-    let translated = 0, skipped = 0;
+    let translated = 0,
+      skipped = 0;
 
     for (const page of pages) {
       const source = page.translations.find((t) => t.locale === sourceLocale);
       const existing = page.translations.find((t) => t.locale === targetLocale);
-      if (!source || existing) { skipped++; continue; }
+      if (!source || existing) {
+        skipped++;
+        continue;
+      }
 
       try {
         const result = await this.translateFields(
           { title: source.title, content: source.content ?? '' },
-          sourceLocale, targetLocale,
+          sourceLocale,
+          targetLocale,
         );
         await this.prisma.staticPageTranslation.upsert({
           where: { page_id_locale: { page_id: page.id, locale: targetLocale } },
-          update: { title: result.title || source.title, content: result.content },
+          update: {
+            title: result.title || source.title,
+            content: result.content,
+          },
           create: {
             page_id: page.id,
             locale: targetLocale,
@@ -370,7 +470,9 @@ export class TranslationsService {
       }
       case TranslatableEntity.CUSTOM_PRODUCT: {
         const t = await this.prisma.customProductTranslation.findUnique({
-          where: { custom_product_id_locale: { custom_product_id: entityId, locale } },
+          where: {
+            custom_product_id_locale: { custom_product_id: entityId, locale },
+          },
         });
         return t ? { title: t.title, description: t.description || '' } : null;
       }
@@ -389,13 +491,16 @@ export class TranslationsService {
       case TranslatableEntity.PRODUCT:
         await this.prisma.productTranslation.upsert({
           where: { product_id_locale: { product_id: entityId, locale } },
-          update: { title: translated.title!, description: translated.description! },
+          update: {
+            title: translated.title,
+            description: translated.description,
+          },
           create: {
             product_id: entityId,
             locale,
-            title: translated.title!,
-            description: translated.description!,
-            slug: this.generateSlug(translated.title!),
+            title: translated.title,
+            description: translated.description,
+            slug: this.generateSlug(translated.title),
           },
         });
         break;
@@ -403,31 +508,47 @@ export class TranslationsService {
       case TranslatableEntity.CATEGORY:
         await this.prisma.categoryTranslation.upsert({
           where: { category_id_locale: { category_id: entityId, locale } },
-          update: { name: translated.name!, description: translated.description },
-          create: { category_id: entityId, locale, name: translated.name!, description: translated.description },
+          update: {
+            name: translated.name,
+            description: translated.description,
+          },
+          create: {
+            category_id: entityId,
+            locale,
+            name: translated.name,
+            description: translated.description,
+          },
         });
         break;
-
-
 
       case TranslatableEntity.STATIC_PAGE:
         await this.prisma.staticPageTranslation.upsert({
           where: { page_id_locale: { page_id: entityId, locale } },
-          update: { title: translated.title!, content: translated.content },
-          create: { page_id: entityId, locale, title: translated.title!, content: translated.content },
+          update: { title: translated.title, content: translated.content },
+          create: {
+            page_id: entityId,
+            locale,
+            title: translated.title,
+            content: translated.content,
+          },
         });
         break;
 
       case TranslatableEntity.CUSTOM_PRODUCT:
         await this.prisma.customProductTranslation.upsert({
-          where: { custom_product_id_locale: { custom_product_id: entityId, locale } },
-          update: { title: translated.title!, description: translated.description },
+          where: {
+            custom_product_id_locale: { custom_product_id: entityId, locale },
+          },
+          update: {
+            title: translated.title,
+            description: translated.description,
+          },
           create: {
             custom_product_id: entityId,
             locale,
-            title: translated.title!,
+            title: translated.title,
             description: translated.description,
-            slug: this.generateSlug(translated.title!),
+            slug: this.generateSlug(translated.title),
           },
         });
         break;
@@ -445,9 +566,16 @@ export class TranslationsService {
   ): Promise<Record<string, string>> {
     const result: Record<string, string> = {};
     for (const [key, value] of Object.entries(source)) {
-      if (!value?.trim()) { result[key] = value; continue; }
+      if (!value?.trim()) {
+        result[key] = value;
+        continue;
+      }
       try {
-        result[key] = await this.callMyMemory(value, sourceLocale, targetLocale);
+        result[key] = await this.callMyMemory(
+          value,
+          sourceLocale,
+          targetLocale,
+        );
       } catch (err) {
         this.logger.warn(`MyMemory failed for "${key}": ${err}`);
         result[key] = value;
@@ -456,9 +584,16 @@ export class TranslationsService {
     return result;
   }
 
-  private async callMyMemory(text: string, sourceLang: string, targetLang: string): Promise<string> {
+  private async callMyMemory(
+    text: string,
+    sourceLang: string,
+    targetLang: string,
+  ): Promise<string> {
     const MAX_CHARS = 400;
-    const plain = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const plain = text
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
     if (!plain) return text;
 
     const chunks = this.splitText(plain, MAX_CHARS);
@@ -467,16 +602,21 @@ export class TranslationsService {
     for (const chunk of chunks) {
       const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(chunk)}&langpair=${sourceLang}|${targetLang}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-      const data = await res.json() as { responseData: { translatedText: string }; responseStatus: number };
+      const data = (await res.json()) as {
+        responseData: { translatedText: string };
+        responseStatus: number;
+      };
 
       if (data.responseStatus === 200 && data.responseData?.translatedText) {
         translatedChunks.push(data.responseData.translatedText);
       } else {
-        this.logger.warn(`MyMemory status ${data.responseStatus} for: "${chunk.substring(0, 40)}..."`);
+        this.logger.warn(
+          `MyMemory status ${data.responseStatus} for: "${chunk.substring(0, 40)}..."`,
+        );
         translatedChunks.push(chunk);
       }
 
-      if (chunks.length > 1) await new Promise(r => setTimeout(r, 200));
+      if (chunks.length > 1) await new Promise((r) => setTimeout(r, 200));
     }
 
     return translatedChunks.join(' ');
@@ -517,13 +657,15 @@ export class TranslationsService {
   }
 
   private generateSlug(text: string): string {
-    return text
-      .toLowerCase()
-      .replace(/[\u0600-\u06FF]/g, '')
-      .replace(/[^\w\s-]/g, '')
-      .replace(/[\s_]+/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .substring(0, 100) || `item-${Date.now()}`;
+    return (
+      text
+        .toLowerCase()
+        .replace(/[\u0600-\u06FF]/g, '')
+        .replace(/[^\w\s-]/g, '')
+        .replace(/[\s_]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .substring(0, 100) || `item-${Date.now()}`
+    );
   }
 }
