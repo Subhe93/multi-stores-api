@@ -56,6 +56,36 @@ export class SendTestEmailDto {
   to?: string;
 }
 
+// Preview or test-send of a template with sample data. The content fields
+// carry the editor's unsaved draft for one locale; when omitted the stored
+// template is used.
+export class TemplateSampleDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(5)
+  locale?: string;
+
+  // Admin only. A creator's test always goes to their own login email.
+  @IsOptional()
+  @IsEmail()
+  to?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  subject?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200000)
+  body_html?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100000)
+  body_text?: string;
+}
+
 // Delivery log filters. Query strings, so numbers arrive as text.
 export class EmailLogQueryDto {
   @IsOptional()

@@ -11,7 +11,10 @@
  *
  * Run with:
  *   npx ts-node prisma/scripts/seed-store-email-templates.ts \
- *     --slug naturalcotton --display-name "Natural Cotton" --company "Namez AB"
+ *     --slug naturalcotton --display-name "Natural Cotton"
+ *
+ * The footer names the platform through {{platform_name}} (Admin → Settings →
+ * Platform Info), so renaming the platform updates every template.
  *
  * Options:
  *   --preview <dir>   also write rendered sample HTML files there
@@ -28,7 +31,6 @@ const LOCALES: Locale[] = ['sv', 'en'];
 
 interface Brand {
   name: string;
-  company: string;
   text: string;
   muted: string;
   accent: string;
@@ -298,7 +300,7 @@ ${body}
           <td align="center" style="padding:28px 16px 0;">
             <p style="margin:0 0 8px;font-family:${SERIF};font-size:15px;color:${b.text};">${esc(c.thanks)}</p>
             <p style="margin:0 0 14px;font-family:${SANS};font-size:12px;"><a href="{{store_url}}" style="color:${b.text};text-decoration:underline;">${esc(c.visit)}</a></p>
-            <p style="margin:0;font-family:${SANS};font-size:11px;line-height:1.6;color:${b.muted};">${esc(b.name)}${b.company ? ` · ${esc(b.company)}` : ''}</p>
+            <p style="margin:0;font-family:${SANS};font-size:11px;line-height:1.6;color:${b.muted};">${esc(b.name)}{{#if platform_name}} · {{platform_name}}{{/if}}</p>
           </td>
         </tr>
       </table>
@@ -398,7 +400,7 @@ function textFor(event: string, b: Brand, locale: Locale): string {
   const totals = `\n{{totals_text}}\n`;
   const addr = `{{#if shipping_address_text}}\n${c.deliveryAddress}:\n{{shipping_address_text}}\n{{/if}}`;
   const view = `{{#if order_url}}\n${event === 'new_order_owner' ? c.openOrder : c.viewOrder}: {{order_url}}\n{{/if}}`;
-  const foot = `\n${b.name}${b.company ? ` · ${b.company}` : ''}\n{{store_url}}`;
+  const foot = `\n${b.name}{{#if platform_name}} · {{platform_name}}{{/if}}\n{{store_url}}`;
   switch (event) {
     case 'order_confirmation':
       return head + itemsText + totals + addr + view + foot;
@@ -477,6 +479,7 @@ function sampleVars(locale: Locale): Record<string, string> {
   <td style="padding:12px 8px;border-bottom:1px solid #e4e4e7;vertical-align:top;text-align:end;font-size:13px;color:#18181b;font-weight:600;white-space:nowrap;">${price}</td>
 </tr>`;
   return {
+    platform_name: 'Namez AB',
     store_name: 'Natural Cotton',
     store_url: 'https://naturalcotton.se',
     store_logo_url: '',
@@ -581,7 +584,6 @@ async function main(): Promise<void> {
 
     const brand: Brand = {
       name: storeName,
-      company: arg('company') || '',
       ...colors,
     };
     const templates = buildTemplates(brand);

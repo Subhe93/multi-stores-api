@@ -46,6 +46,8 @@ export function substitute(
  * localized blocks, since a template has no loops.
  */
 const ORDER_COMMON_VARIABLES = [
+  // Admin → Settings → Platform Info: the platform / company name.
+  'platform_name',
   'store_name',
   'store_url',
   'store_logo_url',
@@ -226,11 +228,11 @@ export class NotificationTemplatesService {
       },
       {
         event: 'welcome',
-        variables: ['name', 'login_url'],
+        variables: ['platform_name', 'name', 'login_url'],
       },
       {
         event: 'password_reset',
-        variables: ['reset_url'],
+        variables: ['platform_name', 'reset_url'],
       },
     ];
 

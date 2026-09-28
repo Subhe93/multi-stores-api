@@ -4,7 +4,10 @@ import { EmailLogStatus, Prisma, StoreType } from '@prisma/client';
 import * as nodemailer from 'nodemailer';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CryptoService } from '../../common/crypto/crypto.service';
-import { NotificationTemplatesService } from '../notification-templates/notification-templates.service';
+import {
+  NotificationTemplatesService,
+  substitute,
+} from '../notification-templates/notification-templates.service';
 import {
   passwordResetEmail,
   orderConfirmationEmail,
@@ -37,11 +40,29 @@ import {
   buildOrderUrl,
   buildStoreUrl,
   loadOrderForEmail,
+  OrderForEmail,
 } from './order-mail.helpers';
 
 /** Delivery log retention. */
 const EMAIL_LOG_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const EMAIL_LOG_PRUNE_EVERY_MS = 24 * 60 * 60 * 1000;
+
+type OrderEmailEvent =
+  | 'order_confirmation'
+  | 'order_shipped'
+  | 'order_delivered'
+  | 'order_cancelled'
+  | 'order_refunded'
+  | 'new_order_owner';
+
+/** Draft (or stored) template to render with sample data. */
+interface TemplateSampleInput {
+  event: string;
+  locale?: string;
+  subject?: string;
+  body_html?: string;
+  body_text?: string;
+}
 
 /** What the delivery log records about a message, besides the outcome. */
 interface MailMeta {
@@ -543,6 +564,7 @@ export class MailService {
     // Try the admin-managed template first; fall back to the bundled default
     // so a missing/disabled DB template never silently breaks password reset.
     const rendered = await this.templates.render('password_reset', locale, {
+      platform_name: await this.platformDisplayName(),
       reset_url: resetUrl,
     });
     if (rendered)
@@ -852,6 +874,7 @@ export class MailService {
   // platform sender with the platform template.
   async sendWelcome(to: string, data: WelcomeData, locale?: string) {
     const rendered = await this.templates.render('welcome', locale, {
+      platform_name: await this.platformDisplayName(),
       name: data.name ?? '',
       login_url: data.loginUrl ?? '',
     });
@@ -871,13 +894,7 @@ export class MailService {
 
   async dispatchOrderEmail(
     orderId: string,
-    event:
-      | 'order_confirmation'
-      | 'order_shipped'
-      | 'order_delivered'
-      | 'order_cancelled'
-      | 'order_refunded'
-      | 'new_order_owner',
+    event: OrderEmailEvent,
     extra: {
       trackingNumber?: string;
       trackingUrl?: string;
@@ -888,100 +905,23 @@ export class MailService {
     const order = await loadOrderForEmail(this.prisma, orderId);
     if (!order) return;
 
-    const customerEmail = order.customer?.user?.email;
-    const ownerEmail = order.storeCtx?.ownerEmail;
-    const locale = order.storeCtx?.primaryLocale;
-    const currency = order.currency;
-
-    const storefrontBase =
-      this.config.get<string>('STOREFRONT_URL') || 'http://localhost:3003';
-    const dashboardBase =
-      this.config.get<string>('DASHBOARD_URL') || 'http://localhost:3002';
-    const publicBase =
-      this.config.get<string>('PUBLIC_API_URL') || 'http://localhost:3001';
-
-    const orderUrl = buildOrderUrl(
-      order.storeCtx?.slug,
-      order.id,
-      storefrontBase,
-      order.storeCtx?.customDomain,
-    );
-    const storeUrl = buildStoreUrl(
-      order.storeCtx?.slug,
-      storefrontBase,
-      order.storeCtx?.customDomain,
-    );
-    const orderAdminUrl = `${dashboardBase.replace(/\/$/, '')}/creator/orders/${order.id}`;
-
-    const { items_html, items_text } = renderOrderItems(
-      order.items as Parameters<typeof renderOrderItems>[0],
-      currency,
+    const {
+      customerEmail,
+      ownerEmail,
       locale,
-      publicBase,
-    );
-
-    const orderNumber = order.order_number;
-    const totalStr = formatMoney(Number(order.total), currency);
-    // "Shipping (<method>): <amount>" — the method name is the order snapshot.
-    const shippingLine = formatShippingLine(
-      Number(order.shipping_cost ?? 0),
-      order.shipping_method_name,
       currency,
-      locale,
-    );
-    // Itemized under the total, one row per rate; `taxLine` is the joined
-    // text for the {{tax_line}} template variable.
-    const taxLines = formatTaxLines(order, currency, locale);
-    const taxLine = taxLines.join('\n');
-
-    // Identity of the shop the customer actually bought from: it selects the
-    // sender and template overrides, and brands the message itself.
-    // SVG logos do not render in most mail clients; use a PNG rendition.
-    const logoUrl = order.storeCtx?.logoUrl
-      ? absoluteUrl(await emailSafeLogoPath(order.storeCtx.logoUrl), publicBase)
-      : undefined;
-
-    const { totals_html, totals_text } = renderOrderTotals(
-      {
-        subtotal: Number(order.subtotal ?? 0),
-        discount: Number(order.discount_amount ?? 0),
-        shipping: Number(order.shipping_cost ?? 0),
-        shippingMethod: order.shipping_method_name,
-        total: Number(order.total),
-        taxLines,
-      },
-      currency,
-      locale,
-    );
-    const address = renderShippingAddress(order.address, locale);
-    const firstName = order.customer?.first_name?.trim() || '';
-    const fullName = [firstName, order.customer?.last_name?.trim()]
-      .filter(Boolean)
-      .join(' ');
-    const discount = Number(order.discount_amount ?? 0);
-
-    // Shared by every order template; the owner notification overrides
-    // order_url with the dashboard link.
-    const extraVars: Record<string, string> = {
-      store_url: storeUrl,
-      store_logo_url: logoUrl ?? '',
-      customer_name: fullName,
-      customer_first_name: firstName,
-      customer_email: customerEmail ?? '',
-      order_date: formatOrderDate(order.created_at, locale),
-      order_url: event === 'new_order_owner' ? orderAdminUrl : orderUrl,
-      payment_method: formatPaymentMethod(order, locale),
-      subtotal: formatMoney(Number(order.subtotal ?? 0), currency),
-      discount: discount > 0 ? formatMoney(discount, currency) : '',
-      shipping_cost: formatMoney(Number(order.shipping_cost ?? 0), currency),
-      shipping_method: order.shipping_method_name ?? '',
-      tax_line: taxLine,
-      total: totalStr,
-      totals_html,
-      totals_text,
-      shipping_address_html: address.html,
-      shipping_address_text: address.text,
-    };
+      orderUrl,
+      orderAdminUrl,
+      items_html,
+      items_text,
+      orderNumber,
+      totalStr,
+      shippingLine,
+      taxLine,
+      taxLines,
+      logoUrl,
+      extraVars,
+    } = await this.orderTemplateContext(order, event);
 
     const brand = {
       orderId: order.id,
@@ -1115,6 +1055,371 @@ export class MailService {
         return;
       }
     }
+  }
+
+  /**
+   * Everything an order template can show, computed once from the loaded
+   * order: links, the rendered items / totals / address blocks and the shared
+   * `extraVars`. Used by the dispatcher and by the template preview.
+   */
+  private async orderTemplateContext(
+    order: OrderForEmail,
+    event: OrderEmailEvent,
+    localeOverride?: string,
+  ) {
+    const customerEmail = order.customer?.user?.email;
+    const ownerEmail = order.storeCtx?.ownerEmail;
+    const locale = localeOverride || order.storeCtx?.primaryLocale;
+    const currency = order.currency;
+
+    const storefrontBase =
+      this.config.get<string>('STOREFRONT_URL') || 'http://localhost:3003';
+    const dashboardBase =
+      this.config.get<string>('DASHBOARD_URL') || 'http://localhost:3002';
+    const publicBase =
+      this.config.get<string>('PUBLIC_API_URL') || 'http://localhost:3001';
+
+    const orderUrl = buildOrderUrl(
+      order.storeCtx?.slug,
+      order.id,
+      storefrontBase,
+      order.storeCtx?.customDomain,
+    );
+    const storeUrl = buildStoreUrl(
+      order.storeCtx?.slug,
+      storefrontBase,
+      order.storeCtx?.customDomain,
+    );
+    const orderAdminUrl = `${dashboardBase.replace(/\/$/, '')}/creator/orders/${order.id}`;
+
+    const { items_html, items_text } = renderOrderItems(
+      order.items as Parameters<typeof renderOrderItems>[0],
+      currency,
+      locale,
+      publicBase,
+    );
+
+    const orderNumber = order.order_number;
+    const totalStr = formatMoney(Number(order.total), currency);
+    // "Shipping (<method>): <amount>" — the method name is the order snapshot.
+    const shippingLine = formatShippingLine(
+      Number(order.shipping_cost ?? 0),
+      order.shipping_method_name,
+      currency,
+      locale,
+    );
+    // Itemized under the total, one row per rate; `taxLine` is the joined
+    // text for the {{tax_line}} template variable.
+    const taxLines = formatTaxLines(order, currency, locale);
+    const taxLine = taxLines.join('\n');
+
+    // Identity of the shop the customer actually bought from: it selects the
+    // sender and template overrides, and brands the message itself.
+    // SVG logos do not render in most mail clients; use a PNG rendition.
+    const logoUrl = order.storeCtx?.logoUrl
+      ? absoluteUrl(await emailSafeLogoPath(order.storeCtx.logoUrl), publicBase)
+      : undefined;
+
+    const { totals_html, totals_text } = renderOrderTotals(
+      {
+        subtotal: Number(order.subtotal ?? 0),
+        discount: Number(order.discount_amount ?? 0),
+        shipping: Number(order.shipping_cost ?? 0),
+        shippingMethod: order.shipping_method_name,
+        total: Number(order.total),
+        taxLines,
+      },
+      currency,
+      locale,
+    );
+    const address = renderShippingAddress(order.address, locale);
+    const firstName = order.customer?.first_name?.trim() || '';
+    const fullName = [firstName, order.customer?.last_name?.trim()]
+      .filter(Boolean)
+      .join(' ');
+    const discount = Number(order.discount_amount ?? 0);
+
+    // Shared by every order template; the owner notification overrides
+    // order_url with the dashboard link.
+    const extraVars: Record<string, string> = {
+      platform_name: await this.platformDisplayName(),
+      store_url: storeUrl,
+      store_logo_url: logoUrl ?? '',
+      customer_name: fullName,
+      customer_first_name: firstName,
+      customer_email: customerEmail ?? '',
+      order_date: formatOrderDate(order.created_at, locale),
+      order_url: event === 'new_order_owner' ? orderAdminUrl : orderUrl,
+      payment_method: formatPaymentMethod(order, locale),
+      subtotal: formatMoney(Number(order.subtotal ?? 0), currency),
+      discount: discount > 0 ? formatMoney(discount, currency) : '',
+      shipping_cost: formatMoney(Number(order.shipping_cost ?? 0), currency),
+      shipping_method: order.shipping_method_name ?? '',
+      tax_line: taxLine,
+      total: totalStr,
+      totals_html,
+      totals_text,
+      shipping_address_html: address.html,
+      shipping_address_text: address.text,
+    };
+
+    return {
+      customerEmail,
+      ownerEmail,
+      locale,
+      currency,
+      orderUrl,
+      orderAdminUrl,
+      storeUrl,
+      items_html,
+      items_text,
+      orderNumber,
+      totalStr,
+      shippingLine,
+      taxLine,
+      taxLines,
+      logoUrl,
+      extraVars,
+    };
+  }
+
+  // ── Template preview + test send ───────────────────────────────────────────
+
+  /**
+   * Sample variables for a template: real products, prices and totals from
+   * the newest order (the store's own, or any order for a platform template)
+   * with a placeholder customer, so no customer data leaves in a test. With
+   * no order to borrow from, a small made-up one is used.
+   */
+  private async sampleTemplateVars(
+    event: string,
+    locale: string,
+    storeId?: string,
+  ): Promise<Record<string, string>> {
+    const platformName = await this.platformDisplayName();
+    const phrases = emailPhrases(locale);
+    const storefrontBase =
+      this.config.get<string>('STOREFRONT_URL') || 'http://localhost:3003';
+    const dashboardBase =
+      this.config.get<string>('DASHBOARD_URL') || 'http://localhost:3002';
+    const publicBase =
+      this.config.get<string>('PUBLIC_API_URL') || 'http://localhost:3001';
+    const orderEvent: OrderEmailEvent =
+      event === 'new_order_owner' ? 'new_order_owner' : 'order_confirmation';
+
+    const latest = await this.prisma.order.findFirst({
+      where: storeId ? { store_id: storeId } : {},
+      orderBy: { created_at: 'desc' },
+      select: { id: true },
+    });
+    const order = latest
+      ? await loadOrderForEmail(this.prisma, latest.id)
+      : null;
+
+    let vars: Record<string, string>;
+    if (order) {
+      const ctx = await this.orderTemplateContext(order, orderEvent, locale);
+      vars = {
+        ...ctx.extraVars,
+        store_name: order.storeCtx?.name ?? platformName,
+        order_number: ctx.orderNumber,
+        shipping_line: ctx.shippingLine,
+        items_html: ctx.items_html,
+        items_text: ctx.items_text,
+      };
+    } else {
+      const store = storeId
+        ? await this.prisma.store.findUnique({
+            where: { id: storeId },
+            select: {
+              name: true,
+              slug: true,
+              custom_domain: true,
+              logo_url: true,
+              currency: true,
+            },
+          })
+        : null;
+      const cfg = await this.prisma.platformConfig.findFirst({
+        select: { default_currency: true },
+      });
+      const currency = store?.currency || cfg?.default_currency || 'EUR';
+      const storeUrl = buildStoreUrl(
+        store?.slug,
+        storefrontBase,
+        store?.custom_domain ?? undefined,
+      );
+      const { items_html, items_text } = renderOrderItems(
+        [
+          {
+            quantity: 2,
+            unit_price: 299,
+            product: { translations: [{ locale, title: 'Sample product' }] },
+          },
+        ],
+        currency,
+        locale,
+        publicBase,
+      );
+      const { totals_html, totals_text } = renderOrderTotals(
+        { subtotal: 598, discount: 0, shipping: 49, total: 647, taxLines: [] },
+        currency,
+        locale,
+      );
+      vars = {
+        platform_name: platformName,
+        store_name: store?.name ?? platformName,
+        store_url: storeUrl,
+        store_logo_url: store?.logo_url
+          ? absoluteUrl(await emailSafeLogoPath(store.logo_url), publicBase)
+          : '',
+        order_number: 'ORD-SAMPLE-0001',
+        order_date: formatOrderDate(new Date(), locale),
+        order_url:
+          event === 'new_order_owner'
+            ? `${dashboardBase.replace(/\/$/, '')}/creator/orders`
+            : `${storeUrl}/account/orders`,
+        payment_method: formatPaymentMethod(
+          { payment_method: 'STRIPE' },
+          locale,
+        ),
+        subtotal: formatMoney(598, currency),
+        discount: '',
+        shipping_cost: formatMoney(49, currency),
+        shipping_method: '',
+        shipping_line: `${phrases.shipping}: ${formatMoney(49, currency)}`,
+        tax_line: '',
+        total: formatMoney(647, currency),
+        totals_html,
+        totals_text,
+        items_html,
+        items_text,
+      };
+    }
+
+    const cta = this.orderCta(
+      vars.order_url,
+      event === 'new_order_owner' ? 'Open order' : phrases.viewOrder,
+    );
+    return {
+      ...vars,
+      // Placeholder customer: a test must never carry a real customer's data.
+      customer_name: 'Anna Lindqvist',
+      customer_first_name: 'Anna',
+      customer_email: 'anna@example.com',
+      shipping_address_html:
+        'Anna Lindqvist<br />Storgatan 12<br />111 23 Stockholm',
+      shipping_address_text: 'Anna Lindqvist\nStorgatan 12\n111 23 Stockholm',
+      payment_line: phrases.paid,
+      order_button: cta.html,
+      order_url_text: cta.text,
+      tracking_number: 'SE123456789',
+      tracking_url: 'https://example.com/track/SE123456789',
+      reason: 'Sample reason',
+      refund_amount: vars.total,
+      name: 'Anna',
+      login_url: `${dashboardBase.replace(/\/$/, '')}/login`,
+      reset_url: `${storefrontBase.replace(/\/$/, '')}/reset-password?token=sample`,
+    };
+  }
+
+  /**
+   * Render a template with sample data. The editor's unsaved draft wins over
+   * what is stored, so the preview shows what a save would send.
+   */
+  async renderTemplateSample(
+    input: TemplateSampleInput,
+    storeId?: string,
+  ): Promise<{ subject: string; html: string; text: string; locale: string }> {
+    const known = NotificationTemplatesService.EVENT_CATALOG.some(
+      (e) => e.event === input.event,
+    );
+    if (!known) throw new BadRequestException('Unknown event');
+
+    let locale = input.locale;
+    if (!locale && storeId) {
+      const cfg = await this.prisma.storeLanguageConfig.findUnique({
+        where: { store_id: storeId },
+        select: { primary_locale: true },
+      });
+      locale = cfg?.primary_locale;
+    }
+    locale = locale || 'en';
+
+    const vars = await this.sampleTemplateVars(input.event, locale, storeId);
+    const hasDraft =
+      input.subject !== undefined ||
+      input.body_html !== undefined ||
+      input.body_text !== undefined;
+    const rendered = hasDraft
+      ? {
+          subject: substitute(input.subject ?? '', vars),
+          html: substitute(input.body_html ?? '', vars),
+          text: substitute(input.body_text ?? '', vars),
+        }
+      : await this.templates.render(input.event, locale, vars, storeId);
+
+    if (!rendered || !rendered.html.trim()) {
+      throw new BadRequestException({
+        code: 'TEMPLATE_EMPTY',
+        message: 'This template has no content in the selected language yet.',
+      });
+    }
+    return { ...rendered, locale };
+  }
+
+  async sendTemplateTest(
+    input: TemplateSampleInput,
+    to: string,
+    storeId?: string,
+  ): Promise<{ sent: true; to: string }> {
+    const rendered = await this.renderTemplateSample(input, storeId);
+    if (!rendered.subject.trim()) {
+      throw new BadRequestException({
+        code: 'TEMPLATE_NO_SUBJECT',
+        message: 'Enter a subject before sending a test.',
+      });
+    }
+    const store = storeId
+      ? await this.prisma.store.findUnique({
+          where: { id: storeId },
+          select: { name: true },
+        })
+      : null;
+    const { sent } = await this.send({
+      to,
+      subject: `[Test] ${rendered.subject}`,
+      html: rendered.html,
+      text: rendered.text || undefined,
+      storeId,
+      event: 'test',
+      // Same footer a real message gets when it leaves via the platform.
+      brandFooter: storeId
+        ? { storeName: store?.name, customerEmail: to, locale: rendered.locale }
+        : undefined,
+    });
+    if (!sent) {
+      throw new BadRequestException({
+        code: 'TEMPLATE_TEST_FAILED',
+        message:
+          'The test email could not be sent. Open the email log to see the reason.',
+      });
+    }
+    return { sent: true, to };
+  }
+
+  async renderStoreTemplateSample(userId: string, input: TemplateSampleInput) {
+    const store = await this.requireIndependentStore(userId);
+    return this.renderTemplateSample(input, store.id);
+  }
+
+  async sendStoreTemplateTest(
+    userId: string,
+    input: TemplateSampleInput,
+    to: string,
+  ) {
+    const store = await this.requireIndependentStore(userId);
+    return this.sendTemplateTest(input, to, store.id);
   }
 
   // ── Admin settings (ADMIN only; never returns the password) ─────────────────
