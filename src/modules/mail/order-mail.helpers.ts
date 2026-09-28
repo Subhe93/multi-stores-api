@@ -1,4 +1,7 @@
 import { Prisma, PrismaClient } from '@prisma/client';
+import { promises as fs } from 'fs';
+import { join, normalize, sep } from 'path';
+import sharp from 'sharp';
 import { currencyDecimals } from '../../common/money/currency.util';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
 
@@ -174,6 +177,7 @@ export function formatMoney(amount: number, currency: string): string {
 // the payload type) AND validates against the schema at compile time.
 export const orderWithItemsInclude = {
   customer: { include: { user: { select: { email: true } } } },
+  address: true,
   items: {
     include: {
       product: {
@@ -367,7 +371,7 @@ export function renderOrderItems(
 
       return `<tr>
   <td style="padding:12px 8px;border-bottom:1px solid #e4e4e7;vertical-align:top;">
-    ${imgUrl ? `<img src="${esc(imgUrl)}" alt="${esc(title)}" width="48" height="48" style="border-radius:6px;border:1px solid #e4e4e7;object-fit:cover;" />` : ''}
+    ${imgUrl ? `<img src="${esc(imgUrl)}" alt="${esc(title)}" width="64" height="64" style="display:block;border-radius:6px;border:1px solid #e4e4e7;object-fit:cover;" />` : ''}
   </td>
   <td style="padding:12px 8px;border-bottom:1px solid #e4e4e7;vertical-align:top;font-size:13px;color:#18181b;">
     <div style="font-weight:600;">${esc(title)}</div>
@@ -412,15 +416,232 @@ export function absoluteUrl(maybeRelative: string, base: string): string {
   return `${cleanBase}${cleanPath}`;
 }
 
+/**
+ * Public home of a store: its own domain when it has one, otherwise its path
+ * on the platform storefront.
+ */
+export function buildStoreUrl(
+  storeSlug: string | undefined,
+  storefrontBase: string,
+  customDomain?: string,
+): string {
+  if (customDomain) return `https://${customDomain.replace(/\/$/, '')}`;
+  const cleanBase = storefrontBase.replace(/\/$/, '');
+  return storeSlug ? `${cleanBase}/store/${storeSlug}` : cleanBase;
+}
+
 export function buildOrderUrl(
   storeSlug: string | undefined,
   orderId: string,
   storefrontBase: string,
+  customDomain?: string,
 ): string {
-  const cleanBase = storefrontBase.replace(/\/$/, '');
-  if (storeSlug)
-    return `${cleanBase}/store/${storeSlug}/account/orders/${orderId}`;
-  return `${cleanBase}/account/orders/${orderId}`;
+  return `${buildStoreUrl(storeSlug, storefrontBase, customDomain)}/account/orders/${orderId}`;
+}
+
+/**
+ * Most mail clients (Gmail, Outlook) do not render SVG images, so a store
+ * whose logo is an SVG would show no logo at all. Returns the path of a PNG
+ * rendition stored next to the original (created on first use); any other
+ * format, or any failure, returns the original path unchanged.
+ */
+export async function emailSafeLogoPath(logoPath: string): Promise<string> {
+  if (/^https?:\/\//i.test(logoPath) || !/\.svg$/i.test(logoPath)) {
+    return logoPath;
+  }
+  const relative = normalize(logoPath.replace(/^[\\/]+/, ''));
+  // Only ever touch files under uploads/.
+  if (!relative.startsWith(`uploads${sep}`) || relative.includes('..')) {
+    return logoPath;
+  }
+  const source = join(process.cwd(), relative);
+  const target = source.replace(/\.svg$/i, '.email.png');
+  const publicPath = logoPath.replace(/\.svg$/i, '.email.png');
+  try {
+    await fs.access(target);
+    return publicPath;
+  } catch {
+    // not rendered yet
+  }
+  try {
+    await sharp(source, { density: 300 })
+      .resize({ width: 480, withoutEnlargement: false })
+      .png()
+      .toFile(target);
+    return publicPath;
+  } catch {
+    return logoPath;
+  }
+}
+
+const TOTALS_PHRASES: Record<
+  EmailLocale,
+  { card: string; cod: string; free: string }
+> = {
+  en: { card: 'Card', cod: 'Cash on delivery', free: 'Free' },
+  ar: { card: 'بطاقة', cod: 'الدفع عند الاستلام', free: 'مجاني' },
+  tr: { card: 'Kart', cod: 'Kapıda ödeme', free: 'Ücretsiz' },
+  de: { card: 'Karte', cod: 'Nachnahme', free: 'Kostenlos' },
+  fr: { card: 'Carte', cod: 'Paiement à la livraison', free: 'Gratuit' },
+  sv: { card: 'Kort', cod: 'Betalning vid leverans', free: 'Gratis' },
+};
+
+/** "Kustom", "Visa •••• 4242", "Card" or the cash-on-delivery label. */
+export function formatPaymentMethod(
+  order: {
+    payment_method: string;
+    card_brand?: string | null;
+    card_last4?: string | null;
+  },
+  locale?: string,
+): string {
+  const phrases = TOTALS_PHRASES[pickLocale(locale)];
+  if (order.payment_method === 'KUSTOM') return 'Kustom';
+  if (order.payment_method === 'COD') return phrases.cod;
+  if (order.card_brand && order.card_last4) {
+    const brand =
+      order.card_brand.charAt(0).toUpperCase() + order.card_brand.slice(1);
+    return `${brand} •••• ${order.card_last4}`;
+  }
+  return phrases.card;
+}
+
+export function formatOrderDate(date: Date, locale?: string): string {
+  try {
+    return new Intl.DateTimeFormat(pickLocale(locale), {
+      dateStyle: 'long',
+    }).format(date);
+  } catch {
+    return date.toISOString().slice(0, 10);
+  }
+}
+
+function countryName(code: string, locale?: string): string {
+  try {
+    return (
+      new Intl.DisplayNames([pickLocale(locale)], { type: 'region' }).of(
+        code.toUpperCase(),
+      ) || code
+    );
+  } catch {
+    return code;
+  }
+}
+
+/** The delivery address as an HTML block (lines joined by <br>) and as text. */
+export function renderShippingAddress(
+  address:
+    | {
+        full_name: string;
+        line1: string;
+        line2?: string | null;
+        city: string;
+        state?: string | null;
+        postal_code: string;
+        country_code: string;
+        phone?: string | null;
+      }
+    | null
+    | undefined,
+  locale?: string,
+): { html: string; text: string } {
+  if (!address) return { html: '', text: '' };
+  const lines = [
+    address.full_name,
+    address.line1,
+    address.line2 || '',
+    [address.postal_code, address.city].filter(Boolean).join(' '),
+    address.state || '',
+    countryName(address.country_code, locale),
+    address.phone || '',
+  ]
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return {
+    html: lines.map((l) => esc(l)).join('<br />'),
+    text: lines.join('\n'),
+  };
+}
+
+/**
+ * The totals block under the items: subtotal, discount, shipping, total and
+ * the itemized tax lines, in the email's locale. Colours are neutral so the
+ * block sits well inside any template.
+ */
+export function renderOrderTotals(
+  input: {
+    subtotal: number;
+    discount: number;
+    shipping: number;
+    shippingMethod?: string | null;
+    total: number;
+    taxLines: string[];
+  },
+  currency: string,
+  locale?: string,
+): { totals_html: string; totals_text: string } {
+  const phrases = emailPhrases(locale);
+  const free = TOTALS_PHRASES[pickLocale(locale)].free;
+  const method = input.shippingMethod?.trim();
+  const shippingLabel = method
+    ? `${phrases.shipping} (${method})`
+    : phrases.shipping;
+  const showShipping = input.shipping > 0 || !!method;
+
+  const rows: Array<{ label: string; value: string }> = [
+    { label: phrases.subtotal, value: formatMoney(input.subtotal, currency) },
+  ];
+  if (input.discount > 0) {
+    rows.push({
+      label: phrases.discount,
+      value: `−${formatMoney(input.discount, currency)}`,
+    });
+  }
+  if (showShipping) {
+    rows.push({
+      label: shippingLabel,
+      value: input.shipping > 0 ? formatMoney(input.shipping, currency) : free,
+    });
+  }
+
+  const cell =
+    'padding:4px 0;font-size:13px;line-height:1.5;color:#52525b;vertical-align:top;';
+  const htmlRows = rows
+    .map(
+      (r) => `<tr>
+  <td style="${cell}">${esc(r.label)}</td>
+  <td style="${cell}text-align:end;white-space:nowrap;">${esc(r.value)}</td>
+</tr>`,
+    )
+    .join('\n');
+  const totalCell =
+    'padding:12px 0 4px;border-top:1px solid #e4e4e7;font-size:16px;font-weight:700;color:#18181b;';
+  const taxHtml = input.taxLines
+    .map(
+      (line) =>
+        `<tr><td colspan="2" style="padding:0;font-size:12px;line-height:1.6;color:#71717a;text-align:end;">${esc(line)}</td></tr>`,
+    )
+    .join('\n');
+
+  const totals_html = `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:4px 0 0;">
+  <tbody>
+${htmlRows}
+<tr><td colspan="2" style="padding:0;height:8px;line-height:8px;font-size:0;">&nbsp;</td></tr>
+<tr>
+  <td style="${totalCell}">${esc(phrases.total)}</td>
+  <td style="${totalCell}text-align:end;white-space:nowrap;">${esc(formatMoney(input.total, currency))}</td>
+</tr>
+${taxHtml}
+  </tbody>
+</table>`;
+
+  const totals_text = [
+    ...rows.map((r) => `${r.label}: ${r.value}`),
+    `${phrases.total}: ${formatMoney(input.total, currency)}`,
+    ...input.taxLines,
+  ].join('\n');
+
+  return { totals_html, totals_text };
 }
 
 // Concrete Prisma payload type so call sites get full property typings without
@@ -433,6 +654,8 @@ export interface OrderStoreContext {
   id: string;
   slug: string;
   name: string;
+  /** The store's own domain, when it has one (links then point there). */
+  customDomain?: string;
   /** Used to brand the email — customers buy from the shop, not the platform. */
   logoUrl?: string;
   primaryLocale?: string;
@@ -467,6 +690,7 @@ export async function loadOrderForEmail(
         id: true,
         slug: true,
         name: true,
+        custom_domain: true,
         logo_url: true,
         notification_email: true,
         language_config: { select: { primary_locale: true } },
@@ -478,6 +702,7 @@ export async function loadOrderForEmail(
         id: store.id,
         slug: store.slug,
         name: store.name,
+        customDomain: store.custom_domain ?? undefined,
         logoUrl: store.logo_url ?? undefined,
         primaryLocale: store.language_config?.primary_locale,
         // The store's notifications address wins over the login email.

@@ -29,7 +29,13 @@ import {
   formatTaxLines,
   formatShippingLine,
   renderOrderItems,
+  renderOrderTotals,
+  renderShippingAddress,
+  formatOrderDate,
+  formatPaymentMethod,
+  emailSafeLogoPath,
   buildOrderUrl,
+  buildStoreUrl,
   loadOrderForEmail,
 } from './order-mail.helpers';
 
@@ -573,6 +579,7 @@ export class MailService {
       'order_confirmation',
       locale,
       {
+        ...(data.extraVars ?? {}),
         store_name: data.storeName ?? '',
         order_number: data.orderNumber,
         total: data.total,
@@ -618,6 +625,7 @@ export class MailService {
       'order_shipped',
       locale,
       {
+        ...(data.extraVars ?? {}),
         store_name: data.storeName ?? '',
         order_number: data.orderNumber,
         tracking_number: data.trackingNumber ?? '',
@@ -665,6 +673,7 @@ export class MailService {
       'order_delivered',
       locale,
       {
+        ...(data.extraVars ?? {}),
         store_name: data.storeName ?? '',
         order_number: data.orderNumber,
         order_button: cta.html,
@@ -710,6 +719,7 @@ export class MailService {
       'order_cancelled',
       locale,
       {
+        ...(data.extraVars ?? {}),
         store_name: data.storeName ?? '',
         order_number: data.orderNumber,
         reason: data.reason ?? '',
@@ -756,6 +766,7 @@ export class MailService {
       'order_refunded',
       locale,
       {
+        ...(data.extraVars ?? {}),
         store_name: data.storeName ?? '',
         order_number: data.orderNumber,
         refund_amount: data.refundAmount ?? '',
@@ -801,12 +812,13 @@ export class MailService {
       'new_order_owner',
       locale,
       {
+        ...(data.extraVars ?? {}),
         order_number: data.orderNumber,
         total: data.total,
         shipping_line: data.shippingLine ?? '',
         tax_line: data.taxLine ?? '',
         store_name: data.storeName ?? '',
-        customer_name: data.customerName ?? '',
+        customer_name: data.customerName ?? data.extraVars?.customer_name ?? '',
         order_button: cta.html,
         order_url_text: cta.text,
         items_html: data.itemsHtml ?? '',
@@ -892,6 +904,12 @@ export class MailService {
       order.storeCtx?.slug,
       order.id,
       storefrontBase,
+      order.storeCtx?.customDomain,
+    );
+    const storeUrl = buildStoreUrl(
+      order.storeCtx?.slug,
+      storefrontBase,
+      order.storeCtx?.customDomain,
     );
     const orderAdminUrl = `${dashboardBase.replace(/\/$/, '')}/creator/orders/${order.id}`;
 
@@ -918,13 +936,59 @@ export class MailService {
 
     // Identity of the shop the customer actually bought from: it selects the
     // sender and template overrides, and brands the message itself.
+    // SVG logos do not render in most mail clients; use a PNG rendition.
+    const logoUrl = order.storeCtx?.logoUrl
+      ? absoluteUrl(await emailSafeLogoPath(order.storeCtx.logoUrl), publicBase)
+      : undefined;
+
+    const { totals_html, totals_text } = renderOrderTotals(
+      {
+        subtotal: Number(order.subtotal ?? 0),
+        discount: Number(order.discount_amount ?? 0),
+        shipping: Number(order.shipping_cost ?? 0),
+        shippingMethod: order.shipping_method_name,
+        total: Number(order.total),
+        taxLines,
+      },
+      currency,
+      locale,
+    );
+    const address = renderShippingAddress(order.address, locale);
+    const firstName = order.customer?.first_name?.trim() || '';
+    const fullName = [firstName, order.customer?.last_name?.trim()]
+      .filter(Boolean)
+      .join(' ');
+    const discount = Number(order.discount_amount ?? 0);
+
+    // Shared by every order template; the owner notification overrides
+    // order_url with the dashboard link.
+    const extraVars: Record<string, string> = {
+      store_url: storeUrl,
+      store_logo_url: logoUrl ?? '',
+      customer_name: fullName,
+      customer_first_name: firstName,
+      customer_email: customerEmail ?? '',
+      order_date: formatOrderDate(order.created_at, locale),
+      order_url: event === 'new_order_owner' ? orderAdminUrl : orderUrl,
+      payment_method: formatPaymentMethod(order, locale),
+      subtotal: formatMoney(Number(order.subtotal ?? 0), currency),
+      discount: discount > 0 ? formatMoney(discount, currency) : '',
+      shipping_cost: formatMoney(Number(order.shipping_cost ?? 0), currency),
+      shipping_method: order.shipping_method_name ?? '',
+      tax_line: taxLine,
+      total: totalStr,
+      totals_html,
+      totals_text,
+      shipping_address_html: address.html,
+      shipping_address_text: address.text,
+    };
+
     const brand = {
       orderId: order.id,
       storeId: order.storeCtx?.id,
       storeName: order.storeCtx?.name,
-      storeLogoUrl: order.storeCtx?.logoUrl
-        ? absoluteUrl(order.storeCtx.logoUrl, publicBase)
-        : undefined,
+      storeLogoUrl: logoUrl,
+      extraVars,
     };
 
     // Pick the recipient + payload per event.

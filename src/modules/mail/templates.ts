@@ -34,6 +34,8 @@ export interface EmailBrand {
   storeId?: string;
   /** Order the message is about — recorded in the delivery log only. */
   orderId?: string;
+  /** Variables shared by every order template (totals, address, dates, …). */
+  extraVars?: Record<string, string>;
   /** Admin-configured platform name (PlatformConfig.platform_name) — used when
    *  no store brand applies, instead of the hardcoded fallback. */
   platformName?: string;

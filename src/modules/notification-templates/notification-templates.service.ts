@@ -8,13 +8,63 @@ import { UpdateNotificationTemplateDto } from './dto/notification-template.dto';
 
 type Localized = Record<string, string>;
 
-/** `{{var}}` placeholder substitution. Missing vars resolve to ''. */
-function substitute(template: string, vars: Record<string, string>): string {
-  return template.replace(
-    /\{\{\s*(\w+)\s*\}\}/g,
-    (_match: string, key: string) => vars[key] ?? '',
-  );
+/**
+ * Template substitution. `{{var}}` inserts a value (missing vars resolve to
+ * ''), and a block can be made conditional on a variable being non-empty:
+ *
+ *   {{#if tracking_number}}Tracking: {{tracking_number}}{{/if}}
+ *   {{#unless tracking_number}}We will email the tracking number.{{/unless}}
+ *
+ * Blocks do not nest. Conditions are resolved first, so a removed block never
+ * leaves its placeholders behind.
+ */
+export function substitute(
+  template: string,
+  vars: Record<string, string>,
+): string {
+  const filled = (key: string) => (vars[key] ?? '').trim() !== '';
+  return template
+    .replace(
+      /\{\{\s*#if\s+(\w+)\s*\}\}([\s\S]*?)\{\{\s*\/if\s*\}\}/g,
+      (_match: string, key: string, inner: string) =>
+        filled(key) ? inner : '',
+    )
+    .replace(
+      /\{\{\s*#unless\s+(\w+)\s*\}\}([\s\S]*?)\{\{\s*\/unless\s*\}\}/g,
+      (_match: string, key: string, inner: string) =>
+        filled(key) ? '' : inner,
+    )
+    .replace(
+      /\{\{\s*(\w+)\s*\}\}/g,
+      (_match: string, key: string) => vars[key] ?? '',
+    );
 }
+
+/**
+ * Variables every order email receives on top of its own (see
+ * MailService.dispatchOrderEmail). The `_html` ones are pre-rendered,
+ * localized blocks, since a template has no loops.
+ */
+const ORDER_COMMON_VARIABLES = [
+  'store_name',
+  'store_url',
+  'store_logo_url',
+  'customer_name',
+  'customer_first_name',
+  'customer_email',
+  'order_date',
+  'order_url',
+  'payment_method',
+  'subtotal',
+  'discount',
+  'shipping_cost',
+  'shipping_method',
+  'tax_line',
+  'totals_html',
+  'totals_text',
+  'shipping_address_html',
+  'shipping_address_text',
+];
 
 /**
  * Admin-managed transactional notification templates. One row per event
@@ -102,6 +152,7 @@ export class NotificationTemplatesService {
       {
         event: 'order_confirmation',
         variables: [
+          ...ORDER_COMMON_VARIABLES,
           'order_number',
           'total',
           'shipping_line',
@@ -115,6 +166,7 @@ export class NotificationTemplatesService {
       {
         event: 'order_shipped',
         variables: [
+          ...ORDER_COMMON_VARIABLES,
           'order_number',
           'tracking_number',
           'tracking_url',
@@ -127,6 +179,7 @@ export class NotificationTemplatesService {
       {
         event: 'order_delivered',
         variables: [
+          ...ORDER_COMMON_VARIABLES,
           'order_number',
           'order_button',
           'order_url_text',
@@ -137,6 +190,7 @@ export class NotificationTemplatesService {
       {
         event: 'order_cancelled',
         variables: [
+          ...ORDER_COMMON_VARIABLES,
           'order_number',
           'reason',
           'order_button',
@@ -148,6 +202,7 @@ export class NotificationTemplatesService {
       {
         event: 'order_refunded',
         variables: [
+          ...ORDER_COMMON_VARIABLES,
           'order_number',
           'refund_amount',
           'order_button',
@@ -159,11 +214,10 @@ export class NotificationTemplatesService {
       {
         event: 'new_order_owner',
         variables: [
+          ...ORDER_COMMON_VARIABLES,
           'order_number',
           'total',
           'shipping_line',
-          'store_name',
-          'customer_name',
           'order_button',
           'order_url_text',
           'items_html',
