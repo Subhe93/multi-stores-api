@@ -147,20 +147,16 @@ export class StoreMailController {
     });
   }
 
-  // Always delivered to the creator's own login email: the content is free
-  // HTML, so it must not be sendable to arbitrary addresses.
+  // Always delivered to the store's own notifications address (or the login
+  // email when none is set): the content is free HTML, so it must not be
+  // sendable to arbitrary addresses.
   @Post('templates/:event/test')
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   testTemplate(
     @CurrentUser('id') userId: string,
-    @CurrentUser('email') creatorEmail: string,
     @Param('event') event: string,
     @Body() dto: TemplateSampleDto,
   ) {
-    return this.mailService.sendStoreTemplateTest(
-      userId,
-      { event, ...dto },
-      creatorEmail,
-    );
+    return this.mailService.sendStoreTemplateTest(userId, { event, ...dto });
   }
 }

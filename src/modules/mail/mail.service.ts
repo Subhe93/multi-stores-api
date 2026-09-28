@@ -1413,12 +1413,15 @@ export class MailService {
     return this.renderTemplateSample(input, store.id);
   }
 
-  async sendStoreTemplateTest(
-    userId: string,
-    input: TemplateSampleInput,
-    to: string,
-  ) {
+  /**
+   * A creator's test goes where their order notifications go: the store's
+   * notification email, or the login email when none is set. Never to an
+   * address from the request, since the content is free HTML.
+   */
+  async sendStoreTemplateTest(userId: string, input: TemplateSampleInput) {
     const store = await this.requireIndependentStore(userId);
+    const own = await this.requireOwnStore(userId);
+    const to = own.notification_email || own.loginEmail;
     return this.sendTemplateTest(input, to, store.id);
   }
 
