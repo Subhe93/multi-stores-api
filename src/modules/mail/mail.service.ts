@@ -1,6 +1,6 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { StoreType } from '@prisma/client';
+import { EmailLogStatus, Prisma, StoreType } from '@prisma/client';
 import * as nodemailer from 'nodemailer';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CryptoService } from '../../common/crypto/crypto.service';
@@ -32,6 +32,19 @@ import {
   buildOrderUrl,
   loadOrderForEmail,
 } from './order-mail.helpers';
+
+/** Delivery log retention. */
+const EMAIL_LOG_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+const EMAIL_LOG_PRUNE_EVERY_MS = 24 * 60 * 60 * 1000;
+
+/** What the delivery log records about a message, besides the outcome. */
+interface MailMeta {
+  to: string;
+  subject: string;
+  storeId?: string;
+  orderId?: string;
+  event?: string;
+}
 
 interface SmtpConfig {
   host: string;
@@ -310,13 +323,16 @@ export class MailService {
       customerEmail?: string;
       locale?: string;
     };
+    /** Template/event key and order, recorded in the delivery log. */
+    event?: string;
+    orderId?: string;
   }): Promise<{ sent: boolean }> {
     const storeCfg = opts.storeId
       ? await this.resolveStoreConfig(opts.storeId)
       : null;
 
     if (storeCfg) {
-      const ok = await this.trySend(storeCfg, opts);
+      const ok = await this.trySend(storeCfg, opts, 'store');
       if (ok) return { sent: true };
       // A store's own sender failing must not cost the customer their email —
       // fall through to the platform sender for this message. The creator sees
@@ -331,6 +347,10 @@ export class MailService {
       this.logger.warn(
         `[mail:not-configured] Would send "${opts.subject}" to ${opts.to}`,
       );
+      await this.logDelivery(opts, {
+        status: EmailLogStatus.SKIPPED,
+        error: 'Email (SMTP) is not configured',
+      });
       return { sent: false };
     }
     const html =
@@ -341,12 +361,15 @@ export class MailService {
             opts.brandFooter,
           )
         : opts.html;
-    return { sent: await this.trySend(platformCfg, { ...opts, html }) };
+    return {
+      sent: await this.trySend(platformCfg, { ...opts, html }, 'platform'),
+    };
   }
 
   private async trySend(
     cfg: SmtpConfig,
-    opts: { to: string; subject: string; html: string; text?: string },
+    opts: MailMeta & { html: string; text?: string },
+    via: 'store' | 'platform',
   ): Promise<boolean> {
     try {
       await this.transporterFor(cfg).sendMail({
@@ -356,15 +379,158 @@ export class MailService {
         html: opts.html,
         text: opts.text,
       });
+      await this.logDelivery(opts, {
+        status: EmailLogStatus.SENT,
+        via,
+        host: cfg.host,
+      });
       return true;
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       this.logger.error(
-        `Failed to send "${opts.subject}" to ${opts.to} via ${cfg.host}: ${
+        `Failed to send "${opts.subject}" to ${opts.to} via ${cfg.host}: ${message}`,
+      );
+      await this.logDelivery(opts, {
+        status: EmailLogStatus.FAILED,
+        via,
+        host: cfg.host,
+        error: message,
+      });
+      return false;
+    }
+  }
+
+  // ── Delivery log ───────────────────────────────────────────────────────────
+
+  private lastLogPruneAt = 0;
+
+  /**
+   * Record one delivery attempt. Best-effort like the mail itself: a logging
+   * failure must never cost anyone their email, so it is swallowed.
+   */
+  private async logDelivery(
+    meta: MailMeta,
+    outcome: {
+      status: EmailLogStatus;
+      via?: 'store' | 'platform';
+      host?: string;
+      error?: string;
+    },
+  ): Promise<void> {
+    try {
+      await this.prisma.emailLog.create({
+        data: {
+          store_id: meta.storeId ?? null,
+          order_id: meta.orderId ?? null,
+          event: meta.event ?? null,
+          recipient: meta.to,
+          subject: meta.subject.slice(0, 300),
+          status: outcome.status,
+          via: outcome.via ?? null,
+          smtp_host: outcome.host ?? null,
+          error: outcome.error ? outcome.error.slice(0, 1000) : null,
+        },
+      });
+      const now = Date.now();
+      if (now - this.lastLogPruneAt > EMAIL_LOG_PRUNE_EVERY_MS) {
+        this.lastLogPruneAt = now;
+        await this.prisma.emailLog.deleteMany({
+          where: { created_at: { lt: new Date(now - EMAIL_LOG_RETENTION_MS) } },
+        });
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Could not write the email delivery log: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
-      return false;
     }
+  }
+
+  /**
+   * One page of the delivery log, newest first. `storeId` pins the listing to
+   * one store (the creator endpoint); without it the admin sees everything
+   * and may filter by store.
+   */
+  async listLogs(
+    query: {
+      page?: string;
+      limit?: string;
+      status?: string;
+      q?: string;
+      store_id?: string;
+    },
+    storeId?: string,
+  ) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 25));
+
+    const where: Prisma.EmailLogWhereInput = {};
+    if (storeId) where.store_id = storeId;
+    else if (query.store_id) where.store_id = query.store_id;
+    if (
+      query.status === EmailLogStatus.SENT ||
+      query.status === EmailLogStatus.FAILED ||
+      query.status === EmailLogStatus.SKIPPED
+    ) {
+      where.status = query.status;
+    }
+    const q = query.q?.trim();
+    if (q) {
+      where.OR = [
+        { recipient: { contains: q, mode: 'insensitive' } },
+        { subject: { contains: q, mode: 'insensitive' } },
+      ];
+    }
+
+    const [rows, total, failed] = await Promise.all([
+      this.prisma.emailLog.findMany({
+        where,
+        orderBy: { created_at: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.emailLog.count({ where }),
+      this.prisma.emailLog.count({
+        where: {
+          ...(storeId ? { store_id: storeId } : {}),
+          status: { in: [EmailLogStatus.FAILED, EmailLogStatus.SKIPPED] },
+          created_at: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
+        },
+      }),
+    ]);
+
+    const storeIds = [
+      ...new Set(rows.map((r) => r.store_id).filter((v): v is string => !!v)),
+    ];
+    const stores = storeIds.length
+      ? await this.prisma.store.findMany({
+          where: { id: { in: storeIds } },
+          select: { id: true, name: true, slug: true },
+        })
+      : [];
+    const storeById = new Map(stores.map((st) => [st.id, st]));
+
+    return {
+      items: rows.map((r) => ({
+        id: r.id,
+        created_at: r.created_at,
+        recipient: r.recipient,
+        subject: r.subject,
+        event: r.event,
+        status: r.status,
+        via: r.via,
+        smtp_host: r.smtp_host,
+        error: r.error,
+        order_id: r.order_id,
+        store: r.store_id ? (storeById.get(r.store_id) ?? null) : null,
+      })),
+      total,
+      page,
+      limit,
+      // Failed or skipped in the last 7 days, for the page's warning line.
+      failed_last_7_days: failed,
+    };
   }
 
   async sendPasswordReset(to: string, resetUrl: string, locale?: string) {
@@ -373,11 +539,12 @@ export class MailService {
     const rendered = await this.templates.render('password_reset', locale, {
       reset_url: resetUrl,
     });
-    if (rendered) return this.send({ to, ...rendered });
+    if (rendered)
+      return this.send({ to, ...rendered, event: 'password_reset' });
     const fallback = passwordResetEmail(resetUrl, {
       platformName: await this.platformDisplayName(),
     });
-    return this.send({ to, ...fallback });
+    return this.send({ to, ...fallback, event: 'password_reset' });
   }
 
   /**
@@ -425,12 +592,21 @@ export class MailService {
       locale,
     };
     if (rendered)
-      return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+      return this.send({
+        to,
+        ...rendered,
+        storeId: data.storeId,
+        brandFooter,
+        event: 'order_confirmation',
+        orderId: data.orderId,
+      });
     return this.send({
       to,
       ...orderConfirmationEmail(data),
       storeId: data.storeId,
       brandFooter,
+      event: 'order_confirmation',
+      orderId: data.orderId,
     });
   }
 
@@ -459,12 +635,21 @@ export class MailService {
       locale,
     };
     if (rendered)
-      return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+      return this.send({
+        to,
+        ...rendered,
+        storeId: data.storeId,
+        brandFooter,
+        event: 'order_shipped',
+        orderId: data.orderId,
+      });
     return this.send({
       to,
       ...orderShippedEmail(data),
       storeId: data.storeId,
       brandFooter,
+      event: 'order_shipped',
+      orderId: data.orderId,
     });
   }
 
@@ -495,12 +680,21 @@ export class MailService {
       locale,
     };
     if (rendered)
-      return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+      return this.send({
+        to,
+        ...rendered,
+        storeId: data.storeId,
+        brandFooter,
+        event: 'order_delivered',
+        orderId: data.orderId,
+      });
     return this.send({
       to,
       ...orderDeliveredEmail(data),
       storeId: data.storeId,
       brandFooter,
+      event: 'order_delivered',
+      orderId: data.orderId,
     });
   }
 
@@ -532,12 +726,21 @@ export class MailService {
       locale,
     };
     if (rendered)
-      return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+      return this.send({
+        to,
+        ...rendered,
+        storeId: data.storeId,
+        brandFooter,
+        event: 'order_cancelled',
+        orderId: data.orderId,
+      });
     return this.send({
       to,
       ...orderCancelledEmail(data),
       storeId: data.storeId,
       brandFooter,
+      event: 'order_cancelled',
+      orderId: data.orderId,
     });
   }
 
@@ -569,12 +772,21 @@ export class MailService {
       locale,
     };
     if (rendered)
-      return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+      return this.send({
+        to,
+        ...rendered,
+        storeId: data.storeId,
+        brandFooter,
+        event: 'order_refunded',
+        orderId: data.orderId,
+      });
     return this.send({
       to,
       ...orderRefundedEmail(data),
       storeId: data.storeId,
       brandFooter,
+      event: 'order_refunded',
+      orderId: data.orderId,
     });
   }
 
@@ -606,12 +818,21 @@ export class MailService {
     // recipient is the store owner, not a customer).
     const brandFooter = { locale };
     if (rendered)
-      return this.send({ to, ...rendered, storeId: data.storeId, brandFooter });
+      return this.send({
+        to,
+        ...rendered,
+        storeId: data.storeId,
+        brandFooter,
+        event: 'new_order_owner',
+        orderId: data.orderId,
+      });
     return this.send({
       to,
       ...newOrderOwnerEmail(data),
       storeId: data.storeId,
       brandFooter,
+      event: 'new_order_owner',
+      orderId: data.orderId,
     });
   }
 
@@ -622,10 +843,11 @@ export class MailService {
       name: data.name ?? '',
       login_url: data.loginUrl ?? '',
     });
-    if (rendered) return this.send({ to, ...rendered });
+    if (rendered) return this.send({ to, ...rendered, event: 'welcome' });
     return this.send({
       to,
       ...welcomeEmail(data, { platformName: await this.platformDisplayName() }),
+      event: 'welcome',
     });
   }
 
@@ -697,6 +919,7 @@ export class MailService {
     // Identity of the shop the customer actually bought from: it selects the
     // sender and template overrides, and brands the message itself.
     const brand = {
+      orderId: order.id,
       storeId: order.storeCtx?.id,
       storeName: order.storeCtx?.name,
       storeLogoUrl: order.storeCtx?.logoUrl
@@ -908,10 +1131,18 @@ export class MailService {
         html: `<p>This is a test email from your ${escapeHtml(platform)} admin settings. SMTP is working. ✅</p>`,
         text: `This is a test email from your ${platform} admin settings. SMTP is working.`,
       });
+      await this.logDelivery(
+        { to, subject: `${platform} — test email`, event: 'test' },
+        { status: EmailLogStatus.SENT, via: 'platform' },
+      );
       return { sent: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`Test email to ${to} failed: ${message}`);
+      await this.logDelivery(
+        { to, subject: `${platform} — test email`, event: 'test' },
+        { status: EmailLogStatus.FAILED, via: 'platform', error: message },
+      );
       throw new BadRequestException(`SMTP error: ${message}`);
     }
   }
@@ -1035,13 +1266,94 @@ export class MailService {
         where: { store_id: store.id },
         data: { verified_at: new Date() },
       });
+      await this.logDelivery(
+        {
+          to,
+          subject: 'Test email from your store',
+          event: 'test',
+          storeId: store.id,
+        },
+        { status: EmailLogStatus.SENT, via: 'store', host: cfg.host },
+      );
       return { sent: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(
         `Store ${store.id} test email to ${to} failed: ${message}`,
       );
+      await this.logDelivery(
+        {
+          to,
+          subject: 'Test email from your store',
+          event: 'test',
+          storeId: store.id,
+        },
+        {
+          status: EmailLogStatus.FAILED,
+          via: 'store',
+          host: cfg.host,
+          error: message,
+        },
+      );
       throw new BadRequestException(`SMTP error: ${message}`);
     }
+  }
+
+  // ── Store notifications + log (CREATOR, every store type) ──────────────────
+
+  /** The caller's own store; no store id is ever accepted from the client. */
+  private async requireOwnStore(userId: string) {
+    const creator = await this.prisma.creator.findUnique({
+      where: { user_id: userId },
+      select: { id: true, user: { select: { email: true } } },
+    });
+    const store = creator
+      ? await this.prisma.store.findUnique({
+          where: { creator_id: creator.id },
+          select: { id: true, notification_email: true },
+        })
+      : null;
+    if (!creator || !store) {
+      throw new BadRequestException({
+        code: 'STORE_MAIL_NO_STORE',
+        message: 'You need a store before you can configure email.',
+      });
+    }
+    return { ...store, loginEmail: creator.user.email };
+  }
+
+  async listStoreLogs(
+    userId: string,
+    query: { page?: string; limit?: string; status?: string; q?: string },
+  ) {
+    const store = await this.requireOwnStore(userId);
+    return this.listLogs(query, store.id);
+  }
+
+  async getStoreNotifications(userId: string) {
+    const store = await this.requireOwnStore(userId);
+    return {
+      notification_email: store.notification_email || null,
+      login_email: store.loginEmail,
+      // The address order notifications actually go to right now.
+      effective_email: store.notification_email || store.loginEmail,
+    };
+  }
+
+  async updateStoreNotifications(
+    userId: string,
+    dto: { notification_email?: string },
+  ) {
+    const store = await this.requireOwnStore(userId);
+    if (dto.notification_email !== undefined) {
+      await this.prisma.store.update({
+        where: { id: store.id },
+        data: {
+          notification_email:
+            dto.notification_email.trim().toLowerCase() || null,
+        },
+      });
+    }
+    return this.getStoreNotifications(userId);
   }
 }

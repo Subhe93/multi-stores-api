@@ -32,6 +32,8 @@ export interface EmailBrand {
   storeLogoUrl?: string;
   /** Which store this message belongs to — selects its sender and templates. */
   storeId?: string;
+  /** Order the message is about — recorded in the delivery log only. */
+  orderId?: string;
   /** Admin-configured platform name (PlatformConfig.platform_name) — used when
    *  no store brand applies, instead of the hardcoded fallback. */
   platformName?: string;

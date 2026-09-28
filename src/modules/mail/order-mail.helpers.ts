@@ -468,6 +468,7 @@ export async function loadOrderForEmail(
         slug: true,
         name: true,
         logo_url: true,
+        notification_email: true,
         language_config: { select: { primary_locale: true } },
         creator: { select: { user: { select: { email: true } } } },
       },
@@ -479,7 +480,9 @@ export async function loadOrderForEmail(
         name: store.name,
         logoUrl: store.logo_url ?? undefined,
         primaryLocale: store.language_config?.primary_locale,
-        ownerEmail: store.creator?.user?.email,
+        // The store's notifications address wins over the login email.
+        ownerEmail:
+          store.notification_email?.trim() || store.creator?.user?.email,
       };
     }
   }

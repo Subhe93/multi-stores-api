@@ -378,7 +378,8 @@ export class AuthService {
         avatar_url: true,
         created_at: true,
         provider: true,
-        creator: true,
+        // Never ship the Kustom shared secret, not even as ciphertext.
+        creator: { omit: { kustom_shared_secret: true } },
         customer: true,
       },
     });

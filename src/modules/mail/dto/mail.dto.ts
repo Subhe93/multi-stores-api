@@ -2,10 +2,14 @@ import {
   IsString,
   IsOptional,
   IsBoolean,
+  IsIn,
   IsInt,
   IsEmail,
+  IsNumberString,
+  MaxLength,
   Min,
   Max,
+  ValidateIf,
 } from 'class-validator';
 
 // Admin-managed SMTP settings. All optional so one field can be updated at a
@@ -50,4 +54,41 @@ export class SendTestEmailDto {
   @IsOptional()
   @IsEmail()
   to?: string;
+}
+
+// Delivery log filters. Query strings, so numbers arrive as text.
+export class EmailLogQueryDto {
+  @IsOptional()
+  @IsNumberString()
+  page?: string;
+
+  @IsOptional()
+  @IsNumberString()
+  limit?: string;
+
+  @IsOptional()
+  @IsIn(['SENT', 'FAILED', 'SKIPPED'])
+  status?: 'SENT' | 'FAILED' | 'SKIPPED';
+
+  // Matches the recipient or the subject.
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  q?: string;
+
+  // Admin only; ignored on the creator endpoint.
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  store_id?: string;
+}
+
+// Address for "new order" notifications; an empty string clears it (back to
+// the creator's login email).
+export class UpdateStoreNotificationsDto {
+  @IsOptional()
+  @ValidateIf((o: UpdateStoreNotificationsDto) => o.notification_email !== '')
+  @IsEmail()
+  @MaxLength(254)
+  notification_email?: string;
 }

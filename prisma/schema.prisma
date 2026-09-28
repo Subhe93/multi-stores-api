@@ -973,6 +973,8 @@ model Store {
   shipping_tax_class_id   String?
   // Catalog display: show prices as tax inclusive.
   display_prices_incl_tax Boolean        @default(true)
+  // Where "new order" notifications go. Null = the creator's login email.
+  notification_email   String?
   created_at           DateTime @default(now())
   updated_at           DateTime @updatedAt
 
@@ -1062,6 +1064,33 @@ model StoreMailSettings {
   updated_at  DateTime  @updatedAt
 
   store Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
+}
+
+enum EmailLogStatus {
+  SENT
+  FAILED
+  SKIPPED
+}
+
+// One row per delivery attempt of a transactional email, so an admin or a
+// creator can tell what was handed to the SMTP server and what failed (and
+// why). Bodies are never stored. SENT means the SMTP server accepted the
+// message — not that it reached the inbox. Rows older than 90 days are pruned.
+model EmailLog {
+  id         String         @id @default(uuid())
+  store_id   String?
+  order_id   String?
+  event      String? // order_confirmation, new_order_owner, test, …
+  recipient  String
+  subject    String
+  status     EmailLogStatus
+  via        String? // 'store' | 'platform'
+  smtp_host  String?
+  error      String?
+  created_at DateTime       @default(now())
+
+  @@index([created_at])
+  @@index([store_id, created_at])
 }
 
 // Per-store override of a transactional email template. Same per-locale JSON

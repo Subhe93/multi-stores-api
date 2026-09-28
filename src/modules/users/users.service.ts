@@ -106,7 +106,8 @@ export class UsersService {
         created_at: true,
         updated_at: true,
         provider: true,
-        creator: true,
+        // Never ship the Kustom shared secret, not even as ciphertext.
+        creator: { omit: { kustom_shared_secret: true } },
         customer: { include: { addresses: true } },
       },
     });

@@ -1,9 +1,19 @@
-import { Controller, Get, Put, Post, Body, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Put,
+  Post,
+  Body,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { MailService } from './mail.service';
 import {
   UpdateSmtpSettingsDto,
   UpdateStoreSmtpSettingsDto,
+  UpdateStoreNotificationsDto,
+  EmailLogQueryDto,
   SendTestEmailDto,
 } from './dto/mail.dto';
 import { CurrentUser, Roles } from '../../common/decorators';
@@ -33,6 +43,12 @@ export class MailController {
     @CurrentUser('email') adminEmail: string,
   ) {
     return this.mailService.sendTest(dto.to || adminEmail);
+  }
+
+  // Delivery log of every store and of the platform itself.
+  @Get('logs')
+  listLogs(@Query() query: EmailLogQueryDto) {
+    return this.mailService.listLogs(query);
   }
 }
 
@@ -67,5 +83,29 @@ export class StoreMailController {
     @Body() dto: SendTestEmailDto,
   ) {
     return this.mailService.sendStoreTest(userId, dto.to || creatorEmail);
+  }
+
+  // The two below serve every store type: a marketplace store has no sender
+  // of its own, but it still receives order notifications.
+
+  @Get('logs')
+  listLogs(
+    @CurrentUser('id') userId: string,
+    @Query() query: EmailLogQueryDto,
+  ) {
+    return this.mailService.listStoreLogs(userId, query);
+  }
+
+  @Get('notifications')
+  getNotifications(@CurrentUser('id') userId: string) {
+    return this.mailService.getStoreNotifications(userId);
+  }
+
+  @Put('notifications')
+  updateNotifications(
+    @CurrentUser('id') userId: string,
+    @Body() dto: UpdateStoreNotificationsDto,
+  ) {
+    return this.mailService.updateStoreNotifications(userId, dto);
   }
 }
