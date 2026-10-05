@@ -957,6 +957,9 @@ model Store {
   cache_enabled        Boolean  @default(true)
   // Cash on delivery is opt-in per store (off by default).
   cod_enabled          Boolean   @default(false)
+  // Marketplace stores only: expose the base product's provider (name/logo)
+  // on the storefront as the vendor. Off by default.
+  show_vendor_name     Boolean   @default(false)
   // Legacy single VAT override (basis points). Superseded by the TaxRate
   // table (migration 20260923120000 converted it); no longer written.
   tax_rate_bp          Int?

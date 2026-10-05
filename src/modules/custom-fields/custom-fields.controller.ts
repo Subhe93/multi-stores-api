@@ -14,7 +14,7 @@ import {
   CreateCustomFieldDto,
   UpdateCustomFieldDto,
 } from './dto/custom-field.dto';
-import { Roles } from '../../common/decorators';
+import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '@prisma/client';
 
@@ -28,8 +28,10 @@ export class CustomFieldsController {
   create(
     @Param('productId') productId: string,
     @Body() dto: CreateCustomFieldDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') userRole: UserRole,
   ) {
-    return this.customFieldsService.create(productId, dto);
+    return this.customFieldsService.create(productId, dto, userId, userRole);
   }
 
   // Public — needed by storefront to render the form
@@ -41,15 +43,24 @@ export class CustomFieldsController {
   @Put('custom-fields/:id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR)
-  update(@Param('id') id: string, @Body() dto: UpdateCustomFieldDto) {
-    return this.customFieldsService.update(id, dto);
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateCustomFieldDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') userRole: UserRole,
+  ) {
+    return this.customFieldsService.update(id, dto, userId, userRole);
   }
 
   @Delete('custom-fields/:id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR)
-  delete(@Param('id') id: string) {
-    return this.customFieldsService.delete(id);
+  delete(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') userRole: UserRole,
+  ) {
+    return this.customFieldsService.delete(id, userId, userRole);
   }
 
   @Put('products/:productId/custom-fields/sort')
@@ -58,7 +69,14 @@ export class CustomFieldsController {
   reorder(
     @Param('productId') productId: string,
     @Body('field_ids') fieldIds: string[],
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') userRole: UserRole,
   ) {
-    return this.customFieldsService.reorder(productId, fieldIds);
+    return this.customFieldsService.reorder(
+      productId,
+      fieldIds,
+      userId,
+      userRole,
+    );
   }
 }

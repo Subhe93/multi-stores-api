@@ -101,6 +101,12 @@ export class UpdateStoreDto {
   @IsBoolean()
   cod_enabled?: boolean;
 
+  // Marketplace stores only: show the provider (vendor) name/logo on the
+  // storefront for resold products. Off by default.
+  @IsOptional()
+  @IsBoolean()
+  show_vendor_name?: boolean;
+
   // Presentment currency. Independent stores only — the service rejects it for
   // marketplace stores, which are charged on the platform account. Null/empty
   // clears it back to the platform default.

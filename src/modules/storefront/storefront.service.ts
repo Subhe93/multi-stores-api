@@ -365,6 +365,9 @@ export class StorefrontService {
           images: { take: 1, orderBy: { sort_order: 'asc' } },
           variants: { where: { is_active: true } },
           category: { include: { translations: true } },
+          provider: {
+            select: { id: true, company_name: true, logo_url: true },
+          },
         },
       },
     } satisfies Prisma.CustomProductInclude;
@@ -392,6 +395,9 @@ export class StorefrontService {
           }),
     ]);
 
+    // Vendor (provider) exposure is an opt-in marketplace-only setting.
+    const showVendor = this.showVendor(store);
+
     const mappedCustom = customProducts.map((cp) => {
       const variants = this.computeVariants(cp);
       const displayPrice = this.computeDisplayPrice(cp, variants);
@@ -412,6 +418,7 @@ export class StorefrontService {
         variants,
         category: cp.product.category,
         pricing_type: cp.pricing_type,
+        vendor: showVendor ? (cp.product.provider ?? null) : null,
         _type: 'custom_product' as const,
       };
     });
@@ -674,6 +681,9 @@ export class StorefrontService {
             variants: { where: { is_active: true }, include: { images: true } },
             tags: true,
             category: { include: { translations: true } },
+            provider: {
+              select: { id: true, company_name: true, logo_url: true },
+            },
             custom_fields: {
               include: { translations: true },
               orderBy: { sort_order: 'asc' },
@@ -778,8 +788,24 @@ export class StorefrontService {
       shipping_profile: shippingProfile,
       promotions,
       bundles,
+      vendor: this.showVendor(store) ? (baseProduct.provider ?? null) : null,
       _type: 'custom_product' as const,
     };
+  }
+
+  /**
+   * Whether the storefront may expose the base product's provider as the
+   * vendor. Opt-in per store and marketplace-only: an independent store sells
+   * its own products, so there is no third-party vendor to show.
+   */
+  private showVendor(store: {
+    show_vendor_name: boolean;
+    store_type: StoreType;
+  }): boolean {
+    return (
+      store.show_vendor_name === true &&
+      store.store_type === StoreType.MARKETPLACE
+    );
   }
 
   async getCategories(slug: string) {
