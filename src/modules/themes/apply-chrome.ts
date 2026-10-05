@@ -18,6 +18,9 @@ export interface ChromeSectionUpdate {
   id: string;
   settings: Record<string, unknown>;
   sort_order: number;
+  // Only set when the hidden flag must change (a section this feature hid
+  // when a previous preset dropped it comes back when a preset uses it).
+  is_hidden?: boolean;
 }
 
 export interface ChromeSectionCreate {
@@ -34,8 +37,32 @@ export interface ChromePlan {
   // Preset sections the page lacks.
   creates: ChromeSectionCreate[];
   // Sections the preset does not mention: untouched except for sort_order,
-  // re-packed after the preset ones in their previous relative order.
-  untouchedSortOrders: { id: string; sort_order: number }[];
+  // re-packed after the preset ones in their previous relative order. A
+  // section created by an earlier preset (THEME_MANAGED_KEY) is hidden, so
+  // switching presets never leaves a stale mega menu or bottom nav behind.
+  untouchedSortOrders: {
+    id: string;
+    sort_order: number;
+    is_hidden?: boolean;
+  }[];
+}
+
+// Marker written into the settings of sections this feature creates, so a
+// later preset may hide them again. Creator-authored sections never carry it.
+export const THEME_MANAGED_KEY = '_theme_managed';
+
+// Section-level colour overrides are part of the look. When a preset does not
+// set one, the value left by a previous preset must not survive the switch.
+export function isLookKey(key: string): boolean {
+  return key.endsWith('_color');
+}
+
+function withoutLookKeys(
+  settings: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(settings).filter(([key]) => !isLookKey(key)),
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -80,16 +107,25 @@ export function planChromeSections(
     );
     if (match) {
       claimed.add(match.id);
-      updates.push({
+      const existingSettings = asRecord(match.settings);
+      const update: ChromeSectionUpdate = {
         id: match.id,
-        settings: { ...asRecord(match.settings), ...section.settings },
+        settings: { ...withoutLookKeys(existingSettings), ...section.settings },
         sort_order: index,
-      });
+      };
+      // A section an earlier preset created and a later one hid is wanted
+      // again: show it, unless the preset itself keeps it hidden when empty.
+      if (match.is_hidden && existingSettings[THEME_MANAGED_KEY] === true) {
+        update.is_hidden =
+          section.hidden_when_empty === true &&
+          emptyKeys.has(section.section_key);
+      }
+      updates.push(update);
       return;
     }
     creates.push({
       section_key: section.section_key,
-      settings: { ...section.settings },
+      settings: { ...section.settings, [THEME_MANAGED_KEY]: true },
       sort_order: index,
       hidden:
         section.hidden_when_empty === true &&
@@ -100,7 +136,16 @@ export function planChromeSections(
   let next = preset.length;
   const untouchedSortOrders = ordered
     .filter((s) => !claimed.has(s.id))
-    .map((s) => ({ id: s.id, sort_order: next++ }));
+    .map((s) => {
+      const entry: { id: string; sort_order: number; is_hidden?: boolean } = {
+        id: s.id,
+        sort_order: next++,
+      };
+      if (asRecord(s.settings)[THEME_MANAGED_KEY] === true && !s.is_hidden) {
+        entry.is_hidden = true;
+      }
+      return entry;
+    });
 
   return { updates, creates, untouchedSortOrders };
 }

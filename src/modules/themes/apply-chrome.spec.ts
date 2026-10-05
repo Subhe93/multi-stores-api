@@ -3,6 +3,7 @@ import {
   generateDefaultContent,
   planChromeSections,
   socialItems,
+  THEME_MANAGED_KEY,
   type ExistingChromeSection,
 } from './apply-chrome';
 import type { ChromeSectionPreset } from './presets/types';
@@ -71,7 +72,8 @@ describe('planChromeSections', () => {
     expect(plan.creates).toEqual([
       {
         section_key: 'announcement-bar',
-        settings: { layout: 'rotating' },
+        // Created sections carry the marker so a later preset may hide them.
+        settings: { layout: 'rotating', [THEME_MANAGED_KEY]: true },
         sort_order: 0,
         hidden: false,
       },
@@ -155,6 +157,77 @@ describe('planChromeSections', () => {
       ...plan.untouchedSortOrders.map((u) => u.id),
     ].sort();
     expect(ids).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('drops colour overrides a previous preset left when the new one does not set them', () => {
+    const existing = [
+      section('h', 'header-bar', 0, {
+        bg_color: '#0a0a0a',
+        text_color: '#fff',
+        logo_url: '/logo.svg',
+      }),
+    ];
+    const plan = planChromeSections(existing, [
+      {
+        section_key: 'header-bar',
+        settings: { sticky_mode: 'always', accent_color: '#f00' },
+      },
+    ]);
+    expect(plan.updates[0].settings).toEqual({
+      logo_url: '/logo.svg',
+      sticky_mode: 'always',
+      accent_color: '#f00',
+    });
+  });
+
+  it('marks created sections as theme-managed and hides them when a later preset drops them', () => {
+    const first = planChromeSections(
+      [],
+      [{ section_key: 'mega-menu', settings: { alignment: 'center' } }],
+    );
+    expect(first.creates[0].settings[THEME_MANAGED_KEY]).toBe(true);
+
+    const existing = [
+      section('m', 'mega-menu', 0, first.creates[0].settings),
+      section('c', 'custom-banner', 1, { layout: 'x' }),
+    ];
+    const later = planChromeSections(existing, [
+      { section_key: 'header-bar', settings: {} },
+    ]);
+    const managed = later.untouchedSortOrders.find((u) => u.id === 'm');
+    const authored = later.untouchedSortOrders.find((u) => u.id === 'c');
+    expect(managed?.is_hidden).toBe(true);
+    expect(authored?.is_hidden).toBeUndefined();
+  });
+
+  it('shows a theme-managed section again when a preset uses it', () => {
+    const existing = [
+      section('m', 'mega-menu', 3, { [THEME_MANAGED_KEY]: true }, true),
+    ];
+    const plan = planChromeSections(existing, [
+      { section_key: 'mega-menu', settings: { alignment: 'start' } },
+    ]);
+    expect(plan.updates[0].is_hidden).toBe(false);
+    const hiddenWhenEmpty = planChromeSections(
+      [
+        section(
+          'a',
+          'announcement-bar',
+          0,
+          { [THEME_MANAGED_KEY]: true },
+          true,
+        ),
+      ],
+      [
+        {
+          section_key: 'announcement-bar',
+          settings: {},
+          hidden_when_empty: true,
+        },
+      ],
+      new Set(['announcement-bar']),
+    );
+    expect(hiddenWhenEmpty.updates[0].is_hidden).toBe(true);
   });
 
   it('does not mutate the inputs', () => {

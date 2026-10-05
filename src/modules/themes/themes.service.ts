@@ -276,6 +276,7 @@ export class ThemesService {
         data: {
           settings: u.settings as Prisma.InputJsonValue,
           sort_order: u.sort_order,
+          ...(u.is_hidden !== undefined ? { is_hidden: u.is_hidden } : {}),
         },
       });
     }
@@ -294,7 +295,10 @@ export class ThemesService {
     for (const s of plan.untouchedSortOrders) {
       await tx.pageSection.update({
         where: { id: s.id },
-        data: { sort_order: s.sort_order },
+        data: {
+          sort_order: s.sort_order,
+          ...(s.is_hidden !== undefined ? { is_hidden: s.is_hidden } : {}),
+        },
       });
     }
 

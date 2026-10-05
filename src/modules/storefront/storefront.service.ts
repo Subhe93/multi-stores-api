@@ -558,7 +558,18 @@ export class StorefrontService {
           include: { translations: true },
           orderBy: { sort_order: 'asc' },
         },
-        shipping_profile: { include: { zones: true } },
+        shipping_profile: {
+          include: {
+            zones: {
+              include: {
+                methods: {
+                  where: { is_active: true },
+                  orderBy: { sort_order: 'asc' },
+                },
+              },
+            },
+          },
+        },
       },
     });
 
@@ -570,7 +581,16 @@ export class StorefrontService {
       if (!shippingProfile && product.provider_id) {
         const defaultProfile = await this.prisma.shippingProfile.findFirst({
           where: { provider_id: product.provider_id, is_default: true },
-          include: { zones: true },
+          include: {
+            zones: {
+              include: {
+                methods: {
+                  where: { is_active: true },
+                  orderBy: { sort_order: 'asc' },
+                },
+              },
+            },
+          },
         });
         if (defaultProfile) shippingProfile = defaultProfile;
       }
@@ -662,7 +682,18 @@ export class StorefrontService {
               include: { translations: true },
               orderBy: { sort_order: 'asc' },
             },
-            shipping_profile: { include: { zones: true } },
+            shipping_profile: {
+              include: {
+                zones: {
+                  include: {
+                    methods: {
+                      where: { is_active: true },
+                      orderBy: { sort_order: 'asc' },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
       },
@@ -692,7 +723,16 @@ export class StorefrontService {
     if (!shippingProfile && baseProduct.provider_id) {
       const defaultProfile = await this.prisma.shippingProfile.findFirst({
         where: { provider_id: baseProduct.provider_id, is_default: true },
-        include: { zones: true },
+        include: {
+          zones: {
+            include: {
+              methods: {
+                where: { is_active: true },
+                orderBy: { sort_order: 'asc' },
+              },
+            },
+          },
+        },
       });
       if (defaultProfile) shippingProfile = defaultProfile;
     }
