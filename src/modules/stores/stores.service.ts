@@ -8,6 +8,7 @@ import { Prisma, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { OrdersService } from '../orders/orders.service';
+import { stripBrandFromThemeConfig } from './theme-config';
 import {
   CreateStoreDto,
   UpdateStoreDto,
@@ -444,14 +445,7 @@ export class StoresService {
       const store = await this.prisma.store.findUnique({
         where: { creator_id: creator.id },
       });
-      const cfg = (store?.theme_config as Record<string, any>) || {};
-      const { primaryColor, secondaryColor, fontFamily, typography, ...rest } =
-        cfg;
-      void primaryColor;
-      void secondaryColor;
-      void fontFamily;
-      void typography;
-      data.theme_config = rest;
+      data.theme_config = stripBrandFromThemeConfig(store?.theme_config);
     }
 
     const store = await this.prisma.store.update({

@@ -88,8 +88,10 @@ export class PagesV2Service {
   /**
    * Localized default titles for the provisioned system pages, keyed by
    * page type then locale. Falls back to English for unknown locales.
+   * Public so other modules that provision system pages (themes) seed the
+   * same titles.
    */
-  private defaultPageTitle(type: PageType, locale: string): string {
+  defaultPageTitle(type: PageType, locale: string): string {
     const titles: Partial<Record<PageType, Record<string, string>>> = {
       [PageType.HOME]: {
         en: 'Home',

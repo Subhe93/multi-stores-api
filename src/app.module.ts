@@ -34,6 +34,7 @@ import { PagesModule } from './modules/pages/pages.module';
 import { PageBuilderModule } from './modules/page-builder/page-builder.module';
 import { PagesV2Module } from './modules/pages-v2/pages-v2.module';
 import { TemplatesModule } from './modules/templates/templates.module';
+import { ThemesModule } from './modules/themes/themes.module';
 import { MenusModule } from './modules/menus/menus.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { PaymentsModule } from './modules/payments/payments.module';
@@ -82,6 +83,7 @@ import { BackupsModule } from './modules/backups/backups.module';
     PageBuilderModule,
     PagesV2Module,
     TemplatesModule,
+    ThemesModule,
     MenusModule,
     NotificationsModule,
     PaymentsModule,
