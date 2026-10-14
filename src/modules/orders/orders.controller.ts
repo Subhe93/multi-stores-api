@@ -59,6 +59,10 @@ export class OrdersController {
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('status') status?: string,
+    // Markets app: only orders placed in this market (key).
+    @Query('market') market?: string,
+    // b2b app: 'company' | 'person' (anything else is ignored).
+    @Query('buyer') buyer?: string,
   ) {
     // Validate the optional status filter against the OrderStatus enum so an
     // unknown value gets a friendly 400 instead of a database error.
@@ -78,6 +82,8 @@ export class OrdersController {
         page ? +page : undefined,
         limit ? +limit : undefined,
         statusFilter,
+        market || undefined,
+        buyer || undefined,
       );
     }
     // Provider/Creator — find relevant orders
@@ -87,6 +93,8 @@ export class OrdersController {
       page ? +page : undefined,
       limit ? +limit : undefined,
       statusFilter,
+      market || undefined,
+      buyer || undefined,
     );
   }
 

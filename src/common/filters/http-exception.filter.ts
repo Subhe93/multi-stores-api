@@ -22,6 +22,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // Stable machine-readable error code (when a thrower provides one). Clients
     // translate `errors.<code>` and fall back to `message`.
     let code: string | undefined;
+    // Any further keys a thrower put next to code/message (e.g. the DNS
+    // records a failed domain verify observed) travel with the error.
+    let extra: Record<string, unknown> = {};
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -33,6 +36,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
         // `message` may be a string or an array (class-validator) — preserve it.
         if (r.message !== undefined) message = r.message;
         if (typeof r.code === 'string') code = r.code;
+        const { message: _m, code: _c, statusCode: _s, error: _e, ...rest } = r;
+        void _m;
+        void _c;
+        void _s;
+        void _e;
+        extra = rest;
       }
     } else {
       // Log unexpected errors for debugging
@@ -40,6 +49,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     response.status(status).json({
+      ...extra,
       success: false,
       statusCode: status,
       message,

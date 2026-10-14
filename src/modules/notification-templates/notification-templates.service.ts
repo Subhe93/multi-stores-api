@@ -18,6 +18,25 @@ type Localized = Record<string, string>;
  * Blocks do not nest. Conditions are resolved first, so a removed block never
  * leaves its placeholders behind.
  */
+/**
+ * A variable named `html:<name>` overrides `<name>` in the HTML body only
+ * (subject and text keep the plain value). Lets a caller pass an
+ * HTML-escaped copy of a plain-text variable without touching how any
+ * other variable renders.
+ */
+export const HTML_VAR_PREFIX = 'html:';
+
+/** The variables as the HTML body sees them (`html:` overrides applied). */
+export function htmlVars(vars: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = { ...vars };
+  for (const [key, value] of Object.entries(vars)) {
+    if (key.startsWith(HTML_VAR_PREFIX)) {
+      out[key.slice(HTML_VAR_PREFIX.length)] = value;
+    }
+  }
+  return out;
+}
+
 export function substitute(
   template: string,
   vars: Record<string, string>,
@@ -66,6 +85,22 @@ const ORDER_COMMON_VARIABLES = [
   'totals_text',
   'shipping_address_html',
   'shipping_address_text',
+  // b2b app: company snapshot of a company order (empty for a person).
+  'company_block_html',
+  'company_block_text',
+  'company_name',
+  'org_number',
+  'vat_number',
+  'buyer_reference',
+  'net_total',
+  // invoices app: the order's invoice / credit note and the seller's legal
+  // identity (empty strings without the app or before anything is issued).
+  'invoice_number',
+  'credit_note_number',
+  'invoice_url',
+  'seller_block_html',
+  'seller_block_text',
+  'seller_legal_line',
 ];
 
 /**
@@ -137,7 +172,7 @@ export class NotificationTemplatesService {
   ) {
     return {
       subject: substitute(this.pickLocale(tpl.subject, locale), vars),
-      html: substitute(this.pickLocale(tpl.body_html, locale), vars),
+      html: substitute(this.pickLocale(tpl.body_html, locale), htmlVars(vars)),
       text: substitute(this.pickLocale(tpl.body_text, locale), vars),
     };
   }

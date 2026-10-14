@@ -138,6 +138,12 @@ model Customer {
   first_name String
   last_name  String
   phone      String?
+  // b2b app: default buyer type and company identity used to prefill
+  // checkout. Null = person / never set.
+  customer_type BuyerType?
+  company_name  String?
+  org_number    String?    @db.VarChar(32)
+  vat_number    String?    @db.VarChar(32)
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -159,6 +165,10 @@ model Address {
   postal_code  String
   country_code String   @db.VarChar(2)
   phone        String?
+  // b2b app: company fields of this (billing) address.
+  company_name    String?
+  org_number      String?  @db.VarChar(32)
+  buyer_reference String?
   is_default   Boolean  @default(false)
   created_at   DateTime @default(now())
 
@@ -358,6 +368,7 @@ model Product {
   order_items        OrderItem[]
   bundles            BundleProduct[]
   creator_categories ProductCreatorCategory[]
+  market_prices      ProductMarketPrice[]
 
   @@index([provider_id])
   @@index([creator_id])
@@ -472,6 +483,7 @@ model ProductVariant {
   images                  ProductImage[]
   order_items             OrderItem[]
   custom_product_variants CustomProductVariant[]
+  market_prices           ProductMarketPrice[]
 
   @@index([product_id])
 }
@@ -637,21 +649,39 @@ model Order {
   shipping_method_id   String?
   shipping_method_name String?
   shipping_method_type ShippingMethodType?
+  // Markets app: the market the order was placed in, the storefront host it
+  // was placed on, the UI locale and the base->market rate the prices were
+  // converted with (1 when the market prices in the store currency). All
+  // null for orders placed without the app.
+  market_id               String?
+  hostname                String?
+  locale                  String?             @db.VarChar(10)
+  fx_rate_snapshot        Decimal?            @db.Decimal(18, 8)
+  // b2b app snapshot. All null for orders placed as a person / without the
+  // app. Net/gross are derived (see deriveNetTotals), never stored.
+  customer_type           BuyerType?
+  company_name            String?
+  org_number              String?             @db.VarChar(32)
+  vat_number              String?             @db.VarChar(32)
+  buyer_reference         String?
   notes           String?
   created_at      DateTime    @default(now())
   updated_at      DateTime    @updatedAt
 
   customer   Customer         @relation(fields: [customer_id], references: [id])
   address    Address          @relation(fields: [address_id], references: [id])
+  market          Market?          @relation(fields: [market_id], references: [id], onDelete: SetNull)
   items      OrderItem[]
   commission      OrderCommission?
   timeline        OrderTimeline[]
   promotion_usage PromotionUsage[]
   payouts         OrderPayout[]
+  invoices        Invoice[]
 
   @@index([customer_id])
   @@index([order_number])
   @@index([status])
+  @@index([market_id])
 }
 
 // Per-recipient payout (Stripe transfer) for an order — lets each provider /
@@ -991,6 +1021,10 @@ model Store {
   mail_settings   StoreMailSettings?
   mail_templates  StoreNotificationTemplate[]
   kustom_sessions KustomCheckoutSession[]
+  apps            StoreApp[]
+  markets         Market[]
+  domains         StoreDomain[]
+  legal_profiles  StoreLegalProfile[]
 
   @@index([slug])
 }
@@ -1037,6 +1071,14 @@ model KustomCheckoutSession {
   // True when validation had to create the customer account for a guest;
   // surfaced on the confirmation page so the shopper knows how to log in.
   account_created Boolean  @default(false)
+  // Markets app: market and storefront host the session was opened on, so
+  // the merchant URLs and the order created at validation carry them.
+  market_id          String?
+  hostname           String?
+  // b2b app: buyer type the session was opened with and the company prefill
+  // the storefront sent ({company_name, org_number, vat_number?, buyer_reference?}).
+  buyer_type         BuyerType?
+  company            Json?
   created_at      DateTime @default(now())
   updated_at      DateTime @updatedAt
   expires_at      DateTime
@@ -1115,6 +1157,30 @@ model StoreNotificationTemplate {
   @@index([store_id])
 }
 
+// Per-store apps (feature add-ons such as markets / b2b / invoices). The row
+// is the allowlist: `available` is set by an admin, `enabled` by the creator,
+// and the app is in effect only when both are true. A store with no rows has
+// no apps and behaves exactly as before the apps system existed. Keys come
+// from the registry in src/common/store-apps/store-apps.registry.ts.
+model StoreApp {
+  id         String    @id @default(uuid())
+  store_id   String
+  app_key    String    @db.VarChar(32)
+  available  Boolean   @default(false)
+  enabled    Boolean   @default(false)
+  settings   Json      @default("{}")
+  enabled_at DateTime?
+  // User.id of whoever last enabled it (not a relation on purpose).
+  enabled_by String?
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+
+  store Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
+
+  @@unique([store_id, app_key])
+  @@index([store_id])
+}
+
 model StoreLanguageConfig {
   id                String   @id @default(uuid())
   store_id          String   @unique
@@ -1126,6 +1192,113 @@ model StoreLanguageConfig {
   store Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
 }
 
+// -- Markets app ------------------------------------------------------------
+// A market is one country group a store sells to, with its own hostname(s),
+// locales, currency and price rule. Every store has a default market (bound to
+// the platform subdomain and the legacy custom_domain); the rows are inert
+// until the "markets" store app is enabled.
+
+enum MarketStatus {
+  DRAFT
+  LIVE
+}
+
+enum StoreDomainStatus {
+  PENDING
+  VERIFIED
+  ACTIVE
+}
+
+model Market {
+  id              String       @id @default(uuid())
+  store_id        String
+  // URL/API handle ('se', 'eu'); 'default' for the default market.
+  key             String       @db.VarChar(16)
+  name            String
+  // ISO2, upper-case.
+  countries       String[]
+  default_locale  String       @db.VarChar(5)
+  // Served with a /xx/ prefix; never contains default_locale.
+  locales         String[]
+  currency        String       @db.VarChar(3)
+  is_default      Boolean      @default(false)
+  status          MarketStatus @default(DRAFT)
+  // {mode:'convert'|'fixed', source:'manual'|'platform', rate?, rounding:{increment?, ending?}}
+  price_rule      Json         @default("{}")
+  // {stripe:'ok'|'missing'|'unknown', kustom:..., checked_at, details:{...}}
+  payment_check   Json?
+  // Reserved for a later milestone (per-market legal entity).
+  legal_entity_id String?
+  created_at      DateTime     @default(now())
+  updated_at      DateTime     @updatedAt
+
+  store   Store                @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  domains StoreDomain[]
+  prices  ProductMarketPrice[]
+  orders  Order[]
+
+  @@unique([store_id, key])
+  @@index([store_id])
+}
+
+model StoreDomain {
+  id            String            @id @default(uuid())
+  store_id      String
+  market_id     String
+  // Lower-case, no port.
+  hostname      String            @unique
+  // Canonical host of the market.
+  is_primary    Boolean           @default(false)
+  // Hostname to 301 to (www -> apex).
+  redirect_to   String?
+  // PENDING -> VERIFIED (creator DNS check) -> ACTIVE (admin, after the CDN
+  // step). Only ACTIVE hosts are served.
+  status        StoreDomainStatus @default(PENDING)
+  verified_at   DateTime?
+  // DNS records (CNAME + A) seen by the last "Verify" call, string[].
+  last_observed Json?
+  created_at    DateTime          @default(now())
+
+  store  Store  @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  market Market @relation(fields: [market_id], references: [id], onDelete: Cascade)
+
+  @@index([store_id])
+  @@index([market_id])
+}
+
+model ProductMarketPrice {
+  id               String   @id @default(uuid())
+  market_id        String
+  product_id       String
+  variant_id       String?
+  // Manual override in the market currency; null = auto (converted).
+  price            Decimal? @db.Decimal(10, 2)
+  compare_at_price Decimal? @db.Decimal(10, 2)
+  // false on the product-level row hides the product in this market.
+  available        Boolean  @default(true)
+  updated_at       DateTime @updatedAt
+
+  market  Market          @relation(fields: [market_id], references: [id], onDelete: Cascade)
+  product Product         @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  variant ProductVariant? @relation(fields: [variant_id], references: [id], onDelete: Cascade)
+
+  // Postgres treats NULL variant_id rows as distinct here; the migration adds
+  // a partial unique index for the product-level row (variant_id IS NULL).
+  @@unique([market_id, product_id, variant_id])
+  @@index([product_id])
+}
+
+// Platform-provided FX rates (admin-maintained; a fetch job can fill it later).
+model PlatformFxRate {
+  id         String   @id @default(uuid())
+  base       String   @db.VarChar(3)
+  quote      String   @db.VarChar(3)
+  rate       Decimal  @db.Decimal(18, 8)
+  updated_at DateTime @updatedAt
+
+  @@unique([base, quote])
+}
+
 // ==========================================
 // Taxes (plans/tax-system/API-CONTRACT-TAX.md)
 // ==========================================
@@ -1133,6 +1306,12 @@ model StoreLanguageConfig {
 enum TaxPricingMode {
   INCLUSIVE
   EXCLUSIVE
+}
+
+// Buyer kind of a customer / order (b2b app). Null = PERSON (pre-app rows).
+enum BuyerType {
+  PERSON
+  COMPANY
 }
 
 enum TaxBasis {
@@ -1820,4 +1999,136 @@ enum BundleDiscountType {
 enum BundleStatus {
   ACTIVE
   DISABLED
+}
+
+// ==========================================
+// Invoices app (M3)
+// ==========================================
+
+enum InvoiceKind {
+  INVOICE
+  CREDIT_NOTE
+}
+
+// What caused the document (audit + idempotency semantics).
+enum InvoiceTrigger {
+  PAYMENT
+  COD_CREATED
+  COD_DELIVERED
+  MANUAL
+  REFUND
+  CANCELLATION
+}
+
+// Invoices app: legal identity of the seller shown on invoices and order
+// emails. One 'default' profile per store in M3; Market.legal_entity_id may
+// point here later. Columns nullable so the form can be saved progressively;
+// completeness is checked before issuing.
+model StoreLegalProfile {
+  id                String   @id @default(uuid())
+  store_id          String
+  key               String   @default("default") @db.VarChar(32)
+  legal_name        String?
+  brand_name        String?
+  org_number        String?  @db.VarChar(32)
+  vat_number        String?  @db.VarChar(32)
+  address_line1     String?
+  address_line2     String?
+  postal_code       String?  @db.VarChar(16)
+  city              String?
+  country_code      String?  @db.VarChar(2)
+  registered_office String? // "Säte" (Swedish AB requirement)
+  email             String?
+  phone             String?
+  website           String?
+  bankgiro          String?  @db.VarChar(16)
+  plusgiro          String?  @db.VarChar(16)
+  iban              String?  @db.VarChar(34)
+  bic               String?  @db.VarChar(11)
+  bank_name         String?
+  logo_url          String? // /uploads/... (public logo) or https; null = Store.logo_url
+  f_tax_approved    Boolean  @default(false) // "Godkänd för F-skatt"
+  due_days          Int      @default(30)
+  footer_note       String?
+  timezone          String   @default("Europe/Stockholm") @db.VarChar(64)
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  store     Store             @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  sequences InvoiceSequence[]
+
+  @@unique([store_id, key])
+  @@index([store_id])
+}
+
+// One gapless series per (profile, kind). A number is allocated under
+// SELECT ... FOR UPDATE inside the transaction that inserts the invoice.
+model InvoiceSequence {
+  id               String      @id @default(uuid())
+  legal_profile_id String
+  store_id         String
+  kind             InvoiceKind
+  prefix           String      @default("") @db.VarChar(12)
+  padding          Int         @default(0)
+  start_number     Int         @default(1) // as configured (audit)
+  next_number      Int         @default(1)
+  issued_count     Int         @default(0)
+  last_issued_at   DateTime?
+  updated_at       DateTime    @updatedAt
+
+  legal_profile StoreLegalProfile @relation(fields: [legal_profile_id], references: [id], onDelete: Cascade)
+
+  @@unique([legal_profile_id, kind])
+  @@index([store_id])
+}
+
+// An issued invoice or credit note: an immutable snapshot plus scalar columns
+// for lists. Amounts are signed (credit notes negative). A trigger
+// (prisma/sql/invoice-guards.sql) rejects DELETE and any UPDATE except the PDF
+// / email bookkeeping columns.
+model Invoice {
+  id                  String         @id @default(uuid())
+  store_id            String // no FK on purpose (survives store deletion, like Order.store_id)
+  legal_profile_id    String // no FK on purpose
+  order_id            String
+  kind                InvoiceKind
+  sequence_number     Int
+  number              String         @db.VarChar(40)
+  credited_invoice_id String?
+  trigger             InvoiceTrigger
+  idempotency_key     String         @db.VarChar(120)
+  issue_date          DateTime       @db.Date
+  due_date            DateTime?      @db.Date
+  issued_at           DateTime       @default(now())
+  issued_by           String? // User.id; null = system
+  currency            String         @db.VarChar(3)
+  locale              String         @db.VarChar(10)
+  net_total           Decimal        @db.Decimal(12, 2) // signed
+  vat_total           Decimal        @db.Decimal(12, 2)
+  gross_total         Decimal        @db.Decimal(12, 2)
+  paid                Boolean
+  buyer_type          BuyerType?
+  buyer_name          String
+  buyer_email         String?
+  order_number        String
+  reason              String?
+  snapshot            Json
+  snapshot_version    Int            @default(1)
+  snapshot_sha256     String         @db.VarChar(64)
+  // Mutable bookkeeping (the only columns the immutability trigger allows).
+  pdf_path            String?
+  pdf_sha256          String?        @db.VarChar(64)
+  pdf_generated_at    DateTime?
+  emailed_at          DateTime?
+  created_at          DateTime       @default(now())
+
+  order            Order     @relation(fields: [order_id], references: [id], onDelete: Restrict)
+  credited_invoice Invoice?  @relation("InvoiceCredits", fields: [credited_invoice_id], references: [id], onDelete: Restrict)
+  credit_notes     Invoice[] @relation("InvoiceCredits")
+
+  @@unique([legal_profile_id, kind, sequence_number])
+  @@unique([store_id, kind, number])
+  @@unique([store_id, idempotency_key])
+  @@index([store_id, issue_date])
+  @@index([order_id])
 }

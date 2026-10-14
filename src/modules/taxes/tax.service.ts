@@ -15,6 +15,7 @@ import {
   roundSymmetric,
 } from '../../common/money/tax.util';
 import { isEuCountry } from './tax-territory';
+import type { BuyerType } from '../b2b/b2b.types';
 
 /**
  * Tax engine (API-CONTRACT-TAX.md §2). Two halves:
@@ -45,6 +46,12 @@ export interface TaxContext {
   usePlatformRates: boolean;
   shippingTaxClassId: string | null;
   displayPricesInclTax: boolean;
+  /**
+   * b2b app: who is buying. Only changes `display_mode` of the result (a
+   * company sees net prices); amounts are the same for both (L11). Absent =
+   * PERSON. Reverse charge would plug in here later.
+   */
+  buyerType?: BuyerType;
 }
 
 export interface TaxClassRow {
@@ -133,6 +140,61 @@ export interface TaxComputeResult {
   headline_rate_bp: number;
   tax_pricing_mode: TaxPricingMode;
   tax_basis_country: string | null;
+  /**
+   * b2b app (D3): how the amounts are presented - 'excl' for a COMPANY buyer
+   * or an EXCLUSIVE store, 'incl' otherwise. Purely informational.
+   */
+  display_mode: 'incl' | 'excl';
+  /** Sum of line nets after the discount share (major units). */
+  net_items: number;
+  /** Shipping without its tax (= shipping_cost in EXCLUSIVE mode). */
+  net_shipping: number;
+  /** total - tax_total; always equals net_items + net_shipping. */
+  net_total: number;
+}
+
+/** Net/gross split of a stored order, derived the same way everywhere. */
+export interface DerivedNetTotals {
+  gross: number;
+  net_items: number;
+  net_shipping: number;
+  net_total: number;
+}
+
+/**
+ * Net figures of an existing order from its snapshot columns (D4): nothing
+ * is stored for them, so emails and dashboards derive them with this one
+ * formula. `gross = total`, `net_total = total - tax_amount`,
+ * `net_shipping = INCLUSIVE ? shipping - shipping tax : shipping`.
+ */
+export function deriveNetTotals(
+  order: {
+    total: unknown;
+    tax_amount?: unknown;
+    shipping_cost?: unknown;
+    shipping_tax_amount?: unknown;
+    tax_pricing_mode?: TaxPricingMode | 'INCLUSIVE' | 'EXCLUSIVE' | null;
+  },
+  currency?: string,
+): DerivedNetTotals {
+  const factor = 10 ** (currency ? currencyDecimals(currency) : 2);
+  const toMinor = (major: unknown) => Math.round(Number(major || 0) * factor);
+  const toMajor = (minor: number) => minor / factor;
+  const total = toMinor(order.total);
+  const tax = toMinor(order.tax_amount);
+  const shipping = toMinor(order.shipping_cost);
+  const shippingTax = toMinor(order.shipping_tax_amount);
+  const netShipping =
+    order.tax_pricing_mode === TaxPricingMode.EXCLUSIVE
+      ? shipping
+      : shipping - shippingTax;
+  const netTotal = total - tax;
+  return {
+    gross: toMajor(total),
+    net_items: toMajor(netTotal - netShipping),
+    net_shipping: toMajor(netShipping),
+    net_total: toMajor(netTotal),
+  };
 }
 
 // ── Matching ────────────────────────────────────────────────────────────────
@@ -448,14 +510,16 @@ export function computeTaxes(input: TaxComputeInput): TaxComputeResult {
   let headline = 0;
   let taxTotalMinor = 0;
   let grossSumMinor = 0;
+  let netItemsMinor = 0;
   let highest: { rate_bp: number; class_id: string | null } | null = null;
   const items: TaxComputeItem[] = input.lines.map((line, i) => {
     const resolved = resolveRatesForLine(ctx, data, line, destination);
     const base = lineMinor[i] - shares[i];
-    const { tax, applied } = taxLineMinor(base, resolved.rates, mode);
+    const { net, tax, applied } = taxLineMinor(base, resolved.rates, mode);
     const rateBp = effectiveRateBp(resolved.rates);
     addToGroup(applied);
     taxTotalMinor += tax;
+    netItemsMinor += net;
     const gross = mode === TaxPricingMode.INCLUSIVE ? base : base + tax;
     grossSumMinor += gross;
     headline = Math.max(headline, rateBp);
@@ -507,6 +571,19 @@ export function computeTaxes(input: TaxComputeInput): TaxComputeResult {
     grossSumMinor +
     shippingMinor +
     (mode === TaxPricingMode.EXCLUSIVE ? shippingTaxMinor : 0);
+  // b2b app (D3): net figures for the company view. Derived from the same
+  // minor-unit parts as the total, so net_total + tax_total === total and
+  // net_items + net_shipping === net_total hold exactly; nothing above
+  // changes. Free shipping has a zero net.
+  const netShippingMinor =
+    mode === TaxPricingMode.INCLUSIVE
+      ? shippingMinor - shippingTaxMinor
+      : shippingMinor;
+  const netTotalMinor = totalMinor - taxTotalMinor;
+  const display_mode: 'incl' | 'excl' =
+    ctx.buyerType === 'COMPANY' || mode === TaxPricingMode.EXCLUSIVE
+      ? 'excl'
+      : 'incl';
 
   const tax_lines: TaxLine[] = Array.from(groups.values())
     .sort((a, b) => b.rate_bp - a.rate_bp || a.label.localeCompare(b.label))
@@ -527,6 +604,10 @@ export function computeTaxes(input: TaxComputeInput): TaxComputeResult {
     headline_rate_bp: headline,
     tax_pricing_mode: mode,
     tax_basis_country: basisCountry,
+    display_mode,
+    net_items: toMajor(netItemsMinor),
+    net_shipping: toMajor(netShippingMinor),
+    net_total: toMajor(netTotalMinor),
   };
 }
 

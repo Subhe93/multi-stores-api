@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
   BadRequestException,
@@ -8,6 +9,12 @@ import { Prisma, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { OrdersService } from '../orders/orders.service';
+import { StoreAppsService } from '../store-apps/store-apps.service';
+import { MarketsService } from '../markets/markets.service';
+import { MarketsContextService } from '../markets/markets-context.service';
+import { toMarketRoute } from '../markets/market-context';
+import type { StoreByDomainResponse } from '../markets/market.types';
+import { isReservedDomain } from '../../common/domains/reserved-hosts';
 import { stripBrandFromThemeConfig } from './theme-config';
 import {
   CreateStoreDto,
@@ -18,31 +25,24 @@ import {
   UpdateLanguageDto,
 } from './dto/store.dto';
 
-// Hosts a creator cannot claim as their custom_domain. Mirrors the storefront
-// proxy's PLATFORM_HOSTNAMES so an attacker can't register e.g.
-// "admin.iwings-digital.com" and intercept platform traffic. Both an exact
-// match and any subdomain (`.endsWith('.' + host)`) are blocked.
-const RESERVED_HOSTS = (
-  process.env.PLATFORM_HOSTS ||
-  process.env.NEXT_PUBLIC_PLATFORM_HOSTS ||
-  'localhost,iwings-digital.com,www.iwings-digital.com'
-)
-  .split(',')
-  .map((h) => h.trim().toLowerCase())
-  .filter(Boolean);
-
-function isReservedDomain(domain: string): boolean {
-  return RESERVED_HOSTS.some(
-    (host) => domain === host || domain.endsWith('.' + host),
-  );
-}
+// While the markets app is on, hostnames are managed per market (Markets
+// page); the legacy custom_domain field is read-only there.
+const STORE_CUSTOM_DOMAIN_MANAGED_BY_MARKETS = {
+  code: 'STORE_CUSTOM_DOMAIN_MANAGED_BY_MARKETS',
+  message: 'Domains are managed in Markets while the markets app is enabled.',
+};
 
 @Injectable()
 export class StoresService {
+  private readonly logger = new Logger(StoresService.name);
+
   constructor(
     private prisma: PrismaService,
     private readonly revalidation: RevalidationService,
     private readonly ordersService: OrdersService,
+    private readonly storeApps: StoreAppsService,
+    private readonly markets: MarketsService,
+    private readonly marketsContext: MarketsContextService,
   ) {}
 
   async create(userId: string, dto: CreateStoreDto) {
@@ -131,6 +131,10 @@ export class StoresService {
       },
     });
 
+    // Every store carries a default market (inert until the markets app is
+    // enabled), created from the language config + store currency.
+    await this.markets.ensureDefaultMarket(store.id);
+
     return store;
   }
 
@@ -191,19 +195,50 @@ export class StoresService {
 
   // Lightweight lookup used by the storefront proxy to resolve a custom CNAME
   // (e.g. shop.merchant.com) to its store slug. Returns only the slug so the
-  // proxy can rewrite without pulling the full store payload.
-  async findSlugByCustomDomain(host: string): Promise<{ slug: string }> {
+  // proxy can rewrite without pulling the full store payload — plus, for a
+  // store with the markets app on, the market the host belongs to
+  // (M1-DESIGN §3.2; market/markets are absent otherwise).
+  async findSlugByCustomDomain(host: string): Promise<StoreByDomainResponse> {
     const normalized = host.trim().toLowerCase().split(':')[0];
+    const notFound = () =>
+      new NotFoundException({
+        code: 'STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
+
+    // StoreDomain first. A row exists for every migrated custom_domain, so
+    // with the app OFF the host is honoured only when it still equals the
+    // legacy column (today's semantics); with the app ON the row must be
+    // ACTIVE and its market LIVE. A row that is not servable falls through
+    // to the legacy lookup below rather than blocking the host.
+    const domain = await this.marketsContext.byHostname(normalized);
+    if (domain && domain.store.is_active) {
+      const defaultMarket = await this.marketsContext.resolve(domain.store_id);
+      if (defaultMarket) {
+        if (domain.status === 'ACTIVE' && domain.market.status === 'LIVE') {
+          const market = await this.marketsContext.resolve(
+            domain.store_id,
+            domain.market.key,
+          );
+          const markets =
+            (await this.marketsContext.listLive(domain.store_id)) ?? [];
+          return {
+            slug: domain.store.slug,
+            ...(domain.redirect_to ? { redirect_to: domain.redirect_to } : {}),
+            market: toMarketRoute(market ?? defaultMarket),
+            markets,
+          };
+        }
+      } else if (domain.store.custom_domain?.toLowerCase() === normalized) {
+        return { slug: domain.store.slug };
+      }
+    }
+
     const store = await this.prisma.store.findUnique({
       where: { custom_domain: normalized },
       select: { slug: true, is_active: true },
     });
-    if (!store || !store.is_active) {
-      throw new NotFoundException({
-        code: 'STORE_NOT_FOUND',
-        message: 'Store not found',
-      });
-    }
+    if (!store || !store.is_active) throw notFound();
     return { slug: store.slug };
   }
 
@@ -249,6 +284,18 @@ export class StoresService {
       }
     }
 
+    const own = await this.prisma.store.findUnique({
+      where: { creator_id: creator.id },
+      select: { id: true },
+    });
+    if (
+      data.custom_domain !== undefined &&
+      own &&
+      (await this.storeApps.isEnabled(own.id, 'markets'))
+    ) {
+      throw new BadRequestException(STORE_CUSTOM_DOMAIN_MANAGED_BY_MARKETS);
+    }
+
     if (data.custom_domain) {
       if (isReservedDomain(data.custom_domain)) {
         throw new BadRequestException({
@@ -263,7 +310,10 @@ export class StoresService {
         },
         select: { id: true },
       });
-      if (conflict)
+      if (
+        conflict ||
+        (await this.marketHostTaken(data.custom_domain, own?.id ?? null))
+      )
         throw new ConflictException({
           code: 'STORE_CUSTOM_DOMAIN_TAKEN',
           message: 'Custom domain already in use',
@@ -278,9 +328,32 @@ export class StoresService {
       }),
     );
 
+    // The default market prices in the store currency (read live through
+    // the markets cache), so a currency change drops the cached contexts.
+    if (data.currency !== undefined) this.marketsContext.invalidate(store.id);
+
     await this.revalidation.revalidateStoreBySlug(store.slug);
 
     return store;
+  }
+
+  /**
+   * Whether another store already claims `hostname` as a market host that
+   * is VERIFIED or ACTIVE (a PENDING row does not block a legacy domain).
+   */
+  private async marketHostTaken(
+    hostname: string,
+    ownStoreId: string | null,
+  ): Promise<boolean> {
+    const row = await this.prisma.storeDomain.findFirst({
+      where: {
+        hostname,
+        status: { in: ['VERIFIED', 'ACTIVE'] },
+        ...(ownStoreId ? { store_id: { not: ownStoreId } } : {}),
+      },
+      select: { id: true },
+    });
+    return row !== null;
   }
 
   async findByCreatorId(creatorId: string) {
@@ -344,6 +417,13 @@ export class StoresService {
       });
     }
 
+    if (
+      data.custom_domain !== undefined &&
+      (await this.storeApps.isEnabled(store.id, 'markets'))
+    ) {
+      throw new BadRequestException(STORE_CUSTOM_DOMAIN_MANAGED_BY_MARKETS);
+    }
+
     if (data.custom_domain) {
       if (isReservedDomain(data.custom_domain)) {
         throw new BadRequestException({
@@ -355,7 +435,10 @@ export class StoresService {
         where: { custom_domain: data.custom_domain, id: { not: store.id } },
         select: { id: true },
       });
-      if (conflict)
+      if (
+        conflict ||
+        (await this.marketHostTaken(data.custom_domain, store.id))
+      )
         throw new ConflictException({
           code: 'STORE_CUSTOM_DOMAIN_TAKEN',
           message: 'Custom domain already in use',
@@ -369,6 +452,8 @@ export class StoresService {
         include: { language_config: true },
       }),
     );
+
+    if (data.currency !== undefined) this.marketsContext.invalidate(store.id);
 
     // The commission split of an unpaid order is derived from the store type
     // at payment time — but COD orders are never "paid" through Stripe, so
@@ -384,12 +469,27 @@ export class StoresService {
         try {
           await this.ordersService.recomputeCommissionForOrder(order.id);
         } catch (err) {
-          console.error(
-            '[StoreTypeSwitch] commission recompute failed for',
-            order.id,
-            err,
+          this.logger.warn(
+            `Store type switch: commission recompute failed for order ${order.id}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
           );
         }
+      }
+      // Apps that need an independent store are switched off on a move away
+      // from INDEPENDENT; nothing changes on the way back. The store row is
+      // already updated, so a failure here is logged rather than surfaced.
+      try {
+        await this.storeApps.onStoreTypeChanged(
+          store.id,
+          dto.store_type as StoreType,
+        );
+      } catch (err) {
+        this.logger.warn(
+          `Store type switch: failed to sync store apps: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
       }
     }
 
@@ -563,6 +663,16 @@ export class StoresService {
       update: normalized,
       create: { store_id: store.id, ...normalized },
     });
+
+    // The default market mirrors the store's locales only while the markets
+    // app is off; once it is on, the Markets page owns them (L8).
+    if (!(await this.storeApps.isEnabled(store.id, 'markets'))) {
+      await this.markets.mirrorLanguagesIntoDefault(
+        store.id,
+        config.primary_locale,
+        config.secondary_locales,
+      );
+    }
 
     await this.revalidation.revalidateStoreById(store.id);
 

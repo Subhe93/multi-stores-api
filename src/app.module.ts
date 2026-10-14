@@ -6,6 +6,10 @@ import { PrismaModule } from './prisma/prisma.module';
 import { CryptoModule } from './common/crypto/crypto.module';
 import { RevalidationModule } from './common/revalidation/revalidation.module';
 import { CorsModule } from './common/cors/cors.module';
+import { StoreAppsModule } from './modules/store-apps/store-apps.module';
+import { MarketsModule } from './modules/markets/markets.module';
+import { B2bModule } from './modules/b2b/b2b.module';
+import { InvoicesModule } from './modules/invoices/invoices.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ProvidersModule } from './modules/providers/providers.module';
 import { CreatorsModule } from './modules/creators/creators.module';
@@ -54,6 +58,10 @@ import { BackupsModule } from './modules/backups/backups.module';
     PrismaModule,
     CryptoModule,
     RevalidationModule,
+    StoreAppsModule,
+    MarketsModule,
+    B2bModule,
+    InvoicesModule,
     CorsModule,
     AuthModule,
     UsersModule,

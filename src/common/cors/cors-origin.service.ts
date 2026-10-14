@@ -44,11 +44,22 @@ export class CorsOriginService {
       const candidates = new Set<string>([host]);
       if (host.startsWith('www.')) candidates.add(host.slice(4));
       else candidates.add(`www.${host}`);
+      // A legacy custom_domain, or an ACTIVE market hostname (markets app).
       const store = await this.prisma.store.findFirst({
         where: {
-          OR: [...candidates].map((domain) => ({
-            custom_domain: { equals: domain, mode: 'insensitive' as const },
-          })),
+          OR: [
+            ...[...candidates].map((domain) => ({
+              custom_domain: { equals: domain, mode: 'insensitive' as const },
+            })),
+            {
+              domains: {
+                some: {
+                  hostname: { in: [...candidates] },
+                  status: 'ACTIVE' as const,
+                },
+              },
+            },
+          ],
         },
         select: { id: true },
       });

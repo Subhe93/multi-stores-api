@@ -9,10 +9,13 @@ import type {
   KustomAddress,
   KustomCheckoutPayload,
   KustomCheckoutUpdateResponse,
+  KustomCustomer,
+  KustomCustomerType,
   KustomMerchantUrls,
   KustomOrderLine,
   KustomShippingOption,
 } from './kustom.client';
+import type { BuyerType, CompanySnapshot } from '../../b2b/b2b.types';
 
 /**
  * Pure functions that turn one of our orders — or a not-yet-ordered checkout
@@ -68,7 +71,19 @@ export interface KustomLinesInput {
   shipping_tax_rate_bp?: number | null;
 }
 
-export interface KustomOrderInput extends KustomLinesInput {
+/**
+ * b2b app: the company snapshot of an order (D4), all null / absent for a
+ * person. An Order row satisfies it; a session passes its own snapshot.
+ */
+export interface KustomCompanyInput {
+  customer_type?: BuyerType | null;
+  company_name?: string | null;
+  org_number?: string | null;
+  vat_number?: string | null;
+  buyer_reference?: string | null;
+}
+
+export interface KustomOrderInput extends KustomLinesInput, KustomCompanyInput {
   id: string;
   order_number: string;
   subtotal: unknown;
@@ -92,6 +107,11 @@ export interface KustomMapperContext {
   /** PUBLIC_API_URL, no trailing slash needed. */
   apiBase: string;
   pushToken: string;
+  /**
+   * b2b app: `options.allowed_customer_types`, set only when the store
+   * accepts company purchases. Undefined leaves the payload as it always was.
+   */
+  allowedCustomerTypes?: KustomCustomerType[];
 }
 
 // ── Locale ──────────────────────────────────────────────────────────────────
@@ -194,7 +214,7 @@ export function splitFullName(fullName: string): {
 }
 
 export function buildKustomAddress(
-  order: Pick<KustomOrderInput, 'address' | 'customer'>,
+  order: Pick<KustomOrderInput, 'address' | 'customer'> & KustomCompanyInput,
 ): KustomAddress {
   const a = order.address;
   const { given_name, family_name } = splitFullName(a.full_name);
@@ -212,7 +232,49 @@ export function buildKustomAddress(
   if (a.state) address.region = a.state;
   if (email) address.email = email;
   if (phone) address.phone = phone;
+  // b2b app: organisation fields, only on a company purchase (Kustom API
+  // reference names: organization_name, buyer_reference).
+  if (isCompany(order)) {
+    if (order.company_name) address.organization_name = order.company_name;
+    if (order.buyer_reference) address.buyer_reference = order.buyer_reference;
+  }
   return address;
+}
+
+function isCompany(input: KustomCompanyInput): boolean {
+  return input.customer_type === 'COMPANY';
+}
+
+/**
+ * b2b app: the `customer` object of a company purchase - Kustom renders the
+ * organisation flow by default and prefills the org number (and VAT id when
+ * one was given). Undefined for a person, so the key is never sent.
+ */
+export function buildKustomCustomer(
+  input: KustomCompanyInput,
+): KustomCustomer | undefined {
+  if (!isCompany(input)) return undefined;
+  const customer: KustomCustomer = { type: 'organization' };
+  if (input.org_number) {
+    customer.organization_registration_id = input.org_number;
+  }
+  if (input.vat_number) customer.vat_id = input.vat_number;
+  return customer;
+}
+
+/** The company snapshot of a session as the mapper input ({} = person). */
+export function companyInputOf(
+  buyerType: BuyerType | null | undefined,
+  company: CompanySnapshot | null | undefined,
+): KustomCompanyInput {
+  if (buyerType !== 'COMPANY') return {};
+  return {
+    customer_type: 'COMPANY',
+    company_name: company?.company_name ?? null,
+    org_number: company?.org_number ?? null,
+    vat_number: company?.vat_number ?? null,
+    buyer_reference: company?.buyer_reference ?? null,
+  };
 }
 
 // ── Lines / amounts ─────────────────────────────────────────────────────────
@@ -479,6 +541,7 @@ export function buildKustomCheckoutPayload(
   const lines = buildKustomOrderLines(order, contentLocale, {
     shippingName: order.shipping_method_name ?? undefined,
   });
+  const customer = buildKustomCustomer(order);
 
   return {
     purchase_country: country,
@@ -496,6 +559,8 @@ export function buildKustomCheckoutPayload(
     // still change the shipping address inside the iframe.
     billing_address: address,
     shipping_address: address,
+    // b2b app: both keys are absent (not undefined) without the app.
+    ...(customer ? { customer } : {}),
     options: {
       auto_capture: false,
       allow_separate_shipping_address: true,
@@ -503,6 +568,9 @@ export function buildKustomCheckoutPayload(
       // time: stock and order state must be confirmed before Kustom
       // authorizes money, never assumed.
       require_validate_callback_success: true,
+      ...(ctx.allowedCustomerTypes
+        ? { allowed_customer_types: ctx.allowedCustomerTypes }
+        : {}),
     },
   };
 }
@@ -535,6 +603,8 @@ export interface KustomSessionMapperContext {
    * returned to the storefront.
    */
   callbackToken: string;
+  /** b2b app: see KustomMapperContext.allowedCustomerTypes. */
+  allowedCustomerTypes?: KustomCustomerType[];
 }
 
 /** A priced checkout session: the quote plus what Kustom should prefill. */
@@ -551,6 +621,10 @@ export interface KustomSessionInput extends KustomLinesInput {
   /** Options to offer for the current destination; empty until known. */
   shippingOptions: ShippingQuoteOption[];
   selectedShippingId?: string | null;
+  /** b2b app: the buyer type the session runs as (absent = person). */
+  buyerType?: BuyerType | null;
+  /** b2b app: the company prefill of a COMPANY session, if any was given. */
+  company?: CompanySnapshot | null;
 }
 
 /**
@@ -621,15 +695,28 @@ export function buildKustomSessionPayload(
 ): KustomCheckoutPayload {
   const amounts = buildKustomSessionAmounts(input, ctx);
   const country = input.purchaseCountry.toUpperCase();
+  const company = companyInputOf(input.buyerType, input.company);
   let address: KustomAddress | undefined;
   if (input.address) {
     address = buildKustomAddress({
       address: input.address,
       customer: { phone: input.phone, user: { email: input.email } },
+      ...company,
     });
   } else if (input.email) {
     address = { email: input.email, country };
   }
+  // b2b app: a company session with an email-only prefill (logged-in
+  // customer without a saved address) still prefills the organisation name
+  // / reference. Never invents an address: updates send no prefill at all,
+  // and a partial billing_address could clobber what the shopper typed.
+  if (isCompany(company) && address && !input.address) {
+    const org: KustomAddress = { ...address };
+    if (company.company_name) org.organization_name = company.company_name;
+    if (company.buyer_reference) org.buyer_reference = company.buyer_reference;
+    if (org.organization_name || org.buyer_reference) address = org;
+  }
+  const customer = buildKustomCustomer(company);
 
   const payload: KustomCheckoutPayload = {
     purchase_country: country,
@@ -644,6 +731,10 @@ export function buildKustomSessionPayload(
       auto_capture: false,
       allow_separate_shipping_address: true,
       require_validate_callback_success: true,
+      // b2b app: absent without the app, so the payload stays identical.
+      ...(ctx.allowedCustomerTypes
+        ? { allowed_customer_types: ctx.allowedCustomerTypes }
+        : {}),
     },
   };
   if (input.reference2) payload.merchant_reference2 = input.reference2;
@@ -651,6 +742,7 @@ export function buildKustomSessionPayload(
     payload.billing_address = address;
     payload.shipping_address = address;
   }
+  if (customer) payload.customer = customer;
   // Omitted (not an empty array) until a destination is known.
   if (amounts.shipping_options.length) {
     payload.shipping_options = amounts.shipping_options;

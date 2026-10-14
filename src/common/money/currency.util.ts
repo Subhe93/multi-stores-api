@@ -151,3 +151,21 @@ export function resolveStoreCurrency(
   if (!isSupportedCurrency(store.currency)) return fallback;
   return store.currency!.toUpperCase();
 }
+
+/**
+ * The currency an order is priced in when a market context applies: the
+ * market's currency, else exactly resolveStoreCurrency(). The markets app
+ * only exists on INDEPENDENT stores, so a market currency never reaches a
+ * marketplace order.
+ */
+export function resolveOrderCurrency(
+  store:
+    | { store_type?: string | null; currency?: string | null }
+    | null
+    | undefined,
+  platformDefault: string | null | undefined,
+  market?: { currency: string } | null,
+): string {
+  if (market?.currency) return market.currency.toUpperCase();
+  return resolveStoreCurrency(store, platformDefault);
+}

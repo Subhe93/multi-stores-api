@@ -117,11 +117,44 @@ export class CommissionsService {
       .filter((c) => c.status === 'PENDING')
       .reduce((sum, c) => sum + Number(c[amountField]), 0);
 
+    // Markets app (L14): the same figures split per order currency, so a
+    // store selling in several currencies is not shown one mixed total. The
+    // cross-currency totals above are unchanged for every existing reader.
+    const byCurrency = new Map<
+      string,
+      // paid = COMPLETED commissions (the order was delivered).
+      { orders: number; total_earnings: number; pending: number; paid: number }
+    >();
+    for (const c of allCommissions) {
+      const code = (c.currency || 'EUR').toUpperCase();
+      const entry = byCurrency.get(code) ?? {
+        orders: 0,
+        total_earnings: 0,
+        pending: 0,
+        paid: 0,
+      };
+      const amount = Number(c[amountField]);
+      entry.orders += 1;
+      entry.total_earnings += amount;
+      if (c.status === 'PENDING') entry.pending += amount;
+      if (c.status === 'COMPLETED') entry.paid += amount;
+      byCurrency.set(code, entry);
+    }
+
     return {
       total_earnings: Math.round(totalEarnings * 100) / 100,
       this_month: Math.round(thisMonth * 100) / 100,
       pending: Math.round(pending * 100) / 100,
       total_orders: allCommissions.length,
+      by_currency: [...byCurrency.entries()]
+        .map(([currency, e]) => ({
+          currency,
+          orders: e.orders,
+          total_earnings: Math.round(e.total_earnings * 100) / 100,
+          pending: Math.round(e.pending * 100) / 100,
+          paid: Math.round(e.paid * 100) / 100,
+        }))
+        .sort((a, b) => b.orders - a.orders),
     };
   }
 

@@ -1,8 +1,18 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { StoreAppsService } from '../store-apps/store-apps.service';
+import { MarketsContextService } from '../markets/markets-context.service';
+import { MarketPricingService } from '../markets/market-pricing.service';
+import { toMarketRoute, type MarketContext } from '../markets/market-context';
 import { PricingType, Prisma, ProductVariant, StoreType } from '@prisma/client';
 import { resolveStoreCurrency } from '../../common/money/currency.util';
-import { buildTaxContext } from '../taxes/tax.service';
+import {
+  TaxService,
+  buildTaxContext,
+  effectiveRateBp,
+  resolveRatesForLine,
+  type TaxStoreFields,
+} from '../taxes/tax.service';
 import {
   isKustomEnabledForStore,
   kustomCreatorSelect,
@@ -48,7 +58,101 @@ interface CustomProductPricingSource {
 
 @Injectable()
 export class StorefrontService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly storeApps: StoreAppsService,
+    private readonly markets: MarketsContextService,
+    private readonly marketPricing: MarketPricingService,
+    private readonly taxService: TaxService,
+  ) {}
+
+  /**
+   * b2b app (D2): the estimated tax rate (basis points) of each product -
+   * the registration-country estimate the cart uses, since no destination
+   * is known on a catalog page - so the web can show net prices to a
+   * company without a per-buyer cache split. Null when the app is off, so
+   * the catalog payload stays byte-identical; one extra rate-table query
+   * per request otherwise.
+   */
+  private async taxRatesFor(
+    store: TaxStoreFields,
+    products: { tax_class_id: string | null; tax_exempt: boolean }[],
+  ): Promise<number[] | null> {
+    if (!(await this.storeApps.isEnabled(store.id, 'b2b'))) return null;
+    const ctx = await this.taxService.contextFor(store);
+    const data = await this.taxService.loadTaxData(ctx);
+    const destination = { country: ctx.taxCountry };
+    return products.map((p) =>
+      effectiveRateBp(resolveRatesForLine(ctx, data, p, destination).rates),
+    );
+  }
+
+  /**
+   * Market context of a storefront read (?market=): null when the app is
+   * off (every caller then runs its pre-markets code), the default market
+   * when the app is on and no key was given, 404 MARKET_NOT_FOUND /
+   * MARKET_NOT_LIVE for an unknown or draft key.
+   */
+  private resolveMarket(
+    storeId: string,
+    marketKey?: string,
+  ): Promise<MarketContext | null> {
+    return this.markets.resolve(storeId, marketKey);
+  }
+
+  /**
+   * Apply a market's prices to own products already shaped for the
+   * storefront (base_price / variants[].price as numbers). Products hidden
+   * in the market are dropped. Override rows are loaded in one query.
+   */
+  private async applyMarketPrices<
+    T extends {
+      id: string;
+      base_price: number;
+      compare_at_price?: number;
+      variants: {
+        id: string;
+        price: number;
+        price_adjustment: unknown;
+        compare_at_price?: number;
+      }[];
+    },
+  >(ctx: MarketContext, products: T[]): Promise<T[]> {
+    const rows = await this.marketPricing.loadPrices(
+      ctx.id,
+      products.map((p) => p.id),
+    );
+    const out: T[] = [];
+    for (const p of products) {
+      const priced = this.marketPricing.priceProduct(
+        ctx,
+        {
+          id: p.id,
+          base_price: p.base_price,
+          compare_at_price: p.compare_at_price ?? null,
+          variants: p.variants.map((v) => ({
+            id: v.id,
+            price_adjustment: v.price_adjustment,
+            compare_at_price: v.compare_at_price ?? null,
+          })),
+        },
+        rows.get(p.id),
+      );
+      if (priced.hidden) continue;
+      const byId = new Map(priced.variants.map((v) => [v.id, v]));
+      out.push({
+        ...p,
+        base_price: priced.base_price,
+        compare_at_price: priced.compare_at_price,
+        variants: p.variants.map((v) => ({
+          ...v,
+          price: byId.get(v.id)?.price ?? v.price,
+          compare_at_price: byId.get(v.id)?.compare_at_price,
+        })),
+      });
+    }
+    return out;
+  }
 
   /**
    * Fetch ACTIVE bundles attached to either an own Product or a CustomProduct,
@@ -107,7 +211,7 @@ export class StorefrontService {
     return { enabled: store?.cache_enabled ?? true };
   }
 
-  async getStore(slug: string) {
+  async getStore(slug: string, marketKey?: string) {
     const store = await this.prisma.store.findUnique({
       where: { slug, is_active: true },
       include: {
@@ -145,6 +249,17 @@ export class StorefrontService {
       where: { id: store.creator_id },
       select: kustomCreatorSelect,
     });
+
+    // Store apps in effect for this store (`{}` for a store without apps).
+    const apps = await this.storeApps.storefrontApps(store.id);
+
+    // Markets app: null when off — the payload below is then byte-identical
+    // to the pre-markets one (no market/markets keys, language_config and
+    // currency untouched).
+    const market = await this.resolveMarket(store.id, marketKey);
+    const markets = market
+      ? ((await this.markets.listLive(store.id)) ?? [])
+      : [];
 
     // Builder (v2) static pages that are live. A legacy page migrated into the
     // builder is deleted from static_pages, so without this merge it silently
@@ -215,6 +330,9 @@ export class StorefrontService {
         creator: kustomCreator,
         currency: resolveStoreCurrency(store, platformConfig?.default_currency),
       }),
+      // Enabled store apps keyed by app key; always present (`{}` when none)
+      // so the storefront payload has a stable shape.
+      apps,
       pages: mergedPages,
       // New theme system: storefront resolves the registry by theme_key and
       // merges theme_customizations on top.
@@ -241,6 +359,27 @@ export class StorefrontService {
         // sub-objects (enabled, image_url, height, overlay, show_count).
         hero: themeConfig.hero || {},
       },
+      // With a market: the market's currency and locales override the
+      // store-level ones so every page reading language_config.primary_locale
+      // becomes market-aware (M1-DESIGN D3), plus the market routes.
+      ...(market
+        ? {
+            currency: market.currency,
+            language_config: {
+              ...store.language_config,
+              primary_locale: market.defaultLocale,
+              secondary_locales: market.locales,
+            },
+            kustom_enabled: isKustomEnabledForStore({
+              store_type: store.store_type,
+              is_active: store.is_active,
+              creator: kustomCreator,
+              currency: market.currency,
+            }),
+            market: toMarketRoute(market),
+            markets,
+          }
+        : {}),
     };
   }
 
@@ -254,6 +393,7 @@ export class StorefrontService {
       search?: string;
       locale?: string;
     },
+    marketKey?: string,
   ) {
     const store = await this.prisma.store.findUnique({
       where: { slug },
@@ -264,6 +404,8 @@ export class StorefrontService {
         code: 'STOREFRONT_STORE_NOT_FOUND',
         message: 'Store not found',
       });
+
+    const market = await this.resolveMarket(store.id, marketKey);
 
     // If a creator-category slug is requested, resolve it to an id + match rule
     // up front so we can apply the same filter to both own and custom queries.
@@ -319,6 +461,26 @@ export class StorefrontService {
       } else {
         ownWhere.creator_categories = {
           some: { creator_category_id: creatorCategory.id },
+        };
+      }
+    }
+    if (market) {
+      // Products the creator switched off in this market are not listed.
+      ownWhere.NOT = {
+        market_prices: {
+          some: { market_id: market.id, variant_id: null, available: false },
+        },
+      };
+      // No rate (fixed rule): only products with a manual override can be
+      // priced, so the others are excluded here already (exact counts);
+      // applyMarketPrices below still drops anything unpriceable.
+      if (market.rate == null) {
+        ownWhere.market_prices = {
+          some: {
+            market_id: market.id,
+            variant_id: null,
+            price: { not: null },
+          },
         };
       }
     }
@@ -469,7 +631,11 @@ export class StorefrontService {
           translations: p.translations,
         }));
 
-    const ownWithPromos = mappedOwn.map((p) => ({
+    const ownListed = market
+      ? await this.applyMarketPrices(market, mappedOwn)
+      : mappedOwn;
+
+    const ownWithPromos = ownListed.map((p) => ({
       ...p,
       promotions: attachPromos(p.id),
     }));
@@ -478,7 +644,26 @@ export class StorefrontService {
       promotions: attachPromos(p.id),
     }));
 
-    return [...ownWithPromos, ...customWithPromos];
+    // b2b app: `tax_rate_bp` per product (own, then custom), app on only.
+    const rates = await this.taxRatesFor(store, [
+      ...ownWithPromos.map((p) => ({
+        tax_class_id: p.tax_class_id,
+        tax_exempt: p.tax_exempt,
+      })),
+      ...customProducts.map((cp) => ({
+        tax_class_id: cp.product.tax_class_id,
+        tax_exempt: cp.product.tax_exempt,
+      })),
+    ]);
+    if (!rates) return [...ownWithPromos, ...customWithPromos];
+    const ownCount = ownWithPromos.length;
+    return [
+      ...ownWithPromos.map((p, i) => ({ ...p, tax_rate_bp: rates[i] })),
+      ...customWithPromos.map((p, i) => ({
+        ...p,
+        tax_rate_bp: rates[ownCount + i],
+      })),
+    ];
   }
 
   /**
@@ -521,7 +706,12 @@ export class StorefrontService {
       }));
   }
 
-  async getProduct(slug: string, productSlug: string, _locale?: string) {
+  async getProduct(
+    slug: string,
+    productSlug: string,
+    _locale?: string,
+    marketKey?: string,
+  ) {
     const store = await this.prisma.store.findUnique({
       where: { slug },
       include: { creator: true },
@@ -531,6 +721,8 @@ export class StorefrontService {
         code: 'STOREFRONT_STORE_NOT_FOUND',
         message: 'Store not found',
       });
+
+    const market = await this.resolveMarket(store.id, marketKey);
 
     // Try creator's own product first. Order by updated_at so duplicate-slug
     // collisions resolve to the most recently edited product instead of an
@@ -610,7 +802,7 @@ export class StorefrontService {
         productId: product.id,
       });
 
-      return {
+      const shaped = {
         ...product,
         shipping_profile: shippingProfile,
         base_price: prodBasePrice,
@@ -630,7 +822,21 @@ export class StorefrontService {
           .filter((cc) => cc && cc.is_active !== false),
         promotions,
         bundles,
+        // b2b app: estimated rate (variants share the product's class).
+        ...(await this.taxRateEntry(store, product)),
       };
+      if (market) {
+        // Market prices; a product hidden in this market is a 404 here.
+        const [priced] = await this.applyMarketPrices(market, [shaped]);
+        if (!priced) {
+          throw new NotFoundException({
+            code: 'STOREFRONT_PRODUCT_NOT_FOUND',
+            message: 'Product not found',
+          });
+        }
+        return priced;
+      }
+      return shaped;
     }
 
     // Independent stores sell the creator's own products only — never serve
@@ -790,7 +996,18 @@ export class StorefrontService {
       bundles,
       vendor: this.showVendor(store) ? (baseProduct.provider ?? null) : null,
       _type: 'custom_product' as const,
+      // b2b app: estimated rate of the base product (app on only).
+      ...(await this.taxRateEntry(store, baseProduct)),
     };
+  }
+
+  /** `{ tax_rate_bp }` for one product when the b2b app is on, else `{}`. */
+  private async taxRateEntry(
+    store: TaxStoreFields,
+    product: { tax_class_id: string | null; tax_exempt: boolean },
+  ): Promise<{ tax_rate_bp?: number }> {
+    const rates = await this.taxRatesFor(store, [product]);
+    return rates ? { tax_rate_bp: rates[0] } : {};
   }
 
   /**
@@ -935,7 +1152,7 @@ export class StorefrontService {
    * - the store's locale set so the sitemap can render hreflang alternates
    * Server-side aggregation keeps the storefront route to a single fetch.
    */
-  async getSitemapData(storeSlug: string) {
+  async getSitemapData(storeSlug: string, marketKey?: string) {
     const store = await this.prisma.store.findUnique({
       where: { slug: storeSlug },
       include: {
@@ -949,8 +1166,24 @@ export class StorefrontService {
         message: 'Store not found',
       });
 
-    const primaryLocale = store.language_config?.primary_locale || 'en';
-    const secondaryLocales = store.language_config?.secondary_locales || [];
+    // With a market, its locales drive the sitemap and hidden products are
+    // left out; without one (app off) the output is unchanged.
+    const market = await this.resolveMarket(store.id, marketKey);
+    const hiddenIds = new Set<string>();
+    if (market) {
+      const hidden = await this.prisma.productMarketPrice.findMany({
+        where: { market_id: market.id, variant_id: null, available: false },
+        select: { product_id: true },
+      });
+      hidden.forEach((h) => hiddenIds.add(h.product_id));
+    }
+
+    const primaryLocale = market
+      ? market.defaultLocale
+      : store.language_config?.primary_locale || 'en';
+    const secondaryLocales = market
+      ? market.locales
+      : store.language_config?.secondary_locales || [];
     const locales = Array.from(new Set([primaryLocale, ...secondaryLocales]));
 
     // v2 published pages — only those with a published_version_id.
@@ -979,6 +1212,7 @@ export class StorefrontService {
         this.prisma.product.findMany({
           where: { creator_id: store.creator.id, status: 'PUBLISHED' },
           select: {
+            id: true,
             updated_at: true,
             translations: { select: { locale: true, slug: true } },
           },
@@ -988,6 +1222,7 @@ export class StorefrontService {
           : this.prisma.customProduct.findMany({
               where: { creator_id: store.creator.id, status: 'PUBLISHED' },
               select: {
+                id: true,
                 updated_at: true,
                 translations: { select: { locale: true, slug: true } },
               },
@@ -1023,6 +1258,7 @@ export class StorefrontService {
         .filter((p) => p.type === 'LANDING' && p.slug)
         .map((p) => ({ slug: p.slug!, lastmod: p.updated_at })),
       products: [...ownProducts, ...customProducts]
+        .filter((p) => !hiddenIds.has(p.id))
         .map((p) => {
           // The sitemap's canonical is the PRIMARY-locale URL, so the slug has
           // to be the primary locale's. Picking whichever translation happened
@@ -1031,7 +1267,17 @@ export class StorefrontService {
             p.translations.find(
               (tr) => tr.locale === primaryLocale && !!tr.slug,
             ) || p.translations.find((tr) => !!tr.slug);
-          return t ? { slug: t.slug, lastmod: p.updated_at } : null;
+          if (!t) return null;
+          if (!market) return { slug: t.slug, lastmod: p.updated_at };
+          // Per-locale slugs so the sitemap can emit one <url> per locale
+          // with translated product paths (only with a market, D9/L12).
+          const slugs: Record<string, string> = {};
+          for (const tr of p.translations) {
+            if (tr.slug && locales.includes(tr.locale)) {
+              slugs[tr.locale] = tr.slug;
+            }
+          }
+          return { slug: t.slug, slugs, lastmod: p.updated_at };
         })
         .filter((p): p is { slug: string; lastmod: Date } => !!p),
       collections: collections.map((c) => ({
@@ -1042,6 +1288,12 @@ export class StorefrontService {
         slug: p.slug,
         lastmod: p.updated_at,
       })),
+      ...(market
+        ? {
+            market: toMarketRoute(market),
+            markets: (await this.markets.listLive(store.id)) ?? [],
+          }
+        : {}),
     };
   }
 

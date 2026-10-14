@@ -26,6 +26,22 @@ async function step(label, fn) {
   console.log('');
 
   try {
+    // ── Invoices (invoices app) ──
+    // Issued documents are guarded by a trigger (prisma/sql/invoice-guards.sql)
+    // and reference orders with ON DELETE RESTRICT, so they go first, inside
+    // one transaction that opens the dev-only escape hatch. Credit notes go
+    // before the invoices they credit (also RESTRICT).
+    await step('Invoice', async () => {
+      const [, credits, invoices] = await prisma.$transaction([
+        prisma.$executeRawUnsafe("SET LOCAL app.allow_invoice_delete = 'on'"),
+        prisma.invoice.deleteMany({ where: { kind: 'CREDIT_NOTE' } }),
+        prisma.invoice.deleteMany(),
+      ]);
+      return { count: credits.count + invoices.count };
+    });
+    await step('InvoiceSequence', () => prisma.invoiceSequence.deleteMany());
+    await step('StoreLegalProfile', () => prisma.storeLegalProfile.deleteMany());
+
     // ── Orders & related ──
     await step('OrderTimeline', () => prisma.orderTimeline.deleteMany());
     await step('OrderCommission', () => prisma.orderCommission.deleteMany());

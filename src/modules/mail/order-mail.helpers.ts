@@ -486,6 +486,110 @@ const TOTALS_PHRASES: Record<
   sv: { card: 'Kort', cod: 'Betalning vid leverans', free: 'Gratis' },
 };
 
+// b2b app: labels of the company block and of the net/gross rows a company
+// order prints in its totals.
+const COMPANY_PHRASES: Record<
+  EmailLocale,
+  {
+    companyLabel: string;
+    orgNumber: string;
+    vatNumber: string;
+    reference: string;
+    netTotal: string;
+    totalInclVat: string;
+  }
+> = {
+  en: {
+    companyLabel: 'Company',
+    orgNumber: 'Organisation number',
+    vatNumber: 'VAT number',
+    reference: 'Reference',
+    netTotal: 'Net total',
+    totalInclVat: 'Total incl. VAT',
+  },
+  ar: {
+    companyLabel: 'الشركة',
+    orgNumber: 'رقم السجل التجاري',
+    vatNumber: 'الرقم الضريبي',
+    reference: 'المرجع',
+    netTotal: 'الإجمالي الصافي',
+    totalInclVat: 'الإجمالي شامل الضريبة',
+  },
+  tr: {
+    companyLabel: 'Şirket',
+    orgNumber: 'Kuruluş numarası',
+    vatNumber: 'KDV numarası',
+    reference: 'Referans',
+    netTotal: 'Net toplam',
+    totalInclVat: 'KDV dahil toplam',
+  },
+  de: {
+    companyLabel: 'Firma',
+    orgNumber: 'Organisationsnummer',
+    vatNumber: 'USt-IdNr.',
+    reference: 'Referenz',
+    netTotal: 'Nettosumme',
+    totalInclVat: 'Gesamt inkl. MwSt.',
+  },
+  fr: {
+    companyLabel: 'Entreprise',
+    orgNumber: 'Numéro d’organisation',
+    vatNumber: 'Numéro de TVA',
+    reference: 'Référence',
+    netTotal: 'Total HT',
+    totalInclVat: 'Total TTC',
+  },
+  sv: {
+    companyLabel: 'Företag',
+    orgNumber: 'Organisationsnummer',
+    vatNumber: 'Momsregistreringsnummer',
+    reference: 'Referens',
+    netTotal: 'Nettosumma',
+    totalInclVat: 'Totalt inkl. moms',
+  },
+};
+
+export function companyPhrases(locale?: string) {
+  return COMPANY_PHRASES[pickLocale(locale)];
+}
+
+/**
+ * The company block of an order placed as a company (b2b app): name,
+ * organisation number, VAT number and buyer reference, as an HTML block
+ * (lines joined by <br>) and as text. Empty for a person order, so a
+ * template may always print `{{company_block_html}}`.
+ */
+export function renderCompanyBlock(
+  order: {
+    customer_type?: string | null;
+    company_name?: string | null;
+    org_number?: string | null;
+    vat_number?: string | null;
+    buyer_reference?: string | null;
+  },
+  locale?: string,
+): { html: string; text: string } {
+  if (order.customer_type !== 'COMPANY') return { html: '', text: '' };
+  const phrases = companyPhrases(locale);
+  const lines = [
+    order.company_name?.trim() || '',
+    order.org_number?.trim()
+      ? `${phrases.orgNumber}: ${order.org_number.trim()}`
+      : '',
+    order.vat_number?.trim()
+      ? `${phrases.vatNumber}: ${order.vat_number.trim()}`
+      : '',
+    order.buyer_reference?.trim()
+      ? `${phrases.reference}: ${order.buyer_reference.trim()}`
+      : '',
+  ].filter(Boolean);
+  if (lines.length === 0) return { html: '', text: '' };
+  return {
+    html: lines.map((l) => esc(l)).join('<br />'),
+    text: lines.join('\n'),
+  };
+}
+
 /** "Kustom", "Visa •••• 4242", "Card" or the cash-on-delivery label. */
 export function formatPaymentMethod(
   order: {
@@ -567,6 +671,11 @@ export function renderShippingAddress(
  * The totals block under the items: subtotal, discount, shipping, total and
  * the itemized tax lines, in the email's locale. Colours are neutral so the
  * block sits well inside any template.
+ *
+ * b2b app: with `buyerMode: 'excl'` (a company order) the block prints a
+ * "Net total" row and the VAT rows as regular rows before a final "Total
+ * incl. VAT"; the amounts are the same, only the presentation changes.
+ * Without it the output is exactly the pre-app one.
  */
 export function renderOrderTotals(
   input: {
@@ -576,6 +685,10 @@ export function renderOrderTotals(
     shippingMethod?: string | null;
     total: number;
     taxLines: string[];
+    /** 'excl' renders the company (net-first) layout; default 'incl'. */
+    buyerMode?: 'incl' | 'excl';
+    /** Net total (total - tax); required for the 'excl' layout. */
+    netTotal?: number;
   },
   currency: string,
   locale?: string,
@@ -587,6 +700,8 @@ export function renderOrderTotals(
     ? `${phrases.shipping} (${method})`
     : phrases.shipping;
   const showShipping = input.shipping > 0 || !!method;
+  const excl = input.buyerMode === 'excl';
+  const company = companyPhrases(locale);
 
   const rows: Array<{ label: string; value: string }> = [
     { label: phrases.subtotal, value: formatMoney(input.subtotal, currency) },
@@ -603,6 +718,12 @@ export function renderOrderTotals(
       value: input.shipping > 0 ? formatMoney(input.shipping, currency) : free,
     });
   }
+  if (excl) {
+    rows.push({
+      label: company.netTotal,
+      value: formatMoney(input.netTotal ?? input.total, currency),
+    });
+  }
 
   const cell =
     'padding:4px 0;font-size:13px;line-height:1.5;color:#52525b;vertical-align:top;';
@@ -616,30 +737,42 @@ export function renderOrderTotals(
     .join('\n');
   const totalCell =
     'padding:12px 0 4px;border-top:1px solid #e4e4e7;font-size:16px;font-weight:700;color:#18181b;';
+  // Company layout: the VAT rows sit above the total as regular rows;
+  // person layout: muted lines under it (unchanged).
   const taxHtml = input.taxLines
-    .map(
-      (line) =>
-        `<tr><td colspan="2" style="padding:0;font-size:12px;line-height:1.6;color:#71717a;text-align:end;">${esc(line)}</td></tr>`,
+    .map((line) =>
+      excl
+        ? `<tr><td colspan="2" style="${cell}text-align:end;">${esc(line)}</td></tr>`
+        : `<tr><td colspan="2" style="padding:0;font-size:12px;line-height:1.6;color:#71717a;text-align:end;">${esc(line)}</td></tr>`,
     )
     .join('\n');
+  const totalLabel = excl ? company.totalInclVat : phrases.total;
+  const totalRow = `<tr><td colspan="2" style="padding:0;height:8px;line-height:8px;font-size:0;">&nbsp;</td></tr>
+<tr>
+  <td style="${totalCell}">${esc(totalLabel)}</td>
+  <td style="${totalCell}text-align:end;white-space:nowrap;">${esc(formatMoney(input.total, currency))}</td>
+</tr>`;
 
   const totals_html = `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:4px 0 0;">
   <tbody>
 ${htmlRows}
-<tr><td colspan="2" style="padding:0;height:8px;line-height:8px;font-size:0;">&nbsp;</td></tr>
-<tr>
-  <td style="${totalCell}">${esc(phrases.total)}</td>
-  <td style="${totalCell}text-align:end;white-space:nowrap;">${esc(formatMoney(input.total, currency))}</td>
-</tr>
-${taxHtml}
+${excl ? `${taxHtml}\n${totalRow}` : `${totalRow}\n${taxHtml}`}
   </tbody>
 </table>`;
 
-  const totals_text = [
-    ...rows.map((r) => `${r.label}: ${r.value}`),
-    `${phrases.total}: ${formatMoney(input.total, currency)}`,
-    ...input.taxLines,
-  ].join('\n');
+  const totals_text = (
+    excl
+      ? [
+          ...rows.map((r) => `${r.label}: ${r.value}`),
+          ...input.taxLines,
+          `${totalLabel}: ${formatMoney(input.total, currency)}`,
+        ]
+      : [
+          ...rows.map((r) => `${r.label}: ${r.value}`),
+          `${totalLabel}: ${formatMoney(input.total, currency)}`,
+          ...input.taxLines,
+        ]
+  ).join('\n');
 
   return { totals_html, totals_text };
 }
@@ -702,7 +835,8 @@ export async function loadOrderForEmail(
         id: store.id,
         slug: store.slug,
         name: store.name,
-        customDomain: store.custom_domain ?? undefined,
+        // Markets app: the host the order was placed on (null without it).
+        customDomain: order.hostname ?? store.custom_domain ?? undefined,
         logoUrl: store.logo_url ?? undefined,
         primaryLocale: store.language_config?.primary_locale,
         // The store's notifications address wins over the login email.
@@ -713,4 +847,54 @@ export async function loadOrderForEmail(
   }
 
   return { ...order, storeCtx };
+}
+
+/** The order events that send an email. */
+export type OrderEmailEvent =
+  | 'order_confirmation'
+  | 'order_shipped'
+  | 'order_delivered'
+  | 'order_cancelled'
+  | 'order_refunded'
+  | 'new_order_owner';
+
+/** A file attached to an outgoing email. */
+export interface MailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType: string;
+}
+
+/** Context the dispatcher hands to an extension's `vars`. */
+export interface OrderMailExtensionContext {
+  /** The customer's order page (account, requires login). */
+  orderUrl: string;
+}
+
+/**
+ * A seam through which an app adds to order emails without MailModule
+ * importing it (the reverse of OrdersService's shipped hooks). Registered with
+ * MailService.registerOrderMailExtension, typically in an app module's
+ * onModuleInit. Failures are logged and ignored: an extension can never stop
+ * an order email from going out.
+ */
+export interface OrderMailExtension {
+  /** Extra template variables (may include `html:` escaped variants). */
+  vars?(
+    order: OrderForEmail,
+    event: OrderEmailEvent,
+    locale: string | undefined,
+    ctx: OrderMailExtensionContext,
+  ): Promise<Record<string, string>>;
+  /**
+   * Files to attach to the customer email of this event. `onSent` runs only
+   * after the message was actually handed to an SMTP server.
+   */
+  attachments?(
+    order: OrderForEmail,
+    event: OrderEmailEvent,
+  ): Promise<{
+    files: MailAttachment[];
+    onSent?: () => Promise<void>;
+  } | null>;
 }

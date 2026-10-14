@@ -64,6 +64,8 @@ interface Copy {
   customer: string;
   visit: string;
   thanks: string;
+  invoice: string;
+  viewInvoice: string;
   events: Record<string, EventCopy>;
 }
 
@@ -83,6 +85,8 @@ const COPY: Record<Locale, Copy> = {
     customer: 'Kund',
     visit: 'Besök butiken',
     thanks: 'Tack för att du handlar hos oss.',
+    invoice: 'Faktura',
+    viewInvoice: 'Visa fakturan',
     events: {
       order_confirmation: {
         subject: 'Tack för din beställning! Order {{order_number}}',
@@ -150,6 +154,8 @@ const COPY: Record<Locale, Copy> = {
     customer: 'Customer',
     visit: 'Visit the store',
     thanks: 'Thank you for shopping with us.',
+    invoice: 'Invoice',
+    viewInvoice: 'View the invoice',
     events: {
       order_confirmation: {
         subject: 'Thank you for your order! Order {{order_number}}',
@@ -257,9 +263,12 @@ function infoBox(b: Brand, label: string, value: string): string {
 </table>`;
 }
 
+// b2b app: the company block (name, org number, VAT, reference) sits right
+// under the delivery address and renders nothing for a person order.
 function address(b: Brand, c: Copy): string {
   return `{{#if shipping_address_html}}${sectionTitle(b, c.deliveryAddress)}
-<p style="margin:12px 0 0;font-family:${SANS};font-size:13px;line-height:1.7;color:${b.text};">{{shipping_address_html}}</p>{{/if}}`;
+<p style="margin:12px 0 0;font-family:${SANS};font-size:13px;line-height:1.7;color:${b.text};">{{shipping_address_html}}</p>{{/if}}
+{{#if company_block_html}}<p style="margin:12px 0 0;font-family:${SANS};font-size:13px;line-height:1.7;color:${b.text};">{{company_block_html}}</p>{{/if}}`;
 }
 
 function shell(
@@ -300,7 +309,8 @@ ${body}
           <td align="center" style="padding:28px 16px 0;">
             <p style="margin:0 0 8px;font-family:${SERIF};font-size:15px;color:${b.text};">${esc(c.thanks)}</p>
             <p style="margin:0 0 14px;font-family:${SANS};font-size:12px;"><a href="{{store_url}}" style="color:${b.text};text-decoration:underline;">${esc(c.visit)}</a></p>
-            <p style="margin:0;font-family:${SANS};font-size:11px;line-height:1.6;color:${b.muted};">${esc(b.name)}{{#if platform_name}} · {{platform_name}}{{/if}}</p>
+            <p style="margin:0;font-family:${SANS};font-size:11px;line-height:1.6;color:${b.muted};">${esc(b.name)}{{#if platform_name}} · {{platform_name}}{{/if}}</p>{{#if seller_block_html}}
+            <p style="margin:10px 0 0;font-family:${SANS};font-size:11px;line-height:1.6;color:${b.muted};">{{seller_block_html}}</p>{{/if}}
           </td>
         </tr>
       </table>
@@ -309,6 +319,13 @@ ${body}
 </table>
 </body>
 </html>`;
+}
+
+// invoices app: the invoice number with a link to the account page. Inline
+// after the preceding block, so it adds nothing when the variable is empty.
+function invoiceLine(b: Brand, c: Copy): string {
+  return `{{#if invoice_number}}
+<p style="margin:16px 0 0;font-family:${SANS};font-size:13px;line-height:1.6;color:${b.text};">${esc(c.invoice)} {{invoice_number}} – <a href="{{invoice_url}}" style="color:${b.text};text-decoration:underline;">${esc(c.viewInvoice)}</a></p>{{/if}}`;
 }
 
 function items(b: Brand, c: Copy): string {
@@ -328,7 +345,7 @@ function htmlFor(event: string, b: Brand, locale: Locale): string {
         e,
         `${meta(b, c)}
 ${items(b, c)}
-{{totals_html}}
+{{totals_html}}${invoiceLine(b, c)}
 ${address(b, c)}
 {{#if order_url}}${button(b, c.viewOrder, '{{order_url}}')}{{/if}}`,
       );
@@ -350,7 +367,7 @@ ${address(b, c)}
         locale,
         c,
         e,
-        `${items(b, c)}
+        `${items(b, c)}${invoiceLine(b, c)}
 {{#if order_url}}${button(b, c.viewOrder, '{{order_url}}')}{{/if}}`,
       );
     case 'order_cancelled':
@@ -398,12 +415,14 @@ function textFor(event: string, b: Brand, locale: Locale): string {
   const head = `${e.title}\n\n${e.intro}\n\n${c.orderNumber}: {{order_number}}\n${c.date}: {{order_date}}\n${c.payment}: {{payment_method}}\n`;
   const itemsText = `\n{{items_text}}\n`;
   const totals = `\n{{totals_text}}\n`;
-  const addr = `{{#if shipping_address_text}}\n${c.deliveryAddress}:\n{{shipping_address_text}}\n{{/if}}`;
+  const addr = `{{#if shipping_address_text}}\n${c.deliveryAddress}:\n{{shipping_address_text}}\n{{/if}}{{#if company_block_text}}\n{{company_block_text}}\n{{/if}}`;
   const view = `{{#if order_url}}\n${event === 'new_order_owner' ? c.openOrder : c.viewOrder}: {{order_url}}\n{{/if}}`;
-  const foot = `\n${b.name}{{#if platform_name}} · {{platform_name}}{{/if}}\n{{store_url}}`;
+  const foot = `\n${b.name}{{#if platform_name}} · {{platform_name}}{{/if}}\n{{store_url}}{{#if seller_block_text}}\n\n{{seller_block_text}}{{/if}}`;
+  // invoices app: empty without an issued invoice.
+  const invoice = `{{#if invoice_number}}\n${c.invoice} {{invoice_number}}: {{invoice_url}}\n{{/if}}`;
   switch (event) {
     case 'order_confirmation':
-      return head + itemsText + totals + addr + view + foot;
+      return head + itemsText + totals + invoice + addr + view + foot;
     case 'order_shipped':
       return (
         head +
@@ -440,6 +459,8 @@ function textFor(event: string, b: Brand, locale: Locale): string {
         view +
         foot
       );
+    case 'order_delivered':
+      return head + itemsText + invoice + view + foot;
     default:
       return head + itemsText + view + foot;
   }
@@ -470,7 +491,7 @@ export function buildTemplates(brand: Brand) {
 
 // ── Sample data for previews ───────────────────────────────────────────────
 
-function sampleVars(locale: Locale): Record<string, string> {
+export function sampleVars(locale: Locale): Record<string, string> {
   const sv = locale === 'sv';
   const row = (title: string, variant: string, qty: number, price: string) =>
     `<tr>
@@ -520,6 +541,9 @@ function sampleVars(locale: Locale): Record<string, string> {
     shipping_address_html:
       'Anna Lindqvist<br />Storgatan 12<br />111 23 Stockholm<br />Sverige',
     shipping_address_text: 'Anna Lindqvist\nStorgatan 12\n111 23 Stockholm',
+    // b2b app: the preview is a person order.
+    company_block_html: '',
+    company_block_text: '',
   };
 }
 
@@ -551,7 +575,7 @@ async function main(): Promise<void> {
 
   let storeId: string | null = null;
   let storeName = arg('display-name') || slug || 'Store';
-  let colors = { ...DEFAULT_COLORS };
+  const colors = { ...DEFAULT_COLORS };
 
   const prisma = dryRun ? null : new PrismaClient();
   try {
@@ -650,7 +674,10 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.message : err);
-  process.exitCode = 1;
-});
+// Only when run as a script, so specs can import buildTemplates.
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err instanceof Error ? err.message : err);
+    process.exitCode = 1;
+  });
+}

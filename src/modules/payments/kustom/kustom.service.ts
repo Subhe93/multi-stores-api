@@ -6,6 +6,7 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -21,6 +22,7 @@ import {
 import { OrdersService } from '../../orders/orders.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { MailService } from '../../mail/mail.service';
+import { InvoiceTriggersService } from '../../invoices/invoice-triggers.service';
 import { RevalidationService } from '../../../common/revalidation/revalidation.service';
 import {
   KustomAddress,
@@ -43,6 +45,9 @@ import {
   kustomCreatorSelect,
 } from './kustom.eligibility';
 import { UpdateKustomSettingsDto } from './dto/kustom.dto';
+import { MarketsContextService } from '../../markets/markets-context.service';
+import type { MarketContext } from '../../markets/market-context';
+import { B2bService } from '../../b2b/b2b.service';
 import {
   TaxService,
   type TaxDestination,
@@ -95,7 +100,10 @@ export interface StoreContext {
   store_type: StoreType;
   is_active: boolean;
   primaryLocale: string | null;
-  /** Resolved presentment currency (store override or platform default). */
+  /**
+   * Resolved presentment currency (store override or platform default; the
+   * order's / market's currency once a market overlay applied).
+   */
   currency: string;
   creator: {
     id: string;
@@ -103,6 +111,42 @@ export interface StoreContext {
     kustom_merchant_id: string | null;
     kustom_shared_secret: string | null;
     kustom_environment: string;
+  };
+  /** Markets app: the market the order / session belongs to; null when off. */
+  market: MarketContext | null;
+}
+
+/** What an order or checkout session knows about the market it was placed in. */
+export interface StoreContextMarketOverlay {
+  market: MarketContext;
+  /** The storefront host it was placed on (already validated, null = platform). */
+  hostname?: string | null;
+  /** The UI locale it was placed in. */
+  locale?: string | null;
+  /** The snapshotted currency (orders); defaults to the market currency. */
+  currency?: string | null;
+}
+
+/**
+ * Apply a market to a store context (M1-DESIGN §3.5): redirect/merchant URLs
+ * go to the host the shopper was on (else the market's primary host, else
+ * the legacy custom domain), the checkout language follows the order /
+ * market locale, and the currency is the one the order or market is priced
+ * in. Without a market the context is returned untouched.
+ */
+export function withMarket(
+  ctx: StoreContext,
+  overlay: StoreContextMarketOverlay | null | undefined,
+): StoreContext {
+  if (!overlay) return ctx;
+  const { market } = overlay;
+  return {
+    ...ctx,
+    customDomain:
+      overlay.hostname ?? market.primaryHostname ?? ctx.customDomain,
+    primaryLocale: overlay.locale ?? market.defaultLocale ?? ctx.primaryLocale,
+    currency: (overlay.currency ?? market.currency).toUpperCase(),
+    market,
   };
 }
 
@@ -131,6 +175,10 @@ export class KustomService implements OnModuleInit {
     private mail: MailService,
     private revalidation: RevalidationService,
     private taxService: TaxService,
+    private markets: MarketsContextService,
+    private b2b: B2bService,
+    // Invoices app (M3 D5): optional and last; no-op without the app.
+    @Optional() private readonly invoices?: InvoiceTriggersService,
   ) {}
 
   // OrdersService cannot inject this service (PaymentsModule imports
@@ -197,7 +245,31 @@ export class KustomService implements OnModuleInit {
       primaryLocale: store.language_config?.primary_locale ?? null,
       currency: resolveStoreCurrency(store, platformConfig?.default_currency),
       creator: store.creator,
+      market: null,
     };
+  }
+
+  /**
+   * Store context for an existing order: with the markets app, the order's
+   * own market, host, locale and currency overlay the store defaults.
+   */
+  async loadOrderContext(order: {
+    store_id: string | null;
+    market_id: string | null;
+    hostname: string | null;
+    locale: string | null;
+    currency: string;
+  }): Promise<StoreContext | null> {
+    const ctx = await this.loadStoreContext(order.store_id);
+    if (!ctx || !order.market_id) return ctx;
+    const market = await this.markets.byId(ctx.id, order.market_id);
+    if (!market) return ctx;
+    return withMarket(ctx, {
+      market,
+      hostname: order.hostname,
+      locale: order.locale,
+      currency: order.currency,
+    });
   }
 
   /**
@@ -367,7 +439,9 @@ export class KustomService implements OnModuleInit {
       });
     }
 
-    const ctx = await this.loadStoreContext(order.store_id);
+    // Markets app: the order's market/host/locale drive the merchant URLs
+    // and checkout language; without one this is the plain store context.
+    const ctx = await this.loadOrderContext(order);
     const creds =
       ctx && isKustomEnabledForStore({ ...ctx, currency: order.currency })
         ? await this.credentialsFor(ctx.creator)
@@ -405,12 +479,16 @@ export class KustomService implements OnModuleInit {
       if (refreshed) Object.assign(order, refreshed);
     }
 
+    // b2b app: the order row carries the company snapshot (customer /
+    // organisation fields); the iframe offers the company toggle only when
+    // the store accepts company purchases (undefined otherwise).
     const payload = buildKustomCheckoutPayload(order, {
       storeSlug: ctx.slug,
       customDomain: ctx.customDomain,
       primaryLocale: ctx.primaryLocale,
       pushToken,
       ...this.requirePublicUrls(),
+      allowedCustomerTypes: await this.b2b.kustomCustomerTypes(ctx.id),
     });
     const client = new KustomClient(creds);
 
@@ -801,12 +879,15 @@ export class KustomService implements OnModuleInit {
     // The Kustom page (not the cart checkout page, whose cart is already
     // emptied by order creation) reads `error` and reloads the session so the
     // customer can retry, or shows why the order is no longer payable.
+    // With the markets app the order remembers the exact host (D1); that
+    // wins over the store's legacy custom domain.
     const reject = (
       store?: { slug: string; custom_domain: string | null } | null,
+      hostname?: string | null,
     ) => ({
       ok: false as const,
       redirectUrl: store
-        ? `${resolveStoreBase(storefrontBase, store.slug, store.custom_domain)}/checkout/kustom?orderId=${encodeURIComponent(orderId ?? '')}&error=kustom_validation`
+        ? `${resolveStoreBase(storefrontBase, store.slug, hostname ?? store.custom_domain)}/checkout/kustom?orderId=${encodeURIComponent(orderId ?? '')}&error=kustom_validation`
         : `${storefrontBase.replace(/\/$/, '')}/?error=kustom_validation`,
     });
     if (!orderId || !token) return reject();
@@ -822,6 +903,7 @@ export class KustomService implements OnModuleInit {
         kustom_order_id: true,
         kustom_push_token: true,
         store_id: true,
+        hostname: true,
       },
     });
     if (
@@ -838,8 +920,9 @@ export class KustomService implements OnModuleInit {
           select: { slug: true, custom_domain: true, is_active: true },
         })
       : null;
-    if (!store?.is_active) return reject(store);
-    if (order.payment_status !== 'awaiting_payment') return reject(store);
+    if (!store?.is_active) return reject(store, order.hostname);
+    if (order.payment_status !== 'awaiting_payment')
+      return reject(store, order.hostname);
 
     const b = (body && typeof body === 'object' ? body : {}) as {
       order_id?: unknown;
@@ -854,26 +937,26 @@ export class KustomService implements OnModuleInit {
       this.logger.warn(
         `Kustom validation rejected for order ${order.id}: amount ${String(b.order_amount)} != ${expectedKustomAmount(order)}`,
       );
-      return reject(store);
+      return reject(store, order.hostname);
     }
     if (
       b.merchant_reference1 !== undefined &&
       b.merchant_reference1 !== order.id
     ) {
-      return reject(store);
+      return reject(store, order.hostname);
     }
     if (
       order.kustom_order_id &&
       typeof b.order_id === 'string' &&
       b.order_id !== order.kustom_order_id
     ) {
-      return reject(store);
+      return reject(store, order.hostname);
     }
     if (
       typeof b.purchase_currency === 'string' &&
       b.purchase_currency.toUpperCase() !== order.currency.toUpperCase()
     ) {
-      return reject(store);
+      return reject(store, order.hostname);
     }
     return { ok: true };
   }
@@ -957,6 +1040,34 @@ export class KustomService implements OnModuleInit {
     );
     const changed = Boolean(result?.changed);
 
+    // Kustom is the truth for the delivery address and the organisation
+    // details: store them before anything reads the order (the invoice
+    // snapshot and the confirmation email both do).
+    // Best-effort: a transient DB error here must never skip the invoice
+    // or the confirmation / owner emails below.
+    try {
+      await this.syncShippingAddress(order.id, live);
+      await this.fillCompanySnapshot(order.id, live);
+    } catch (err) {
+      this.logger.warn(
+        `Order ${order.id}: could not sync the Kustom address / organisation details: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    // Invoices app (L2: issue at authorization), before the confirmation
+    // email so it can attach the invoice. Also on a replay (changed=false):
+    // issuing is idempotent and heals a failed earlier attempt.
+    if (result?.order) {
+      await this.invoices?.onOrderPaid({
+        id: order.id,
+        store_id: result.order.store_id,
+        payment_method: result.order.payment_method,
+        payment_status: 'paid',
+      });
+    }
+
     if (changed && result) {
       await this.notifications.create(
         result.order.customer.user_id,
@@ -978,8 +1089,6 @@ export class KustomService implements OnModuleInit {
         data: { kustom_captured_at: new Date() },
       });
     }
-
-    await this.syncShippingAddress(order.id, live);
 
     // Best-effort: label the Kustom order with the real order id/number so
     // the merchant portal shows it instead of the session id. Later reads
@@ -1086,6 +1195,44 @@ export class KustomService implements OnModuleInit {
       select: { id: true },
     });
     return Boolean(row);
+  }
+
+  /**
+   * b2b app (D5 / L2): a shopper who switched to "organisation" inside the
+   * iframe placed an order whose snapshot still says person. Kustom's order
+   * is the truth, so the company columns are filled from it - only while
+   * they are still empty, so a snapshot the checkout already wrote (with the
+   * VAT number Kustom does not return) is never overwritten. Best-effort.
+   */
+  private async fillCompanySnapshot(
+    orderId: string,
+    live: KustomManagementOrder,
+  ) {
+    if (live.customer?.type !== 'organization') return;
+    const str = (v: unknown, max: number) =>
+      typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null;
+    const billing = live.billing_address;
+    try {
+      await this.prisma.order.updateMany({
+        where: { id: orderId, customer_type: null },
+        data: {
+          customer_type: 'COMPANY',
+          company_name: str(billing?.organization_name, 200),
+          org_number: str(live.customer.organization_registration_id, 32),
+          vat_number: str(live.customer.vat_id, 32),
+          buyer_reference: str(
+            billing?.buyer_reference ?? billing?.reference,
+            100,
+          ),
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Order ${orderId}: could not store the Kustom organisation details: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   /**
@@ -1647,11 +1794,20 @@ export class KustomService implements OnModuleInit {
     if (isFull) {
       await this.orders.markOrderRefunded(order.id, 'Kustom');
     } else {
+      // Kustom's refunded_amount was read before this refund, so the
+      // running total includes it (invoices app credit note).
       await this.orders.recordPartialRefund(
         order.id,
         amount,
         order.currency,
         'Kustom',
+        {
+          cumulativeRefunded: fromStripeAmount(
+            refundedMinor + minor,
+            order.currency,
+          ),
+          storeId: order.store_id,
+        },
       );
     }
     return { refunded: true, amount };

@@ -4,8 +4,10 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Optional,
 } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   CommissionStatus,
@@ -32,11 +34,20 @@ import {
   type QuotedShippingMethod,
 } from '../shipping/shipping.service';
 import { MailService } from '../mail/mail.service';
+import { InvoiceTriggersService } from '../invoices/invoice-triggers.service';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import {
-  resolveStoreCurrency,
+  resolveOrderCurrency,
   roundMoney,
 } from '../../common/money/currency.util';
+import { MarketsContextService } from '../markets/markets-context.service';
+import {
+  MarketPricingService,
+  type MarketPriceMap,
+} from '../markets/market-pricing.service';
+import type { MarketContext } from '../markets/market-context';
+import type { QuoteMarketInfo } from '../markets/market.types';
+import { normalizeHostname } from '../../common/domains/reserved-hosts';
 import {
   TaxService,
   taxStoreSelect,
@@ -57,6 +68,8 @@ import {
   type NormalizedCartLine,
   normalizeCartLine,
 } from '../cart/cart-line';
+import { B2B_COMPANY_NOT_ALLOWED, B2bService } from '../b2b/b2b.service';
+import type { B2bTotals, BuyerType, CompanySnapshot } from '../b2b/b2b.types';
 
 // Callback run after an order's status becomes SHIPPED. Registered by payment
 // providers that capture on shipment (Kustom); see registerShippedHook.
@@ -108,6 +121,7 @@ type PendingOrderItem = Prisma.OrderItemUncheckedCreateWithoutOrderInput & {
 /** The store columns order pricing depends on. */
 interface OrderStoreContext extends TaxStoreFields {
   id: string;
+  slug: string;
   creator_id: string;
   store_type: StoreType;
   currency: string | null;
@@ -116,6 +130,12 @@ interface OrderStoreContext extends TaxStoreFields {
   /** Store content locale; shipping method names are snapshotted in it. */
   primary_locale: string | null;
   creator: KustomCreatorFields;
+  /** Markets app: the market the order is priced in; null when the app is off. */
+  market: MarketContext | null;
+  /** b2b app: whether it is in effect (the `b2b` response block is emitted). */
+  b2bEnabled: boolean;
+  /** b2b app: the buyer type this request runs as (PERSON when the app is off). */
+  buyerType: BuyerType;
 }
 
 /** A stock reservation to apply atomically right before the order row. */
@@ -195,6 +215,10 @@ export interface OrderQuote {
   shipping_method_name: string | null;
   shipping_method_type: ShippingMethodType | null;
   coupon: CouponValidation | null;
+  /** Markets app: present only when a market context applied. */
+  market?: QuoteMarketInfo;
+  /** b2b app: present only when the app is enabled for the store. */
+  b2b?: B2bTotals;
 }
 
 export interface CreateOrderOptions {
@@ -203,6 +227,13 @@ export interface CreateOrderOptions {
    * untouched. Used by checkouts whose lines never lived in the server cart.
    */
   lines?: CartLineLike[];
+  /**
+   * b2b app: a company snapshot the caller already normalised (the Kustom
+   * validation callback, leniently - Kustom validated the data itself and
+   * the 3 s budget must not end in a B2B_* 400). Replaces the strict
+   * validation of `dto.company`; only read when the buyer is COMPANY.
+   */
+  companySnapshot?: CompanySnapshot;
 }
 
 function deriveCommissionStatus(orderStatus: OrderStatus): CommissionStatus {
@@ -305,6 +336,13 @@ export class OrdersService {
     private shippingService: ShippingService,
     private mail: MailService,
     private readonly taxService: TaxService,
+    private readonly markets: MarketsContextService,
+    private readonly marketPricing: MarketPricingService,
+    private readonly config: ConfigService,
+    private readonly b2b: B2bService,
+    // Invoices app (M3 D5): optional and last, so positional test
+    // constructors stay valid. Every trigger is a no-op without the app.
+    @Optional() private readonly invoices?: InvoiceTriggersService,
   ) {}
 
   /** Register a callback to run once an order's status becomes SHIPPED. */
@@ -441,11 +479,16 @@ export class OrdersService {
    * before any pricing happens; otherwise a client could attribute an order
    * to a store that sells none of these items.
    */
-  private async loadOrderStore(storeId: string): Promise<OrderStoreContext> {
+  private async loadOrderStore(
+    storeId: string,
+    marketKey?: string | null,
+    buyerType?: string | null,
+  ): Promise<OrderStoreContext> {
     const orderStore = await this.prisma.store.findUnique({
       where: { id: storeId },
       select: {
         ...taxStoreSelect,
+        slug: true,
         creator_id: true,
         currency: true,
         cod_enabled: true,
@@ -467,10 +510,58 @@ export class OrdersService {
       });
     }
     const { language_config, ...store } = orderStore;
+    // Markets app: null when off (every pricing step below then runs the
+    // pre-markets code); 404 for an unknown or draft key.
+    const market = await this.markets.resolve(orderStore.id, marketKey);
+    // b2b app: PERSON unless the request asked for COMPANY and the store
+    // accepts it (D1); the flag decides whether the `b2b` block is emitted.
+    const b2bEnabled = await this.b2b.isEnabled(orderStore.id);
+    const resolvedBuyerType = b2bEnabled
+      ? await this.b2b.resolveBuyerType(orderStore.id, buyerType)
+      : 'PERSON';
     return {
       ...store,
       primary_locale: language_config?.primary_locale ?? null,
+      market,
+      b2bEnabled,
+      buyerType: resolvedBuyerType,
     };
+  }
+
+  /** The `b2b` response block (D3): display mode and net figures of a result. */
+  private b2bTotals(tax: TaxComputeResult): B2bTotals {
+    return {
+      display_mode: tax.display_mode,
+      net_items: tax.net_items,
+      net_shipping: tax.net_shipping,
+      net_total: tax.net_total,
+    };
+  }
+
+  /**
+   * The storefront host an order was placed on (markets app, D1). Never
+   * trusted as sent: it is kept only when it is one of the market's own
+   * ACTIVE hostnames or the store's platform subdomain; otherwise the
+   * market's primary hostname (null = platform subdomain) is stored.
+   * Public so the Kustom session-first flow stores the same value.
+   */
+  validatedHostname(
+    market: MarketContext,
+    storeSlug: string,
+    hostname?: string | null,
+  ): string | null {
+    const host = hostname ? normalizeHostname(hostname) : '';
+    if (host) {
+      if (market.hostnames.includes(host)) return host;
+      const base =
+        this.config.get<string>('STOREFRONT_URL') || 'http://localhost:3003';
+      try {
+        if (host === `${storeSlug}.${new URL(base).hostname}`) return host;
+      } catch {
+        // Malformed base URL: fall through to the primary hostname.
+      }
+    }
+    return market.primaryHostname;
   }
 
   // Thrown for every line that isn't part of this store's catalogue. The
@@ -494,6 +585,8 @@ export class OrdersService {
   private async priceLine(
     item: NormalizedCartLine,
     orderStore: OrderStoreContext,
+    /** Market override rows of the whole order (loadPricesForLines). */
+    marketRows: MarketPriceMap | null = null,
   ): Promise<PricedLine> {
     const isIndependentStore = orderStore.store_type === StoreType.INDEPENDENT;
     let unitPrice = 0;
@@ -503,6 +596,14 @@ export class OrdersService {
     let stockOp: StockOp | null = null;
     let taxClassId: string | null = null;
     let taxExempt = false;
+    // Own-product lines only (custom products never exist on independent
+    // stores, the only ones with markets): what the market conversion needs.
+    let marketInput: {
+      product_id: string;
+      variant_id: string | null;
+      basePrice: number;
+      adjustment: number;
+    } | null = null;
 
     if (item.custom_product_id) {
       // Custom product (with or without a selected variant)
@@ -610,6 +711,12 @@ export class OrdersService {
 
       unitPrice =
         Number(variant.product.base_price) + Number(variant.price_adjustment);
+      marketInput = {
+        product_id: variant.product_id,
+        variant_id: variant.id,
+        basePrice: Number(variant.product.base_price),
+        adjustment: Number(variant.price_adjustment),
+      };
       if (variant.product.provider_id) providerBasePrice = unitPrice;
       fulfillerId =
         variant.product.provider_id || variant.product.creator_id || '';
@@ -639,6 +746,12 @@ export class OrdersService {
       }
 
       unitPrice = Number(product.base_price);
+      marketInput = {
+        product_id: product.id,
+        variant_id: null,
+        basePrice: unitPrice,
+        adjustment: 0,
+      };
       if (product.provider_id) providerBasePrice = unitPrice;
       fulfillerId = product.provider_id || product.creator_id || '';
       fulfillerType = product.provider_id ? 'PROVIDER' : 'CREATOR';
@@ -675,6 +788,18 @@ export class OrdersService {
       });
     }
 
+    // Markets app: the unit price in the market currency (override or
+    // converted). A product hidden in this market is not sold here.
+    if (orderStore.market && marketInput) {
+      const marketPrice = await this.marketPricing.priceLine(
+        orderStore.market,
+        marketInput,
+        marketRows,
+      );
+      if (marketPrice == null) this.rejectForeignItem();
+      unitPrice = marketPrice;
+    }
+
     // Apply bundle pricing if this cart line carries a bundle offer
     let originalUnitPrice: number | null = null;
     if (item.bundle_offer_id) {
@@ -692,10 +817,20 @@ export class OrdersService {
       // another creator would be a straight discount on this store's goods.
       if (offer.bundle.creator_id !== orderStore.creator_id)
         this.rejectForeignItem();
+      // A FIXED bundle discount is an amount in the base currency; in a
+      // market it is converted like shipping and coupons (PERCENTAGE and
+      // ITEM are currency-free).
+      const discountValue =
+        orderStore.market && offer.discount_type === 'FIXED'
+          ? this.marketPricing.convertMoney(
+              orderStore.market,
+              Number(offer.discount_value),
+            )
+          : offer.discount_value;
       const pricing = computeBundlePricing(unitPrice, {
         quantity: offer.quantity,
         discount_type: offer.discount_type,
-        discount_value: offer.discount_value,
+        discount_value: discountValue,
       });
       // Quantity must be a positive multiple of the bundle's cart quantity
       if (
@@ -790,6 +925,15 @@ export class OrdersService {
     tax: TaxComputeResult;
   }> {
     const { orderStore, lines, subtotal, providerBaseTotal } = input;
+    // Markets app: shipping costs, free-shipping thresholds and fixed coupon
+    // amounts are stored in the base currency and converted with the
+    // market's rate (L1). `toBase` feeds base-currency comparisons; `convert`
+    // brings their results back. Both are identity without a market.
+    const market = orderStore.market;
+    const toBase = (amount: number) =>
+      market ? this.marketPricing.toBaseMoney(market, amount) : amount;
+    const convert = (amount: number) =>
+      market ? this.marketPricing.convertMoney(market, amount) : amount;
     // Where the goods go: what the tax basis reads (shipping = billing here,
     // the checkout collects one address). Null country = not known yet, the
     // engine then estimates with the registration country.
@@ -799,18 +943,25 @@ export class OrdersService {
       postcode: input.postcode ?? null,
     };
     const taxFor = async (shippingCost: number, discountAmount: number) => {
-      const ctx = await this.taxService.contextFor(orderStore);
+      // b2b app: the buyer type only sets the result's display_mode.
+      const ctx = {
+        ...(await this.taxService.contextFor(orderStore)),
+        ...(orderStore.buyerType === 'COMPANY'
+          ? { buyerType: orderStore.buyerType }
+          : {}),
+      };
       const data = await this.taxService.loadTaxData(ctx);
       return this.taxService.computeTaxes({
         ctx,
         data,
-        currency: resolveStoreCurrency(
+        currency: resolveOrderCurrency(
           orderStore,
           (
             await this.prisma.platformConfig.findFirst({
               select: { default_currency: true },
             })
           )?.default_currency,
+          market,
         ),
         locale: input.locale ?? orderStore.primary_locale,
         lines: input.taxLines,
@@ -835,9 +986,14 @@ export class OrdersService {
         product_ids: productIds,
         country_code: input.countryCode,
         item_count: totalItemCount,
-        subtotal,
+        subtotal: toBase(subtotal),
         locale: input.locale ?? orderStore.primary_locale ?? undefined,
       });
+      if (market) {
+        // Method costs are quoted in the base currency; present them in the
+        // market's so the customer picks between converted prices.
+        for (const m of quote.methods) m.cost = convert(m.cost);
+      }
       if (!quote.available) {
         const tax = await taxFor(0, 0);
         return {
@@ -882,12 +1038,12 @@ export class OrdersService {
       couponValidation = await this.promotionsService.validateCoupon({
         coupon_code: input.couponCode,
         store_id: orderStore.id,
-        subtotal,
+        subtotal: toBase(subtotal),
         item_count: totalItemCount,
         product_ids: productIds,
       });
 
-      discountAmount = roundMoney(couponValidation.discount_amount);
+      discountAmount = roundMoney(convert(couponValidation.discount_amount));
 
       if (couponValidation.free_shipping) {
         shippingCost = 0;
@@ -965,9 +1121,17 @@ export class OrdersService {
       couponCode?: string | null;
       shippingMethodId?: string | null;
       locale?: string | null;
+      /** Markets app: the market to price in (default market when omitted). */
+      marketKey?: string | null;
+      /** b2b app: 'COMPANY' for the company view (ignored while the app is off). */
+      buyerType?: string | null;
     },
   ): Promise<OrderQuote> {
-    const orderStore = await this.loadOrderStore(storeId);
+    const orderStore = await this.loadOrderStore(
+      storeId,
+      opts.marketKey,
+      opts.buyerType,
+    );
     const items = lines.map(normalizeCartLine);
     if (items.length === 0) {
       throw new BadRequestException({
@@ -983,8 +1147,11 @@ export class OrdersService {
       'tax_rate_bp' | 'tax_amount' | 'tax_class_key'
     >[] = [];
     const taxLines: TaxLineInput[] = [];
+    const marketRows = orderStore.market
+      ? await this.marketPricing.loadPricesForLines(orderStore.market, items)
+      : null;
     for (const item of items) {
-      const priced = await this.priceLine(item, orderStore);
+      const priced = await this.priceLine(item, orderStore, marketRows);
       const totalPrice = this.lineTotal(priced.unitPrice, item.quantity);
       const providerBaseForItem = this.lineTotal(
         Math.min(priced.providerBasePrice, priced.unitPrice),
@@ -1029,9 +1196,10 @@ export class OrdersService {
     const platformConfig = await this.prisma.platformConfig.findFirst({
       select: { default_currency: true },
     });
-    const currency = resolveStoreCurrency(
+    const currency = resolveOrderCurrency(
       orderStore,
       platformConfig?.default_currency,
+      orderStore.market,
     );
     const { tax } = totals;
     return {
@@ -1059,6 +1227,16 @@ export class OrdersService {
       shipping_method_name: totals.shippingMethod?.name ?? null,
       shipping_method_type: totals.shippingMethod?.type ?? null,
       coupon: totals.couponValidation,
+      ...(orderStore.market
+        ? {
+            market: {
+              key: orderStore.market.key,
+              currency: orderStore.market.currency,
+              rate: orderStore.market.rate,
+            },
+          }
+        : {}),
+      ...(orderStore.b2bEnabled ? { b2b: this.b2bTotals(tax) } : {}),
     };
   }
 
@@ -1079,6 +1257,8 @@ export class OrdersService {
       shipping_method_id?: string | null;
       coupon_code?: string | null;
       locale?: string | null;
+      market_key?: string | null;
+      buyer_type?: string | null;
     },
   ): Promise<OrderQuote> {
     let lines: CartLineLike[] = dto.lines ?? [];
@@ -1102,6 +1282,8 @@ export class OrdersService {
       couponCode: dto.coupon_code ?? null,
       shippingMethodId: dto.shipping_method_id ?? null,
       locale: dto.locale ?? null,
+      marketKey: dto.market_key ?? null,
+      buyerType: dto.buyer_type ?? null,
     });
   }
 
@@ -1174,8 +1356,17 @@ export class OrdersService {
     // One entry per order item, in order: what the tax engine needs per line.
     const taxLines: TaxLineInput[] = [];
 
-    const orderStore = await this.loadOrderStore(dto.store_id);
+    const orderStore = await this.loadOrderStore(
+      dto.store_id,
+      dto.market_key,
+      dto.buyer_type,
+    );
     const isIndependentStore = orderStore.store_type === StoreType.INDEPENDENT;
+    // b2b app: a COMPANY request the store does not accept is refused rather
+    // than silently placed as a person (the storefront showed net prices).
+    if (dto.buyer_type === 'COMPANY' && orderStore.buyerType !== 'COMPANY') {
+      throw new BadRequestException(B2B_COMPANY_NOT_ALLOWED);
+    }
 
     const requestedPaymentMethod: PaymentMethod =
       dto.payment_method || PaymentMethod.COD;
@@ -1199,13 +1390,14 @@ export class OrdersService {
       requestedPaymentMethod === PaymentMethod.KUSTOM &&
       !isKustomEnabledForStore({
         ...orderStore,
-        currency: resolveStoreCurrency(
+        currency: resolveOrderCurrency(
           orderStore,
           (
             await this.prisma.platformConfig.findFirst({
               select: { default_currency: true },
             })
           )?.default_currency,
+          orderStore.market,
         ),
       })
     ) {
@@ -1216,8 +1408,11 @@ export class OrdersService {
       });
     }
 
+    const marketRows = orderStore.market
+      ? await this.marketPricing.loadPricesForLines(orderStore.market, lines)
+      : null;
     for (const item of lines) {
-      const priced = await this.priceLine(item, orderStore);
+      const priced = await this.priceLine(item, orderStore, marketRows);
       const {
         unitPrice,
         originalUnitPrice,
@@ -1355,6 +1550,20 @@ export class OrdersService {
         message: 'Shipping address not found',
       });
 
+    // b2b app (D4/D8): the body's `company` object is the source of truth
+    // for the order snapshot, validated for the destination country (format
+    // only, D7) and written next to the market columns below. Empty for a
+    // person, so the insert is identical to today's.
+    const b2bColumns =
+      orderStore.buyerType === 'COMPANY'
+        ? (opts.companySnapshot ??
+          this.b2b.validateCompany(
+            dto.company,
+            shippingAddress.country_code,
+            await this.b2b.getSettings(orderStore.id),
+          ))
+        : {};
+
     const totals = await this.computeTotals({
       orderStore,
       lines,
@@ -1429,10 +1638,27 @@ export class OrdersService {
     // platform default. Snapshotted onto the order so a later change to the
     // store never rewrites settled history.
     const platformConfig = await this.prisma.platformConfig.findFirst();
-    const currency = resolveStoreCurrency(
+    const currency = resolveOrderCurrency(
       orderStore,
       platformConfig?.default_currency,
+      orderStore.market,
     );
+    // Markets app: which market, which storefront host (validated against the
+    // market's own hostnames), which UI locale and which base->market rate
+    // the prices were converted with. All null without the app.
+    const market = orderStore.market;
+    const marketColumns = market
+      ? {
+          market_id: market.id,
+          hostname: this.validatedHostname(
+            market,
+            orderStore.slug,
+            dto.hostname,
+          ),
+          locale: dto.locale?.trim().toLowerCase().slice(0, 10) || null,
+          fx_rate_snapshot: market.rate,
+        }
+      : {};
     // Tax snapshot: per line (class key, effective rate, amount after the
     // discount share), shipping, the itemized breakdown and the headline
     // rate / total for compatibility. Computed by the same engine as the
@@ -1514,6 +1740,8 @@ export class OrdersService {
           stripe_payment_id: dto.stripe_payment_intent_id,
           kustom_push_token: kustomPushToken,
           notes: dto.notes,
+          ...marketColumns,
+          ...b2bColumns,
           items: { create: orderItems },
           timeline: {
             create: {
@@ -1625,13 +1853,25 @@ export class OrdersService {
     // dispatches both events once the Stripe payment is confirmed) so we
     // don't spam the owner about orders that may end up failing.
     if (paymentMethod === PaymentMethod.COD) {
+      // Invoices app (cod_issue_on='created'): issue before the confirmation
+      // so the email can attach the invoice.
+      await this.invoices?.onCodOrderCreated({
+        id: order.id,
+        store_id: order.store_id,
+        payment_method: paymentMethod,
+      });
       await this.mail.dispatchOrderEmail(order.id, 'order_confirmation');
       await this.mail.dispatchOrderEmail(order.id, 'new_order_owner');
     }
 
     // Same shaping as every read path: resolves item images and drops the
     // Kustom push token, which must never reach the customer's browser.
-    return this.withItemImages(order);
+    // b2b app: the `b2b` block travels with the created order only when the
+    // app is enabled (same rule as the quote).
+    const shaped = this.withItemImages(order);
+    return orderStore.b2bEnabled
+      ? { ...shaped, b2b: this.b2bTotals(tax) }
+      : shaped;
   }
 
   /**
@@ -1817,12 +2057,14 @@ export class OrdersService {
     page = 1,
     limit = 20,
     status?: OrderStatus,
+    marketKey?: string,
+    buyer?: string,
   ) {
     if (role === UserRole.PROVIDER) {
       return this.findByProvider(userId, page, limit, status);
     }
     if (role === UserRole.CREATOR) {
-      return this.findByCreator(userId, page, limit, status);
+      return this.findByCreator(userId, page, limit, status, marketKey, buyer);
     }
     return { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
   }
@@ -1870,11 +2112,28 @@ export class OrdersService {
   }
 
   // Creator sees orders placed through their store
+  /**
+   * b2b app: the `?buyer=` list filter. 'company' = orders placed as a
+   * company; 'person' = everything else (pre-app rows have a null
+   * customer_type). Any other value is ignored.
+   */
+  private buyerWhere(buyer?: string): Prisma.OrderWhereInput {
+    if (buyer === 'company') return { customer_type: 'COMPANY' };
+    if (buyer === 'person') {
+      return {
+        OR: [{ customer_type: null }, { customer_type: { not: 'COMPANY' } }],
+      };
+    }
+    return {};
+  }
+
   private async findByCreator(
     userId: string,
     page = 1,
     limit = 20,
     status?: OrderStatus,
+    marketKey?: string,
+    buyer?: string,
   ) {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
@@ -1885,9 +2144,12 @@ export class OrdersService {
     }
 
     const skip = (page - 1) * limit;
-    const where = {
+    const where: Prisma.OrderWhereInput = {
       store_id: creator.store.id,
       ...(status ? { status } : {}),
+      // Markets app: orders placed in one market (`?market=`).
+      ...(marketKey ? { market: { key: marketKey } } : {}),
+      ...this.buyerWhere(buyer),
     };
 
     const [data, total] = await Promise.all([
@@ -1900,6 +2162,7 @@ export class OrdersService {
           address: true,
           customer: true,
           commission: true,
+          market: this.marketRef,
         },
         orderBy: { created_at: 'desc' },
       }),
@@ -1958,6 +2221,11 @@ export class OrdersService {
     };
   }
 
+  // The market an order was placed in (markets app); null without the app.
+  private readonly marketRef = {
+    select: { key: true, name: true, currency: true },
+  };
+
   async findById(id: string, userId?: string, role?: UserRole) {
     const order = await this.prisma.order.findUnique({
       where: { id },
@@ -1968,6 +2236,7 @@ export class OrdersService {
         address: true,
         customer: true,
         payouts: { orderBy: { created_at: 'asc' } },
+        market: this.marketRef,
       },
     });
 
@@ -2036,15 +2305,29 @@ export class OrdersService {
     return this.withItemImages({ ...safe, payouts: scopedPayouts });
   }
 
-  async findAll(page = 1, limit = 20, status?: OrderStatus) {
+  async findAll(
+    page = 1,
+    limit = 20,
+    status?: OrderStatus,
+    marketKey?: string,
+    buyer?: string,
+  ) {
     const skip = (page - 1) * limit;
-    const where = status ? { status } : {};
+    const where: Prisma.OrderWhereInput = {
+      ...(status ? { status } : {}),
+      ...(marketKey ? { market: { key: marketKey } } : {}),
+      ...this.buyerWhere(buyer),
+    };
     const [data, total] = await Promise.all([
       this.prisma.order.findMany({
         skip,
         take: limit,
         where,
-        include: { items: this.itemsWithProduct, customer: true },
+        include: {
+          items: this.itemsWithProduct,
+          customer: true,
+          market: this.marketRef,
+        },
         orderBy: { created_at: 'desc' },
       }),
       this.prisma.order.count({ where }),
@@ -2134,7 +2417,7 @@ export class OrdersService {
   ): Promise<{ from: OrderStatus; to: OrderStatus } | null> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      select: { status: true },
+      select: { status: true, store_id: true, payment_method: true },
     });
     if (!order) return null;
     const terminal: OrderStatus[] = [
@@ -2180,6 +2463,17 @@ export class OrdersService {
       data: { status: deriveCommissionStatus(candidate) },
     });
     if (candidate === OrderStatus.SHIPPED) await this.runShippedHooks(orderId);
+    // Invoices app: before the callers dispatch the status email, so a
+    // DELIVERED email can attach a COD invoice issued here.
+    await this.invoices?.onStatusChanged(
+      {
+        id: orderId,
+        store_id: order.store_id,
+        payment_method: order.payment_method,
+      },
+      order.status,
+      candidate,
+    );
     return { from: order.status, to: candidate };
   }
 
@@ -2282,6 +2576,9 @@ export class OrdersService {
       ) {
         await this.runShippedHooks(id);
       }
+      // Invoices app: issue (COD delivered) or credit (cancelled / refunded)
+      // before the status email, so the document can be attached.
+      await this.invoices?.onStatusChanged(order, order.status, dto.status);
       await this.dispatchStatusEmail(id, order.status, dto.status, dto.note);
       return this.findById(id, actorId, actorRole);
     }
@@ -2486,7 +2783,7 @@ export class OrdersService {
   async markAuthorizationReleased(orderId: string, note: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      select: { id: true, status: true, payment_status: true },
+      select: { id: true, status: true, payment_status: true, store_id: true },
     });
     if (!order) return null;
     if (
@@ -2516,6 +2813,9 @@ export class OrdersService {
       data: { status: deriveCommissionStatus(OrderStatus.CANCELLED) },
     });
     await this.restoreOrderItemsStock(orderId);
+    // Invoices app (L2): a released authorization always credits the
+    // invoice in full (credit_on_cancel does not apply: nothing was captured).
+    await this.invoices?.onAuthorizationReleased(order);
     return { changed: true };
   }
 
@@ -2602,6 +2902,9 @@ export class OrdersService {
     // Guarded by the flip above, so a replayed webhook cannot double-restock.
     await this.restoreOrderItemsStock(orderId);
 
+    // Invoices app: full credit note before the email, so it can be attached.
+    await this.invoices?.onFullRefund(order);
+
     // The customer paid us; they should hear about the refund from us, not
     // only from their bank statement. Skipped when the order was already
     // marked REFUNDED by an admin, since that transition emailed them
@@ -2620,13 +2923,35 @@ export class OrdersService {
    * timeline so the creator and admin can see it, without touching payment
    * status, stock or commissions — those still reflect a live order.
    * Deduplicated on the note so a replayed event doesn't stack rows.
+   *
+   * `opts.cumulativeRefunded` (the provider's running refunded total, major
+   * units) lets the invoices app issue the matching credit note; it runs even
+   * when the timeline row is a duplicate, since the trigger is idempotent.
+   * Callers pass `opts.storeId` from data they already loaded.
    */
   async recordPartialRefund(
     orderId: string,
     amountRefunded: number,
     currency: string,
     provider = 'Stripe',
+    opts: { cumulativeRefunded?: number; storeId?: string | null } = {},
   ) {
+    if (this.invoices && opts.cumulativeRefunded !== undefined) {
+      const storeId =
+        opts.storeId !== undefined
+          ? opts.storeId
+          : ((
+              await this.prisma.order.findUnique({
+                where: { id: orderId },
+                select: { store_id: true },
+              })
+            )?.store_id ?? null);
+      await this.invoices.onPartialRefund(
+        { id: orderId, store_id: storeId, currency },
+        opts.cumulativeRefunded,
+      );
+    }
+
     const note = `Partially refunded via ${provider}: ${amountRefunded} ${currency.toUpperCase()}`;
     const existing = await this.prisma.orderTimeline.findFirst({
       where: { order_id: orderId, status: 'PARTIALLY_REFUNDED', note },

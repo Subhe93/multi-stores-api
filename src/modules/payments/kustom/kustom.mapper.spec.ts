@@ -1,5 +1,6 @@
 import {
   buildKustomCheckoutPayload,
+  buildKustomCustomer,
   buildKustomOrderLines,
   buildKustomSessionPayload,
   buildKustomShippingOptions,
@@ -624,5 +625,275 @@ describe('buildKustomSessionPayload', () => {
       false,
     );
     expect(payload.order_amount).toBe(25000);
+  });
+});
+
+// Markets app: the storefront host the shopper was on (a market's
+// StoreDomain) is handed to the mapper as `customDomain`, so every
+// storefront-facing merchant URL lands on that host while the API callbacks
+// stay on the platform API.
+describe('merchant URLs with a market hostname', () => {
+  const sessionCtx = {
+    storeSlug: 'namez',
+    customDomain: 'namez.shop',
+    primaryLocale: 'en',
+    storefrontBase: 'https://stores.example.com/',
+    apiBase: 'https://api.example.com/',
+    sessionId: 'sess-1',
+    token: 'tok',
+    callbackToken: 'cb-secret',
+  };
+
+  it('order-first: storefront URLs on the market host, callbacks on the API', () => {
+    const urls = buildKustomCheckoutPayload(order(), {
+      ...ctx,
+      customDomain: 'namez.shop',
+      primaryLocale: 'en',
+    }).merchant_urls;
+    expect(urls.terms).toBe('https://namez.shop/legal/terms');
+    expect(urls.checkout).toBe(
+      'https://namez.shop/checkout/kustom?orderId=order-1',
+    );
+    expect(urls.confirmation).toBe(
+      'https://namez.shop/checkout/kustom/confirmation?orderId=order-1&kustom_order_id={checkout.order.id}',
+    );
+    expect(urls.push).toBe(
+      'https://api.example.com/api/payments/kustom/push?order_id=order-1&token=tok&kustom_order_id={checkout.order.id}',
+    );
+    expect(urls.validation).toBe(
+      'https://api.example.com/api/payments/kustom/validation?order_id=order-1&token=tok',
+    );
+  });
+
+  it('session-first: same rule for the session URLs', () => {
+    const payload = buildKustomSessionPayload(
+      {
+        currency: 'EUR',
+        shipping_cost: 0,
+        discount_amount: 0,
+        total: 250,
+        items: order().items.map((item) => ({
+          ...item,
+          tax_rate_bp: 0,
+          tax_amount: 0,
+        })),
+        tax_pricing_mode: 'INCLUSIVE' as const,
+        shipping_tax_rate_bp: 0,
+        shipping_tax_amount: 0,
+        purchaseCountry: 'DE',
+        reference: 'sess-1',
+        email: null,
+        phone: null,
+        address: null,
+        shippingOptions: [],
+        selectedShippingId: null,
+      },
+      sessionCtx,
+    );
+    expect(payload.purchase_currency).toBe('EUR');
+    expect(payload.locale).toBe('de-DE');
+    expect(payload.merchant_urls.terms).toBe('https://namez.shop/legal/terms');
+    expect(payload.merchant_urls.checkout).toBe(
+      'https://namez.shop/checkout?kustom_session=sess-1',
+    );
+    expect(payload.merchant_urls.confirmation).toBe(
+      'https://namez.shop/checkout/kustom/confirmation?session=sess-1&token=tok&kustom_order_id={checkout.order.id}',
+    );
+    expect(payload.merchant_urls.push).toBe(
+      'https://api.example.com/api/payments/kustom/checkout/push?session_id=sess-1&token=cb-secret&kustom_order_id={checkout.order.id}',
+    );
+    // Without a market host the platform path is used, as before.
+    expect(
+      buildKustomSessionPayload(
+        {
+          currency: 'SEK',
+          shipping_cost: 0,
+          discount_amount: 0,
+          total: 250,
+          items: [],
+          tax_pricing_mode: 'INCLUSIVE' as const,
+          shipping_tax_rate_bp: 0,
+          shipping_tax_amount: 0,
+          purchaseCountry: 'SE',
+          reference: 'sess-1',
+          email: null,
+          phone: null,
+          address: null,
+          shippingOptions: [],
+          selectedShippingId: null,
+        },
+        { ...sessionCtx, customDomain: null },
+      ).merchant_urls.checkout,
+    ).toBe(
+      'https://stores.example.com/store/namez/checkout?kustom_session=sess-1',
+    );
+  });
+});
+
+describe('b2b app: organisation purchases', () => {
+  const allowed = ['person', 'organization'] as const;
+  const company = {
+    customer_type: 'COMPANY' as const,
+    company_name: 'Neronet Academy AB',
+    org_number: '559123-4567',
+    vat_number: 'SE559123456701',
+    buyer_reference: 'Anna',
+  };
+
+  it('order-first: without the app the payload is byte-identical', () => {
+    const baseline = JSON.stringify(buildKustomCheckoutPayload(order(), ctx));
+    const person = buildKustomCheckoutPayload(
+      order({
+        customer_type: null,
+        company_name: null,
+        org_number: null,
+        vat_number: null,
+        buyer_reference: null,
+      }),
+      ctx,
+    );
+    expect(JSON.stringify(person)).toBe(baseline);
+    expect(person).not.toHaveProperty('customer');
+    expect(person.options).not.toHaveProperty('allowed_customer_types');
+    expect(person.billing_address).not.toHaveProperty('organization_name');
+  });
+
+  it('order-first: app on + person adds the customer-type option only', () => {
+    const payload = buildKustomCheckoutPayload(order(), {
+      ...ctx,
+      allowedCustomerTypes: [...allowed],
+    });
+    expect(payload.options?.allowed_customer_types).toEqual([
+      'person',
+      'organization',
+    ]);
+    expect(payload).not.toHaveProperty('customer');
+    expect(payload.billing_address).not.toHaveProperty('organization_name');
+    expect(payload.billing_address).not.toHaveProperty('buyer_reference');
+  });
+
+  it('order-first: a company order sends customer + organisation fields', () => {
+    const payload = buildKustomCheckoutPayload(order(company), {
+      ...ctx,
+      allowedCustomerTypes: [...allowed],
+    });
+    expect(payload.customer).toEqual({
+      type: 'organization',
+      organization_registration_id: '559123-4567',
+      vat_id: 'SE559123456701',
+    });
+    expect(payload.billing_address).toMatchObject({
+      given_name: 'Anna Maria',
+      organization_name: 'Neronet Academy AB',
+      buyer_reference: 'Anna',
+    });
+    expect(payload.shipping_address).toMatchObject({
+      organization_name: 'Neronet Academy AB',
+    });
+    expect(buildKustomCustomer({ customer_type: 'PERSON' })).toBeUndefined();
+    expect(buildKustomCustomer({})).toBeUndefined();
+    expect(
+      buildKustomCustomer({ customer_type: 'COMPANY', org_number: '1' }),
+    ).toEqual({ type: 'organization', organization_registration_id: '1' });
+  });
+
+  const sessionCtx = {
+    storeSlug: 'my-shop',
+    primaryLocale: 'sv',
+    storefrontBase: 'https://shop.example.com/',
+    apiBase: 'https://api.example.com/',
+    sessionId: 'sess-1',
+    token: 'tok',
+    callbackToken: 'cb-secret',
+  };
+  const input = {
+    currency: 'SEK',
+    shipping_cost: 0,
+    discount_amount: 0,
+    total: 250,
+    items: order().items,
+    purchaseCountry: 'SE',
+    reference: 'sess-1',
+    email: 'anna@example.com',
+    shippingOptions: [],
+  };
+  const snapshot = {
+    customer_type: 'COMPANY' as const,
+    company_name: 'Neronet Academy AB',
+    org_number: '559123-4567',
+    vat_number: null,
+    buyer_reference: 'PO-4711',
+  };
+
+  it('session-first: without the app the payload is byte-identical', () => {
+    const baseline = JSON.stringify(
+      buildKustomSessionPayload(input, sessionCtx),
+    );
+    const person = buildKustomSessionPayload(
+      { ...input, buyerType: 'PERSON', company: null },
+      sessionCtx,
+    );
+    expect(JSON.stringify(person)).toBe(baseline);
+    expect(person).not.toHaveProperty('customer');
+    expect(person.options).not.toHaveProperty('allowed_customer_types');
+  });
+
+  it('session-first: app on + person adds the option only', () => {
+    const payload = buildKustomSessionPayload(
+      { ...input, buyerType: 'PERSON' },
+      { ...sessionCtx, allowedCustomerTypes: [...allowed] },
+    );
+    expect(payload.options?.allowed_customer_types).toEqual([
+      'person',
+      'organization',
+    ]);
+    expect(payload).not.toHaveProperty('customer');
+    expect(payload.billing_address).toEqual({
+      email: 'anna@example.com',
+      country: 'SE',
+    });
+  });
+
+  it('session-first: a company session prefills the organisation', () => {
+    const payload = buildKustomSessionPayload(
+      { ...input, buyerType: 'COMPANY', company: snapshot },
+      { ...sessionCtx, allowedCustomerTypes: [...allowed] },
+    );
+    expect(payload.customer).toEqual({
+      type: 'organization',
+      organization_registration_id: '559123-4567',
+    });
+    expect(payload.billing_address).toEqual({
+      email: 'anna@example.com',
+      country: 'SE',
+      organization_name: 'Neronet Academy AB',
+      buyer_reference: 'PO-4711',
+    });
+
+    // With a saved address the organisation rides on the full address.
+    const withAddress = buildKustomSessionPayload(
+      {
+        ...input,
+        buyerType: 'COMPANY',
+        company: snapshot,
+        address: order().address,
+      },
+      { ...sessionCtx, allowedCustomerTypes: [...allowed] },
+    );
+    expect(withAddress.billing_address).toMatchObject({
+      given_name: 'Anna Maria',
+      street_address: 'Sturegatan 6',
+      organization_name: 'Neronet Academy AB',
+      buyer_reference: 'PO-4711',
+    });
+
+    // A company session without any prefill (update, guest) invents no
+    // address; only the customer object is sent.
+    const bare = buildKustomSessionPayload(
+      { ...input, email: null, buyerType: 'COMPANY', company: null },
+      { ...sessionCtx, allowedCustomerTypes: [...allowed] },
+    );
+    expect(bare).not.toHaveProperty('billing_address');
+    expect(bare.customer).toEqual({ type: 'organization' });
   });
 });

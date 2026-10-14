@@ -21,13 +21,21 @@ import {
   normalizeCartLine,
 } from '../../cart/cart-line';
 import { normalizeEmail } from '../../../common/email/email.util';
-import { KustomService, type StoreContext } from './kustom.service';
+import { KustomService, withMarket, type StoreContext } from './kustom.service';
+import { MarketsContextService } from '../../markets/markets-context.service';
+import { B2B_COMPANY_NOT_ALLOWED, B2bService } from '../../b2b/b2b.service';
+import type {
+  BuyerType,
+  CompanyInput,
+  CompanySnapshot,
+} from '../../b2b/b2b.types';
 import {
   KustomClient,
   type KustomAddress,
   type KustomCheckoutCallbackBody,
   type KustomCheckoutOrder,
   type KustomCheckoutUpdateResponse,
+  type KustomCustomerType,
 } from './kustom.client';
 import {
   buildKustomSessionAmounts,
@@ -128,6 +136,47 @@ interface CustomerPrefill {
   email: string | null;
   phone: string | null;
   address: KustomAddressInput | null;
+  /**
+   * b2b app: the customer's saved company defaults (Customer row, the
+   * default address's billing fields on top); null when none are saved.
+   */
+  company: Partial<CompanyInput> | null;
+}
+
+/** b2b app: the buyer type a session row runs as (null = person). */
+function sessionBuyerType(s: Pick<Session, 'buyer_type'>): BuyerType {
+  return s.buyer_type === 'COMPANY' ? 'COMPANY' : 'PERSON';
+}
+
+function optionalString(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+
+/** b2b app: the company snapshot stored on a session row, if usable. */
+function sessionCompany(s: Pick<Session, 'company'>): CompanySnapshot | null {
+  const c = s.company;
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+  const o = c as Record<string, unknown>;
+  const name = optionalString(o.company_name);
+  const org = optionalString(o.org_number);
+  if (!name && !org) return null;
+  return {
+    customer_type: 'COMPANY',
+    company_name: name ?? '',
+    org_number: org ?? '',
+    vat_number: optionalString(o.vat_number),
+    buyer_reference: optionalString(o.buyer_reference),
+  };
+}
+
+/** The `company` body of orders.create for a snapshot. */
+function companyBody(c: CompanySnapshot): CompanyInput {
+  return {
+    company_name: c.company_name,
+    org_number: c.org_number,
+    vat_number: c.vat_number,
+    buyer_reference: c.buyer_reference,
+  };
 }
 
 interface PricedSession {
@@ -180,6 +229,8 @@ export class KustomCheckoutService {
     private kustom: KustomService,
     private orders: OrdersService,
     private mail: MailService,
+    private markets: MarketsContextService,
+    private b2b: B2bService,
   ) {}
 
   // ── Session lookup / auth ───────────────────────────────────────────────
@@ -235,7 +286,15 @@ export class KustomCheckoutService {
   private async storeForSession(session: Session): Promise<StoreContext> {
     const ctx = await this.kustom.loadStoreContext(session.store_id);
     if (!ctx) throw new NotFoundException();
-    return ctx;
+    // Markets app: the market, host and locale the session was opened on.
+    if (!session.market_id) return ctx;
+    const market = await this.markets.byId(ctx.id, session.market_id);
+    if (!market) return ctx;
+    return withMarket(ctx, {
+      market,
+      hostname: session.hostname,
+      locale: session.locale,
+    });
   }
 
   /** The store must still be eligible and the creator's credentials present. */
@@ -296,6 +355,9 @@ export class KustomCheckoutService {
   }
 
   private defaultCountry(ctx: StoreContext): string | null {
+    // Markets app: the market's first country is where it sells.
+    const byMarket = ctx.market?.countries[0];
+    if (byMarket) return byMarket.toUpperCase();
     const byCurrency = CURRENCY_COUNTRIES[ctx.currency.toUpperCase()];
     if (byCurrency) return byCurrency;
     const lang = (ctx.primaryLocale ?? '').toLowerCase().split(/[-_]/)[0];
@@ -326,6 +388,13 @@ export class KustomCheckoutService {
       prefill?: CustomerPrefill | null;
       /** purchase_country of the existing Kustom checkout (fixed on update). */
       purchaseCountry?: string | null;
+      /**
+       * b2b app: the buyer type the session runs as and its company prefill.
+       * Same money either way (L11): it only sets the quote's display mode
+       * and the organisation fields of the Kustom payload.
+       */
+      buyerType?: BuyerType | null;
+      company?: CompanySnapshot | null;
     },
   ): Promise<PriceResult> {
     const lines = this.itemsOf(session);
@@ -336,6 +405,9 @@ export class KustomCheckoutService {
       couponCode: opts.couponCode,
       shippingMethodId: opts.selectedShippingId,
       locale: this.sessionLocale(session, ctx),
+      // Markets app: price in the market (currency, overrides, rate).
+      marketKey: ctx.market?.key ?? null,
+      ...(opts.buyerType === 'COMPANY' ? { buyerType: 'COMPANY' } : {}),
     });
     if (quote.shipping && !quote.shipping.available) {
       return { ok: false, shippingUnavailable: quote.shipping.message };
@@ -376,6 +448,9 @@ export class KustomCheckoutService {
       address: opts.prefill?.address ?? null,
       shippingOptions,
       selectedShippingId: selected?.id ?? null,
+      ...(opts.buyerType === 'COMPANY'
+        ? { buyerType: 'COMPANY', company: opts.company ?? null }
+        : {}),
     };
     return {
       ok: true,
@@ -455,6 +530,7 @@ export class KustomCheckoutService {
     ctx: StoreContext,
     session: Pick<Session, 'id' | 'token' | 'callback_token'>,
     bases: { storefrontBase: string; apiBase: string },
+    allowedCustomerTypes?: KustomCustomerType[],
   ): KustomSessionMapperContext {
     return {
       storeSlug: ctx.slug,
@@ -465,7 +541,64 @@ export class KustomCheckoutService {
       sessionId: session.id,
       token: session.token,
       callbackToken: session.callback_token,
+      // b2b app: present only for stores accepting company purchases, so
+      // every other store's payload is byte-identical to today's.
+      ...(allowedCustomerTypes ? { allowedCustomerTypes } : {}),
     };
+  }
+
+  /**
+   * b2b app: the company snapshot of a session. A `company` the storefront
+   * sent is checked with the B2B_* 400s orders.create answers (same inline
+   * messages on the checkout page) - strictly only when `country` is a
+   * real address country (a prefilled saved address), since the format
+   * rules are per country and the destination is otherwise still a guess
+   * until Kustom reports it; else presence-only (name + org number).
+   * Without a `company`, the customer's saved defaults are offered as a
+   * hint, normalised leniently - Kustom re-collects and validates the
+   * organisation in its iframe anyway.
+   */
+  private async companySnapshot(
+    storeId: string,
+    input: Partial<CompanyInput> | null | undefined,
+    prefill: Partial<CompanyInput> | null | undefined,
+    country: string | null,
+    strict: boolean,
+  ): Promise<CompanySnapshot | null> {
+    const settings = await this.b2b.getSettings(storeId);
+    if (input) {
+      if (strict) return this.b2b.validateCompany(input, country, settings);
+      const { snapshot, errors } = this.b2b.normalizeCompany(
+        input,
+        country,
+        settings,
+      );
+      const missing = errors.find(
+        (e) =>
+          e.code === 'B2B_COMPANY_NAME_REQUIRED' ||
+          e.code === 'B2B_ORG_NUMBER_REQUIRED',
+      );
+      if (missing) throw new BadRequestException(missing);
+      return snapshot;
+    }
+    if (!prefill) return null;
+    return this.b2b.normalizeCompany(prefill, country, settings).snapshot;
+  }
+
+  /**
+   * b2b app: the buyer type a storefront request runs as. A COMPANY request
+   * the store does not accept is refused (the page showed net prices), as
+   * orders.create does for the classic checkout.
+   */
+  private async buyerTypeFor(
+    storeId: string,
+    requested: string | null | undefined,
+  ): Promise<BuyerType> {
+    const buyerType = await this.b2b.resolveBuyerType(storeId, requested);
+    if (requested === 'COMPANY' && buyerType !== 'COMPANY') {
+      throw new BadRequestException(B2B_COMPANY_NOT_ALLOWED);
+    }
+    return buyerType;
   }
 
   /** Email, phone and default address of a logged-in customer, for prefill. */
@@ -477,6 +610,10 @@ export class KustomCheckoutService {
       where: { id: customerId },
       select: {
         phone: true,
+        // b2b app: saved company defaults (D8), a hint for a company session.
+        company_name: true,
+        org_number: true,
+        vat_number: true,
         user: { select: { email: true } },
         addresses: {
           orderBy: [{ is_default: 'desc' }, { created_at: 'desc' }],
@@ -486,9 +623,16 @@ export class KustomCheckoutService {
     });
     if (!customer) return null;
     const a = customer.addresses[0];
+    const company: Partial<CompanyInput> = {
+      company_name: a?.company_name ?? customer.company_name ?? undefined,
+      org_number: a?.org_number ?? customer.org_number ?? undefined,
+      vat_number: customer.vat_number ?? null,
+      buyer_reference: a?.buyer_reference ?? null,
+    };
     return {
       email: customer.user.email ?? null,
       phone: customer.phone ?? null,
+      company: company.company_name || company.org_number ? company : null,
       address: a
         ? {
             full_name: a.full_name,
@@ -531,6 +675,8 @@ export class KustomCheckoutService {
             total: quote.total,
             pricing_mode: quote.tax_pricing_mode,
             currency: quote.currency,
+            // b2b app: the net view, present only while the app is on.
+            ...(quote.b2b ? { b2b: quote.b2b } : {}),
           }
         : null,
     };
@@ -547,11 +693,23 @@ export class KustomCheckoutService {
     userId: string | null,
     dto: CreateKustomCheckoutSessionDto,
   ) {
-    const ctx = await this.kustom.loadStoreContextBySlug(dto.store_slug);
+    let ctx = await this.kustom.loadStoreContextBySlug(dto.store_slug);
     if (!ctx || !ctx.is_active) {
       throw new NotFoundException({
         code: 'STOREFRONT_STORE_NOT_FOUND',
         message: 'Store not found',
+      });
+    }
+    // Markets app: null when off (today's code below), else the market the
+    // storefront resolved (404 for an unknown or draft key) — its currency,
+    // default locale and the validated host shape the session and the
+    // merchant URLs, exactly as orders.create snapshots them.
+    const market = await this.markets.resolve(ctx.id, dto.market_key);
+    if (market) {
+      ctx = withMarket(ctx, {
+        market,
+        hostname: this.orders.validatedHostname(market, ctx.slug, dto.hostname),
+        locale: dto.locale?.trim() || null,
       });
     }
     const client = await this.clientFor(ctx);
@@ -589,6 +747,31 @@ export class KustomCheckoutService {
     let region = prefill?.address ? prefill.address.state || null : null;
     let postcode = prefill?.address?.postal_code || null;
 
+    // b2b app: PERSON unless asked for and accepted (D1); a company session
+    // snapshots its prefill so the validation callback can fall back to it
+    // for what Kustom does not return (the VAT number).
+    const buyerType = await this.buyerTypeFor(ctx.id, dto.buyer_type);
+    const company =
+      buyerType === 'COMPANY'
+        ? await this.companySnapshot(
+            ctx.id,
+            dto.company,
+            prefill?.company,
+            country,
+            Boolean(prefill?.address),
+          )
+        : null;
+    const b2bColumns =
+      buyerType === 'COMPANY'
+        ? {
+            buyer_type: 'COMPANY' as const,
+            company: company
+              ? (company as unknown as Prisma.InputJsonValue)
+              : Prisma.DbNull,
+          }
+        : {};
+    const allowedCustomerTypes = await this.b2b.kustomCustomerTypes(ctx.id);
+
     const session = await this.prisma.kustomCheckoutSession.create({
       data: {
         id: randomUUID(),
@@ -605,11 +788,14 @@ export class KustomCheckoutService {
         country_code: country,
         region,
         postcode,
+        ...(market ? { market_id: market.id, hostname: ctx.customDomain } : {}),
+        ...b2bColumns,
         expires_at: new Date(Date.now() + SESSION_TTL_MS),
       },
     });
 
     try {
+      const b2bOpts = { buyerType, company };
       let priced = await this.priceSession(session, ctx, {
         countryCode: country,
         region,
@@ -617,6 +803,7 @@ export class KustomCheckoutService {
         couponCode: session.coupon_code,
         selectedShippingId: null,
         prefill,
+        ...b2bOpts,
       });
       if (!priced.ok) {
         // The assumed destination cannot be shipped to: offer no option yet
@@ -629,6 +816,7 @@ export class KustomCheckoutService {
           couponCode: session.coupon_code,
           selectedShippingId: null,
           prefill,
+          ...b2bOpts,
         });
       }
       if (!priced.ok) {
@@ -636,7 +824,7 @@ export class KustomCheckoutService {
       }
       const payload = buildKustomSessionPayload(
         priced.priced.input,
-        this.mapperContext(ctx, session, bases),
+        this.mapperContext(ctx, session, bases, allowedCustomerTypes),
       );
       let created: KustomCheckoutOrder;
       try {
@@ -716,6 +904,34 @@ export class KustomCheckoutService {
     }
     if (dto.notes !== undefined) data.notes = dto.notes?.trim() || null;
 
+    // b2b app: the storefront re-sends the buyer type (and company, null to
+    // clear) whenever the app is on, so a toggle mid-checkout re-prices the
+    // session and re-prefills the iframe. Both omitted = unchanged.
+    let buyerType = sessionBuyerType(session);
+    let company = sessionCompany(session);
+    if (dto.buyer_type !== undefined || dto.company !== undefined) {
+      const requested =
+        dto.buyer_type === undefined ? buyerType : (dto.buyer_type ?? 'PERSON');
+      buyerType = await this.buyerTypeFor(ctx.id, requested);
+      if (buyerType !== 'COMPANY') {
+        company = null;
+      } else if (dto.company !== undefined) {
+        // No prefilled address on an update: the session country may still
+        // be the default guess, so presence-only.
+        company = await this.companySnapshot(
+          ctx.id,
+          dto.company,
+          null,
+          session.country_code,
+          false,
+        );
+      }
+      data.buyer_type = buyerType === 'COMPANY' ? 'COMPANY' : null;
+      data.company = company
+        ? (company as unknown as Prisma.InputJsonValue)
+        : Prisma.DbNull;
+    }
+
     const next: Session = {
       ...session,
       items: (data.items ?? session.items) as Prisma.JsonValue,
@@ -727,6 +943,8 @@ export class KustomCheckoutService {
         data.notes !== undefined
           ? (data.notes as string | null)
           : session.notes,
+      buyer_type: buyerType === 'COMPANY' ? 'COMPANY' : null,
+      company: company ? (company as unknown as Prisma.JsonValue) : null,
     };
     if (!this.itemsOf(next).length) {
       throw new BadRequestException({
@@ -740,6 +958,8 @@ export class KustomCheckoutService {
     const pricingOpts = {
       couponCode: next.coupon_code,
       purchaseCountry: session.purchase_country,
+      buyerType,
+      company,
     };
     // Re-price for the destination the last callback stored (country,
     // region and postcode together), so the totals match what validation
@@ -774,7 +994,12 @@ export class KustomCheckoutService {
     }
     const payload = buildKustomSessionPayload(
       priced.priced.input,
-      this.mapperContext(ctx, session, bases),
+      this.mapperContext(
+        ctx,
+        session,
+        bases,
+        await this.b2b.kustomCustomerTypes(ctx.id),
+      ),
     );
 
     // Push the new snapshot to Kustom FIRST. Kustom refuses to update a
@@ -823,16 +1048,28 @@ export class KustomCheckoutService {
     return this.sessionResponse(fresh ?? session, updated, priced.priced.quote);
   }
 
-  /** True when items, coupon or notes differ between two session states. */
+  /**
+   * True when items, coupon, notes or (b2b app) the buyer type / company
+   * differ between two session states.
+   */
   private snapshotChanged(
-    before: Pick<Session, 'items' | 'coupon_code' | 'notes'>,
-    after: Pick<Session, 'items' | 'coupon_code' | 'notes'>,
+    before: Pick<
+      Session,
+      'items' | 'coupon_code' | 'notes' | 'buyer_type' | 'company'
+    >,
+    after: Pick<
+      Session,
+      'items' | 'coupon_code' | 'notes' | 'buyer_type' | 'company'
+    >,
   ): boolean {
     return (
       JSON.stringify(this.itemsOf(before)) !==
         JSON.stringify(this.itemsOf(after)) ||
       (before.coupon_code ?? null) !== (after.coupon_code ?? null) ||
-      (before.notes ?? null) !== (after.notes ?? null)
+      (before.notes ?? null) !== (after.notes ?? null) ||
+      sessionBuyerType(before) !== sessionBuyerType(after) ||
+      JSON.stringify(sessionCompany(before)) !==
+        JSON.stringify(sessionCompany(after))
     );
   }
 
@@ -1112,12 +1349,16 @@ export class KustomCheckoutService {
         typeof b.selected_shipping_option?.id === 'string'
           ? b.selected_shipping_option.id
           : session.shipping_method_id;
+      // b2b app: who bought, as Kustom reports it (it collected the
+      // organisation in the iframe); same money either way.
+      const b2b = await this.companyFromCallback(session, b, country);
       const priced = await this.priceSession(session, ctx, {
         countryCode: country,
         region,
         postcode,
         couponCode: session.coupon_code,
         selectedShippingId: selectedId,
+        ...b2b,
       });
       if (!priced.ok) return reject('shipping_unavailable');
       const amounts = buildKustomSessionAmounts(
@@ -1153,6 +1394,7 @@ export class KustomCheckoutService {
         b.shipping_address ?? b.billing_address,
         b.billing_address,
         resolved.created,
+        b2b.company,
       );
 
       // 4. The order, from the snapshot — same pricing as the quote above,
@@ -1168,8 +1410,24 @@ export class KustomCheckoutService {
           coupon_code: session.coupon_code ?? undefined,
           notes: session.notes ?? undefined,
           shipping_method_id: priced.priced.selectedShippingId ?? undefined,
+          // Markets app: create() snapshots market_id, the validated host,
+          // the locale and fx_rate_snapshot exactly like a storefront order.
+          ...(ctx.market
+            ? {
+                market_key: ctx.market.key,
+                hostname: session.hostname ?? undefined,
+                locale: session.locale ?? undefined,
+              }
+            : {}),
+          // b2b app: the company snapshot (D4), absent for a person.
+          ...(b2b.company
+            ? { buyer_type: 'COMPANY', company: companyBody(b2b.company) }
+            : {}),
         },
-        { lines: this.itemsOf(session) },
+        {
+          lines: this.itemsOf(session),
+          ...(b2b.company ? { companySnapshot: b2b.company } : {}),
+        },
       );
       const order = created as { id: string; total: unknown; currency: string };
 
@@ -1535,11 +1793,78 @@ export class KustomCheckoutService {
    * freshly created account gets the row as its default address — an
    * existing account keeps whatever default it chose.
    */
+  /**
+   * b2b app (D5 / L2): the buyer type and company snapshot of the order
+   * from Kustom's callback body. Kustom collected the organisation in its
+   * iframe, so its values win; the session's prefill only fills what the
+   * body lacks (notably the VAT number). A body without any `customer`
+   * object keeps the session's buyer type. Lenient: Kustom already
+   * validated the data and the 3 s budget must never end in a format 400,
+   * so problems are logged and the values stored as reported.
+   */
+  private async companyFromCallback(
+    session: Session,
+    b: KustomCheckoutCallbackBody,
+    country: string | null,
+  ): Promise<{ buyerType: BuyerType; company: CompanySnapshot | null }> {
+    const reported = b.customer?.type;
+    const isOrg =
+      reported === 'organization' ||
+      (reported === undefined && sessionBuyerType(session) === 'COMPANY');
+    const buyerType = isOrg
+      ? await this.b2b.resolveBuyerType(session.store_id, 'COMPANY')
+      : 'PERSON';
+    if (buyerType !== 'COMPANY') {
+      if (isOrg) {
+        this.logger.warn(
+          `Kustom session ${session.id}: organisation reported but the store does not accept company purchases; stored as a person`,
+        );
+      }
+      return { buyerType: 'PERSON', company: null };
+    }
+
+    const prefill = sessionCompany(session);
+    const billing = b.billing_address;
+    const input: Partial<CompanyInput> = {
+      company_name:
+        optionalString(billing?.organization_name) ?? prefill?.company_name,
+      org_number:
+        optionalString(b.customer?.organization_registration_id) ??
+        prefill?.org_number,
+      vat_number: optionalString(b.customer?.vat_id) ?? prefill?.vat_number,
+      buyer_reference:
+        optionalString(billing?.buyer_reference ?? billing?.reference) ??
+        prefill?.buyer_reference,
+    };
+    if (!input.company_name && !input.org_number) {
+      // Organisation flow reported, but neither Kustom nor the prefill
+      // carry a name or number: nothing to snapshot, so a person order.
+      this.logger.warn(
+        `Kustom session ${session.id}: organisation reported without a name or number; stored as a person`,
+      );
+      return { buyerType: 'PERSON', company: null };
+    }
+    const { snapshot, errors } = this.b2b.normalizeCompany(
+      input,
+      country,
+      await this.b2b.getSettings(session.store_id),
+    );
+    if (errors.length) {
+      this.logger.warn(
+        `Kustom session ${session.id}: organisation details stored as reported (${errors
+          .map((e) => e.code)
+          .join(', ')})`,
+      );
+    }
+    return { buyerType: 'COMPANY', company: snapshot };
+  }
+
   private async upsertAddress(
     customerId: string,
     shipping: KustomAddress | undefined,
     billing: KustomAddress | undefined,
     freshAccount: boolean,
+    company: CompanySnapshot | null = null,
   ): Promise<{ id: string }> {
     const a = shipping ?? billing;
     if (!a?.street_address || !a.city || !a.postal_code || !a.country) {
@@ -1566,6 +1891,11 @@ export class KustomCheckoutService {
       postal_code: a.postal_code,
       country_code: a.country.toUpperCase().slice(0, 2),
       phone: a.phone || billing?.phone || null,
+      // b2b app: the billing company of this address (D8); all null for a
+      // person, so person rows match exactly as before.
+      company_name: company?.company_name || null,
+      org_number: company?.org_number || null,
+      buyer_reference: company?.buyer_reference || null,
     };
     // `state` is part of the match: the order is taxed from the row's
     // state / postal_code, so a reused row must carry the reported region.
@@ -1579,6 +1909,9 @@ export class KustomCheckoutService {
         state: data.state,
         postal_code: data.postal_code,
         country_code: data.country_code,
+        company_name: data.company_name,
+        org_number: data.org_number,
+        buyer_reference: data.buyer_reference,
       },
       select: { id: true },
     });

@@ -1,6 +1,7 @@
 import { TaxBasis, TaxPricingMode } from '@prisma/client';
 import {
   computeTaxes,
+  deriveNetTotals,
   effectiveRateBp,
   postcodeMatches,
   resolveRatesForLine,
@@ -534,5 +535,131 @@ describe('computeTaxes: tax_lines', () => {
         r.tax_total,
       );
     }
+  });
+});
+
+// b2b app (D3): the additive display_mode / net_* fields. The numeric
+// assertions above are untouched; these only check the new fields and the
+// invariants that tie them to the existing totals.
+describe('computeTaxes: b2b display_mode and net figures', () => {
+  const minor = (n: number) => Math.round(n * 100);
+  const invariants = (r: ReturnType<typeof computeTaxes>) => {
+    expect(minor(r.net_items) + minor(r.net_shipping)).toBe(minor(r.net_total));
+    expect(minor(r.net_total) + minor(r.tax_total)).toBe(minor(r.total));
+  };
+
+  it('INCLUSIVE: nets are gross minus tax, total and tax_total unchanged', () => {
+    const r = compute({
+      lines: [
+        { amount: 125, tax_class_id: null, tax_exempt: false },
+        { amount: 56, tax_class_id: 'red', tax_exempt: false },
+      ],
+      shipping_cost: 49,
+      discount_amount: 25,
+    });
+    expect(r.total).toBe(205);
+    expect(r.display_mode).toBe('incl');
+    expect(r.net_shipping).toBe(39.2);
+    invariants(r);
+  });
+
+  it('EXCLUSIVE: net_items is the discounted base, net_shipping the shipping cost', () => {
+    const r = compute({
+      ctx: { pricingMode: TaxPricingMode.EXCLUSIVE },
+      lines: [{ amount: 100, tax_class_id: null, tax_exempt: false }],
+      shipping_cost: 40,
+      discount_amount: 10,
+    });
+    expect(r.net_items).toBe(90);
+    expect(r.net_shipping).toBe(40);
+    expect(r.net_total).toBe(130);
+    expect(r.total).toBe(162.5);
+    expect(r.display_mode).toBe('excl');
+    invariants(r);
+  });
+
+  it('free shipping has a zero net; exempt lines count fully as net', () => {
+    const r = compute({
+      lines: [
+        { amount: 100, tax_class_id: null, tax_exempt: false },
+        { amount: 30, tax_class_id: null, tax_exempt: true },
+      ],
+      shipping_cost: 0,
+    });
+    expect(r.net_shipping).toBe(0);
+    expect(r.net_items).toBe(110);
+    expect(r.net_total).toBe(110);
+    invariants(r);
+  });
+
+  it('display_mode matrix: buyer type x pricing mode', () => {
+    expect(compute().display_mode).toBe('incl');
+    expect(compute({ ctx: { buyerType: 'PERSON' } }).display_mode).toBe('incl');
+    expect(compute({ ctx: { buyerType: 'COMPANY' } }).display_mode).toBe(
+      'excl',
+    );
+    expect(
+      compute({ ctx: { pricingMode: TaxPricingMode.EXCLUSIVE } }).display_mode,
+    ).toBe('excl');
+    expect(
+      compute({
+        ctx: { pricingMode: TaxPricingMode.EXCLUSIVE, buyerType: 'COMPANY' },
+      }).display_mode,
+    ).toBe('excl');
+  });
+
+  it('a COMPANY buyer changes nothing but display_mode', () => {
+    const person = compute({ shipping_cost: 49, discount_amount: 10 });
+    const company = compute({
+      ctx: { buyerType: 'COMPANY' },
+      shipping_cost: 49,
+      discount_amount: 10,
+    });
+    expect({ ...company, display_mode: 'incl' }).toEqual(person);
+  });
+});
+
+describe('deriveNetTotals (stored orders)', () => {
+  it('INCLUSIVE: net shipping excludes the shipping tax', () => {
+    expect(
+      deriveNetTotals({
+        total: 205,
+        tax_amount: 36,
+        shipping_cost: 49,
+        shipping_tax_amount: 9.8,
+        tax_pricing_mode: 'INCLUSIVE',
+      }),
+    ).toEqual({
+      gross: 205,
+      net_items: 129.8,
+      net_shipping: 39.2,
+      net_total: 169,
+    });
+  });
+
+  it('EXCLUSIVE: net shipping is the shipping cost; null mode counts as INCLUSIVE', () => {
+    expect(
+      deriveNetTotals(
+        {
+          total: 162.5,
+          tax_amount: 32.5,
+          shipping_cost: 40,
+          shipping_tax_amount: 10,
+          tax_pricing_mode: TaxPricingMode.EXCLUSIVE,
+        },
+        'SEK',
+      ),
+    ).toEqual({
+      gross: 162.5,
+      net_items: 90,
+      net_shipping: 40,
+      net_total: 130,
+    });
+    expect(deriveNetTotals({ total: 100 })).toEqual({
+      gross: 100,
+      net_items: 100,
+      net_shipping: 0,
+      net_total: 100,
+    });
   });
 });

@@ -82,8 +82,35 @@ export interface KustomAddress {
   phone?: string;
   /** ISO 3166-1 alpha-2. */
   country?: string;
+  /** Organisation purchases (b2b app): the company name. */
   organization_name?: string;
+  /**
+   * Organisation purchases: the buyer's own reference (PO number, contact).
+   * `buyer_reference` is the name in the Kustom API reference; `reference`
+   * is the name the Kustom B2B guide uses and is only ever read, never sent.
+   */
+  buyer_reference?: string;
+  reference?: string;
   care_of?: string;
+}
+
+/** Customer kinds a Kustom checkout may offer (b2b app). */
+export type KustomCustomerType = 'person' | 'organization';
+
+/**
+ * The `customer` object of a Kustom checkout: who is buying. Sent as a
+ * prefill hint for organisation purchases (b2b app) and read back from the
+ * order / callbacks, where Kustom's own values win.
+ */
+export interface KustomCustomer {
+  type?: KustomCustomerType;
+  /** Organisation number as the shopper typed it in the iframe. */
+  organization_registration_id?: string;
+  /** VAT registration number (collected when the merchant enables the field). */
+  vat_id?: string;
+  organization_entity_type?: string;
+  date_of_birth?: string;
+  gender?: string;
 }
 
 export interface KustomMerchantUrls {
@@ -105,6 +132,11 @@ export interface KustomCheckoutOptions {
   allow_separate_shipping_address?: boolean;
   phone_mandatory?: boolean;
   require_validate_callback_success?: boolean;
+  /**
+   * b2b app: which buyer kinds the iframe offers. Omitted = Kustom's default
+   * (person only); both values show the private / company toggle.
+   */
+  allowed_customer_types?: KustomCustomerType[];
 }
 
 /** A shipping option we offer inside the Kustom iframe. Amounts in minor units. */
@@ -147,6 +179,8 @@ export interface KustomCheckoutPayload {
   merchant_urls: KustomMerchantUrls;
   billing_address?: KustomAddress;
   shipping_address?: KustomAddress;
+  /** b2b app: organisation prefill; absent for a person. */
+  customer?: KustomCustomer;
   options?: KustomCheckoutOptions;
   /** Merchant-provided shipping options (omitted = none shown). */
   shipping_options?: KustomShippingOption[];
@@ -174,6 +208,8 @@ export interface KustomCheckoutOrder extends KustomCheckoutPayload {
 export type KustomCheckoutCallbackBody = Partial<KustomCheckoutOrder> & {
   shipping_address?: KustomAddress;
   billing_address?: KustomAddress;
+  /** Untrusted: every field may be missing or of the wrong type. */
+  customer?: Partial<KustomCustomer>;
   selected_shipping_option?: Partial<KustomShippingOption>;
 };
 
@@ -208,6 +244,8 @@ export interface KustomManagementOrder {
   klarna_reference?: string;
   billing_address?: KustomAddress;
   shipping_address?: KustomAddress;
+  /** Who bought: `type: 'organization'` with the org number for a company. */
+  customer?: KustomCustomer;
   order_lines?: KustomOrderLine[];
   initial_payment_method?: { type?: string; description?: string };
   captures?: { capture_id?: string; captured_amount?: number }[];

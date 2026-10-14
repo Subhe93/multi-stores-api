@@ -18,6 +18,16 @@ import {
   type TaxLineInput,
 } from '../taxes/tax.service';
 import { validateBundleEconomics } from '../bundles/bundle-economics.util';
+import { MarketsContextService } from '../markets/markets-context.service';
+import {
+  MarketPricingService,
+  pricingContext,
+  type MarketPriceMap,
+} from '../markets/market-pricing.service';
+import type { MarketContext } from '../markets/market-context';
+import { resolveVariantMarketPrice } from '../markets/pricing.util';
+import { B2bService } from '../b2b/b2b.service';
+import type { B2bTotals } from '../b2b/b2b.types';
 
 // Shape of a product custom field as loaded with its translations.
 /** One cart line as GET /cart returns it (enrichCartItems output). */
@@ -40,7 +50,17 @@ export interface EnrichedCartItem {
   bundleLabel: string | null;
   bundleStickerText: string | null;
   bundleCartQuantity: number | null;
+  /**
+   * Markets app only: the product is hidden in the request's market (switched
+   * off there, or no override and no exchange rate). The key is absent
+   * otherwise, so a response without a market is unchanged.
+   */
+  unavailable_in_market?: true;
 }
+
+/** 400 code of an add/update of a product hidden in the request's market. */
+export const CART_ITEM_NOT_AVAILABLE_IN_MARKET =
+  'CART_ITEM_NOT_AVAILABLE_IN_MARKET';
 
 interface CustomFieldDef {
   id: string;
@@ -66,7 +86,44 @@ export class CartService {
   constructor(
     private prisma: PrismaService,
     private readonly taxService: TaxService,
+    private readonly markets: MarketsContextService,
+    private readonly marketPricing: MarketPricingService,
+    private readonly b2b: B2bService,
   ) {}
+
+  /**
+   * Market context of a cart read (?market=, markets app). The store is the
+   * one the first own/custom product line belongs to (one cart per store);
+   * null when the cart is empty or the app is off.
+   */
+  private async resolveCartMarket(
+    items: { product_id: string | null; custom_product_id: string | null }[],
+    marketKey?: string,
+  ): Promise<MarketContext | null> {
+    const first = items.find((i) => i.product_id || i.custom_product_id);
+    if (!first) return null;
+    let creatorId: string | null = null;
+    if (first.custom_product_id) {
+      const cp = await this.prisma.customProduct.findUnique({
+        where: { id: first.custom_product_id },
+        select: { creator_id: true },
+      });
+      creatorId = cp?.creator_id ?? null;
+    } else if (first.product_id) {
+      const p = await this.prisma.product.findUnique({
+        where: { id: first.product_id },
+        select: { creator_id: true },
+      });
+      creatorId = p?.creator_id ?? null;
+    }
+    if (!creatorId) return null;
+    const store = await this.prisma.store.findUnique({
+      where: { creator_id: creatorId },
+      select: { id: true },
+    });
+    if (!store) return null;
+    return this.markets.resolve(store.id, marketKey);
+  }
 
   private async getOrCreateCart(userId: string) {
     const customer = await this.prisma.customer.findUnique({
@@ -147,23 +204,40 @@ export class CartService {
    * Enrich raw cart items with product data (title, price, image, variant info).
    * `locale` selects which translation to surface for the item title.
    */
-  private async enrichCartItems(items: CartItem[], locale?: string) {
+  private async enrichCartItems(
+    items: CartItem[],
+    locale?: string,
+    market: MarketContext | null = null,
+  ) {
     const enriched: EnrichedCartItem[] = [];
     const config = await this.prisma.platformConfig.findFirst();
     const platformCurrency = config?.default_currency || 'EUR';
+    // Markets app: override rows of every own product in the cart, one query.
+    const marketRows: MarketPriceMap | null = market
+      ? await this.marketPricing.loadPrices(
+          market.id,
+          items.map((i) => i.product_id).filter(Boolean) as string[],
+        )
+      : null;
 
     for (const item of items) {
       let title: string | null = null;
       let price = 0;
       let imageUrl: string | null = null;
       let variantLabel: string | null = null;
-      const currency = platformCurrency;
+      const currency = market ? market.currency : platformCurrency;
+      // Base price and variant adjustment of an own-product line, for the
+      // market conversion below.
+      let ownBasePrice = 0;
+      let ownAdjustment = 0;
       // Per-value image map for the product behind this line, read once and
       // used when the chosen variant is resolved further down.
       let productOptionConfig: unknown = null;
       // Custom field definitions (with translations) of the product behind
       // this line, so the cart can show "Label: value" instead of field ids.
       let customFieldDefs: CustomFieldDef[] = [];
+      // Markets app: set when the product is hidden in the market.
+      let hiddenInMarket = false;
 
       if (item.custom_product_id) {
         // Custom product: fetch from CustomProduct with mockup images and base product
@@ -261,6 +335,7 @@ export class CartService {
           title =
             this.pickTranslation(product.translations, locale)?.title || null;
           price = Number(product.base_price);
+          ownBasePrice = price;
           productOptionConfig = product.variant_option_config;
           imageUrl = product.images[0]?.url || null;
 
@@ -284,6 +359,7 @@ export class CartService {
         if (variant) {
           if (!item.custom_product_id) {
             price = price + Number(variant.price_adjustment);
+            ownAdjustment = Number(variant.price_adjustment);
 
             // Show what the buyer picked, not the generic product shot: the
             // per-value image the creator set for this colour, else an image
@@ -304,6 +380,26 @@ export class CartService {
         }
       }
 
+      // Markets app: an own-product line is re-priced in the market currency
+      // (override or converted). A product hidden in the market (same rule
+      // as MarketPricingService.priceLine, which checkout applies) is flagged
+      // `unavailable_in_market` and getCart leaves it out of the totals.
+      if (market && marketRows && item.product_id && !item.custom_product_id) {
+        const rows = marketRows.get(item.product_id);
+        if (rows?.product && !rows.product.available) hiddenInMarket = true;
+        const converted = resolveVariantMarketPrice({
+          basePrice: ownBasePrice,
+          adjustment: ownAdjustment,
+          productOverride: rows?.product?.price,
+          variantOverride: item.variant_id
+            ? rows?.variants.get(item.variant_id)?.price
+            : null,
+          ctx: pricingContext(market),
+        });
+        if (converted != null) price = converted;
+        else hiddenInMarket = true;
+      }
+
       // Apply bundle pricing if a bundle offer is attached
       let bundleOfferId: string | null = null;
       let bundleOriginalUnitPrice: number | null = null;
@@ -322,10 +418,19 @@ export class CartService {
         });
 
         if (offer && offer.bundle.status === 'ACTIVE') {
+          // A FIXED discount is a base-currency amount: converted in a
+          // market, like orders do (PERCENTAGE / ITEM are currency-free).
+          const discountValue =
+            market && offer.discount_type === 'FIXED'
+              ? this.marketPricing.convertMoney(
+                  market,
+                  Number(offer.discount_value),
+                )
+              : offer.discount_value;
           const pricing = computeBundlePricing(price, {
             quantity: offer.quantity,
             discount_type: offer.discount_type,
-            discount_value: offer.discount_value,
+            discount_value: discountValue,
           });
           bundleOfferId = offer.id;
           bundleOriginalUnitPrice = price;
@@ -368,6 +473,7 @@ export class CartService {
         bundleLabel,
         bundleStickerText,
         bundleCartQuantity,
+        ...(hiddenInMarket ? { unavailable_in_market: true as const } : {}),
       });
     }
 
@@ -549,7 +655,18 @@ export class CartService {
     }
   }
 
-  async getCart(userId: string, locale?: string) {
+  /**
+   * `?buyer=company` (b2b app): the company view. Only changes the response
+   * for a store with the app enabled, which then also carries each line's
+   * estimated `tax_rate_bp` and the `b2b` net block; otherwise the response
+   * is exactly the pre-app one.
+   */
+  async getCart(
+    userId: string,
+    locale?: string,
+    marketKey?: string,
+    buyer?: string,
+  ) {
     const cart = await this.getOrCreateCart(userId);
 
     const cartWithItems = await this.prisma.cart.findUnique({
@@ -559,24 +676,50 @@ export class CartService {
       },
     });
 
+    // Markets app: null when off, so everything below prices as before.
+    const market = await this.resolveCartMarket(
+      cartWithItems?.items || [],
+      marketKey,
+    );
+
     const enrichedItems = await this.enrichCartItems(
       cartWithItems?.items || [],
       locale,
+      market,
     );
 
     // Tax estimate shown in the cart: the coupon-free, shipping-free lines
     // (effective unit price × quantity) taxed for the registration country,
     // since no destination is known yet. POST /orders/quote gives the exact
     // figure once the address is; the order snapshots it at creation.
+    // A line hidden in the market (markets app) stays in `items`, flagged,
+    // so the buyer sees why it cannot be bought and can remove it, but it is
+    // not part of the totals: it counts as a zero line here (keeps the
+    // per-line index alignment) and checkout would reject it anyway.
+    const taxableItems = enrichedItems.map((item) =>
+      item.unavailable_in_market ? { price: 0, quantity: 0 } : item,
+    );
     const tax = await this.resolveCartTax(
       cartWithItems?.items || [],
-      enrichedItems as { price?: number; quantity?: number }[],
+      taxableItems as { price?: number; quantity?: number }[],
       locale,
+      market,
+      buyer,
     );
+
+    // b2b app: per-line estimated rate (the web derives net prices from it)
+    // only when the store has the app; items are untouched otherwise.
+    const lineRates = tax.items_tax_rate_bp;
+    const items = lineRates
+      ? enrichedItems.map((item, i) => ({
+          ...item,
+          tax_rate_bp: lineRates[i] ?? 0,
+        }))
+      : enrichedItems;
 
     return {
       id: cartWithItems?.id,
-      items: enrichedItems,
+      items,
       // Headline rate + tax total (compat) and the itemized estimate.
       tax_rate_bp: tax.tax_rate_bp,
       tax_amount: tax.tax_total,
@@ -586,6 +729,7 @@ export class CartService {
       tax_estimated: true,
       // EXCLUSIVE: subtotal + tax; INCLUSIVE: the subtotal itself.
       total_with_tax: tax.total_with_tax,
+      ...(tax.b2b ? { b2b: tax.b2b } : {}),
     };
   }
 
@@ -604,6 +748,8 @@ export class CartService {
     }[],
     enrichedItems: { price?: number; quantity?: number }[],
     locale?: string,
+    market: MarketContext | null = null,
+    buyer?: string,
   ): Promise<{
     tax_rate_bp: number;
     tax_total: number;
@@ -615,6 +761,10 @@ export class CartService {
     }[];
     tax_pricing_mode: 'INCLUSIVE' | 'EXCLUSIVE';
     total_with_tax: number;
+    /** b2b app only: one estimated rate per line, in item order. */
+    items_tax_rate_bp?: number[];
+    /** b2b app only: display mode and net figures. */
+    b2b?: B2bTotals;
   }> {
     const platformConfig = await this.prisma.platformConfig.findFirst({
       select: { default_currency: true },
@@ -716,10 +866,9 @@ export class CartService {
           select: { ...taxStoreSelect, currency: true },
         })
       : null;
-    const currency = resolveStoreCurrency(
-      store,
-      platformConfig?.default_currency,
-    );
+    const currency = market
+      ? market.currency
+      : resolveStoreCurrency(store, platformConfig?.default_currency);
     const subtotal = taxLines.reduce((sum, l) => sum + l.amount, 0);
     if (!store) {
       return {
@@ -730,7 +879,18 @@ export class CartService {
         total_with_tax: roundMoney(subtotal, currency),
       };
     }
-    const ctx = await this.taxService.contextFor(store);
+    // b2b app: cached flag; the buyer type only sets the display mode.
+    const b2bEnabled = await this.b2b.isEnabled(store.id);
+    const buyerType = b2bEnabled
+      ? await this.b2b.resolveBuyerType(
+          store.id,
+          buyer === 'company' ? 'COMPANY' : null,
+        )
+      : 'PERSON';
+    const ctx = {
+      ...(await this.taxService.contextFor(store)),
+      ...(buyerType === 'COMPANY' ? { buyerType } : {}),
+    };
     const data = await this.taxService.loadTaxData(ctx);
     const result = this.taxService.computeTaxes({
       ctx,
@@ -748,11 +908,75 @@ export class CartService {
       tax_lines: result.tax_lines,
       tax_pricing_mode: result.tax_pricing_mode,
       total_with_tax: result.total,
+      ...(b2bEnabled
+        ? {
+            items_tax_rate_bp: result.items.map((i) => i.tax_rate_bp),
+            b2b: {
+              display_mode: result.display_mode,
+              net_items: result.net_items,
+              net_shipping: result.net_shipping,
+              net_total: result.net_total,
+            },
+          }
+        : {}),
     };
   }
 
-  async addItem(userId: string, dto: AddCartItemDto, locale?: string) {
+  /**
+   * Markets app: refuse an own-product line hidden in the request's market,
+   * by the rule checkout applies (MarketPricingService.priceLine). No-op for
+   * custom products and when the app is off (no market context).
+   */
+  private async assertAvailableInMarket(
+    line: {
+      product_id?: string | null;
+      variant_id?: string | null;
+      custom_product_id?: string | null;
+    },
+    locale?: string,
+    marketKey?: string,
+  ): Promise<void> {
+    if (!line.product_id || line.custom_product_id) return;
+    const market = await this.resolveCartMarket(
+      [{ product_id: line.product_id, custom_product_id: null }],
+      marketKey,
+    );
+    if (!market) return;
+    const product = await this.prisma.product.findUnique({
+      where: { id: line.product_id },
+      select: { base_price: true, translations: true },
+    });
+    if (!product) return;
+    const variant = line.variant_id
+      ? await this.prisma.productVariant.findUnique({
+          where: { id: line.variant_id },
+          select: { price_adjustment: true },
+        })
+      : null;
+    const price = await this.marketPricing.priceLine(market, {
+      product_id: line.product_id,
+      variant_id: line.variant_id ?? null,
+      basePrice: Number(product.base_price),
+      adjustment: Number(variant?.price_adjustment || 0),
+    });
+    if (price != null) return;
+    const title =
+      this.pickTranslation(product.translations, locale)?.title || 'This item';
+    throw new BadRequestException({
+      code: CART_ITEM_NOT_AVAILABLE_IN_MARKET,
+      message: `${title} is not available in this market.`,
+    });
+  }
+
+  async addItem(
+    userId: string,
+    dto: AddCartItemDto,
+    locale?: string,
+    marketKey?: string,
+    buyer?: string,
+  ) {
     const cart = await this.getOrCreateCart(userId);
+    await this.assertAvailableInMarket(dto, locale, marketKey);
 
     if (dto.bundle_offer_id) {
       const offer = await this.validateBundleOffer(
@@ -800,7 +1024,7 @@ export class CartService {
     }
 
     // Return enriched cart
-    return this.getCart(userId, locale);
+    return this.getCart(userId, locale, marketKey, buyer);
   }
 
   async updateItem(
@@ -808,6 +1032,8 @@ export class CartService {
     itemId: string,
     dto: UpdateCartItemDto,
     locale?: string,
+    marketKey?: string,
+    buyer?: string,
   ) {
     const cart = await this.getOrCreateCart(userId);
 
@@ -819,6 +1045,7 @@ export class CartService {
         code: 'CART_ITEM_NOT_FOUND',
         message: 'Cart item not found',
       });
+    await this.assertAvailableInMarket(item, locale, marketKey);
 
     const data: { quantity?: number; bundle_offer_id?: string | null } = {};
     if (typeof dto.quantity === 'number') {
@@ -857,17 +1084,23 @@ export class CartService {
       });
     }
 
-    return this.getCart(userId, locale);
+    return this.getCart(userId, locale, marketKey, buyer);
   }
 
-  async removeItem(userId: string, itemId: string, locale?: string) {
+  async removeItem(
+    userId: string,
+    itemId: string,
+    locale?: string,
+    marketKey?: string,
+    buyer?: string,
+  ) {
     const cart = await this.getOrCreateCart(userId);
 
     await this.prisma.cartItem.delete({
       where: { id: itemId, cart_id: cart.id },
     });
 
-    return this.getCart(userId, locale);
+    return this.getCart(userId, locale, marketKey, buyer);
   }
 
   async clearCart(userId: string) {

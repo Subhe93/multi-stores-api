@@ -6,6 +6,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CryptoService } from '../../common/crypto/crypto.service';
 import {
   NotificationTemplatesService,
+  HTML_VAR_PREFIX,
+  htmlVars,
   substitute,
 } from '../notification-templates/notification-templates.service';
 import {
@@ -34,6 +36,7 @@ import {
   renderOrderItems,
   renderOrderTotals,
   renderShippingAddress,
+  renderCompanyBlock,
   formatOrderDate,
   formatPaymentMethod,
   emailSafeLogoPath,
@@ -41,19 +44,33 @@ import {
   buildStoreUrl,
   loadOrderForEmail,
   OrderForEmail,
+  type MailAttachment,
+  type OrderEmailEvent,
+  type OrderMailExtension,
 } from './order-mail.helpers';
+import { deriveNetTotals } from '../taxes/tax.service';
 
 /** Delivery log retention. */
 const EMAIL_LOG_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const EMAIL_LOG_PRUNE_EVERY_MS = 24 * 60 * 60 * 1000;
 
-type OrderEmailEvent =
-  | 'order_confirmation'
-  | 'order_shipped'
-  | 'order_delivered'
-  | 'order_cancelled'
-  | 'order_refunded'
-  | 'new_order_owner';
+/** Invoices-app variables a template sample always renders empty. */
+const INVOICE_SAMPLE_VARS = [
+  'invoice_number',
+  'credit_note_number',
+  'invoice_url',
+  'seller_block_html',
+  'seller_block_text',
+  'seller_legal_line',
+] as const;
+
+/** Customer emails that may carry extension attachments (invoices app). */
+const ATTACHMENT_EVENTS: ReadonlySet<OrderEmailEvent> = new Set([
+  'order_confirmation',
+  'order_delivered',
+  'order_refunded',
+  'order_cancelled',
+]);
 
 /** Draft (or stored) template to render with sample data. */
 interface TemplateSampleInput {
@@ -191,6 +208,8 @@ export class MailService {
   // One transporter per distinct SMTP config: the platform's, plus one for each
   // independent store sending under its own domain.
   private transporters = new Map<string, nodemailer.Transporter>();
+  // Apps that add variables / attachments to order emails (invoices app).
+  private readonly orderExtensions: OrderMailExtension[] = [];
 
   constructor(
     private config: ConfigService,
@@ -198,6 +217,11 @@ export class MailService {
     private crypto: CryptoService,
     private templates: NotificationTemplatesService,
   ) {}
+
+  /** Register an order-email extension (see OrderMailExtension). */
+  registerOrderMailExtension(extension: OrderMailExtension): void {
+    this.orderExtensions.push(extension);
+  }
 
   /**
    * A store's own sender, when it has one. Only INDEPENDENT stores may send
@@ -353,6 +377,8 @@ export class MailService {
     /** Template/event key and order, recorded in the delivery log. */
     event?: string;
     orderId?: string;
+    /** Files to attach; passed to nodemailer only when non-empty. */
+    attachments?: MailAttachment[];
   }): Promise<{ sent: boolean }> {
     const storeCfg = opts.storeId
       ? await this.resolveStoreConfig(opts.storeId)
@@ -395,16 +421,23 @@ export class MailService {
 
   private async trySend(
     cfg: SmtpConfig,
-    opts: MailMeta & { html: string; text?: string },
+    opts: MailMeta & {
+      html: string;
+      text?: string;
+      attachments?: MailAttachment[];
+    },
     via: 'store' | 'platform',
   ): Promise<boolean> {
     try {
+      // `attachments` only when there are some, so every other message is
+      // handed to nodemailer exactly as before.
       await this.transporterFor(cfg).sendMail({
         from: cfg.from,
         to: opts.to,
         subject: opts.subject,
         html: opts.html,
         text: opts.text,
+        ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
       });
       await this.logDelivery(opts, {
         status: EmailLogStatus.SENT,
@@ -628,6 +661,7 @@ export class MailService {
         brandFooter,
         event: 'order_confirmation',
         orderId: data.orderId,
+        attachments: data.attachments,
       });
     return this.send({
       to,
@@ -636,6 +670,7 @@ export class MailService {
       brandFooter,
       event: 'order_confirmation',
       orderId: data.orderId,
+      attachments: data.attachments,
     });
   }
 
@@ -718,6 +753,7 @@ export class MailService {
         brandFooter,
         event: 'order_delivered',
         orderId: data.orderId,
+        attachments: data.attachments,
       });
     return this.send({
       to,
@@ -726,6 +762,7 @@ export class MailService {
       brandFooter,
       event: 'order_delivered',
       orderId: data.orderId,
+      attachments: data.attachments,
     });
   }
 
@@ -765,6 +802,7 @@ export class MailService {
         brandFooter,
         event: 'order_cancelled',
         orderId: data.orderId,
+        attachments: data.attachments,
       });
     return this.send({
       to,
@@ -773,6 +811,7 @@ export class MailService {
       brandFooter,
       event: 'order_cancelled',
       orderId: data.orderId,
+      attachments: data.attachments,
     });
   }
 
@@ -812,6 +851,7 @@ export class MailService {
         brandFooter,
         event: 'order_refunded',
         orderId: data.orderId,
+        attachments: data.attachments,
       });
     return this.send({
       to,
@@ -820,6 +860,7 @@ export class MailService {
       brandFooter,
       event: 'order_refunded',
       orderId: data.orderId,
+      attachments: data.attachments,
     });
   }
 
@@ -923,19 +964,27 @@ export class MailService {
       extraVars,
     } = await this.orderTemplateContext(order, event);
 
+    // Extension attachments (invoices app) for the customer emails that
+    // carry documents; null for every other event or without extensions.
+    const attached =
+      customerEmail && ATTACHMENT_EVENTS.has(event)
+        ? await this.collectAttachments(order, event)
+        : null;
+
     const brand = {
       orderId: order.id,
       storeId: order.storeCtx?.id,
       storeName: order.storeCtx?.name,
       storeLogoUrl: logoUrl,
       extraVars,
+      ...(attached ? { attachments: attached.files } : {}),
     };
 
     // Pick the recipient + payload per event.
     switch (event) {
       case 'order_confirmation': {
         if (!customerEmail) return;
-        await this.sendOrderConfirmation(
+        const result = await this.sendOrderConfirmation(
           customerEmail,
           {
             ...brand,
@@ -951,6 +1000,7 @@ export class MailService {
           },
           locale,
         );
+        await this.afterAttachedSend(result, attached);
         return;
       }
       case 'order_shipped': {
@@ -972,7 +1022,7 @@ export class MailService {
       }
       case 'order_delivered': {
         if (!customerEmail) return;
-        await this.sendOrderDelivered(
+        const result = await this.sendOrderDelivered(
           customerEmail,
           {
             ...brand,
@@ -983,11 +1033,12 @@ export class MailService {
           },
           locale,
         );
+        await this.afterAttachedSend(result, attached);
         return;
       }
       case 'order_cancelled': {
         if (!customerEmail) return;
-        await this.sendOrderCancelled(
+        const result = await this.sendOrderCancelled(
           customerEmail,
           {
             ...brand,
@@ -999,11 +1050,12 @@ export class MailService {
           },
           locale,
         );
+        await this.afterAttachedSend(result, attached);
         return;
       }
       case 'order_refunded': {
         if (!customerEmail) return;
-        await this.sendOrderRefunded(
+        const result = await this.sendOrderRefunded(
           customerEmail,
           {
             ...brand,
@@ -1018,6 +1070,7 @@ export class MailService {
           },
           locale,
         );
+        await this.afterAttachedSend(result, attached);
         return;
       }
       case 'new_order_owner': {
@@ -1053,6 +1106,56 @@ export class MailService {
           locale,
         );
         return;
+      }
+    }
+  }
+
+  /**
+   * Attachments every registered extension offers for this email. A failing
+   * extension is logged and skipped; null when nothing is attached.
+   */
+  private async collectAttachments(
+    order: OrderForEmail,
+    event: OrderEmailEvent,
+  ): Promise<{
+    files: MailAttachment[];
+    onSent: Array<() => Promise<void>>;
+  } | null> {
+    const files: MailAttachment[] = [];
+    const onSent: Array<() => Promise<void>> = [];
+    for (const ext of this.orderExtensions) {
+      if (!ext.attachments) continue;
+      try {
+        const res = await ext.attachments(order, event);
+        if (!res?.files.length) continue;
+        files.push(...res.files);
+        if (res.onSent) onSent.push(res.onSent);
+      } catch (err) {
+        this.logger.warn(
+          `Order email extension attachments failed for ${order.id} (${event}): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+    return files.length ? { files, onSent } : null;
+  }
+
+  /** Runs the extensions' onSent callbacks once the message went out. */
+  private async afterAttachedSend(
+    result: { sent: boolean },
+    attached: { onSent: Array<() => Promise<void>> } | null,
+  ): Promise<void> {
+    if (!attached || !result.sent) return;
+    for (const cb of attached.onSent) {
+      try {
+        await cb();
+      } catch (err) {
+        this.logger.warn(
+          `Order email extension onSent failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
       }
     }
   }
@@ -1120,6 +1223,10 @@ export class MailService {
       ? absoluteUrl(await emailSafeLogoPath(order.storeCtx.logoUrl), publicBase)
       : undefined;
 
+    // b2b app: a company order prints the net-first layout; the net figures
+    // are derived from the snapshot (nothing is stored for them, D4).
+    const isCompany = order.customer_type === 'COMPANY';
+    const derived = deriveNetTotals(order, currency);
     const { totals_html, totals_text } = renderOrderTotals(
       {
         subtotal: Number(order.subtotal ?? 0),
@@ -1128,11 +1235,15 @@ export class MailService {
         shippingMethod: order.shipping_method_name,
         total: Number(order.total),
         taxLines,
+        ...(isCompany
+          ? { buyerMode: 'excl' as const, netTotal: derived.net_total }
+          : {}),
       },
       currency,
       locale,
     );
     const address = renderShippingAddress(order.address, locale);
+    const companyBlock = renderCompanyBlock(order, locale);
     const firstName = order.customer?.first_name?.trim() || '';
     const fullName = [firstName, order.customer?.last_name?.trim()]
       .filter(Boolean)
@@ -1161,7 +1272,44 @@ export class MailService {
       totals_text,
       shipping_address_html: address.html,
       shipping_address_text: address.text,
+      // b2b app: empty strings for a person order, so templates that print
+      // them render nothing.
+      company_block_html: companyBlock.html,
+      company_block_text: companyBlock.text,
+      company_name: isCompany ? (order.company_name ?? '') : '',
+      org_number: isCompany ? (order.org_number ?? '') : '',
+      vat_number: isCompany ? (order.vat_number ?? '') : '',
+      buyer_reference: isCompany ? (order.buyer_reference ?? '') : '',
+      net_total: isCompany ? formatMoney(derived.net_total, currency) : '',
     };
+    // The four plain company strings are shopper-typed: the HTML body gets
+    // an escaped copy (text and subject keep the raw value).
+    for (const key of [
+      'company_name',
+      'org_number',
+      'vat_number',
+      'buyer_reference',
+    ]) {
+      extraVars[`${HTML_VAR_PREFIX}${key}`] = escapeHtml(extraVars[key]);
+    }
+
+    // App extensions (invoices app) add their own variables. They never
+    // override a core variable, and a failing one is logged and skipped.
+    for (const ext of this.orderExtensions) {
+      if (!ext.vars) continue;
+      try {
+        const vars = await ext.vars(order, event, locale, { orderUrl });
+        for (const [key, value] of Object.entries(vars ?? {})) {
+          if (!(key in extraVars)) extraVars[key] = value;
+        }
+      } catch (err) {
+        this.logger.warn(
+          `Order email extension vars failed for ${order.id} (${event}): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
 
     return {
       customerEmail,
@@ -1301,8 +1449,14 @@ export class MailService {
       vars.order_url,
       event === 'new_order_owner' ? 'Open order' : phrases.viewOrder,
     );
+    // Invoices app: a sample never shows a real invoice or seller block, so
+    // the extension variables (and their HTML overrides) are blanked.
+    for (const key of INVOICE_SAMPLE_VARS) {
+      delete vars[`${HTML_VAR_PREFIX}${key}`];
+    }
     return {
       ...vars,
+      ...Object.fromEntries(INVOICE_SAMPLE_VARS.map((key) => [key, ''])),
       // Placeholder customer: a test must never carry a real customer's data.
       customer_name: 'Anna Lindqvist',
       customer_first_name: 'Anna',
@@ -1310,6 +1464,14 @@ export class MailService {
       shipping_address_html:
         'Anna Lindqvist<br />Storgatan 12<br />111 23 Stockholm',
       shipping_address_text: 'Anna Lindqvist\nStorgatan 12\n111 23 Stockholm',
+      // b2b app: the sample is a person order.
+      company_block_html: '',
+      company_block_text: '',
+      company_name: '',
+      org_number: '',
+      vat_number: '',
+      buyer_reference: '',
+      net_total: '',
       payment_line: phrases.paid,
       order_button: cta.html,
       order_url_text: cta.text,
@@ -1354,7 +1516,7 @@ export class MailService {
     const rendered = hasDraft
       ? {
           subject: substitute(input.subject ?? '', vars),
-          html: substitute(input.body_html ?? '', vars),
+          html: substitute(input.body_html ?? '', htmlVars(vars)),
           text: substitute(input.body_text ?? '', vars),
         }
       : await this.templates.render(input.event, locale, vars, storeId);

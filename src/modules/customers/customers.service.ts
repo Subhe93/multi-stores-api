@@ -5,6 +5,53 @@ import {
   UpdateCustomerDto,
   CreateAddressDto,
 } from './dto/create-customer.dto';
+import { normalizeOrgNumber, validateOrgNumber } from '../b2b/org-number.util';
+import { normalizeVatNumber } from '../b2b/vat-number.util';
+
+/**
+ * b2b app: company defaults are prefill, not a legal snapshot, so they are
+ * normalised (canonical org-number form when it validates for the country,
+ * VAT upper-cased without spaces) but never rejected here; the order path
+ * validates. Blank strings clear the field. Keys absent from the body stay
+ * absent so a partial update leaves the other columns alone.
+ */
+function normalizeCompanyFields<
+  T extends {
+    org_number?: string | null;
+    vat_number?: string | null;
+    company_name?: string | null;
+  },
+>(dto: T, country?: string | null): T {
+  const out = { ...dto };
+  // Null and blank both clear the column (stored as null).
+  const orNull = (value: string) => (value ? value : null);
+  if (typeof dto.company_name === 'string') {
+    out.company_name = orNull(dto.company_name.trim().replace(/\s+/g, ' '));
+  }
+  if (typeof dto.org_number === 'string') {
+    out.org_number = orNull(normalizeOrgNumber(country, dto.org_number));
+  }
+  if (typeof dto.vat_number === 'string') {
+    out.vat_number = orNull(normalizeVatNumber(dto.vat_number));
+  }
+  return out;
+}
+
+/**
+ * Org number on the customer's own defaults (PUT /customers/me), which carry
+ * no country: use the default address's country when there is one; else
+ * store the Swedish pretty form when the value validates as a Swedish number
+ * (the platform's primary market, and what the address path would store);
+ * else the generic treatment (trimmed). Never rejects.
+ */
+export function normalizeProfileOrgNumber(
+  raw: string,
+  defaultCountry: string | null | undefined,
+): string {
+  if (defaultCountry) return normalizeOrgNumber(defaultCountry, raw);
+  const se = validateOrgNumber('SE', raw, { strictCountries: ['SE'] });
+  return se.ok ? se.normalized : normalizeOrgNumber(null, raw);
+}
 
 @Injectable()
 export class CustomersService {
@@ -25,9 +72,22 @@ export class CustomersService {
   }
 
   async update(userId: string, dto: UpdateCustomerDto) {
+    const data = normalizeCompanyFields(dto, null);
+    if (typeof dto.org_number === 'string' && data.org_number) {
+      // The customer's defaults carry no country: borrow the default
+      // address's (see normalizeProfileOrgNumber).
+      const address = await this.prisma.address.findFirst({
+        where: { customer: { user_id: userId }, is_default: true },
+        select: { country_code: true },
+      });
+      data.org_number = normalizeProfileOrgNumber(
+        dto.org_number,
+        address?.country_code,
+      );
+    }
     return this.prisma.customer.update({
       where: { user_id: userId },
-      data: dto,
+      data,
     });
   }
 
@@ -54,7 +114,10 @@ export class CustomersService {
     const customer = await this.ensureCustomer(userId);
 
     return this.prisma.address.create({
-      data: { customer_id: customer.id, ...dto },
+      data: {
+        customer_id: customer.id,
+        ...normalizeCompanyFields(dto, dto.country_code),
+      },
     });
   }
 

@@ -2,6 +2,8 @@
 // plus html and text parts. Kept intentionally simple (inline styles) so they
 // render across mail clients without a build step.
 
+import type { MailAttachment } from './order-mail.helpers';
+
 interface EmailParts {
   subject: string;
   html: string;
@@ -36,6 +38,8 @@ export interface EmailBrand {
   orderId?: string;
   /** Variables shared by every order template (totals, address, dates, …). */
   extraVars?: Record<string, string>;
+  /** Files attached to the message (invoices app); omitted when none. */
+  attachments?: MailAttachment[];
   /** Admin-configured platform name (PlatformConfig.platform_name) — used when
    *  no store brand applies, instead of the hardcoded fallback. */
   platformName?: string;

@@ -18,9 +18,10 @@ export class StorefrontController {
     return this.storefrontService.getPlatformMeta();
   }
 
+  // ?market= (markets app): the market key the proxy resolved for the host.
   @Get(':slug')
-  getStore(@Param('slug') slug: string) {
-    return this.storefrontService.getStore(slug);
+  getStore(@Param('slug') slug: string, @Query('market') market?: string) {
+    return this.storefrontService.getStore(slug, market);
   }
 
   // Tiny endpoint the storefront reads to decide whether to cache this store.
@@ -38,15 +39,20 @@ export class StorefrontController {
     @Query('creator_category') creator_category?: string,
     @Query('search') search?: string,
     @Query('locale') locale?: string,
+    @Query('market') market?: string,
   ) {
-    return this.storefrontService.getProducts(slug, {
-      page: page ? +page : undefined,
-      limit: limit ? +limit : undefined,
-      category_id,
-      creator_category,
-      search,
-      locale,
-    });
+    return this.storefrontService.getProducts(
+      slug,
+      {
+        page: page ? +page : undefined,
+        limit: limit ? +limit : undefined,
+        category_id,
+        creator_category,
+        search,
+        locale,
+      },
+      market,
+    );
   }
 
   @Get(':slug/products/:productSlug')
@@ -54,8 +60,9 @@ export class StorefrontController {
     @Param('slug') slug: string,
     @Param('productSlug') productSlug: string,
     @Query('locale') locale?: string,
+    @Query('market') market?: string,
   ) {
-    return this.storefrontService.getProduct(slug, productSlug, locale);
+    return this.storefrontService.getProduct(slug, productSlug, locale, market);
   }
 
   @Get(':slug/categories')
@@ -144,7 +151,10 @@ export class StorefrontController {
 
   // Aggregated data the storefront's sitemap.xml route needs.
   @Get(':slug/sitemap-data')
-  getSitemapData(@Param('slug') slug: string) {
-    return this.storefrontService.getSitemapData(slug);
+  getSitemapData(
+    @Param('slug') slug: string,
+    @Query('market') market?: string,
+  ) {
+    return this.storefrontService.getSitemapData(slug, market);
   }
 }

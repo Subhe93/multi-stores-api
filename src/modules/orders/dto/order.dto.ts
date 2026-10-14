@@ -14,6 +14,8 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { OrderStatus, FulfillmentStatus, PaymentMethod } from '@prisma/client';
+import { CompanyDto, IsBuyerType } from '../../b2b/dto/b2b.dto';
+import type { BuyerType } from '../../b2b/b2b.types';
 
 export class OrderCustomFieldValueDto {
   @IsString()
@@ -94,6 +96,37 @@ export class CreateOrderDto {
   @ValidateNested({ each: true })
   @Type(() => OrderItemCustomizationDto)
   item_customizations?: Record<string, OrderItemCustomizationDto>;
+
+  // Markets app (ignored while the app is off): the market the storefront
+  // resolved for the host, the host itself (accepted only when it is one of
+  // the market's own hostnames) and the UI locale, snapshotted on the order.
+  @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  market_key?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(253)
+  hostname?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  locale?: string;
+
+  // b2b app (ignored while the app is off): the buyer type the storefront
+  // ran in and, for a company purchase, the company snapshot of the order.
+  // A COMPANY request on a store that does not accept it is refused
+  // (B2B_COMPANY_NOT_ALLOWED) rather than silently placed as a person.
+  @IsOptional()
+  @IsBuyerType()
+  buyer_type?: BuyerType;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CompanyDto)
+  company?: CompanyDto;
 }
 
 export class UpdateOrderStatusDto {
@@ -194,4 +227,15 @@ export class QuoteOrderDto {
   @IsString()
   @MaxLength(10)
   locale?: string;
+
+  // Markets app: price the quote in this market (ignored while the app is off).
+  @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  market_key?: string;
+
+  // b2b app: quote for the company view (ignored while the app is off).
+  @IsOptional()
+  @IsBuyerType()
+  buyer_type?: BuyerType;
 }

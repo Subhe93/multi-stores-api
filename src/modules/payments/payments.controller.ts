@@ -30,10 +30,11 @@ export class PaymentsController {
 
   // Public — frontend checks if Stripe is available. With ?store=<slug>, the
   // config is store-aware: independent stores also return the connected
-  // account Stripe.js must target for their direct charges.
+  // account Stripe.js must target for their direct charges. With the markets
+  // app, ?market=<key> evaluates kustomEnabled against the market currency.
   @Get('config')
-  getConfig(@Query('store') store?: string) {
-    return this.paymentsService.getPublicConfig(store);
+  getConfig(@Query('store') store?: string, @Query('market') market?: string) {
+    return this.paymentsService.getPublicConfig(store, market);
   }
 
   // ── Admin platform Stripe settings ──────────────────────────────────────────

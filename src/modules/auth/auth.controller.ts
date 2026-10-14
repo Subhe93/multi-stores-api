@@ -61,7 +61,11 @@ export class AuthController {
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   forgotPassword(@Body() dto: ForgotPasswordDto) {
-    return this.authService.forgotPassword(dto.email, dto.store_slug);
+    return this.authService.forgotPassword(
+      dto.email,
+      dto.store_slug,
+      dto.hostname,
+    );
   }
 
   @Post('reset-password')

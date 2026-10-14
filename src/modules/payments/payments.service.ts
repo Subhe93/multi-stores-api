@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   NotFoundException,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
@@ -13,11 +14,13 @@ import { CryptoService } from '../../common/crypto/crypto.service';
 import {
   toStripeAmount,
   fromStripeAmount,
-  resolveStoreCurrency,
+  resolveOrderCurrency,
 } from '../../common/money/currency.util';
+import { MarketsContextService } from '../markets/markets-context.service';
 import { OrdersService } from '../orders/orders.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
+import { InvoiceTriggersService } from '../invoices/invoice-triggers.service';
 import {
   isKustomEnabledForStore,
   kustomCreatorSelect,
@@ -53,6 +56,9 @@ export class PaymentsService {
     private orders: OrdersService,
     private notifications: NotificationsService,
     private mail: MailService,
+    private markets: MarketsContextService,
+    // Invoices app (M3 D5): optional and last; no-op without the app.
+    @Optional() private readonly invoices?: InvoiceTriggersService,
   ) {}
 
   // ── Config resolution (DB first, env fallback) ─────────────────────────────
@@ -111,9 +117,12 @@ export class PaymentsService {
    * For an INDEPENDENT store, stripeAccount is the creator's Standard connected
    * account (so Stripe.js can confirm the direct-charge PaymentIntent on it) —
    * and the store only counts as configured once that account is ready.
-   * `kustomEnabled` follows the same independent-store rule for Kustom Checkout.
+   * `kustomEnabled` follows the same independent-store rule for Kustom Checkout,
+   * evaluated against the market currency when the markets app resolves one
+   * for `marketKey` (the default market without a key; null when the app is
+   * off, in which case the store currency decides as before).
    */
-  async getPublicConfig(storeSlug?: string) {
+  async getPublicConfig(storeSlug?: string, marketKey?: string) {
     const stripeConfigured = await this.isStripeConfigured();
     const publishableKey = await this.getPublishableKey();
 
@@ -123,6 +132,7 @@ export class PaymentsService {
       ? await this.prisma.store.findUnique({
           where: { slug: storeSlug, is_active: true },
           select: {
+            id: true,
             store_type: true,
             currency: true,
             creator: {
@@ -157,16 +167,18 @@ export class PaymentsService {
         Boolean(publishableKey) && stripeConfigured && stripeAccount != null,
       publishableKey,
       stripeAccount,
-      // Kustom also needs a currency it can process.
+      // Kustom also needs a currency it can process: the market's when the
+      // markets app applies, else the store's.
       kustomEnabled: isKustomEnabledForStore({
         ...store,
-        currency: resolveStoreCurrency(
+        currency: resolveOrderCurrency(
           store,
           (
             await this.prisma.platformConfig.findFirst({
               select: { default_currency: true },
             })
           )?.default_currency,
+          await this.markets.resolve(store.id, marketKey),
         ),
       }),
     };
@@ -731,6 +743,15 @@ export class PaymentsService {
         line_items: String(lineCount),
         unit_count: String(unitCount),
         ...(order.store_id ? { store_id: order.store_id } : {}),
+        // b2b app: who bought, for reconciliation in the Stripe dashboard.
+        // Absent for a person, so existing intents are built identically.
+        ...(order.customer_type === 'COMPANY'
+          ? {
+              buyer_type: 'COMPANY',
+              company_name: order.company_name ?? '',
+              org_number: order.org_number ?? '',
+            }
+          : {}),
       },
       automatic_payment_methods: {
         enabled: true,
@@ -1018,7 +1039,7 @@ export class PaymentsService {
 
     const orderRow = await this.prisma.order.findUnique({
       where: { id: orderId },
-      select: { stripe_account_id: true },
+      select: { stripe_account_id: true, store_id: true },
     });
     if (!orderRow) return;
 
@@ -1056,6 +1077,16 @@ export class PaymentsService {
 
     // Capture the card/receipt details for tracking (best-effort, non-fatal).
     await this.captureChargeDetails(orderId, chargeId);
+
+    // Invoices app: issue after the card label is captured and before the
+    // transfers (which may throw) and the confirmation email (which attaches
+    // the invoice). Not gated on `changed`, so a retried delivery heals a
+    // failed issuance; issuing is idempotent.
+    await this.invoices?.onOrderPaid({
+      id: orderId,
+      store_id: orderRow.store_id,
+      payment_status: 'paid',
+    });
 
     // Split the captured funds out to the payout recipients. Always attempted
     // (not gated on `changed`) so a webhook retry after a partial failure still
@@ -1409,10 +1440,14 @@ export class PaymentsService {
       // so it isn't invisible to the creator and admin.
       if (live.amount_refunded > 0) {
         const amount = fromStripeAmount(live.amount_refunded, live.currency);
+        // Stripe's amount_refunded is the running total, which is what the
+        // invoices app expects as `cumulativeRefunded`.
         const recorded = await this.orders.recordPartialRefund(
           order.id,
           amount,
           live.currency,
+          'Stripe',
+          { cumulativeRefunded: amount, storeId: order.store_id },
         );
         if (recorded.changed) {
           await this.notifyStoreCreator(

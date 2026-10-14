@@ -1,4 +1,10 @@
-import { IsEmail, IsString, IsOptional, MinLength } from 'class-validator';
+import {
+  IsEmail,
+  IsString,
+  IsOptional,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class ForgotPasswordDto {
   @IsEmail()
@@ -9,6 +15,13 @@ export class ForgotPasswordDto {
   @IsOptional()
   @IsString()
   store_slug?: string;
+
+  // Markets app: the storefront host the request came from. Honoured only
+  // when it is an ACTIVE hostname of that store (never an open redirect).
+  @IsOptional()
+  @IsString()
+  @MaxLength(253)
+  hostname?: string;
 }
 
 export class ResetPasswordDto {

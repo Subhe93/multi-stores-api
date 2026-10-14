@@ -12,6 +12,8 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
+import { CompanyDto, IsBuyerType } from '../../../b2b/dto/b2b.dto';
+import type { BuyerType } from '../../../b2b/b2b.types';
 
 // One purchase line, the same shape POST /cart/items accepts (CartLine).
 export class KustomCartLineDto {
@@ -75,6 +77,31 @@ export class CreateKustomCheckoutSessionDto {
   @IsString()
   @MaxLength(10)
   locale?: string;
+
+  // Markets app: the market the storefront resolved for the host and the
+  // host itself. Accepted here so the global whitelist does not reject the
+  // body; wired into the session by WP-B.
+  @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  market_key?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(253)
+  hostname?: string;
+
+  // b2b app (ignored while the app is off): the buyer type the storefront
+  // runs in and, for a company checkout, the company prefill. Kustom
+  // collects and validates the organisation in its iframe; this is a hint.
+  @IsOptional()
+  @IsBuyerType()
+  buyer_type?: BuyerType;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CompanyDto)
+  company?: CompanyDto;
 }
 
 // Resync an open session: omitted fields are unchanged, null clears the
@@ -102,4 +129,17 @@ export class UpdateKustomCheckoutSessionDto {
   @IsString()
   @MaxLength(2000)
   notes?: string | null;
+
+  // b2b app: the storefront re-sends both whenever the app is on (a toggle
+  // mid-checkout re-prices the session); null = person / no company.
+  @ValidateIf((_, v) => v !== null)
+  @IsOptional()
+  @IsBuyerType()
+  buyer_type?: BuyerType | null;
+
+  @ValidateIf((_, v) => v !== null)
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CompanyDto)
+  company?: CompanyDto | null;
 }

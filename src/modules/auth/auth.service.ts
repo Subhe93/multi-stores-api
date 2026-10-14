@@ -11,6 +11,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { RegisterDto, LoginDto } from './dto';
 import { UserRole } from '@prisma/client';
 import { MailService } from '../mail/mail.service';
+import { StoreAppsService } from '../store-apps/store-apps.service';
 import { normalizeEmail } from '../../common/email/email.util';
 
 @Injectable()
@@ -20,6 +21,7 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private mail: MailService,
+    private readonly storeApps: StoreAppsService,
   ) {}
 
   /**
@@ -210,7 +212,7 @@ export class AuthService {
     return { message: 'Logged out successfully' };
   }
 
-  async forgotPassword(email: string, storeSlug?: string) {
+  async forgotPassword(email: string, storeSlug?: string, hostname?: string) {
     const user = await this.findUserByEmail(email);
 
     // Never reveal whether the email exists — always return the same message.
@@ -239,7 +241,7 @@ export class AuthService {
     // Email the reset link (best-effort — never blocks or reveals existence).
     // When the request came from a store, use that store's primary locale so
     // the email body matches the storefront language.
-    const resetUrl = await this.buildResetUrl(resetToken, storeSlug);
+    const resetUrl = await this.buildResetUrl(resetToken, storeSlug, hostname);
     let mailLocale: string | undefined;
     if (storeSlug) {
       const store = await this.prisma.store.findUnique({
@@ -264,6 +266,7 @@ export class AuthService {
   private async buildResetUrl(
     token: string,
     storeSlug?: string,
+    hostname?: string,
   ): Promise<string> {
     const platformBase =
       this.configService.get<string>('STOREFRONT_URL') ||
@@ -273,9 +276,19 @@ export class AuthService {
     if (storeSlug) {
       const store = await this.prisma.store.findUnique({
         where: { slug: storeSlug },
-        select: { slug: true, custom_domain: true, is_active: true },
+        select: { id: true, slug: true, custom_domain: true, is_active: true },
       });
       if (store?.is_active) {
+        // Markets app: keep the customer on the market host they came from,
+        // provided it is one of the store's ACTIVE hostnames.
+        const host = hostname?.trim().toLowerCase().split(':')[0];
+        if (host && (await this.storeApps.isEnabled(store.id, 'markets'))) {
+          const domain = await this.prisma.storeDomain.findFirst({
+            where: { store_id: store.id, hostname: host, status: 'ACTIVE' },
+            select: { id: true },
+          });
+          if (domain) return `https://${host}/auth/reset-password?${q}`;
+        }
         if (store.custom_domain) {
           return `https://${store.custom_domain}/auth/reset-password?${q}`;
         }
