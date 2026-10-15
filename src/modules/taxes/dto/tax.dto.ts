@@ -316,3 +316,10 @@ export class TaxReportQueryDto {
   @IsIn(['json', 'csv'])
   format?: 'json' | 'csv';
 }
+
+/** GET /taxes/my/reports/ec-sales (b2b app M2.5). */
+export class EcSalesQueryDto extends TaxReportQueryDto {
+  @IsOptional()
+  @IsIn(['month', 'quarter'])
+  period?: 'month' | 'quarter';
+}

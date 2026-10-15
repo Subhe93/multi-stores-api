@@ -151,6 +151,7 @@ model Customer {
   addresses Address[]
   orders    Order[]
   cart      Cart?
+  tax_exemptions StoreCustomerTaxExemption[]
 }
 
 model Address {
@@ -664,6 +665,10 @@ model Order {
   org_number              String?             @db.VarChar(32)
   vat_number              String?             @db.VarChar(32)
   buyer_reference         String?
+  // b2b app M2.5: why VAT is zero (null = taxed normally) and the evidence
+  // (VIES result / manual exemption, a VatEvidence object).
+  tax_exempt_reason       TaxExemptReason?
+  vat_validation          Json?
   notes           String?
   created_at      DateTime    @default(now())
   updated_at      DateTime    @updatedAt
@@ -682,6 +687,7 @@ model Order {
   @@index([order_number])
   @@index([status])
   @@index([market_id])
+  @@index([store_id, tax_exempt_reason])
 }
 
 // Per-recipient payout (Stripe transfer) for an order — lets each provider /
@@ -1025,6 +1031,7 @@ model Store {
   markets         Market[]
   domains         StoreDomain[]
   legal_profiles  StoreLegalProfile[]
+  tax_exemptions  StoreCustomerTaxExemption[]
 
   @@index([slug])
 }
@@ -1079,6 +1086,9 @@ model KustomCheckoutSession {
   // the storefront sent ({company_name, org_number, vat_number?, buyer_reference?}).
   buyer_type         BuyerType?
   company            Json?
+  // b2b app M2.5: VatEvidence of company.vat_number; the Kustom callbacks
+  // reuse it instead of calling VIES inside their time budget.
+  vat_validation     Json?
   created_at      DateTime @default(now())
   updated_at      DateTime @updatedAt
   expires_at      DateTime
@@ -1312,6 +1322,74 @@ enum TaxPricingMode {
 enum BuyerType {
   PERSON
   COMPANY
+}
+
+// Why an order carries no VAT (b2b app, M2.5). Null = taxed normally.
+enum TaxExemptReason {
+  REVERSE_CHARGE
+  CUSTOMER_EXEMPT
+}
+
+// Kind of a merchant-granted customer exemption (b2b app, M2.5).
+enum TaxExemptionKind {
+  REVERSE_CHARGE
+  FULL
+}
+
+// Outcome of one VIES consultation (b2b app, M2.5).
+enum VatCheckStatus {
+  VALID
+  INVALID
+  UNAVAILABLE
+}
+
+// Every VIES consultation (evidence + L2 cache). Rows are never updated.
+model VatNumberCheck {
+  id                 String         @id @default(uuid())
+  // Normalised, with the VIES prefix (EL..., XI...).
+  vat_number         String         @db.VarChar(32)
+  // VIES member-state code (EL, XI).
+  country_code       String         @db.VarChar(2)
+  status             VatCheckStatus
+  // MS_UNAVAILABLE, TIMEOUT, ...
+  error_code         String?        @db.VarChar(40)
+  name               String?
+  address            String?
+  request_identifier String?        @db.VarChar(64)
+  requester          String?        @db.VarChar(32)
+  // VIES requestDate.
+  request_date       DateTime?
+  checked_at         DateTime       @default(now())
+  // Who asked (no FK on purpose).
+  store_id           String?
+  // storefront | quote | order | kustom | dashboard
+  source             String         @db.VarChar(16)
+  // VIES_MODE that answered (live | mock): mock rows never serve live.
+  mode               String         @default("live") @db.VarChar(8)
+
+  @@index([vat_number, checked_at])
+}
+
+// A merchant's "don't collect tax" decision for one customer of one store.
+// At most one active (revoked_at null) row per (store, customer): enforced by
+// the partial unique index StoreCustomerTaxExemption_active (migration SQL).
+model StoreCustomerTaxExemption {
+  id          String           @id @default(uuid())
+  store_id    String
+  customer_id String
+  kind        TaxExemptionKind
+  vat_number  String?          @db.VarChar(32)
+  note        String?          @db.VarChar(500)
+  // User.id
+  created_by  String
+  created_at  DateTime         @default(now())
+  revoked_at  DateTime?
+  revoked_by  String?
+
+  store    Store    @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+
+  @@index([store_id, customer_id])
 }
 
 enum TaxBasis {
@@ -2110,6 +2188,10 @@ model Invoice {
   buyer_type          BuyerType?
   buyer_name          String
   buyer_email         String?
+  // b2b app M2.5: reverse charge / exemption snapshot (written on INSERT only).
+  tax_exempt_reason   TaxExemptReason?
+  buyer_vat_number    String?          @db.VarChar(32)
+  buyer_country       String?          @db.VarChar(2)
   order_number        String
   reason              String?
   snapshot            Json

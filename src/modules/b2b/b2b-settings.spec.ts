@@ -1,3 +1,4 @@
+import { DEFAULT_REVERSE_CHARGE_PRICING } from './b2b.types';
 import {
   DEFAULT_B2B_SETTINGS,
   parseB2bSettings,
@@ -29,6 +30,9 @@ describe('parseB2bSettings (lenient read)', () => {
       default_buyer_type: 'COMPANY',
       require_vat_number: false,
       org_number_countries: ['SE', 'FI'],
+      reverse_charge_enabled: false,
+      reverse_charge_pricing: 'net',
+      vies_requester_vat: null,
     });
     expect(
       parseB2bSettings({ default_buyer_type: 'robot' }).default_buyer_type,
@@ -88,5 +92,66 @@ describe('validateB2bSettings (strict write)', () => {
 
   it('ignores unknown keys (stored, never read)', () => {
     expect(validateB2bSettings({ b: 2 }).ok).toBe(true);
+  });
+});
+
+// M2.5: reverse-charge settings.
+describe('reverse-charge settings', () => {
+  it('defaults: off, net pricing, no requester', () => {
+    expect(DEFAULT_B2B_SETTINGS.reverse_charge_enabled).toBe(false);
+    expect(DEFAULT_B2B_SETTINGS.reverse_charge_pricing).toBe(
+      DEFAULT_REVERSE_CHARGE_PRICING,
+    );
+    expect(DEFAULT_B2B_SETTINGS.vies_requester_vat).toBeNull();
+  });
+
+  it('parses valid values and replaces invalid ones', () => {
+    expect(
+      parseB2bSettings({
+        reverse_charge_enabled: true,
+        reverse_charge_pricing: 'gross',
+        vies_requester_vat: 'se 5560 3607 9301',
+      }),
+    ).toMatchObject({
+      reverse_charge_enabled: true,
+      reverse_charge_pricing: 'gross',
+      vies_requester_vat: 'SE556036079301',
+    });
+    expect(
+      parseB2bSettings({
+        reverse_charge_enabled: 'yes',
+        reverse_charge_pricing: 'half',
+        vies_requester_vat: 'NO123456789MVA',
+      }),
+    ).toMatchObject({
+      reverse_charge_enabled: false,
+      reverse_charge_pricing: DEFAULT_REVERSE_CHARGE_PRICING,
+      vies_requester_vat: null,
+    });
+    // Greece is stored with its VIES prefix.
+    expect(
+      parseB2bSettings({ vies_requester_vat: 'GR123456789' })
+        .vies_requester_vat,
+    ).toBe('GR123456789');
+  });
+
+  it('validates the write strictly', () => {
+    expect(
+      validateB2bSettings({
+        reverse_charge_enabled: true,
+        reverse_charge_pricing: 'net',
+        vies_requester_vat: 'SE556036079301',
+      }).ok,
+    ).toBe(true);
+    expect(validateB2bSettings({ vies_requester_vat: null }).ok).toBe(true);
+    expect(validateB2bSettings({ vies_requester_vat: '' }).ok).toBe(true);
+    const bad = validateB2bSettings({
+      reverse_charge_enabled: 1,
+      reverse_charge_pricing: 'half',
+      vies_requester_vat: 'NO123456789MVA',
+    });
+    expect(bad.ok).toBe(false);
+    expect(bad.errors).toHaveLength(3);
+    expect(validateB2bSettings({ vies_requester_vat: 'SE123' }).ok).toBe(false);
   });
 });

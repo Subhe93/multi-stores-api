@@ -42,6 +42,27 @@ describe('renderCompanyBlock', () => {
         .text,
     ).toBe('Neronet <Academy> AB\nOrganisation number: 556036-0793');
   });
+
+  // b2b app M2.5: reverse-charge note, only when the order carries it.
+  it('appends the reverse-charge note with the validated number', () => {
+    const order = {
+      customer_type: 'COMPANY',
+      company_name: 'Muster GmbH',
+      org_number: 'HRB 1',
+      vat_number: null,
+      tax_exempt_reason: 'REVERSE_CHARGE',
+      vat_validation: { vat_number: 'DE123456789' },
+    };
+    expect(renderCompanyBlock(order, 'en').text).toBe(
+      'Muster GmbH\nOrganisation number: HRB 1\nReverse charge: VAT to be accounted for by the recipient (VAT no. DE123456789)',
+    );
+    expect(renderCompanyBlock(order, 'sv').text).toContain(
+      'Omvänd skattskyldighet',
+    );
+    expect(
+      renderCompanyBlock({ ...order, tax_exempt_reason: null }, 'en').text,
+    ).toBe('Muster GmbH\nOrganisation number: HRB 1');
+  });
 });
 
 describe('renderOrderTotals', () => {

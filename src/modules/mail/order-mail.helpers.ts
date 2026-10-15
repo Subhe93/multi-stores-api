@@ -497,6 +497,8 @@ const COMPANY_PHRASES: Record<
     reference: string;
     netTotal: string;
     totalInclVat: string;
+    /** M2.5: printed when the order carries reverse charge; {vat} = number. */
+    reverseChargeNote: string;
   }
 > = {
   en: {
@@ -506,6 +508,8 @@ const COMPANY_PHRASES: Record<
     reference: 'Reference',
     netTotal: 'Net total',
     totalInclVat: 'Total incl. VAT',
+    reverseChargeNote:
+      'Reverse charge: VAT to be accounted for by the recipient (VAT no. {vat})',
   },
   ar: {
     companyLabel: 'الشركة',
@@ -514,6 +518,8 @@ const COMPANY_PHRASES: Record<
     reference: 'المرجع',
     netTotal: 'الإجمالي الصافي',
     totalInclVat: 'الإجمالي شامل الضريبة',
+    reverseChargeNote:
+      'التكليف العكسي: يتحمّل المستلم احتساب ضريبة القيمة المضافة (الرقم الضريبي {vat})',
   },
   tr: {
     companyLabel: 'Şirket',
@@ -522,6 +528,8 @@ const COMPANY_PHRASES: Record<
     reference: 'Referans',
     netTotal: 'Net toplam',
     totalInclVat: 'KDV dahil toplam',
+    reverseChargeNote:
+      'Ters ifa (sorumlu sıfatıyla): KDV alıcı tarafından beyan edilir (KDV no. {vat})',
   },
   de: {
     companyLabel: 'Firma',
@@ -530,6 +538,8 @@ const COMPANY_PHRASES: Record<
     reference: 'Referenz',
     netTotal: 'Nettosumme',
     totalInclVat: 'Gesamt inkl. MwSt.',
+    reverseChargeNote:
+      'Steuerschuldnerschaft des Leistungsempfängers: Die Umsatzsteuer schuldet der Empfänger (USt-IdNr. {vat})',
   },
   fr: {
     companyLabel: 'Entreprise',
@@ -538,6 +548,8 @@ const COMPANY_PHRASES: Record<
     reference: 'Référence',
     netTotal: 'Total HT',
     totalInclVat: 'Total TTC',
+    reverseChargeNote:
+      'Autoliquidation : TVA due par le preneur (n° de TVA {vat})',
   },
   sv: {
     companyLabel: 'Företag',
@@ -546,6 +558,8 @@ const COMPANY_PHRASES: Record<
     reference: 'Referens',
     netTotal: 'Nettosumma',
     totalInclVat: 'Totalt inkl. moms',
+    reverseChargeNote:
+      'Omvänd skattskyldighet: köparen redovisar momsen (momsreg.nr {vat})',
   },
 };
 
@@ -566,10 +580,21 @@ export function renderCompanyBlock(
     org_number?: string | null;
     vat_number?: string | null;
     buyer_reference?: string | null;
+    /** b2b app M2.5: set when the order carries no VAT. */
+    tax_exempt_reason?: string | null;
+    vat_validation?: unknown;
   },
   locale?: string,
 ): { html: string; text: string } {
   if (order.customer_type !== 'COMPANY') return { html: '', text: '' };
+  const evidenceVat =
+    order.vat_validation &&
+    typeof order.vat_validation === 'object' &&
+    typeof (order.vat_validation as { vat_number?: unknown }).vat_number ===
+      'string'
+      ? (order.vat_validation as { vat_number: string }).vat_number
+      : '';
+  const rcVat = order.vat_number?.trim() || evidenceVat;
   const phrases = companyPhrases(locale);
   const lines = [
     order.company_name?.trim() || '',
@@ -581,6 +606,9 @@ export function renderCompanyBlock(
       : '',
     order.buyer_reference?.trim()
       ? `${phrases.reference}: ${order.buyer_reference.trim()}`
+      : '',
+    order.tax_exempt_reason === 'REVERSE_CHARGE'
+      ? phrases.reverseChargeNote.replace('{vat}', rcVat || '-')
       : '',
   ].filter(Boolean);
   if (lines.length === 0) return { html: '', text: '' };

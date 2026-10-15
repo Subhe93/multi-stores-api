@@ -31,7 +31,9 @@ ALTER TABLE "Invoice" ADD CONSTRAINT "Invoice_credit_ref_check" CHECK (
 -- Immutability. An issued document is never deleted and never changed,
 -- except for the PDF / email bookkeeping columns. The only way to delete is
 -- the dev reset script, which sets app.allow_invoice_delete = 'on' for its
--- own transaction (SET LOCAL).
+-- own transaction (SET LOCAL). The whole-row compare also covers columns
+-- added later (M2.5: tax_exempt_reason, buyer_vat_number, buyer_country):
+-- they are written on INSERT only and must never be backfilled.
 CREATE OR REPLACE FUNCTION invoice_guard() RETURNS trigger AS $$
 BEGIN
     IF TG_OP = 'DELETE' OR TG_OP = 'TRUNCATE' THEN

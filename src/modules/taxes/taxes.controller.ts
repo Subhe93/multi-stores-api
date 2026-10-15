@@ -17,6 +17,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import {
   CreateTaxClassDto,
   CreateTaxRateDto,
+  EcSalesQueryDto,
   ListTaxRatesQueryDto,
   TaxReportQueryDto,
   UpdatePlatformTaxSettingsDto,
@@ -25,6 +26,7 @@ import {
   UpdateTaxRateDto,
 } from './dto/tax.dto';
 import { TaxManagementService } from './tax-management.service';
+import { ecSalesCsv } from './ec-sales-report';
 
 const PLATFORM_SCOPE = { store_id: null };
 
@@ -204,6 +206,29 @@ export class TaxesController {
     const store = await this.taxes.storeOfCreator(userId);
     const rows = await this.taxes.report(query, { store_id: store.id });
     return this.respond(rows, query, 'tax-report');
+  }
+
+  /**
+   * EC sales list of reverse-charge sales (b2b app M2.5). Read-only and not
+   * app-gated, like the tax report: the data stays reportable after the
+   * app or reverse charge is switched off.
+   */
+  @Get('my/reports/ec-sales')
+  @Roles(UserRole.CREATOR)
+  async myEcSalesReport(
+    @CurrentUser('id') userId: string,
+    @Query() query: EcSalesQueryDto,
+  ) {
+    const store = await this.taxes.storeOfCreator(userId);
+    const report = await this.taxes.ecSalesReport(query, {
+      store_id: store.id,
+    });
+    if (query.format !== 'csv') return report;
+    const name = `ec-sales-${query.from}-${query.to ?? query.from}.csv`;
+    return new StreamableFile(Buffer.from('\uFEFF' + ecSalesCsv(report.rows)), {
+      type: 'text/csv; charset=utf-8',
+      disposition: `attachment; filename="${name}"`,
+    });
   }
 
   /**

@@ -284,3 +284,102 @@ export function sampleSvCreditNote(): InvoiceSnapshot {
     },
   };
 }
+
+/**
+ * b2b app M2.5: reverse-charge invoice (template v2) of an SE seller to a
+ * German company, 'net' pricing on an INCLUSIVE store (125 → 100.00, 49 →
+ * 39.20), paid via Kustom: one exempt 0 % row, the legal block.
+ */
+export function sampleSvReverseChargeInvoice(): InvoiceSnapshot {
+  const billing = {
+    name: 'Max Muster',
+    company_name: 'Muster GmbH',
+    line1: 'Musterstraße 1',
+    line2: null,
+    postal_code: '10115',
+    city: 'Berlin',
+    state: null,
+    country_code: 'DE',
+    phone: '+49 30 123456',
+  };
+  return {
+    version: 1,
+    template_version: 2,
+    kind: 'INVOICE',
+    locale: 'sv',
+    currency: 'SEK',
+    tax_mode: 'INCLUSIVE',
+    seller: { ...seller },
+    buyer: {
+      type: 'COMPANY',
+      name: 'Muster GmbH',
+      company_name: 'Muster GmbH',
+      org_number: 'HRB 123456 B',
+      vat_number: 'DE123456789',
+      reference: 'PO-4711',
+      email: 'einkauf@muster.de',
+      billing_address: billing,
+      shipping_address: { ...billing },
+    },
+    lines: [
+      {
+        kind: 'item',
+        description: 'Hoodie Classic',
+        sku: 'HD-100-BLK-L',
+        details: [{ label: 'Storlek', value: 'L' }],
+        qty: 4,
+        unit_net: 400,
+        vat_rate_bp: 0,
+        line_net: 1600,
+      },
+      {
+        kind: 'shipping',
+        description: 'DHL Europaket',
+        sku: null,
+        details: [],
+        qty: 1,
+        unit_net: 39.2,
+        vat_rate_bp: 0,
+        line_net: 39.2,
+      },
+    ],
+    vat_summary: [
+      {
+        label: 'Omvänd skattskyldighet',
+        rate_bp: 0,
+        net: 1639.2,
+        vat: 0,
+        gross: 1639.2,
+        exempt_reason: 'REVERSE_CHARGE',
+      },
+    ],
+    totals: { net: 1639.2, vat: 0, gross: 1639.2, layout: 'excl' },
+    payment: {
+      method: 'KUSTOM',
+      label: 'Kustom',
+      status: 'paid',
+      paid: true,
+      paid_at: '2026-10-15T09:20:00.000Z',
+    },
+    bank: null,
+    refs: {
+      order_number: 'ORD-RC42',
+      order_date: '2026-10-15',
+      invoice_number: '1042',
+      issue_date: '2026-10-15',
+      due_date: '2026-10-15',
+    },
+    tax_exemption: {
+      reason: 'REVERSE_CHARGE',
+      vat_number: 'DE123456789',
+      buyer_country: 'DE',
+      seller_vat_number: 'SE556036079301',
+      legal_text_key: 'REVERSE_CHARGE_ART_138',
+      vies: {
+        request_identifier: 'WAPIAAAAZ1x2y3',
+        checked_at: '2026-10-15T09:12:00.000Z',
+        name: 'Muster GmbH',
+      },
+    },
+  };
+}

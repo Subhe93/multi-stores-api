@@ -104,6 +104,25 @@ export interface PdfVatRow {
   net: number;
   vat: number;
   gross: number;
+  /** b2b app M2.5: set on the exempt (0 %) row only. */
+  exempt_reason?: 'REVERSE_CHARGE' | 'CUSTOMER_EXEMPT' | null;
+}
+
+/** b2b app M2.5: why the document carries no VAT (template v2). */
+export interface PdfTaxExemption {
+  reason: 'REVERSE_CHARGE' | 'CUSTOMER_EXEMPT';
+  /** Buyer VAT number. */
+  vat_number?: string | null;
+  buyer_country?: string | null;
+  seller_vat_number?: string | null;
+  legal_text_key?: 'REVERSE_CHARGE_ART_138' | 'CUSTOMER_EXEMPT' | null;
+  vies?: {
+    request_identifier?: string | null;
+    checked_at?: string | null;
+    /** YYYY-MM-DD in the seller's timezone; preferred over checked_at. */
+    checked_on?: string | null;
+    name?: string | null;
+  } | null;
 }
 
 export interface PdfTotals {
@@ -154,6 +173,8 @@ export interface SnapshotForPdf {
   payment: PdfPayment;
   bank?: PdfBank | null;
   refs: PdfRefs;
+  /** b2b app M2.5: absent / null = taxed (v1 snapshots never have it). */
+  tax_exemption?: PdfTaxExemption | null;
 }
 
 function address(a: InvoiceAddress | null | undefined): PdfAddress | null {
@@ -254,5 +275,6 @@ export function toSnapshotForPdf(stored: unknown): SnapshotForPdf {
       reason_code: s.refs?.reason_code ?? null,
       reason: s.refs?.reason,
     },
+    tax_exemption: s.tax_exemption ?? null,
   };
 }

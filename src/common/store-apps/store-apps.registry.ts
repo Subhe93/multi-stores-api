@@ -28,6 +28,9 @@ export interface StoreAppDefinition {
   // payload (GET /storefront/:slug → apps[key].settings). Off for every app
   // until an app actually needs it.
   expose_settings_to_storefront: boolean;
+  // When set (and settings are exposed), only these keys of the settings
+  // object reach the public payload; every other key stays private.
+  public_settings_keys?: string[];
 }
 
 export const STORE_APPS: Record<StoreAppKey, StoreAppDefinition> = {
@@ -46,8 +49,18 @@ export const STORE_APPS: Record<StoreAppKey, StoreAppDefinition> = {
     requires_independent: false,
     depends_on: [],
     // The storefront reads allow_company / default_buyer_type from the
-    // public payload (apps.b2b.settings) to seed the buyer-type toggle.
+    // public payload (apps.b2b.settings) to seed the buyer-type toggle, and
+    // the reverse-charge switch / pricing to show the VAT-number check.
+    // vies_requester_vat stays private.
     expose_settings_to_storefront: true,
+    public_settings_keys: [
+      'allow_company',
+      'default_buyer_type',
+      'require_vat_number',
+      'org_number_countries',
+      'reverse_charge_enabled',
+      'reverse_charge_pricing',
+    ],
   },
   invoices: {
     key: 'invoices',

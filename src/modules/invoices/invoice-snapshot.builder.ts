@@ -7,6 +7,7 @@ import {
 } from '../../common/money/tax.util';
 import { deriveNetTotals } from '../taxes/tax.service';
 import { formatPaymentMethod } from '../mail/order-mail.helpers';
+import type { TaxExemptReason } from '../b2b/b2b.types';
 import {
   INVOICE_SNAPSHOT_VERSION,
   INVOICE_TEMPLATE_VERSION,
@@ -17,6 +18,7 @@ import {
   type InvoiceLineDetail,
   type InvoiceSeller,
   type InvoiceSnapshot,
+  type InvoiceTaxExemption,
   type InvoiceVatSummaryRow,
 } from './invoices.types';
 
@@ -100,6 +102,10 @@ export interface SnapshotOrder {
   org_number?: string | null;
   vat_number?: string | null;
   buyer_reference?: string | null;
+  /** b2b app M2.5: why the order carries no VAT (null = taxed). */
+  tax_exempt_reason?: TaxExemptReason | null;
+  /** b2b app M2.5: VatEvidence JSON of the exemption decision. */
+  vat_validation?: unknown;
   address?: SnapshotOrderAddress | null;
   customer?: {
     first_name?: string | null;
@@ -235,6 +241,80 @@ function copyAddress(
   };
 }
 
+const EXEMPT_REASONS: readonly TaxExemptReason[] = [
+  'REVERSE_CHARGE',
+  'CUSTOMER_EXEMPT',
+];
+
+function exemptReasonOf(v: unknown): TaxExemptReason | null {
+  return EXEMPT_REASONS.includes(v as TaxExemptReason)
+    ? (v as TaxExemptReason)
+    : null;
+}
+
+/** The fields of an order's VatEvidence JSON the invoice prints. */
+function evidenceOf(raw: unknown): {
+  source: string | null;
+  vat_number: string | null;
+  destination_country: string | null;
+  request_identifier: string | null;
+  checked_at: string | null;
+  name: string | null;
+} | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null);
+  return {
+    source: str(o.source),
+    vat_number: str(o.vat_number),
+    destination_country: str(o.destination_country),
+    request_identifier: str(o.request_identifier),
+    checked_at: str(o.checked_at),
+    name: str(o.name),
+  };
+}
+
+/**
+ * b2b app M2.5: the snapshot's exemption block, or null for a taxed order
+ * (then nothing about the document changes).
+ */
+function buildTaxExemption(
+  order: SnapshotOrder,
+  buyer: InvoiceBuyer,
+  seller: InvoiceSeller,
+  timeZone: string,
+): InvoiceTaxExemption | null {
+  const reason = exemptReasonOf(order.tax_exempt_reason);
+  if (!reason) return null;
+  const ev = evidenceOf(order.vat_validation);
+  const fromVies = ev?.source === 'VIES';
+  return {
+    reason,
+    vat_number: buyer.vat_number ?? ev?.vat_number ?? null,
+    buyer_country:
+      (order.address?.country_code || ev?.destination_country || '')
+        .trim()
+        .toUpperCase() || null,
+    seller_vat_number: seller.vat_number || null,
+    legal_text_key:
+      reason === 'REVERSE_CHARGE'
+        ? 'REVERSE_CHARGE_ART_138'
+        : 'CUSTOMER_EXEMPT',
+    vies:
+      fromVies && ev
+        ? {
+            request_identifier: ev.request_identifier,
+            checked_at: ev.checked_at,
+            // Printed like every other invoice date: the seller's local day.
+            checked_on: ev.checked_at
+              ? isoDateInZone(ev.checked_at, timeZone)
+              : null,
+            name: ev.name,
+          }
+        : null,
+  };
+}
+
 function buildBuyer(order: SnapshotOrder): InvoiceBuyer {
   const type = order.customer_type ?? 'PERSON';
   const company = type === 'COMPANY';
@@ -253,7 +333,15 @@ function buildBuyer(order: SnapshotOrder): InvoiceBuyer {
     name,
     company_name: company ? order.company_name || null : null,
     org_number: company ? order.org_number || null : null,
-    vat_number: company ? order.vat_number || null : null,
+    // b2b app M2.5: an exempt order prints the VAT number the exemption was
+    // decided for (the validated one); every other order is unchanged.
+    vat_number: company
+      ? (exemptReasonOf(order.tax_exempt_reason)
+          ? evidenceOf(order.vat_validation)?.vat_number
+          : null) ||
+        order.vat_number ||
+        null
+      : null,
     reference: company ? order.buyer_reference || null : null,
     email: order.customer?.user?.email || null,
     // The Address row is mutable and shared, so it is copied, not referenced.
@@ -267,6 +355,7 @@ interface RawTaxLine {
   rate_bp: number;
   taxable_amount: number;
   tax_amount: number;
+  exempt_reason?: TaxExemptReason;
 }
 
 function parseTaxLines(raw: unknown): RawTaxLine[] {
@@ -278,6 +367,9 @@ function parseTaxLines(raw: unknown): RawTaxLine[] {
       rate_bp: Number(l.rate_bp) || 0,
       taxable_amount: Number(l.taxable_amount) || 0,
       tax_amount: Number(l.tax_amount) || 0,
+      ...(exemptReasonOf(l.exempt_reason)
+        ? { exempt_reason: exemptReasonOf(l.exempt_reason)! }
+        : {}),
     }));
 }
 
@@ -394,7 +486,9 @@ export function buildInvoiceSnapshot(
     rate_bp: number;
     net: number;
     vat: number;
+    exempt_reason?: TaxExemptReason;
   }[] = [];
+  const exemptReason = exemptReasonOf(order.tax_exempt_reason);
   const taxLines = parseTaxLines(order.tax_lines);
   if (taxLines.length) {
     for (const t of taxLines) {
@@ -403,6 +497,7 @@ export function buildInvoiceSnapshot(
         rate_bp: t.rate_bp,
         net: toMinor(t.taxable_amount),
         vat: toMinor(t.tax_amount),
+        ...(t.exempt_reason ? { exempt_reason: t.exempt_reason } : {}),
       });
     }
   } else if (vat !== 0) {
@@ -417,7 +512,14 @@ export function buildInvoiceSnapshot(
   // summary's gross column adds up to the total.
   const rowsNet = rows.reduce((s, r) => s + r.net, 0);
   if (net - rowsNet > 0) {
-    rows.push({ label: null, rate_bp: 0, net: net - rowsNet, vat: 0 });
+    rows.push({
+      label: null,
+      rate_bp: 0,
+      net: net - rowsNet,
+      vat: 0,
+      // An exempt order's untaxed remainder is exempt for the same reason.
+      ...(exemptReason ? { exempt_reason: exemptReason } : {}),
+    });
   }
   const vat_summary: InvoiceVatSummaryRow[] = rows.map((r) => ({
     label: r.label,
@@ -425,9 +527,16 @@ export function buildInvoiceSnapshot(
     net: toMajor(r.net),
     vat: toMajor(r.vat),
     gross: toMajor(r.net + r.vat),
+    ...(r.exempt_reason ? { exempt_reason: r.exempt_reason } : {}),
   }));
 
   const buyer = buildBuyer(order);
+  const taxExemption = buildTaxExemption(
+    order,
+    buyer,
+    input.seller,
+    input.timezone,
+  );
   const isCod = order.payment_method === 'COD';
   const dueDate = input.paid
     ? input.issueDate
@@ -451,7 +560,11 @@ export function buildInvoiceSnapshot(
       net: toMajor(net),
       vat: toMajor(vat),
       gross: toMajor(gross),
-      layout: buyer.type === 'COMPANY' || !inclusive ? 'excl' : 'incl',
+      // An exempt document always shows Net / VAT 0 / Total (excl).
+      layout:
+        buyer.type === 'COMPANY' || !inclusive || taxExemption
+          ? 'excl'
+          : 'incl',
     },
     payment: {
       method: order.payment_method,
@@ -468,6 +581,7 @@ export function buildInvoiceSnapshot(
       issue_date: input.issueDate,
       due_date: dueDate,
     },
+    ...(taxExemption ? { tax_exemption: taxExemption } : {}),
   };
 }
 
@@ -529,6 +643,10 @@ export function buildCreditSnapshot(input: BuildCreditInput): InvoiceSnapshot {
       reason_code: input.reasonCode ?? null,
       reason: input.reason ?? null,
     },
+    // b2b app M2.5: a credit note of an exempt invoice is exempt the same way.
+    ...(original.tax_exemption
+      ? { tax_exemption: original.tax_exemption }
+      : {}),
   };
 
   if (input.amount === 'full' && toMinor(input.priorCredited) === 0) {
@@ -562,14 +680,27 @@ export function buildCreditSnapshot(input: BuildCreditInput): InvoiceSnapshot {
 
   // Weights: the invoice's gross per VAT row; any gap to the total (no
   // summary rows at all, or rounding) is weighted at 0 %.
-  const weights = original.vat_summary.map((r) => ({
+  const weights: {
+    label: string | null;
+    rate_bp: number;
+    gross: number;
+    exempt_reason?: TaxExemptReason;
+  }[] = original.vat_summary.map((r) => ({
     label: r.label,
     rate_bp: r.rate_bp,
     gross: toMinor(r.gross),
+    ...(r.exempt_reason ? { exempt_reason: r.exempt_reason } : {}),
   }));
   const weightSum = weights.reduce((s, w) => s + w.gross, 0);
   if (totalGross - weightSum > 0) {
-    weights.push({ label: null, rate_bp: 0, gross: totalGross - weightSum });
+    // On an exempt invoice the untaxed gap is exempt for the same reason.
+    const reason = original.tax_exemption?.reason;
+    weights.push({
+      label: null,
+      rate_bp: 0,
+      gross: totalGross - weightSum,
+      ...(reason ? { exempt_reason: reason } : {}),
+    });
   }
   const shares = allocateLargestRemainder(
     credit,
@@ -603,6 +734,7 @@ export function buildCreditSnapshot(input: BuildCreditInput): InvoiceSnapshot {
       net: toMajor(-net),
       vat: toMajor(-vat),
       gross: toMajor(-share),
+      ...(w.exempt_reason ? { exempt_reason: w.exempt_reason } : {}),
     });
   });
 

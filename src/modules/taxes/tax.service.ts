@@ -15,7 +15,11 @@ import {
   roundSymmetric,
 } from '../../common/money/tax.util';
 import { isEuCountry } from './tax-territory';
-import type { BuyerType } from '../b2b/b2b.types';
+import type {
+  BuyerType,
+  ReverseChargePricing,
+  TaxExemptReason,
+} from '../b2b/b2b.types';
 
 /**
  * Tax engine (API-CONTRACT-TAX.md §2). Two halves:
@@ -49,9 +53,15 @@ export interface TaxContext {
   /**
    * b2b app: who is buying. Only changes `display_mode` of the result (a
    * company sees net prices); amounts are the same for both (L11). Absent =
-   * PERSON. Reverse charge would plug in here later.
+   * PERSON.
    */
   buyerType?: BuyerType;
+  /**
+   * b2b app M2.5: the order carries no VAT (reverse charge / customer
+   * exemption), decided by the b2b module. Every line and the shipping are
+   * taxed at 0 % and one synthetic 0 % breakdown row explains why.
+   */
+  exemption?: { reason: TaxExemptReason };
 }
 
 export interface TaxClassRow {
@@ -116,6 +126,8 @@ export interface TaxLine {
   rate_bp: number;
   taxable_amount: number;
   tax_amount: number;
+  /** Only on the synthetic 0 % row of an exempt order (M2.5). */
+  exempt_reason?: TaxExemptReason;
 }
 
 export interface TaxComputeItem {
@@ -151,6 +163,8 @@ export interface TaxComputeResult {
   net_shipping: number;
   /** total - tax_total; always equals net_items + net_shipping. */
   net_total: number;
+  /** M2.5: present (only) when the context carried an exemption. */
+  tax_exempt_reason?: TaxExemptReason;
 }
 
 /** Net/gross split of a stored order, derived the same way everywhere. */
@@ -462,6 +476,163 @@ function destinationFor(
   }
 }
 
+// ── Exemption (b2b app, M2.5) ───────────────────────────────────────────────
+
+/** Label of the synthetic 0 % row of an exempt order, per locale. */
+export const EXEMPT_LABELS: Record<TaxExemptReason, Record<string, string>> = {
+  REVERSE_CHARGE: {
+    en: 'Reverse charge',
+    sv: 'Omvänd skattskyldighet',
+    de: 'Steuerschuldnerschaft des Leistungsempfängers',
+    fr: 'Autoliquidation',
+    ar: 'التكليف العكسي',
+    tr: 'Ters ifa (sorumlu sıfatıyla)',
+  },
+  CUSTOMER_EXEMPT: {
+    en: 'VAT exempt',
+    sv: 'Momsbefriad',
+    de: 'Von der Umsatzsteuer befreit',
+    fr: 'Exonéré de TVA',
+    ar: 'معفى من ضريبة القيمة المضافة',
+    tr: 'KDV muaf',
+  },
+};
+
+export function exemptLabel(
+  reason: TaxExemptReason,
+  locale: string | null | undefined,
+): string {
+  return pickLabel(EXEMPT_LABELS[reason], locale);
+}
+
+/** Input of exemptNetPrices: the gross figures of an INCLUSIVE order. */
+export interface ExemptNetPricesInput {
+  ctx: TaxContext;
+  data: TaxData;
+  currency: string;
+  lines: {
+    unit_price: number;
+    quantity: number;
+    tax_class_id: string | null;
+    tax_exempt: boolean;
+  }[];
+  /** Shipping-method costs to net (every offered method, any order). */
+  shippingCosts: number[];
+  discount_amount: number;
+  /** Subtotal the discount was computed against (gross). */
+  subtotal_gross: number;
+  /** b2b setting; 'gross' keeps every amount unchanged. Default 'net'. */
+  pricing?: ReverseChargePricing;
+}
+
+export interface ExemptNetPricesResult {
+  unit_prices: number[];
+  /** unit_prices[i] x quantity (exact in minor units). */
+  line_totals: number[];
+  subtotal: number;
+  shipping_costs: number[];
+  discount_amount: number;
+  /** Registration-country rate each line was netted with (0 = unchanged). */
+  line_rate_bp: number[];
+  /** Rate the shipping costs were netted with. */
+  shipping_rate_bp: number;
+}
+
+/** `amount` without `rateBp` of included VAT, rounded to minor units. */
+export function netOfRate(
+  amount: number,
+  rateBp: number,
+  currency: string,
+): number {
+  const factor = 10 ** currencyDecimals(currency);
+  const minor = Math.round(Number(amount || 0) * factor);
+  const rate = clampRateBp(rateBp);
+  if (!rate) return minor / factor;
+  return roundSymmetric((minor * MAX_RATE_BP) / (MAX_RATE_BP + rate)) / factor;
+}
+
+/**
+ * What an exempt company pays on an INCLUSIVE store with the 'net' pricing
+ * (D5): every unit price without the registration-country VAT of its class
+ * (the M2 "excl. VAT" estimate), line totals as unit x quantity so Kustom's
+ * unit x qty stays exact, shipping costs netted with the shipping rate of
+ * the registration country, the discount scaled by subtotal_net /
+ * subtotal_gross. Identity for EXCLUSIVE stores (prices are already net)
+ * and for the 'gross' pricing (Shopify: the unchanged price is the net).
+ */
+export function exemptNetPrices(
+  input: ExemptNetPricesInput,
+): ExemptNetPricesResult {
+  const { ctx, data, currency } = input;
+  const factor = 10 ** currencyDecimals(currency);
+  const toMinor = (major: unknown) => Math.round(Number(major || 0) * factor);
+  const toMajor = (minor: number) => minor / factor;
+  const identity =
+    ctx.pricingMode !== TaxPricingMode.INCLUSIVE || input.pricing === 'gross';
+  const registration: TaxDestination = { country: ctx.taxCountry };
+
+  let highest: { rate_bp: number; class_id: string | null } | null = null;
+  const lineRates = input.lines.map((line) => {
+    if (identity) return 0;
+    const resolved = resolveRatesForLine(ctx, data, line, registration);
+    const rate = effectiveRateBp(resolved.rates);
+    if (resolved.rates.length && (!highest || rate > highest.rate_bp)) {
+      highest = { rate_bp: rate, class_id: resolved.class_id };
+    }
+    return rate;
+  });
+  const unitMinor = input.lines.map((line, i) => {
+    const gross = toMinor(line.unit_price);
+    return identity || !lineRates[i]
+      ? gross
+      : roundSymmetric((gross * MAX_RATE_BP) / (MAX_RATE_BP + lineRates[i]));
+  });
+  const lineMinor = unitMinor.map((u, i) => u * input.lines[i].quantity);
+  const subtotalMinor = lineMinor.reduce((s, x) => s + x, 0);
+
+  let shippingRate = 0;
+  if (!identity) {
+    const shippingClassId =
+      ctx.shippingTaxClassId ??
+      (highest as { class_id: string | null } | null)?.class_id ??
+      null;
+    if (shippingClassId) {
+      shippingRate = effectiveRateBp(
+        resolveRatesForLine(
+          ctx,
+          data,
+          { tax_class_id: shippingClassId, tax_exempt: false },
+          registration,
+          { forShipping: true },
+        ).rates,
+      );
+    }
+  }
+  const shippingCosts = input.shippingCosts.map((c) =>
+    shippingRate ? netOfRate(c, shippingRate, currency) : c,
+  );
+
+  const discountGross = toMinor(input.discount_amount);
+  const subtotalGross = toMinor(input.subtotal_gross);
+  const discountMinor =
+    identity || !discountGross || !subtotalGross
+      ? discountGross
+      : Math.min(
+          subtotalMinor,
+          roundSymmetric((discountGross * subtotalMinor) / subtotalGross),
+        );
+
+  return {
+    unit_prices: unitMinor.map(toMajor),
+    line_totals: lineMinor.map(toMajor),
+    subtotal: identity ? input.subtotal_gross : toMajor(subtotalMinor),
+    shipping_costs: shippingCosts,
+    discount_amount: toMajor(discountMinor),
+    line_rate_bp: lineRates,
+    shipping_rate_bp: shippingRate,
+  };
+}
+
 /**
  * Full tax computation for an order (contract §2 "Amounts"): allocate the
  * discount across the product lines, tax each line and the shipping,
@@ -512,8 +683,12 @@ export function computeTaxes(input: TaxComputeInput): TaxComputeResult {
   let grossSumMinor = 0;
   let netItemsMinor = 0;
   let highest: { rate_bp: number; class_id: string | null } | null = null;
+  // b2b app M2.5: an exempt order resolves classes (for the class key) but
+  // applies no rate anywhere.
+  const exemption = ctx.exemption ?? null;
   const items: TaxComputeItem[] = input.lines.map((line, i) => {
     const resolved = resolveRatesForLine(ctx, data, line, destination);
+    if (exemption) resolved.rates = [];
     const base = lineMinor[i] - shares[i];
     const { net, tax, applied } = taxLineMinor(base, resolved.rates, mode);
     const rateBp = effectiveRateBp(resolved.rates);
@@ -545,7 +720,7 @@ export function computeTaxes(input: TaxComputeInput): TaxComputeResult {
     null;
   // The rate is resolved even for free shipping: a Kustom session prices
   // every offered option with it, not only the selected (possibly free) one.
-  if (shippingClassId) {
+  if (shippingClassId && !exemption) {
     const resolved = resolveRatesForLine(
       ctx,
       data,
@@ -585,14 +760,26 @@ export function computeTaxes(input: TaxComputeInput): TaxComputeResult {
       ? 'excl'
       : 'incl';
 
-  const tax_lines: TaxLine[] = Array.from(groups.values())
-    .sort((a, b) => b.rate_bp - a.rate_bp || a.label.localeCompare(b.label))
-    .map((g) => ({
-      label: g.label,
-      rate_bp: g.rate_bp,
-      taxable_amount: toMajor(g.taxable),
-      tax_amount: toMajor(g.tax),
-    }));
+  const tax_lines: TaxLine[] = exemption
+    ? netTotalMinor !== 0
+      ? [
+          {
+            label: exemptLabel(exemption.reason, input.locale),
+            rate_bp: 0,
+            taxable_amount: toMajor(netTotalMinor),
+            tax_amount: 0,
+            exempt_reason: exemption.reason,
+          },
+        ]
+      : []
+    : Array.from(groups.values())
+        .sort((a, b) => b.rate_bp - a.rate_bp || a.label.localeCompare(b.label))
+        .map((g) => ({
+          label: g.label,
+          rate_bp: g.rate_bp,
+          taxable_amount: toMajor(g.taxable),
+          tax_amount: toMajor(g.tax),
+        }));
 
   return {
     items,
@@ -608,6 +795,7 @@ export function computeTaxes(input: TaxComputeInput): TaxComputeResult {
     net_items: toMajor(netItemsMinor),
     net_shipping: toMajor(netShippingMinor),
     net_total: toMajor(netTotalMinor),
+    ...(exemption ? { tax_exempt_reason: exemption.reason } : {}),
   };
 }
 

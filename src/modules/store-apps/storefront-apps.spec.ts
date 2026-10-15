@@ -70,8 +70,12 @@ describe('buildStorefrontApps', () => {
   });
 
   it('exposes settings for an app that opts in', () => {
+    // No whitelist: the whole object is exposed.
     const registry = registryWith({
-      b2b: { expose_settings_to_storefront: true },
+      b2b: {
+        expose_settings_to_storefront: true,
+        public_settings_keys: undefined,
+      },
     });
     expect(
       buildStorefrontApps(
@@ -100,6 +104,67 @@ describe('buildStorefrontApps', () => {
         registry,
       ),
     ).toEqual({ markets: { enabled: true } });
+  });
+});
+
+// b2b app M2.5 (D13): only whitelisted keys reach the public payload.
+describe('public_settings_keys (b2b)', () => {
+  const row = (settings: unknown) => ({
+    app_key: 'b2b',
+    available: true,
+    enabled: true,
+    settings,
+  });
+
+  it('keeps the four M2 keys byte-identical while reverse charge is off', () => {
+    const settings = {
+      allow_company: true,
+      default_buyer_type: 'COMPANY',
+      require_vat_number: false,
+      org_number_countries: ['SE', 'FI'],
+    };
+    expect(buildStorefrontApps([row(settings)]).b2b).toEqual({
+      enabled: true,
+      settings,
+    });
+    expect(
+      JSON.stringify(buildStorefrontApps([row(settings)]).b2b?.settings),
+    ).toBe(JSON.stringify(settings));
+  });
+
+  it('drops private / unknown keys (vies_requester_vat)', () => {
+    const apps = buildStorefrontApps([
+      row({
+        allow_company: true,
+        vies_requester_vat: 'SE556036079301',
+        secret: 'x',
+        reverse_charge_enabled: false,
+      }),
+    ]);
+    expect(apps.b2b?.settings).toEqual({
+      allow_company: true,
+      reverse_charge_enabled: false,
+    });
+  });
+
+  it('adds the effective reverse_charge_pricing while reverse charge is on', () => {
+    expect(
+      buildStorefrontApps([row({ reverse_charge_enabled: true })]).b2b
+        ?.settings,
+    ).toEqual({ reverse_charge_enabled: true, reverse_charge_pricing: 'net' });
+    expect(
+      buildStorefrontApps([
+        row({ reverse_charge_enabled: true, reverse_charge_pricing: 'gross' }),
+      ]).b2b?.settings,
+    ).toEqual({
+      reverse_charge_enabled: true,
+      reverse_charge_pricing: 'gross',
+    });
+    expect(
+      buildStorefrontApps([
+        row({ reverse_charge_enabled: true, reverse_charge_pricing: 'odd' }),
+      ]).b2b?.settings,
+    ).toEqual({ reverse_charge_enabled: true, reverse_charge_pricing: 'net' });
   });
 });
 

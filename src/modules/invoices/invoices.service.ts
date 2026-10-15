@@ -119,6 +119,9 @@ const summarySelect = {
   trigger: true,
   reason: true,
   issued_at: true,
+  tax_exempt_reason: true,
+  buyer_vat_number: true,
+  buyer_country: true,
   credited_invoice: { select: { id: true, number: true } },
   credit_notes: { select: { gross_total: true } },
 } satisfies Prisma.InvoiceSelect;
@@ -275,7 +278,11 @@ export class InvoicesService {
 
     const profile = await this.profiles.find(storeId);
     const factor = 10 ** currencyDecimals(order.currency);
-    const chargesVat = Math.round(Number(order.tax_amount) * factor) !== 0;
+    // b2b app M2.5: a reverse-charge invoice carries no VAT but must print
+    // the seller's VAT number (art. 226 VAT Directive), so it is required.
+    const chargesVat =
+      Math.round(Number(order.tax_amount) * factor) !== 0 ||
+      order.tax_exempt_reason === 'REVERSE_CHARGE';
     const completeness = profileCompleteness(profile, { chargesVat });
     if (!profile || !completeness.complete) {
       throw invoiceErrors.profileIncomplete(completeness.missing);
@@ -374,6 +381,15 @@ export class InvoicesService {
               buyer_name: snapshot.buyer.name,
               buyer_email: snapshot.buyer.email,
               order_number: order.order_number,
+              // b2b app M2.5: set on INSERT only (the immutability trigger
+              // refuses any later change); absent for taxed documents.
+              ...(snapshot.tax_exemption
+                ? {
+                    tax_exempt_reason: snapshot.tax_exemption.reason,
+                    buyer_vat_number: snapshot.tax_exemption.vat_number,
+                    buyer_country: snapshot.tax_exemption.buyer_country,
+                  }
+                : {}),
               snapshot: snapshot as unknown as Prisma.InputJsonValue,
               snapshot_version: snapshot.version,
               snapshot_sha256: snapshotSha256(snapshot),
@@ -536,6 +552,15 @@ export class InvoicesService {
               buyer_name: original.buyer_name,
               buyer_email: original.buyer_email,
               order_number: original.order_number,
+              // b2b app M2.5: a credit note inherits the invoice's exemption
+              // columns (INSERT only, like the invoice itself).
+              ...(original.tax_exempt_reason
+                ? {
+                    tax_exempt_reason: original.tax_exempt_reason,
+                    buyer_vat_number: original.buyer_vat_number,
+                    buyer_country: original.buyer_country,
+                  }
+                : {}),
               reason: opts.reason ?? null,
               snapshot: snapshot as unknown as Prisma.InputJsonValue,
               snapshot_version: snapshot.version,
@@ -775,6 +800,9 @@ export class InvoicesService {
         vat_total: true,
         gross_total: true,
         snapshot: true,
+        tax_exempt_reason: true,
+        buyer_vat_number: true,
+        buyer_country: true,
         credited_invoice: { select: { number: true } },
       },
     });
@@ -793,6 +821,9 @@ export class InvoicesService {
       vat_total: Number(r.vat_total),
       gross_total: Number(r.gross_total),
       snapshot: r.snapshot as unknown as InvoiceSnapshot,
+      tax_exempt_reason: r.tax_exempt_reason,
+      buyer_vat_number: r.buyer_vat_number,
+      buyer_country: r.buyer_country,
     }));
     return invoicesToCsv(csvRows);
   }
@@ -940,6 +971,9 @@ export class InvoicesService {
       reason: row.reason,
       pdf_available: process.env.INVOICE_PDF_ENGINE !== 'off',
       remaining_creditable: remaining,
+      tax_exempt_reason: row.tax_exempt_reason ?? null,
+      buyer_vat_number: row.buyer_vat_number ?? null,
+      buyer_country: row.buyer_country ?? null,
     };
   }
 

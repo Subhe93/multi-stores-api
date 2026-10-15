@@ -317,7 +317,7 @@ describe('buildInvoiceSnapshot (fields)', () => {
       due_date: '2026-10-14',
       invoice_number: '',
     });
-    expect(s.template_version).toBe(1);
+    expect(s.template_version).toBe(2);
     expect(s.version).toBe(1);
   });
 

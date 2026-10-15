@@ -44,9 +44,44 @@ describe('invoices CSV', () => {
       },
     ]);
     const [header, row] = csv.split('\r\n');
-    expect(header.split(',')).toHaveLength(17);
+    expect(header.split(',')).toHaveLength(19);
+    expect(header.endsWith(',tax_exempt_reason,buyer_country')).toBe(true);
+    // A taxed document leaves the two reverse-charge cells empty.
     expect(row).toBe(
-      'CN-1,CREDIT_NOTE,2026-10-14,,1001,ORD-1,COMPANY,"\'=HYPERLINK(""x"")",556036-0793,SE556036079301,STRIPE,true,SEK,-96.00,-21.20,-117.20,"25%:-20.00;12%:-1.20"',
+      'CN-1,CREDIT_NOTE,2026-10-14,,1001,ORD-1,COMPANY,"\'=HYPERLINK(""x"")",556036-0793,SE556036079301,STRIPE,true,SEK,-96.00,-21.20,-117.20,"25%:-20.00;12%:-1.20",,',
     );
+  });
+
+  it('reverse charge: reason, validated buyer VAT number and country; 0 % row', () => {
+    const snapshot = {
+      buyer: { org_number: 'HRB 1234', vat_number: 'DE 123 456 789' },
+      payment: { method: 'KUSTOM' },
+      vat_summary: [{ rate_bp: 0, vat: 0, exempt_reason: 'REVERSE_CHARGE' }],
+    } as unknown as InvoiceSnapshot;
+    const csv = invoicesToCsv([
+      {
+        number: 'INV-7',
+        kind: 'INVOICE',
+        issue_date: '2026-10-15',
+        due_date: '2026-10-15',
+        credited_number: null,
+        order_number: 'ORD-7',
+        buyer_type: 'COMPANY',
+        buyer_name: 'Muster GmbH',
+        currency: 'EUR',
+        paid: true,
+        net_total: 139.2,
+        vat_total: 0,
+        gross_total: 139.2,
+        snapshot,
+        tax_exempt_reason: 'REVERSE_CHARGE',
+        buyer_vat_number: 'DE123456789',
+        buyer_country: 'DE',
+      },
+    ]);
+    const row = csv.split('\r\n')[1].split(',');
+    expect(row[9]).toBe('DE123456789');
+    expect(row[16]).toBe('0%:0.00');
+    expect(row.slice(17)).toEqual(['REVERSE_CHARGE', 'DE']);
   });
 });

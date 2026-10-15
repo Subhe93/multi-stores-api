@@ -3,12 +3,14 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { Prisma, StoreType, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   CreateTaxClassDto,
   CreateTaxRateDto,
+  EcSalesQueryDto,
   ListTaxRatesQueryDto,
   TaxReportQueryDto,
   UpdatePlatformTaxSettingsDto,
@@ -18,6 +20,15 @@ import {
 } from './dto/tax.dto';
 import { SEED_CLASSES, TAX_LABEL, flattenSeedRates } from './tax-seed';
 import { TaxService, taxStoreSelect } from './tax.service';
+import { StoreAppsService } from '../store-apps/store-apps.service';
+import { resolveStoreCurrency } from '../../common/money/currency.util';
+import {
+  DEFAULT_EC_SALES_TIMEZONE,
+  aggregateEcSales,
+  zonedDayStart,
+  type EcSalesDocument,
+  type EcSalesReport,
+} from './ec-sales-report';
 
 /**
  * Tax administration (API-CONTRACT-TAX.md §3): classes and rates of one
@@ -63,6 +74,9 @@ export class TaxManagementService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tax: TaxService,
+    // b2b app M2.5 (EC sales list source): optional and trailing so
+    // positional constructors stay valid; absent = orders source.
+    @Optional() private readonly storeApps?: StoreAppsService,
   ) {}
 
   // ── Scope helpers ─────────────────────────────────────────────────────────
@@ -663,6 +677,189 @@ export class TaxManagementService {
           a.label.localeCompare(b.label) ||
           a.currency.localeCompare(b.currency),
       );
+  }
+
+  /**
+   * EC sales list of reverse-charge sales (b2b app M2.5, D11): issued
+   * invoices and credit notes (signed) when the invoices app is on, else
+   * paid / refunded orders (a refunded order adds a negative mirror dated
+   * at its REFUNDED timeline entry, else its last update; partial refunds
+   * are not netted). Periods follow the seller's timezone. Grouped per
+   * period x buyer country x buyer VAT number x currency, with the amount
+   * also in the store currency (via the order's fx_rate_snapshot).
+   */
+  async ecSalesReport(
+    query: EcSalesQueryDto,
+    scope: { store_id: string },
+  ): Promise<EcSalesReport> {
+    // Calendar days (invoice issue dates are DATE columns).
+    const from = new Date(`${query.from}T00:00:00.000Z`);
+    const to = new Date(`${query.to ?? query.from}T23:59:59.999Z`);
+    if (
+      Number.isNaN(from.getTime()) ||
+      Number.isNaN(to.getTime()) ||
+      from > to
+    ) {
+      throw new BadRequestException({
+        code: 'TAX_REPORT_RANGE_INVALID',
+        message: 'from must be a date on or before to.',
+      });
+    }
+    const period = query.period ?? 'month';
+    // Periods follow the seller's timezone (legal profile, default
+    // Europe/Stockholm); order timestamps are bounded by its local days.
+    const profile = await this.prisma.storeLegalProfile
+      .findFirst({
+        where: { store_id: scope.store_id, key: 'default' },
+        select: { timezone: true },
+      })
+      .catch(() => null);
+    const timeZone = profile?.timezone || DEFAULT_EC_SALES_TIMEZONE;
+    const fromLocal = zonedDayStart(query.from, timeZone);
+    const toLocal = new Date(
+      zonedDayStart(
+        new Date(
+          Date.parse(`${query.to ?? query.from}T00:00:00.000Z`) + 86_400_000,
+        )
+          .toISOString()
+          .slice(0, 10),
+        timeZone,
+      ).getTime() - 1,
+    );
+    const [store, platform] = await Promise.all([
+      this.prisma.store.findUnique({
+        where: { id: scope.store_id },
+        select: { store_type: true, currency: true },
+      }),
+      this.prisma.platformConfig.findFirst({
+        select: { default_currency: true },
+      }),
+    ]);
+    const storeCurrency = resolveStoreCurrency(
+      store,
+      platform?.default_currency,
+    );
+    const useInvoices =
+      (await this.storeApps?.isEnabled(scope.store_id, 'invoices')) ?? false;
+    const docs: EcSalesDocument[] = [];
+    const vatOf = (order: {
+      vat_number: string | null;
+      vat_validation: unknown;
+    }) => {
+      const ev = order.vat_validation as { vat_number?: unknown } | null;
+      return (
+        order.vat_number ||
+        (ev && typeof ev.vat_number === 'string' ? ev.vat_number : '') ||
+        ''
+      );
+    };
+
+    if (useInvoices) {
+      const invoices = await this.prisma.invoice.findMany({
+        where: {
+          store_id: scope.store_id,
+          tax_exempt_reason: 'REVERSE_CHARGE',
+          issue_date: { gte: from, lte: to },
+        },
+        select: {
+          issue_date: true,
+          net_total: true,
+          currency: true,
+          buyer_name: true,
+          buyer_vat_number: true,
+          buyer_country: true,
+          order: { select: { fx_rate_snapshot: true } },
+        },
+      });
+      for (const inv of invoices) {
+        docs.push({
+          date: inv.issue_date,
+          date_only: true,
+          buyer_country: (inv.buyer_country ?? '').toUpperCase(),
+          buyer_vat_number: inv.buyer_vat_number ?? '',
+          buyer_name: inv.buyer_name || null,
+          amount: Number(inv.net_total),
+          currency: inv.currency,
+          fx_rate:
+            inv.order?.fx_rate_snapshot != null
+              ? Number(inv.order.fx_rate_snapshot)
+              : null,
+        });
+      }
+    } else {
+      const orders = await this.prisma.order.findMany({
+        where: {
+          store_id: scope.store_id,
+          tax_exempt_reason: 'REVERSE_CHARGE',
+          OR: [
+            {
+              payment_status: { in: ['paid', 'refunded'] },
+              created_at: { gte: fromLocal, lte: toLocal },
+            },
+            {
+              payment_status: 'refunded',
+              timeline: {
+                some: {
+                  status: 'REFUNDED',
+                  created_at: { gte: fromLocal, lte: toLocal },
+                },
+              },
+            },
+            {
+              payment_status: 'refunded',
+              updated_at: { gte: fromLocal, lte: toLocal },
+              timeline: { none: { status: 'REFUNDED' } },
+            },
+          ],
+        },
+        select: {
+          created_at: true,
+          updated_at: true,
+          timeline: {
+            where: { status: 'REFUNDED' },
+            orderBy: { created_at: 'asc' },
+            take: 1,
+            select: { created_at: true },
+          },
+          payment_status: true,
+          total: true,
+          currency: true,
+          company_name: true,
+          vat_number: true,
+          vat_validation: true,
+          fx_rate_snapshot: true,
+          address: { select: { country_code: true } },
+        },
+      });
+      for (const o of orders) {
+        const base = {
+          buyer_country: (o.address?.country_code ?? '').toUpperCase(),
+          buyer_vat_number: vatOf(o),
+          buyer_name: o.company_name ?? null,
+          currency: o.currency,
+          fx_rate:
+            o.fx_rate_snapshot != null ? Number(o.fx_rate_snapshot) : null,
+        };
+        if (o.created_at >= fromLocal && o.created_at <= toLocal) {
+          docs.push({ ...base, date: o.created_at, amount: Number(o.total) });
+        }
+        // The refund date: the REFUNDED timeline entry (written when the
+        // refund is recorded), else the order's last update.
+        const refundedAt = o.timeline?.[0]?.created_at ?? o.updated_at;
+        if (
+          o.payment_status === 'refunded' &&
+          refundedAt >= fromLocal &&
+          refundedAt <= toLocal
+        ) {
+          docs.push({ ...base, date: refundedAt, amount: -Number(o.total) });
+        }
+      }
+    }
+    return {
+      source: useInvoices ? 'invoices' : 'orders',
+      partial_refunds_included: useInvoices,
+      rows: aggregateEcSales(docs, period, storeCurrency, timeZone),
+    };
   }
 
   toCsv(rows: TaxReportRow[]): string {

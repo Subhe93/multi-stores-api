@@ -31,6 +31,7 @@ import type {
   PdfLine,
   PdfLineDetail,
   PdfLocale,
+  PdfTaxExemption,
   SnapshotForPdf,
 } from './snapshot-for-pdf';
 
@@ -151,6 +152,16 @@ function kv(label: string, valueHtml: string): string {
   return `<tr><th>${esc(label)}</th><td>${valueHtml}</td></tr>`;
 }
 
+/**
+ * b2b app M2.5: whether the exemption is a reverse charge (art. 138 note)
+ * rather than a merchant-granted "tax exempt" one.
+ */
+function isReverseCharge(e: PdfTaxExemption): boolean {
+  return e.legal_text_key
+    ? e.legal_text_key === 'REVERSE_CHARGE_ART_138'
+    : e.reason === 'REVERSE_CHARGE';
+}
+
 // ---------------------------------------------------------------- CSS
 
 function css(fontCss: string, rtl: boolean): string {
@@ -219,6 +230,19 @@ table.lines tr.adj td { color: #444d56; }
 .bank .item .v { font-weight: 700; font-size: 10pt; }
 .bank .note { margin-top: 1.5mm; }
 .footer-note { margin-top: 6mm; white-space: pre-line; color: #444d56; }
+`;
+}
+
+/**
+ * b2b app M2.5: CSS of the exemption block, appended only to exempt
+ * documents so every other document's HTML stays byte-identical.
+ */
+function exemptionCss(): string {
+  return `.exemption { margin-top: 5mm; border: 0.35mm solid #1f2328; border-inline-start: 1.6mm solid #1f2328; border-radius: 1.2mm; padding: 2.6mm 4mm; break-inside: avoid; }
+.exemption .title { font-size: 11pt; font-weight: 700; }
+.exemption .note { margin-top: 1mm; }
+.exemption .ids { margin-top: 1.4mm; font-weight: 600; }
+.exemption .vies { margin-top: 1mm; }
 `;
 }
 
@@ -474,7 +498,16 @@ function vatSummaryTable(
       ${rows
         .map(
           (r) => `<tr>
-        <td>${ltr(formatPercent(r.rate_bp, locale))}</td>
+        <td>${ltr(formatPercent(r.rate_bp, locale))}${
+          // b2b app M2.5: "0 % — Reverse charge" on the exempt row only.
+          r.exempt_reason
+            ? ` — ${esc(
+                r.exempt_reason === 'REVERSE_CHARGE'
+                  ? p.reverseChargeShort
+                  : p.customerExemptShort,
+              )}`
+            : ''
+        }</td>
         <td>${money(r.net)}</td>
         <td>${money(r.vat)}</td>
         <td>${money(r.gross)}</td>
@@ -521,14 +554,23 @@ function totalsBlock(
     ].join('');
   } else {
     // Company buyer or EXCLUSIVE store: Net / VAT per rate / Total.
-    const vatRows = perRate.length
-      ? perRate
-          .map(
-            (r) =>
-              `<tr><th>${vatAt(r.rate_bp)}</th><td>${money(r.vat)}</td></tr>`,
-          )
-          .join('')
-      : `<tr><th>${esc(p.vatTotal)}</th><td>${money(t.vat)}</td></tr>`;
+    const exemption = s.tax_exemption;
+    const vatRows = exemption
+      ? // b2b app M2.5: one "VAT 0 % (reverse charge)" row, no per-rate rows.
+        `<tr class="vat-exempt"><th>${phrase(
+          isReverseCharge(exemption)
+            ? p.vatAtRateReverseCharge
+            : p.vatAtRateExempt,
+          { rate: ltr(formatPercent(0, locale)) },
+        )}</th><td>${money(t.vat)}</td></tr>`
+      : perRate.length
+        ? perRate
+            .map(
+              (r) =>
+                `<tr><th>${vatAt(r.rate_bp)}</th><td>${money(r.vat)}</td></tr>`,
+            )
+            .join('')
+        : `<tr><th>${esc(p.vatTotal)}</th><td>${money(t.vat)}</td></tr>`;
     rows = [
       `<tr><th>${esc(p.netTotal)}</th><td>${money(t.net)}</td></tr>`,
       vatRows,
@@ -536,6 +578,52 @@ function totalsBlock(
     ].join('');
   }
   return `<div class="totals totals-${t.layout === 'incl' ? 'incl' : 'excl'}"><table>${rows}</table></div>`;
+}
+
+/**
+ * b2b app M2.5: the legal block under the totals of an exempt document.
+ * Reverse charge: localized title, the art. 138 VAT Directive (sv: 10 kap.
+ * 42 § ML) exemption line, the seller and buyer VAT numbers and, when
+ * there is one, the VIES consultation number. Customer exemption: the
+ * "Tax exempt" title only (no article). Empty for every other document.
+ */
+function exemptionBlock(
+  s: SnapshotForPdf,
+  p: InvoicePhrases,
+  locale: PdfLocale,
+): string {
+  const e = s.tax_exemption;
+  if (!e) return '';
+  if (!isReverseCharge(e)) {
+    return `
+<div class="exemption customer-exempt">
+  <div class="title">${esc(p.customerExemptTitle)}</div>
+</div>`;
+  }
+  const ids = [
+    present(e.seller_vat_number)
+      ? `${esc(p.sellerVatNumber)}: ${ltr(e.seller_vat_number)}`
+      : '',
+    present(e.vat_number)
+      ? `${esc(p.buyerVatNumber)}: ${ltr(e.vat_number)}`
+      : '',
+  ].filter(Boolean);
+  const vies =
+    e.vies && present(e.vies.request_identifier)
+      ? phrase(p.viesReference, {
+          ref: ltr(e.vies.request_identifier),
+          // checked_on is the seller-local day; older snapshots only have
+          // the UTC instant.
+          date: ltr(formatDate(e.vies.checked_on || e.vies.checked_at, locale)),
+        })
+      : '';
+  return `
+<div class="exemption reverse-charge">
+  <div class="title">${esc(p.reverseChargeTitle)}</div>
+  <div class="note">${esc(p.reverseChargeNote)}</div>
+  ${ids.length ? `<div class="ids">${ids.join(' &nbsp;·&nbsp; ')}</div>` : ''}
+  ${vies ? `<div class="vies small muted">${vies}</div>` : ''}
+</div>`;
 }
 
 function bankBlock(s: SnapshotForPdf, p: InvoicePhrases): string {
@@ -577,7 +665,7 @@ export function renderInvoiceHtml(
 <head>
 <meta charset="utf-8">
 <title>${esc(s.kind === 'CREDIT_NOTE' ? p.creditNote : p.invoice)} ${esc(s.number)}</title>
-<style>${css(opts.fontCss ?? '', rtl)}</style>
+<style>${css(opts.fontCss ?? '', rtl)}${s.tax_exemption ? exemptionCss() : ''}</style>
 </head>
 <body class="${s.kind === 'CREDIT_NOTE' ? 'credit-note' : 'invoice'}">
 <div class="header">
@@ -590,7 +678,7 @@ ${linesTable(s, p, locale)}
 <div class="bottom">
   ${vatSummaryTable(s, p, locale)}
   ${totalsBlock(s, p, locale)}
-</div>
+</div>${exemptionBlock(s, p, locale)}
 ${bankBlock(s, p)}
 ${present(s.seller.footer_note) ? `<div class="footer-note small">${txt(s.seller.footer_note)}</div>` : ''}
 </body>

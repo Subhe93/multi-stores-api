@@ -5,7 +5,7 @@
 // the mirrors in api (src/modules/invoices/invoices.types.ts) / web /
 // dashboard — keep in sync.
 
-import type { BuyerType } from '../b2b/b2b.types';
+import type { BuyerType, TaxExemptReason } from '../b2b/b2b.types';
 
 export type InvoiceKind = 'INVOICE' | 'CREDIT_NOTE';
 
@@ -153,6 +153,11 @@ export interface InvoiceSummary {
   pdf_available: boolean;
   /** INVOICE: gross still creditable; CREDIT_NOTE: null. */
   remaining_creditable: number | null;
+  /** b2b app M2.5: why the document carries no VAT; null when taxed. */
+  tax_exempt_reason: TaxExemptReason | null;
+  /** b2b app M2.5: buyer VAT number / ISO2 country of an exempt document. */
+  buyer_vat_number: string | null;
+  buyer_country: string | null;
 }
 
 /** GET /invoices/my/:id. */
@@ -292,6 +297,38 @@ export interface InvoiceVatSummaryRow {
   net: number;
   vat: number;
   gross: number;
+  /**
+   * b2b app M2.5: why the row carries no VAT (the order's reverse-charge /
+   * exempt row). Absent on every taxed row, so those stay byte-identical.
+   */
+  exempt_reason?: TaxExemptReason;
+}
+
+/**
+ * Which legal note the document prints (b2b app M2.5):
+ * REVERSE_CHARGE_ART_138  intra-Community supply, art. 138 VAT Directive /
+ *                         10 kap. 42 § ML, VAT accounted for by the buyer
+ * CUSTOMER_EXEMPT         merchant-granted exemption ("Tax exempt", no article)
+ */
+export type InvoiceLegalTextKey = 'REVERSE_CHARGE_ART_138' | 'CUSTOMER_EXEMPT';
+
+/** b2b app M2.5: why the document carries no VAT, with the VAT numbers. */
+export interface InvoiceTaxExemption {
+  reason: TaxExemptReason;
+  /** Buyer VAT number (the VIES-validated one when there is one). */
+  vat_number: string | null;
+  /** ISO2 country the goods were shipped to. */
+  buyer_country: string | null;
+  seller_vat_number: string | null;
+  legal_text_key: InvoiceLegalTextKey;
+  /** VIES consultation behind a reverse charge (absent for manual ones). */
+  vies?: {
+    request_identifier: string | null;
+    checked_at: string | null;
+    /** YYYY-MM-DD of checked_at in the seller's timezone (printed date). */
+    checked_on?: string | null;
+    name: string | null;
+  } | null;
 }
 
 export interface InvoiceTotals {
@@ -361,6 +398,11 @@ export interface InvoiceSnapshot {
   payment: InvoicePayment;
   bank: InvoiceBankDetails | null;
   refs: InvoiceRefs;
+  /**
+   * b2b app M2.5 (template v2): set only on exempt documents; absent on
+   * every other snapshot (v1 snapshots never have it), so `version` stays 1.
+   */
+  tax_exemption?: InvoiceTaxExemption | null;
 }
 
 // ── API-only ────────────────────────────────────────────────────────────────
@@ -369,4 +411,4 @@ export interface InvoiceSnapshot {
  * Revision of the PDF template recorded in each new snapshot (L8). Bump it
  * when the printed layout changes in a way an auditor should be able to see.
  */
-export const INVOICE_TEMPLATE_VERSION = 1;
+export const INVOICE_TEMPLATE_VERSION = 2;

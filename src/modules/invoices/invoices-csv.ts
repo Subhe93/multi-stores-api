@@ -24,6 +24,9 @@ export const INVOICE_CSV_COLUMNS = [
   'vat_total',
   'gross_total',
   'vat_breakdown',
+  // b2b app M2.5: empty for taxed documents.
+  'tax_exempt_reason',
+  'buyer_country',
 ] as const;
 
 export interface InvoiceCsvRow {
@@ -41,6 +44,12 @@ export interface InvoiceCsvRow {
   vat_total: number;
   gross_total: number;
   snapshot: InvoiceSnapshot | null;
+  /** b2b app M2.5: Invoice.tax_exempt_reason (null = taxed). */
+  tax_exempt_reason?: string | null;
+  /** b2b app M2.5: Invoice.buyer_vat_number (the validated number). */
+  buyer_vat_number?: string | null;
+  /** b2b app M2.5: Invoice.buyer_country (destination of the goods). */
+  buyer_country?: string | null;
 }
 
 /** A text cell: neutralize spreadsheet formulas, then quote when needed. */
@@ -86,7 +95,7 @@ export function invoicesToCsv(rows: InvoiceCsvRow[]): string {
       csvText(r.buyer_type),
       csvText(r.buyer_name),
       csvText(buyer?.org_number),
-      csvText(buyer?.vat_number),
+      csvText(r.buyer_vat_number || buyer?.vat_number),
       csvText(r.snapshot?.payment?.method),
       r.paid ? 'true' : 'false',
       csvText(r.currency),
@@ -94,6 +103,8 @@ export function invoicesToCsv(rows: InvoiceCsvRow[]): string {
       csvAmount(r.vat_total, r.currency),
       csvAmount(r.gross_total, r.currency),
       csvText(vatBreakdown(r.snapshot, r.currency)),
+      csvText(r.tax_exempt_reason),
+      csvText(r.buyer_country),
     ];
     lines.push(cells.join(','));
   }

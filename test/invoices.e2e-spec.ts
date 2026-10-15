@@ -7,6 +7,8 @@ import { LegalProfileService } from '../src/modules/invoices/legal-profile.servi
 import type { PrismaService } from '../src/prisma/prisma.service';
 import type { StoreAppsService } from '../src/modules/store-apps/store-apps.service';
 import type { InvoicePdfService } from '../src/modules/invoices/pdf/invoice-pdf.service';
+import { TaxManagementService } from '../src/modules/taxes/tax-management.service';
+import type { TaxService } from '../src/modules/taxes/tax.service';
 
 // Gaplessness and the database guards need a real PostgreSQL (mocks cannot
 // prove FOR UPDATE semantics). Opt-in: set INVOICE_E2E_DATABASE_URL to a
@@ -271,5 +273,128 @@ d('invoices (real database)', () => {
     expect(numbers).toEqual(
       Array.from({ length: numbers.length }, (_, i) => numbers[0] + i),
     );
+  }, 60_000);
+  it('(e) b2b M2.5: an RC invoice + credit note carry the exemption columns and feed the EC sales list', async () => {
+    const order = await prisma.order.findFirstOrThrow({
+      where: { id: orderIds[N + 1] },
+      select: { customer_id: true, address_id: true },
+    });
+    const deAddress = await prisma.address.create({
+      data: {
+        customer_id: order.customer_id,
+        full_name: 'Max Muster',
+        line1: 'Musterstr. 1',
+        city: 'Berlin',
+        postal_code: '10115',
+        country_code: 'DE',
+        company_name: 'Muster GmbH',
+      },
+    });
+    const rc = await prisma.order.create({
+      data: {
+        order_number: 'E2E-RC',
+        customer_id: order.customer_id,
+        address_id: deAddress.id,
+        store_id: storeId,
+        status: 'CONFIRMED',
+        subtotal: 100,
+        total: 100,
+        currency: 'SEK',
+        payment_method: 'KUSTOM',
+        payment_status: 'paid',
+        tax_rate_bp: 0,
+        tax_amount: 0,
+        tax_lines: [
+          {
+            label: 'Omvänd skattskyldighet',
+            rate_bp: 0,
+            taxable_amount: 100,
+            tax_amount: 0,
+            exempt_reason: 'REVERSE_CHARGE',
+          },
+        ],
+        customer_type: 'COMPANY',
+        company_name: 'Muster GmbH',
+        org_number: 'HRB 1',
+        vat_number: 'DE123456789',
+        tax_exempt_reason: 'REVERSE_CHARGE',
+        vat_validation: {
+          source: 'VIES',
+          vat_number: 'DE123456789',
+          country_code: 'DE',
+          status: 'valid',
+          valid: true,
+          name: 'Muster GmbH',
+          address: null,
+          request_identifier: 'WAPI-1',
+          requester: 'SE556036079301',
+          checked_at: '2026-10-15T09:12:00.000Z',
+          check_id: null,
+          destination_country: 'DE',
+        },
+        items: {
+          create: {
+            quantity: 1,
+            unit_price: 100,
+            total_price: 100,
+            tax_rate_bp: 0,
+            tax_amount: 0,
+            fulfiller_type: 'CREATOR',
+            fulfiller_id: 'x',
+          },
+        },
+      },
+    });
+    const { invoice } = await service.issueForOrder(rc.id, {
+      trigger: 'MANUAL',
+    });
+    expect(invoice).toMatchObject({
+      tax_exempt_reason: 'REVERSE_CHARGE',
+      buyer_vat_number: 'DE123456789',
+      buyer_country: 'DE',
+    });
+    expect(Number(invoice.vat_total)).toBe(0);
+    const credit = await service.issueCreditNote(invoice.id, {
+      amount: 30,
+      trigger: 'REFUND',
+      idempotencyKey: 'rc-refund-1',
+    });
+    expect(credit.invoice).toMatchObject({
+      kind: 'CREDIT_NOTE',
+      tax_exempt_reason: 'REVERSE_CHARGE',
+      buyer_vat_number: 'DE123456789',
+      buyer_country: 'DE',
+    });
+    // The columns are immutable like the rest of the row.
+    await expect(
+      prisma.$executeRawUnsafe(
+        `UPDATE "Invoice" SET buyer_vat_number = 'DE000000000' WHERE id = $1`,
+        invoice.id,
+      ),
+    ).rejects.toThrow(/immutable/);
+
+    const taxes = new TaxManagementService(
+      prisma as unknown as PrismaService,
+      {} as TaxService,
+      { isEnabled: () => Promise.resolve(true) } as unknown as StoreAppsService,
+    );
+    // issue_date is the seller-timezone day: query a window around now.
+    const day = (offset: number) =>
+      new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+    const report = await taxes.ecSalesReport(
+      { from: day(-1), to: day(1), period: 'month' },
+      { store_id: storeId },
+    );
+    expect(report.source).toBe('invoices');
+    expect(report.rows).toHaveLength(1);
+    expect(report.rows[0]).toMatchObject({
+      buyer_country: 'DE',
+      buyer_vat_number: 'DE123456789',
+      buyer_name: 'Muster GmbH',
+      goods_amount: 70,
+      currency: 'SEK',
+      goods_amount_store_currency: 70,
+      document_count: 2,
+    });
   }, 60_000);
 });

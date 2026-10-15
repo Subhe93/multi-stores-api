@@ -3,6 +3,7 @@ import {
   Logger,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Optional,
 } from '@nestjs/common';
@@ -50,7 +51,10 @@ import type { QuoteMarketInfo } from '../markets/market.types';
 import { normalizeHostname } from '../../common/domains/reserved-hosts';
 import {
   TaxService,
+  exemptNetPrices,
+  netOfRate,
   taxStoreSelect,
+  type ExemptNetPricesResult,
   type TaxComputeResult,
   type TaxDestination,
   type TaxLine,
@@ -69,7 +73,20 @@ import {
   normalizeCartLine,
 } from '../cart/cart-line';
 import { B2B_COMPANY_NOT_ALLOWED, B2bService } from '../b2b/b2b.service';
-import type { B2bTotals, BuyerType, CompanySnapshot } from '../b2b/b2b.types';
+import type {
+  B2bTotals,
+  BuyerType,
+  CompanySnapshot,
+  QuoteTaxExemption,
+  TaxExemptReason,
+} from '../b2b/b2b.types';
+import { B2bTaxExemptionService } from '../b2b/b2b-tax-exemption.service';
+import {
+  customerVatEvidence,
+  decideTaxExemption,
+  type ExemptionInputs,
+  type TaxExemptionDecision,
+} from '../b2b/reverse-charge';
 
 // Callback run after an order's status becomes SHIPPED. Registered by payment
 // providers that capture on shipment (Kustom); see registerShippedHook.
@@ -219,7 +236,25 @@ export interface OrderQuote {
   market?: QuoteMarketInfo;
   /** b2b app: present only when the app is enabled for the store. */
   b2b?: B2bTotals;
+  /**
+   * b2b app M2.5: present only while the app and reverse charge are on.
+   * Non-null when the quote carries no VAT; item prices / subtotal are then
+   * what the exempt buyer pays (net on INCLUSIVE stores with 'net' pricing).
+   */
+  tax_exempt_reason?: TaxExemptReason | null;
+  tax_exemption?: QuoteTaxExemption;
 }
+
+/** What computeTotals decided about a tax exemption (b2b app, M2.5). */
+interface TotalsExemption {
+  decision: TaxExemptionDecision;
+  /** Netted line prices; null when the amounts are unchanged. */
+  net: ExemptNetPricesResult | null;
+}
+
+/** 409 of create() when the buyer expected reverse charge but none applies. */
+export const B2B_REVERSE_CHARGE_NOT_CONFIRMED =
+  'B2B_REVERSE_CHARGE_NOT_CONFIRMED';
 
 export interface CreateOrderOptions {
   /**
@@ -234,6 +269,13 @@ export interface CreateOrderOptions {
    * validation of `dto.company`; only read when the buyer is COMPANY.
    */
   companySnapshot?: CompanySnapshot;
+  /**
+   * b2b app M2.5: reverse-charge inputs prepared by the caller (Kustom:
+   * from the session's stored VIES evidence, never a live VIES call inside
+   * the validation callback). Undefined = prepare live here; null = the app
+   * or reverse charge is off.
+   */
+  exemptionInputs?: ExemptionInputs | null;
 }
 
 function deriveCommissionStatus(orderStatus: OrderStatus): CommissionStatus {
@@ -343,6 +385,9 @@ export class OrdersService {
     // Invoices app (M3 D5): optional and last, so positional test
     // constructors stay valid. Every trigger is a no-op without the app.
     @Optional() private readonly invoices?: InvoiceTriggersService,
+    // b2b app M2.5 (reverse charge): optional and trailing for the same
+    // reason. Absent = no exemption is ever applied.
+    @Optional() private readonly b2bTax?: B2bTaxExemptionService,
   ) {}
 
   /** Register a callback to run once an order's status becomes SHIPPED. */
@@ -462,6 +507,21 @@ export class OrdersService {
         ...(it as object),
         image_url: this.resolveOrderItemImage(it as OrderItemImageSource),
       })),
+    } as T;
+  }
+
+  /**
+   * b2b app M2.5: what a customer-facing response may show of the
+   * reverse-charge evidence (no internal ids, requester, VIES address or
+   * merchant notes). Orders without evidence are returned untouched.
+   */
+  private forCustomer<T>(order: T): T {
+    if (!order || typeof order !== 'object') return order;
+    const o = order as { vat_validation?: unknown };
+    if (!o.vat_validation) return order;
+    return {
+      ...order,
+      vat_validation: customerVatEvidence(o.vat_validation),
     } as T;
   }
 
@@ -915,6 +975,12 @@ export class OrdersService {
     shippingMethodId?: string | null;
     strictMethod?: boolean;
     locale?: string | null;
+    /**
+     * b2b app M2.5: reverse-charge inputs (null / absent = off) and, per
+     * line, the unit price and quantity behind `taxLines` (for netting).
+     */
+    exemptionInputs?: ExemptionInputs | null;
+    unitLines?: { unit_price: number; quantity: number }[];
   }): Promise<{
     shipping: ShippingQuote | null;
     shippingCost: number;
@@ -923,6 +989,8 @@ export class OrdersService {
     total: number;
     couponValidation: CouponValidation | null;
     tax: TaxComputeResult;
+    /** b2b app M2.5: null while the app or reverse charge is off. */
+    exemption: TotalsExemption | null;
   }> {
     const { orderStore, lines, subtotal, providerBaseTotal } = input;
     // Markets app: shipping costs, free-shipping thresholds and fixed coupon
@@ -942,19 +1010,18 @@ export class OrdersService {
       region: input.region ?? null,
       postcode: input.postcode ?? null,
     };
-    const taxFor = async (shippingCost: number, discountAmount: number) => {
-      // b2b app: the buyer type only sets the result's display_mode.
-      const ctx = {
-        ...(await this.taxService.contextFor(orderStore)),
-        ...(orderStore.buyerType === 'COMPANY'
-          ? { buyerType: orderStore.buyerType }
-          : {}),
-      };
-      const data = await this.taxService.loadTaxData(ctx);
-      return this.taxService.computeTaxes({
-        ctx,
-        data,
-        currency: resolveOrderCurrency(
+    // Tax context, rates and currency are loaded once (lazily: a path that
+    // never taxes never loads them).
+    let taxSetup: Promise<{
+      ctx: Awaited<ReturnType<TaxService['contextFor']>>;
+      data: Awaited<ReturnType<TaxService['loadTaxData']>>;
+      currency: string;
+    }> | null = null;
+    const loadTaxSetup = () =>
+      (taxSetup ??= (async () => {
+        const ctx = await this.taxService.contextFor(orderStore);
+        const data = await this.taxService.loadTaxData(ctx);
+        const currency = resolveOrderCurrency(
           orderStore,
           (
             await this.prisma.platformConfig.findFirst({
@@ -962,9 +1029,76 @@ export class OrdersService {
             })
           )?.default_currency,
           market,
-        ),
+        );
+        return { ctx, data, currency };
+      })());
+
+    // b2b app M2.5: reverse charge / customer exemption. Decided once, for
+    // the destination, before the shipping quote so method costs can be
+    // netted. Nothing below changes while the inputs are null.
+    let exemption: TotalsExemption | null = null;
+    let netting = false;
+    const netItemLines = (input.unitLines ?? []).map((u, i) => ({
+      unit_price: u.unit_price,
+      quantity: u.quantity,
+      tax_class_id: input.taxLines[i]?.tax_class_id ?? null,
+      tax_exempt: input.taxLines[i]?.tax_exempt ?? false,
+    }));
+    if (input.exemptionInputs) {
+      const { ctx, data, currency } = await loadTaxSetup();
+      const decision = decideTaxExemption({
+        ctx,
+        destinationCountry: input.countryCode,
+        buyerType: orderStore.buyerType,
+        inputs: input.exemptionInputs,
+      });
+      let net: ExemptNetPricesResult | null = null;
+      if (
+        decision.reason &&
+        input.unitLines &&
+        ctx.pricingMode === TaxPricingMode.INCLUSIVE &&
+        input.exemptionInputs.settings.reverse_charge_pricing === 'net'
+      ) {
+        net = exemptNetPrices({
+          ctx,
+          data,
+          currency,
+          lines: netItemLines,
+          shippingCosts: [],
+          discount_amount: 0,
+          subtotal_gross: subtotal,
+          pricing: 'net',
+        });
+        netting = true;
+      }
+      exemption = { decision, net };
+    }
+
+    const taxFor = async (shippingCost: number, discountAmount: number) => {
+      const { ctx: baseCtx, data, currency } = await loadTaxSetup();
+      // b2b app: the buyer type only sets the result's display_mode; an
+      // exemption (M2.5) zeroes every rate.
+      const ctx = {
+        ...baseCtx,
+        ...(orderStore.buyerType === 'COMPANY'
+          ? { buyerType: orderStore.buyerType }
+          : {}),
+        ...(exemption?.decision.reason
+          ? { exemption: { reason: exemption.decision.reason } }
+          : {}),
+      };
+      const netLines = exemption?.net;
+      return this.taxService.computeTaxes({
+        ctx,
+        data,
+        currency,
         locale: input.locale ?? orderStore.primary_locale,
-        lines: input.taxLines,
+        lines: netLines
+          ? input.taxLines.map((l, i) => ({
+              ...l,
+              amount: netLines.line_totals[i] ?? l.amount,
+            }))
+          : input.taxLines,
         shipping_cost: shippingCost,
         discount_amount: discountAmount,
         shipping: destination,
@@ -994,6 +1128,15 @@ export class OrdersService {
         // market's so the customer picks between converted prices.
         for (const m of quote.methods) m.cost = convert(m.cost);
       }
+      if (netting && exemption?.net?.shipping_rate_bp) {
+        // b2b app M2.5 (D5): an exempt company pays the method costs without
+        // the registration-country VAT (after the market conversion).
+        const { currency } = await loadTaxSetup();
+        const rate = exemption.net.shipping_rate_bp;
+        for (const m of quote.methods) {
+          m.cost = netOfRate(m.cost, rate, currency);
+        }
+      }
       if (!quote.available) {
         const tax = await taxFor(0, 0);
         return {
@@ -1007,6 +1150,7 @@ export class OrdersService {
           total: tax.total,
           couponValidation: null,
           tax,
+          exemption,
         };
       }
       const requested = input.shippingMethodId
@@ -1069,6 +1213,30 @@ export class OrdersService {
       }
     }
 
+    // b2b app M2.5 (D5): the coupon was evaluated on the gross subtotal (the
+    // same cart qualifies either way); the netted order gets the discount
+    // scaled by subtotal_net / subtotal_gross.
+    if (netting && exemption?.net && discountAmount > 0) {
+      const { ctx, data, currency } = await loadTaxSetup();
+      discountAmount = exemptNetPrices({
+        ctx,
+        data,
+        currency,
+        lines: netItemLines,
+        shippingCosts: [],
+        discount_amount: discountAmount,
+        subtotal_gross: subtotal,
+        pricing: 'net',
+      }).discount_amount;
+      // The quote's coupon block shows the same (net) amount the buyer gets.
+      if (couponValidation) {
+        couponValidation = {
+          ...couponValidation,
+          discount_amount: discountAmount,
+        };
+      }
+    }
+
     // Taxes: the discount is allocated across the lines first, every line
     // and the shipping are taxed and rounded in minor units, and the total
     // comes back as the sum of those parts — in INCLUSIVE mode that is
@@ -1084,6 +1252,33 @@ export class OrdersService {
       total,
       couponValidation,
       tax,
+      exemption,
+    };
+  }
+
+  /**
+   * b2b app M2.5: the quote / response block of a reverse-charge decision.
+   * Emitted only while the app and reverse charge are on (inputs non-null).
+   */
+  private quoteExemption(
+    inputs: ExemptionInputs,
+    exemption: TotalsExemption | null,
+  ): {
+    tax_exempt_reason: TaxExemptReason | null;
+    tax_exemption: QuoteTaxExemption;
+  } {
+    const decision = exemption?.decision ?? null;
+    const evidence =
+      decision && decision.reason ? decision.evidence : inputs.vat;
+    return {
+      tax_exempt_reason: decision?.reason ?? null,
+      tax_exemption: {
+        reason: decision?.reason ?? null,
+        vat_number: evidence?.vat_number || null,
+        name: evidence?.valid ? evidence.name : null,
+        checked_at: evidence?.checked_at ?? null,
+        why: decision && !decision.reason ? decision.why : null,
+      },
     };
   }
 
@@ -1125,6 +1320,15 @@ export class OrdersService {
       marketKey?: string | null;
       /** b2b app: 'COMPANY' for the company view (ignored while the app is off). */
       buyerType?: string | null;
+      /** b2b app M2.5: the company's VAT number (COMPANY only). */
+      vatNumber?: string | null;
+      /** b2b app M2.5: logged-in shopper (customer exemptions). */
+      userId?: string | null;
+      /**
+       * b2b app M2.5: inputs prepared by the caller (Kustom, from stored
+       * evidence). Undefined = prepared here from the caches only.
+       */
+      exemptionInputs?: ExemptionInputs | null;
     },
   ): Promise<OrderQuote> {
     const orderStore = await this.loadOrderStore(
@@ -1132,6 +1336,16 @@ export class OrdersService {
       opts.marketKey,
       opts.buyerType,
     );
+    const exemptionInputs =
+      opts.exemptionInputs !== undefined
+        ? opts.exemptionInputs
+        : ((await this.b2bTax?.prepare(orderStore.id, {
+            buyerType: orderStore.buyerType,
+            vatNumber: opts.vatNumber ?? null,
+            userId: opts.userId ?? null,
+            mode: 'cached',
+            source: 'quote',
+          })) ?? null);
     const items = lines.map(normalizeCartLine);
     if (items.length === 0) {
       throw new BadRequestException({
@@ -1147,12 +1361,14 @@ export class OrdersService {
       'tax_rate_bp' | 'tax_amount' | 'tax_class_key'
     >[] = [];
     const taxLines: TaxLineInput[] = [];
+    const unitLines: { unit_price: number; quantity: number }[] = [];
     const marketRows = orderStore.market
       ? await this.marketPricing.loadPricesForLines(orderStore.market, items)
       : null;
     for (const item of items) {
       const priced = await this.priceLine(item, orderStore, marketRows);
       const totalPrice = this.lineTotal(priced.unitPrice, item.quantity);
+      unitLines.push({ unit_price: priced.unitPrice, quantity: item.quantity });
       const providerBaseForItem = this.lineTotal(
         Math.min(priced.providerBasePrice, priced.unitPrice),
         item.quantity,
@@ -1191,6 +1407,8 @@ export class OrdersService {
       shippingMethodId: opts.shippingMethodId,
       strictMethod: false,
       locale: opts.locale,
+      exemptionInputs,
+      unitLines,
     });
 
     const platformConfig = await this.prisma.platformConfig.findFirst({
@@ -1202,6 +1420,23 @@ export class OrdersService {
       orderStore.market,
     );
     const { tax } = totals;
+    // b2b app M2.5: an exempt company on a 'net' INCLUSIVE store is quoted
+    // the netted line prices (what the order and Kustom will carry).
+    const net = totals.exemption?.net;
+    if (net) {
+      quotedItems.forEach((item, i) => {
+        item.unit_price = net.unit_prices[i];
+        item.total_price = net.line_totals[i];
+        if (item.original_unit_price != null) {
+          item.original_unit_price = netOfRate(
+            item.original_unit_price,
+            net.line_rate_bp[i],
+            currency,
+          );
+        }
+      });
+      subtotal = net.subtotal;
+    }
     return {
       items: quotedItems.map((item, i) => ({
         ...item,
@@ -1237,6 +1472,9 @@ export class OrdersService {
           }
         : {}),
       ...(orderStore.b2bEnabled ? { b2b: this.b2bTotals(tax) } : {}),
+      ...(exemptionInputs
+        ? this.quoteExemption(exemptionInputs, totals.exemption)
+        : {}),
     };
   }
 
@@ -1259,6 +1497,7 @@ export class OrdersService {
       locale?: string | null;
       market_key?: string | null;
       buyer_type?: string | null;
+      vat_number?: string | null;
     },
   ): Promise<OrderQuote> {
     let lines: CartLineLike[] = dto.lines ?? [];
@@ -1284,6 +1523,8 @@ export class OrdersService {
       locale: dto.locale ?? null,
       marketKey: dto.market_key ?? null,
       buyerType: dto.buyer_type ?? null,
+      vatNumber: dto.vat_number ?? null,
+      userId,
     });
   }
 
@@ -1355,6 +1596,8 @@ export class OrdersService {
     const stockOps: StockOp[] = [];
     // One entry per order item, in order: what the tax engine needs per line.
     const taxLines: TaxLineInput[] = [];
+    // b2b app M2.5: unit price and quantity per line (reverse-charge netting).
+    const unitLines: { unit_price: number; quantity: number }[] = [];
 
     const orderStore = await this.loadOrderStore(
       dto.store_id,
@@ -1438,6 +1681,7 @@ export class OrdersService {
         tax_class_id: priced.taxClassId,
         tax_exempt: priced.taxExempt,
       });
+      unitLines.push({ unit_price: unitPrice, quantity: item.quantity });
 
       // Build custom field values from cart item's custom_fields JSON
       // Format: { "field-uuid": "value" } or { "field-uuid": "https://...url" }
@@ -1554,7 +1798,7 @@ export class OrdersService {
     // for the order snapshot, validated for the destination country (format
     // only, D7) and written next to the market columns below. Empty for a
     // person, so the insert is identical to today's.
-    const b2bColumns =
+    const b2bColumns: Partial<CompanySnapshot> =
       orderStore.buyerType === 'COMPANY'
         ? (opts.companySnapshot ??
           this.b2b.validateCompany(
@@ -1563,6 +1807,35 @@ export class OrdersService {
             await this.b2b.getSettings(orderStore.id),
           ))
         : {};
+
+    // b2b app M2.5 (D8): reverse charge is decided by the server from the
+    // VIES result it fetched itself (cache within 24 h, else live, 4 s) -
+    // or, for a Kustom checkout, from the inputs the session already holds.
+    // Null while the app or reverse charge is off. A snapshot checkout
+    // (opts.lines, the Kustom validation callback) that passed no inputs
+    // gets none: never a VIES call inside its time budget, and the same
+    // (non-exempt) decision its session quote was priced with.
+    const exemptionInputs =
+      opts.exemptionInputs !== undefined
+        ? opts.exemptionInputs
+        : ((await this.b2bTax?.prepare(
+            orderStore.id,
+            opts.lines
+              ? {
+                  buyerType: orderStore.buyerType,
+                  vatNumber: null,
+                  customerId: null,
+                  mode: 'stored',
+                  stored: null,
+                }
+              : {
+                  buyerType: orderStore.buyerType,
+                  vatNumber: b2bColumns.vat_number ?? null,
+                  customerId: customer.id,
+                  mode: 'live',
+                  source: 'order',
+                },
+          )) ?? null);
 
     const totals = await this.computeTotals({
       orderStore,
@@ -1576,12 +1849,76 @@ export class OrdersService {
       couponCode: dto.coupon_code,
       shippingMethodId: dto.shipping_method_id ?? null,
       strictMethod: true,
+      exemptionInputs,
+      unitLines,
     });
 
     if (totals.shipping && !totals.shipping.available) {
       throw new BadRequestException(
         totals.shipping.message || 'Shipping not available to your country',
       );
+    }
+
+    // b2b app M2.5 (D8): the buyer saw a VAT-free quote; never silently
+    // charge VAT instead. Thrown before any stock or coupon is claimed.
+    const exemptDecision = totals.exemption?.decision ?? null;
+    if (
+      dto.expect_reverse_charge &&
+      exemptDecision?.reason !== 'REVERSE_CHARGE'
+    ) {
+      throw new ConflictException({
+        code: B2B_REVERSE_CHARGE_NOT_CONFIRMED,
+        message:
+          'The VAT number could not be confirmed for reverse charge. Please review the updated total.',
+        why: !exemptDecision
+          ? 'APP_OFF'
+          : exemptDecision.reason
+            ? // VAT-free, but as a customer exemption, not reverse charge.
+              'CUSTOMER_EXEMPT'
+            : exemptDecision.why,
+      });
+    }
+    // Netted prices of an exempt company ('net' pricing, INCLUSIVE store):
+    // the order lines and subtotal carry what the buyer actually pays.
+    const netPrices = totals.exemption?.net ?? null;
+    if (netPrices) {
+      const netCurrency = resolveOrderCurrency(
+        orderStore,
+        (
+          await this.prisma.platformConfig.findFirst({
+            select: { default_currency: true },
+          })
+        )?.default_currency,
+        orderStore.market,
+      );
+      orderItems.forEach((item, i) => {
+        item.unit_price = netPrices.unit_prices[i];
+        item.total_price = netPrices.line_totals[i];
+        if (item.original_unit_price != null) {
+          item.original_unit_price = netOfRate(
+            Number(item.original_unit_price),
+            netPrices.line_rate_bp[i],
+            netCurrency,
+          );
+        }
+      });
+      subtotal = netPrices.subtotal;
+    }
+    const exemptColumns =
+      exemptDecision && exemptDecision.reason
+        ? {
+            tax_exempt_reason: exemptDecision.reason,
+            vat_validation:
+              exemptDecision.evidence as unknown as Prisma.InputJsonValue,
+          }
+        : {};
+    // The snapshot number is the validated one (VIES evidence wins).
+    if (
+      exemptDecision?.reason &&
+      exemptDecision.evidence.source === 'VIES' &&
+      b2bColumns.vat_number
+    ) {
+      b2bColumns.vat_number = exemptDecision.evidence.vat_number;
     }
 
     const shippingCost = totals.shippingCost;
@@ -1742,6 +2079,7 @@ export class OrdersService {
           notes: dto.notes,
           ...marketColumns,
           ...b2bColumns,
+          ...exemptColumns,
           items: { create: orderItems },
           timeline: {
             create: {
@@ -1868,7 +2206,7 @@ export class OrdersService {
     // Kustom push token, which must never reach the customer's browser.
     // b2b app: the `b2b` block travels with the created order only when the
     // app is enabled (same rule as the quote).
-    const shaped = this.withItemImages(order);
+    const shaped = this.forCustomer(this.withItemImages(order));
     return orderStore.b2bEnabled
       ? { ...shaped, b2b: this.b2bTotals(tax) }
       : shaped;
@@ -2046,7 +2384,7 @@ export class OrdersService {
     ]);
 
     return {
-      data: data.map((o) => this.withItemImages(o)),
+      data: data.map((o) => this.forCustomer(this.withItemImages(o))),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -2300,7 +2638,10 @@ export class OrdersService {
       void _ko;
       void _kc;
       void _kd;
-      return this.withItemImages({ ...customerSafe, payouts: scopedPayouts });
+      // Customers / providers: reverse-charge evidence without internals.
+      return this.forCustomer(
+        this.withItemImages({ ...customerSafe, payouts: scopedPayouts }),
+      );
     }
     return this.withItemImages({ ...safe, payouts: scopedPayouts });
   }

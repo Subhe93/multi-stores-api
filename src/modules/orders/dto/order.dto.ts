@@ -1,5 +1,6 @@
 import {
   ArrayMaxSize,
+  IsBoolean,
   IsString,
   IsOptional,
   IsEnum,
@@ -127,6 +128,13 @@ export class CreateOrderDto {
   @ValidateNested()
   @Type(() => CompanyDto)
   company?: CompanyDto;
+
+  // b2b app M2.5: the quote the buyer saw was VAT-free (reverse charge).
+  // When the server cannot confirm it, the order is refused with 409
+  // B2B_REVERSE_CHARGE_NOT_CONFIRMED instead of silently charging VAT.
+  @IsOptional()
+  @IsBoolean()
+  expect_reverse_charge?: boolean;
 }
 
 export class UpdateOrderStatusDto {
@@ -238,4 +246,11 @@ export class QuoteOrderDto {
   @IsOptional()
   @IsBuyerType()
   buyer_type?: BuyerType;
+
+  // b2b app M2.5: the company's VAT number (a guest quote has no `company`
+  // object). Read only for a COMPANY buyer while reverse charge is on.
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  vat_number?: string;
 }

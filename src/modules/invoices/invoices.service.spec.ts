@@ -173,6 +173,10 @@ describe('InvoicesService.issueForOrder', () => {
       issue_date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) as string,
       remaining_creditable: 125,
       credited_invoice: null,
+      // b2b app M2.5 keys: null on a taxed invoice.
+      tax_exempt_reason: null,
+      buyer_vat_number: null,
+      buyer_country: null,
     });
     try {
       await service.issueManually(STORE_ID, 'o1', 'creator-user');

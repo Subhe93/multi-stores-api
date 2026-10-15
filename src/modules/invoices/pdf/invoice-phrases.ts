@@ -82,6 +82,18 @@ const en = {
   reasonCancellation: 'Order cancellation',
   reasonManual: 'Manual credit',
   page: 'Page {x} of {y}',
+  // b2b app M2.5: exemption (reverse charge) block, VAT rows.
+  reverseChargeTitle: 'Reverse charge',
+  reverseChargeNote:
+    'Intra-Community supply of goods, exempt from VAT under Article 138 of Council Directive 2006/112/EC. VAT to be accounted for by the recipient.',
+  reverseChargeShort: 'Reverse charge',
+  vatAtRateReverseCharge: 'VAT {rate} — Reverse charge',
+  customerExemptTitle: 'Tax exempt',
+  customerExemptShort: 'Tax exempt',
+  vatAtRateExempt: 'VAT {rate} (tax exempt)',
+  sellerVatNumber: 'Seller VAT no.',
+  buyerVatNumber: 'Buyer VAT no.',
+  viesReference: 'VIES consultation no. {ref}, {date}',
 };
 
 export type InvoicePhrases = typeof en;
@@ -152,6 +164,17 @@ const sv: InvoicePhrases = {
   reasonCancellation: 'Annullerad order',
   reasonManual: 'Manuell kreditering',
   page: 'Sida {x} av {y}',
+  reverseChargeTitle: 'Omvänd skattskyldighet',
+  reverseChargeNote:
+    'Unionsintern leverans av varor, undantagen från moms enligt 10 kap. 42 § mervärdesskattelagen (2023:200) och artikel 138 i rådets direktiv 2006/112/EG. Köparen redovisar momsen.',
+  reverseChargeShort: 'Omvänd skattskyldighet',
+  vatAtRateReverseCharge: 'Moms {rate} — Omvänd skattskyldighet',
+  customerExemptTitle: 'Momsbefriad',
+  customerExemptShort: 'Momsbefriad',
+  vatAtRateExempt: 'Moms {rate} (momsbefriad)',
+  sellerVatNumber: 'Säljarens momsreg.nr',
+  buyerVatNumber: 'Köparens momsreg.nr',
+  viesReference: 'VIES-kontrollnummer {ref}, {date}',
 };
 
 const de: InvoicePhrases = {
@@ -220,6 +243,18 @@ const de: InvoicePhrases = {
   reasonCancellation: 'Stornierung der Bestellung',
   reasonManual: 'Manuelle Gutschrift',
   page: 'Seite {x} von {y}',
+  reverseChargeTitle: 'Steuerschuldnerschaft des Leistungsempfängers',
+  reverseChargeNote:
+    'Steuerfreie innergemeinschaftliche Lieferung von Waren gemäß Art. 138 der Richtlinie 2006/112/EG (MwStSystRL). Die Steuer schuldet der Leistungsempfänger.',
+  reverseChargeShort: 'Steuerschuldnerschaft des Leistungsempfängers',
+  vatAtRateReverseCharge:
+    'USt. {rate} — Steuerschuldnerschaft des Leistungsempfängers',
+  customerExemptTitle: 'Steuerbefreit',
+  customerExemptShort: 'Steuerbefreit',
+  vatAtRateExempt: 'USt. {rate} (steuerbefreit)',
+  sellerVatNumber: 'USt-IdNr. des Verkäufers',
+  buyerVatNumber: 'USt-IdNr. des Käufers',
+  viesReference: 'VIES-Abfragenummer {ref}, {date}',
 };
 
 const fr: InvoicePhrases = {
@@ -288,6 +323,17 @@ const fr: InvoicePhrases = {
   reasonCancellation: 'Annulation de la commande',
   reasonManual: 'Avoir manuel',
   page: 'Page {x} sur {y}',
+  reverseChargeTitle: 'Autoliquidation',
+  reverseChargeNote:
+    'Livraison intracommunautaire de biens exonérée de TVA, article 138 de la directive 2006/112/CE. TVA due par le preneur.',
+  reverseChargeShort: 'Autoliquidation',
+  vatAtRateReverseCharge: 'TVA {rate} — Autoliquidation',
+  customerExemptTitle: 'Exonéré de TVA',
+  customerExemptShort: 'Exonéré',
+  vatAtRateExempt: 'TVA {rate} (exonéré)',
+  sellerVatNumber: 'N° de TVA du vendeur',
+  buyerVatNumber: "N° de TVA de l'acheteur",
+  viesReference: 'Consultation VIES n° {ref}, {date}',
 };
 
 const tr: InvoicePhrases = {
@@ -355,6 +401,17 @@ const tr: InvoicePhrases = {
   reasonCancellation: 'Sipariş iptali',
   reasonManual: 'Manuel iade',
   page: 'Sayfa {x} / {y}',
+  reverseChargeTitle: 'Ters ifa (sorumlu sıfatıyla)',
+  reverseChargeNote:
+    "Topluluk içi mal teslimi; 2006/112/AT sayılı Konsey Direktifi'nin 138. maddesi uyarınca KDV'den istisnadır. KDV alıcı tarafından beyan edilir.",
+  reverseChargeShort: 'Ters ifa (sorumlu sıfatıyla)',
+  vatAtRateReverseCharge: 'KDV {rate} — Ters ifa (sorumlu sıfatıyla)',
+  customerExemptTitle: 'Vergiden muaf',
+  customerExemptShort: 'Muaf',
+  vatAtRateExempt: 'KDV {rate} (muaf)',
+  sellerVatNumber: 'Satıcı KDV No',
+  buyerVatNumber: 'Alıcı KDV No',
+  viesReference: 'VIES sorgu no. {ref}, {date}',
 };
 
 const ar: InvoicePhrases = {
@@ -422,6 +479,17 @@ const ar: InvoicePhrases = {
   reasonCancellation: 'إلغاء الطلب',
   reasonManual: 'إشعار دائن يدوي',
   page: 'صفحة {x} من {y}',
+  reverseChargeTitle: 'التكليف العكسي',
+  reverseChargeNote:
+    'توريد سلع داخل الاتحاد الأوروبي معفى من ضريبة القيمة المضافة وفقاً للمادة 138 من توجيه المجلس 2006/112/EC، ويلتزم المشتري بالمحاسبة عن الضريبة.',
+  reverseChargeShort: 'التكليف العكسي',
+  vatAtRateReverseCharge: 'ضريبة {rate} — التكليف العكسي',
+  customerExemptTitle: 'معفى من الضريبة',
+  customerExemptShort: 'معفى',
+  vatAtRateExempt: 'ضريبة {rate} (معفى)',
+  sellerVatNumber: 'الرقم الضريبي للبائع',
+  buyerVatNumber: 'الرقم الضريبي للمشتري',
+  viesReference: 'رقم استعلام VIES {ref}، {date}',
 };
 
 export const INVOICE_PHRASES: Record<PdfLocale, InvoicePhrases> = {

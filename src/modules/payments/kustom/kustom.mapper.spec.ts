@@ -897,3 +897,104 @@ describe('b2b app: organisation purchases', () => {
     expect(bare.customer).toEqual({ type: 'organization' });
   });
 });
+
+describe('b2b app M2.5: reverse-charge session (zero tax from the quote)', () => {
+  const sessionCtx = {
+    storeSlug: 'my-shop',
+    primaryLocale: 'sv',
+    storefrontBase: 'https://shop.example.com/',
+    apiBase: 'https://api.example.com/',
+    sessionId: 'sess-rc',
+    token: 'tok',
+    callbackToken: 'cb-secret',
+    allowedCustomerTypes: ['person', 'organization'] as (
+      | 'person'
+      | 'organization'
+    )[],
+  };
+  // What quoteLines returns for an exempt company on a 'net' INCLUSIVE
+  // store: 125 SEK incl. 25 % becomes 100.00 net, shipping 49 → 39.20, and
+  // every rate / tax amount is 0.
+  const rcInput = (mode: 'INCLUSIVE' | 'EXCLUSIVE') => ({
+    currency: 'SEK',
+    shipping_cost: 39.2,
+    discount_amount: 0,
+    total: 239.2,
+    items: order().items.map((item) => ({
+      ...item,
+      unit_price: 100,
+      total_price: 200,
+      tax_rate_bp: 0,
+      tax_amount: 0,
+    })),
+    tax_pricing_mode: mode,
+    shipping_tax_rate_bp: 0,
+    shipping_tax_amount: 0,
+    purchaseCountry: 'DE',
+    reference: 'sess-rc',
+    shippingOptions: [
+      {
+        id: 'standard',
+        name: 'Standard',
+        type: 'delivery' as const,
+        cost: 39.2,
+        estimated_days: { min: 2, max: 5 },
+      },
+      {
+        id: 'pickup',
+        name: 'Pickup',
+        type: 'pickup' as const,
+        cost: 0,
+      },
+    ],
+    selectedShippingId: 'standard',
+    buyerType: 'COMPANY' as const,
+    company: {
+      customer_type: 'COMPANY' as const,
+      company_name: 'Muster GmbH',
+      org_number: 'HRB 1234',
+      vat_number: 'DE123456789',
+      buyer_reference: null,
+    },
+  });
+
+  it.each(['INCLUSIVE', 'EXCLUSIVE'] as const)(
+    '%s: every line and option carries tax_rate 0 / tax 0, order_tax_amount 0, no rounding line',
+    (mode) => {
+      const payload = buildKustomSessionPayload(rcInput(mode), sessionCtx);
+      expect(payload.order_amount).toBe(23920);
+      expect(payload.order_tax_amount).toBe(0);
+      assertLineInvariants(payload.order_lines);
+      expect(payload.order_lines).toHaveLength(2);
+      for (const line of payload.order_lines) {
+        expect(line.tax_rate).toBe(0);
+        expect(line.total_tax_amount).toBe(0);
+        expect(line.reference).not.toBe('rounding');
+      }
+      expect(payload.order_lines[0]).toMatchObject({
+        type: 'physical',
+        quantity: 2,
+        unit_price: 10000,
+        total_amount: 20000,
+      });
+      expect(payload.order_lines[1]).toMatchObject({
+        type: 'shipping_fee',
+        total_amount: 3920,
+      });
+      expect(payload.order_lines.reduce((s, l) => s + l.total_amount, 0)).toBe(
+        payload.order_amount,
+      );
+      expect(payload.shipping_options).toHaveLength(2);
+      for (const option of payload.shipping_options ?? []) {
+        expect(option.tax_rate).toBe(0);
+        expect(option.tax_amount).toBe(0);
+      }
+      expect(payload.shipping_options?.[0].price).toBe(3920);
+      // The validated VAT number goes to Kustom as the organisation's vat_id.
+      expect(payload.customer).toMatchObject({
+        type: 'organization',
+        vat_id: 'DE123456789',
+      });
+    },
+  );
+});

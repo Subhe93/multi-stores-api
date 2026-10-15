@@ -6,6 +6,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { PaymentMethod, Prisma, UserRole } from '@prisma/client';
@@ -28,7 +29,10 @@ import type {
   BuyerType,
   CompanyInput,
   CompanySnapshot,
+  VatEvidence,
 } from '../../b2b/b2b.types';
+import { B2bTaxExemptionService } from '../../b2b/b2b-tax-exemption.service';
+import { viesFormOf, type ExemptionInputs } from '../../b2b/reverse-charge';
 import {
   KustomClient,
   type KustomAddress,
@@ -169,6 +173,37 @@ function sessionCompany(s: Pick<Session, 'company'>): CompanySnapshot | null {
   };
 }
 
+/**
+ * b2b app M2.5: the VIES evidence stored on a session row (the result of
+ * the live check made by createSession / updateSession), if any.
+ */
+function sessionVatEvidence(
+  s: Pick<Session, 'vat_validation'>,
+): VatEvidence | null {
+  const v = s.vat_validation;
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  return typeof o.vat_number === 'string' && typeof o.status === 'string'
+    ? (o as unknown as VatEvidence)
+    : null;
+}
+
+/** VIES results older than this are re-checked by updateSession. */
+const VAT_EVIDENCE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/** b2b app M2.5: whether stored evidence is too old to keep (or undated). */
+function isStaleEvidence(e: VatEvidence): boolean {
+  const at = Date.parse(e.checked_at);
+  return !Number.isFinite(at) || Date.now() - at > VAT_EVIDENCE_MAX_AGE_MS;
+}
+
+/** A VAT number for logs: country prefix and last 4 characters only. */
+function maskVat(v: string | null | undefined): string {
+  const n = (v ?? '').replace(/\s/g, '').toUpperCase();
+  if (n.length <= 6) return n ? `${n.slice(0, 2)}***` : '';
+  return `${n.slice(0, 2)}***${n.slice(-4)}`;
+}
+
 /** The `company` body of orders.create for a snapshot. */
 function companyBody(c: CompanySnapshot): CompanyInput {
   return {
@@ -231,6 +266,9 @@ export class KustomCheckoutService {
     private mail: MailService,
     private markets: MarketsContextService,
     private b2b: B2bService,
+    // b2b app M2.5 (reverse charge): optional and trailing so positional
+    // test constructors stay valid. Absent = no exemption is ever applied.
+    @Optional() private b2bTax?: B2bTaxExemptionService,
   ) {}
 
   // ── Session lookup / auth ───────────────────────────────────────────────
@@ -395,6 +433,12 @@ export class KustomCheckoutService {
        */
       buyerType?: BuyerType | null;
       company?: CompanySnapshot | null;
+      /**
+       * b2b app M2.5: reverse-charge inputs from the session's stored VIES
+       * evidence (sessionExemption). Null = the app or reverse charge is off;
+       * quoteLines never prepares (or calls VIES) on its own here.
+       */
+      exemption?: ExemptionInputs | null;
     },
   ): Promise<PriceResult> {
     const lines = this.itemsOf(session);
@@ -408,6 +452,7 @@ export class KustomCheckoutService {
       // Markets app: price in the market (currency, overrides, rate).
       marketKey: ctx.market?.key ?? null,
       ...(opts.buyerType === 'COMPANY' ? { buyerType: 'COMPANY' } : {}),
+      exemptionInputs: opts.exemption ?? null,
     });
     if (quote.shipping && !quote.shipping.available) {
       return { ok: false, shippingUnavailable: quote.shipping.message };
@@ -601,6 +646,61 @@ export class KustomCheckoutService {
     return buyerType;
   }
 
+  /**
+   * b2b app M2.5: live VIES check (4 s) of a company session's VAT number.
+   * Only createSession / updateSession call it - never a Kustom callback.
+   * Null while the app or reverse charge is off, for a person, or without a
+   * number (fail-closed: VAT is charged).
+   */
+  private async checkSessionVat(
+    storeId: string,
+    buyerType: BuyerType,
+    company: CompanySnapshot | null,
+  ): Promise<VatEvidence | null> {
+    if (!this.b2bTax || buyerType !== 'COMPANY' || !company?.vat_number) {
+      return null;
+    }
+    const inputs = await this.b2bTax.prepare(storeId, {
+      buyerType,
+      vatNumber: company.vat_number,
+      mode: 'live',
+      source: 'kustom',
+    });
+    return inputs?.vat ?? null;
+  }
+
+  /**
+   * b2b app M2.5: the reverse-charge inputs every re-price of a session
+   * uses (create, update, address / shipping callbacks, validation), so the
+   * quote, the Kustom amounts and the order all take the same decision.
+   * Built from the evidence stored on the session (mode 'stored': never a
+   * VIES call, safe inside the 3 s validation budget) and the customer known
+   * when the session was opened - a guest who turns out to own an exempt
+   * account at validation is not exempted (the amount must not move there).
+   */
+  private async sessionExemption(
+    session: Pick<Session, 'store_id' | 'customer_id' | 'vat_validation'>,
+    buyerType: BuyerType,
+    company: CompanySnapshot | null,
+  ): Promise<ExemptionInputs | null> {
+    if (!this.b2bTax) return null;
+    return this.b2bTax.prepare(session.store_id, {
+      buyerType,
+      vatNumber: buyerType === 'COMPANY' ? (company?.vat_number ?? null) : null,
+      customerId: session.customer_id,
+      mode: 'stored',
+      stored: sessionVatEvidence(session),
+    });
+  }
+
+  /** b2b app M2.5: whether the store has the b2b app with reverse charge on. */
+  private async reverseChargeOn(storeId: string): Promise<boolean> {
+    if (!this.b2bTax || !(await this.b2b.isEnabled(storeId))) return false;
+    return (
+      (await this.b2b.getSettings(storeId)).reverse_charge_enabled === true
+    );
+  }
+
   /** Email, phone and default address of a logged-in customer, for prefill. */
   private async customerPrefill(
     customerId: string | null,
@@ -677,6 +777,29 @@ export class KustomCheckoutService {
             currency: quote.currency,
             // b2b app: the net view, present only while the app is on.
             ...(quote.b2b ? { b2b: quote.b2b } : {}),
+            // b2b app M2.5: the reverse-charge decision, present only while
+            // the app and reverse charge are on (mirrors the quote).
+            ...(quote.tax_exemption
+              ? {
+                  tax_exempt_reason: quote.tax_exempt_reason ?? null,
+                  tax_exemption: quote.tax_exemption,
+                }
+              : {}),
+            // b2b app M2.5: on an exempt session the line prices differ from
+            // the catalogue (netted), so the exact quoted lines are included.
+            ...(quote.tax_exempt_reason
+              ? {
+                  items: quote.items.map((i) => ({
+                    product_id: i.product_id ?? null,
+                    variant_id: i.variant_id ?? null,
+                    custom_product_id: i.custom_product_id ?? null,
+                    bundle_offer_id: i.bundle_offer_id ?? null,
+                    quantity: i.quantity,
+                    unit_price: i.unit_price,
+                    total: i.total_price,
+                  })),
+                }
+              : {}),
           }
         : null,
     };
@@ -771,6 +894,13 @@ export class KustomCheckoutService {
           }
         : {};
     const allowedCustomerTypes = await this.b2b.kustomCustomerTypes(ctx.id);
+    // b2b app M2.5: the company's VAT number is checked against VIES once,
+    // here, and the evidence bound to the session for every later re-price.
+    const vatValidation = await this.checkSessionVat(
+      ctx.id,
+      buyerType,
+      company,
+    );
 
     const session = await this.prisma.kustomCheckoutSession.create({
       data: {
@@ -790,12 +920,21 @@ export class KustomCheckoutService {
         postcode,
         ...(market ? { market_id: market.id, hostname: ctx.customDomain } : {}),
         ...b2bColumns,
+        ...(vatValidation
+          ? {
+              vat_validation: vatValidation as unknown as Prisma.InputJsonValue,
+            }
+          : {}),
         expires_at: new Date(Date.now() + SESSION_TTL_MS),
       },
     });
 
     try {
-      const b2bOpts = { buyerType, company };
+      const b2bOpts = {
+        buyerType,
+        company,
+        exemption: await this.sessionExemption(session, buyerType, company),
+      };
       let priced = await this.priceSession(session, ctx, {
         countryCode: country,
         region,
@@ -932,6 +1071,31 @@ export class KustomCheckoutService {
         : Prisma.DbNull;
     }
 
+    // b2b app M2.5: re-check the VAT number when it changed (or was never
+    // confirmed because VIES was unavailable); clear the evidence for a
+    // person or a removed number. Callbacks only ever reuse what is stored.
+    const storedVat = sessionVatEvidence(session);
+    let vatValidation = storedVat;
+    const wantedVat =
+      buyerType === 'COMPANY' && company?.vat_number
+        ? (viesFormOf(company.vat_number) ?? company.vat_number)
+        : null;
+    if (!wantedVat) {
+      vatValidation = null;
+    } else if (
+      !storedVat ||
+      storedVat.vat_number !== wantedVat ||
+      storedVat.status === 'unavailable' ||
+      isStaleEvidence(storedVat)
+    ) {
+      vatValidation = await this.checkSessionVat(ctx.id, buyerType, company);
+    }
+    if (vatValidation !== storedVat) {
+      data.vat_validation = vatValidation
+        ? (vatValidation as unknown as Prisma.InputJsonValue)
+        : Prisma.DbNull;
+    }
+
     const next: Session = {
       ...session,
       items: (data.items ?? session.items) as Prisma.JsonValue,
@@ -945,6 +1109,9 @@ export class KustomCheckoutService {
           : session.notes,
       buyer_type: buyerType === 'COMPANY' ? 'COMPANY' : null,
       company: company ? (company as unknown as Prisma.JsonValue) : null,
+      vat_validation: vatValidation
+        ? (vatValidation as unknown as Prisma.JsonValue)
+        : null,
     };
     if (!this.itemsOf(next).length) {
       throw new BadRequestException({
@@ -960,6 +1127,7 @@ export class KustomCheckoutService {
       purchaseCountry: session.purchase_country,
       buyerType,
       company,
+      exemption: await this.sessionExemption(next, buyerType, company),
     };
     // Re-price for the destination the last callback stored (country,
     // region and postcode together), so the totals match what validation
@@ -1234,12 +1402,31 @@ export class KustomCheckoutService {
 
     let priced: PriceResult;
     try {
+      // b2b app M2.5: with reverse charge on, the buyer as validation will
+      // see it plus the session's reverse-charge inputs - the decision is
+      // re-taken for the reported destination, so a country change re-adds
+      // or removes the VAT here exactly as the order will. Database only,
+      // never VIES. Otherwise the pre-M2.5 pricing, unchanged.
+      const rcOpts = (await this.reverseChargeOn(session.store_id))
+        ? await (async () => {
+            const b2b = await this.companyFromCallback(session, b, country);
+            return {
+              ...b2b,
+              exemption: await this.sessionExemption(
+                session,
+                b2b.buyerType,
+                b2b.company,
+              ),
+            };
+          })()
+        : {};
       priced = await this.priceSession(session, ctx, {
         countryCode: country,
         region,
         postcode,
         couponCode: session.coupon_code,
         selectedShippingId: selectedId,
+        ...rcOpts,
       });
     } catch (err) {
       this.logger.warn(
@@ -1352,6 +1539,13 @@ export class KustomCheckoutService {
       // b2b app: who bought, as Kustom reports it (it collected the
       // organisation in the iframe); same money either way.
       const b2b = await this.companyFromCallback(session, b, country);
+      // b2b app M2.5: the stored VIES evidence only (no VIES call inside the
+      // 3 s budget); the same inputs go to orders.create below.
+      const exemption = await this.sessionExemption(
+        session,
+        b2b.buyerType,
+        b2b.company,
+      );
       const priced = await this.priceSession(session, ctx, {
         countryCode: country,
         region,
@@ -1359,6 +1553,7 @@ export class KustomCheckoutService {
         couponCode: session.coupon_code,
         selectedShippingId: selectedId,
         ...b2b,
+        exemption,
       });
       if (!priced.ok) return reject('shipping_unavailable');
       const amounts = buildKustomSessionAmounts(
@@ -1427,6 +1622,7 @@ export class KustomCheckoutService {
         {
           lines: this.itemsOf(session),
           ...(b2b.company ? { companySnapshot: b2b.company } : {}),
+          exemptionInputs: exemption,
         },
       );
       const order = created as { id: string; total: unknown; currency: string };
@@ -1825,13 +2021,27 @@ export class KustomCheckoutService {
 
     const prefill = sessionCompany(session);
     const billing = b.billing_address;
+    // b2b app M2.5: a VAT number validated against VIES for this session
+    // wins over whatever Kustom reports, so the order keeps the number the
+    // reverse-charge decision was taken for; a difference is only logged.
+    const validated = sessionVatEvidence(session);
+    const reportedVat = optionalString(b.customer?.vat_id);
+    let vatNumber = reportedVat ?? prefill?.vat_number;
+    if (validated?.valid === true && prefill?.vat_number) {
+      vatNumber = prefill.vat_number;
+      if (reportedVat && viesFormOf(reportedVat) !== validated.vat_number) {
+        this.logger.warn(
+          `Kustom session ${session.id}: Kustom reported VAT number ${maskVat(reportedVat)}; keeping the validated ${maskVat(validated.vat_number)}`,
+        );
+      }
+    }
     const input: Partial<CompanyInput> = {
       company_name:
         optionalString(billing?.organization_name) ?? prefill?.company_name,
       org_number:
         optionalString(b.customer?.organization_registration_id) ??
         prefill?.org_number,
-      vat_number: optionalString(b.customer?.vat_id) ?? prefill?.vat_number,
+      vat_number: vatNumber,
       buyer_reference:
         optionalString(billing?.buyer_reference ?? billing?.reference) ??
         prefill?.buyer_reference,

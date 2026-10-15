@@ -1,11 +1,5 @@
-import {
-  Controller,
-  Get,
-  NotFoundException,
-  Param,
-  UseGuards,
-} from '@nestjs/common';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MarketsContextService } from './markets-context.service';
 import { toMarketRoute } from './market-context';
@@ -22,7 +16,6 @@ export class MarketsPublicController {
   ) {}
 
   @Get(':slug/market-context')
-  @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 120, ttl: 60_000 } })
   async marketContext(
     @Param('slug') slug: string,

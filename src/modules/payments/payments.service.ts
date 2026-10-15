@@ -752,6 +752,10 @@ export class PaymentsService {
               org_number: order.org_number ?? '',
             }
           : {}),
+        // b2b app M2.5: why the intent carries no VAT (absent otherwise).
+        ...(order.tax_exempt_reason
+          ? { tax_exempt_reason: order.tax_exempt_reason }
+          : {}),
       },
       automatic_payment_methods: {
         enabled: true,
