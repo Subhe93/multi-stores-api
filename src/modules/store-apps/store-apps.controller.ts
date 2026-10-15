@@ -1,10 +1,19 @@
-import { Body, Controller, Get, Param, Put, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Put,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { UserRole } from '@prisma/client';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { StoreAppsService } from './store-apps.service';
 import {
+  AdminStoreAppsQueryDto,
   SetStoreAppAvailableDto,
   UpdateMyStoreAppDto,
 } from './dto/store-app.dto';
@@ -32,6 +41,14 @@ export class StoreAppsController {
     @Body() dto: UpdateMyStoreAppDto,
   ) {
     return this.storeApps.updateMine(userId, appKey, dto);
+  }
+
+  // Admin — every store with its apps (paginated, searchable overview)
+  @Get('admin/apps')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  adminOverview(@Query() query: AdminStoreAppsQueryDto) {
+    return this.storeApps.adminOverview(query);
   }
 
   // Admin — every app with its availability for a creator's store

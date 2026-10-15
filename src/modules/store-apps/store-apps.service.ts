@@ -20,7 +20,10 @@ import {
   buildStorefrontApps,
   isStoreAppRowActive,
 } from './storefront-apps';
-import { UpdateMyStoreAppDto } from './dto/store-app.dto';
+import {
+  AdminStoreAppsQueryDto,
+  UpdateMyStoreAppDto,
+} from './dto/store-app.dto';
 import { validateStoreAppSettings } from '../../common/store-apps/settings-validators';
 
 /**
@@ -70,6 +73,24 @@ export interface AdminStoreAppView {
   enabled: boolean;
   requires_independent: boolean;
   depends_on: StoreAppKey[];
+}
+
+/** One row of the admin "store apps" overview. */
+export interface AdminStoreAppsRow {
+  store_id: string;
+  store_name: string;
+  store_slug: string;
+  store_type: StoreType;
+  creator_id: string;
+  creator_name: string;
+  apps: AdminStoreAppView[];
+}
+
+export interface AdminStoreAppsPage {
+  items: AdminStoreAppsRow[];
+  total: number;
+  page: number;
+  limit: number;
 }
 
 const storeAppSelect = {
@@ -365,19 +386,81 @@ export class StoreAppsService {
   async adminList(creatorId: string): Promise<AdminStoreAppView[]> {
     const store = await this.storeOfCreatorId(creatorId);
     const rows = await this.loadRows(store.id);
-    return STORE_APP_KEYS.map((key) => {
-      const def = STORE_APPS[key];
-      const row = rows.get(key);
+    return STORE_APP_KEYS.map((key) => toAdminView(key, rows.get(key)));
+  }
+
+  /**
+   * Admin overview: a page of stores, each with every registry app merged
+   * with its row (defaults when the store has none). Two queries for the
+   * stores (page + count) and one for all of their app rows — no N+1.
+   */
+  async adminOverview(
+    query: AdminStoreAppsQueryDto,
+  ): Promise<AdminStoreAppsPage> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const q = query.q?.trim();
+    const where: Prisma.StoreWhereInput = {
+      ...(query.type ? { store_type: query.type } : {}),
+      ...(q
+        ? {
+            OR: [
+              { name: { contains: q, mode: 'insensitive' } },
+              { slug: { contains: q, mode: 'insensitive' } },
+              {
+                creator: {
+                  display_name: { contains: q, mode: 'insensitive' },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+    const [stores, total] = await Promise.all([
+      this.prisma.store.findMany({
+        where,
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          store_type: true,
+          creator_id: true,
+          creator: { select: { display_name: true } },
+        },
+      }),
+      this.prisma.store.count({ where }),
+    ]);
+    const appRows = stores.length
+      ? await this.prisma.storeApp.findMany({
+          where: { store_id: { in: stores.map((s) => s.id) } },
+          select: { store_id: true, ...storeAppSelect },
+        })
+      : [];
+    const byStore = new Map<string, Map<string, StoreAppRow>>();
+    for (const row of appRows) {
+      let rows = byStore.get(row.store_id);
+      if (!rows) {
+        rows = new Map();
+        byStore.set(row.store_id, rows);
+      }
+      rows.set(row.app_key, row);
+    }
+    const items = stores.map((store) => {
+      const rows = byStore.get(store.id);
       return {
-        key,
-        name_key: def.name_key,
-        description_key: def.description_key,
-        available: row?.available ?? false,
-        enabled: row?.enabled ?? false,
-        requires_independent: def.requires_independent,
-        depends_on: def.depends_on,
+        store_id: store.id,
+        store_name: store.name,
+        store_slug: store.slug,
+        store_type: store.store_type,
+        creator_id: store.creator_id,
+        creator_name: store.creator.display_name,
+        apps: STORE_APP_KEYS.map((key) => toAdminView(key, rows?.get(key))),
       };
     });
+    return { items, total, page, limit };
   }
 
   /**
@@ -506,6 +589,22 @@ export class StoreAppsService {
       blocked_reason: reason,
     };
   }
+}
+
+function toAdminView(
+  key: StoreAppKey,
+  row: StoreAppRow | undefined,
+): AdminStoreAppView {
+  const def = STORE_APPS[key];
+  return {
+    key,
+    name_key: def.name_key,
+    description_key: def.description_key,
+    available: row?.available ?? false,
+    enabled: row?.enabled ?? false,
+    requires_independent: def.requires_independent,
+    depends_on: def.depends_on,
+  };
 }
 
 function settingsOf(row: { settings: unknown }): Record<string, unknown> {
