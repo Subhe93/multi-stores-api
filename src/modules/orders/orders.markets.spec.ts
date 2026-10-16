@@ -86,7 +86,17 @@ function makePrisma(
       ),
     },
     product: { findUnique: jest.fn(() => Promise.resolve(product)) },
-    productVariant: { findUnique: jest.fn(() => Promise.resolve(variant)) },
+    // M4.0: the personalization check reads the fields of every line.
+    productCustomField: { findMany: jest.fn(() => Promise.resolve([])) },
+    productVariant: {
+      findUnique: jest.fn(() => Promise.resolve(variant)),
+      // M4.1 loadContexts: variant → product of every variant line.
+      findMany: jest.fn(() =>
+        Promise.resolve(
+          variant ? [{ id: variant.id, product_id: variant.product_id }] : [],
+        ),
+      ),
+    },
     productMarketPrice: {
       findMany: jest.fn(() =>
         Promise.resolve(

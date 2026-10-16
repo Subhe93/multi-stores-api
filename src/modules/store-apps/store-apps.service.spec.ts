@@ -178,6 +178,9 @@ describe('StoreAppsService', () => {
         'b2b',
         'invoices',
         'importer',
+        'personalization',
+        'production',
+        'designer',
       ]);
       for (const app of list) {
         expect(app).toMatchObject({
@@ -305,6 +308,9 @@ describe('StoreAppsService', () => {
         'b2b',
         'invoices',
         'importer',
+        'personalization',
+        'production',
+        'designer',
       ]);
       const markets = list.find((a) => a.key === 'markets');
       expect(markets).toMatchObject({
@@ -493,6 +499,9 @@ describe('StoreAppsService', () => {
         ['b2b', true],
         ['invoices', false],
         ['importer', false],
+        ['personalization', false],
+        ['production', false],
+        ['designer', false],
       ]);
       expect(list[3]).toMatchObject({
         requires_independent: true,

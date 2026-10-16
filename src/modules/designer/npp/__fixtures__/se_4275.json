@@ -1,0 +1,104 @@
+{
+  "hideGallery": "1",
+  "cartUrl": "https://namez.se/cart/",
+  "productId": "4275",
+  "templateData": {
+    "id": 4315,
+    "name": "Stilren studentskylt med foto",
+    "size_mode": "budget",
+    "elements": [
+      {
+        "id": "8frbptawy",
+        "type": "background",
+        "color": "#ffffff",
+        "imageData": "https://namez.se/wp-content/uploads/2026/04/Student-2026-1-scaled.jpg",
+        "z": -10,
+        "locked": false,
+        "imageDataHiRes": "https://namez.se/wp-content/uploads/2026/04/Student-2026-4.png"
+      },
+      {
+        "id": "yp6jnu7ld",
+        "type": "text",
+        "text": "Text",
+        "placeholder": "Enter text",
+        "fieldLabel": "Text",
+        "x": 99,
+        "y": 17,
+        "w": 300,
+        "h": 80,
+        "fontSize": 50,
+        "fontFamily": "Montserrat",
+        "fontWeight": 700,
+        "color": "#000000",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 2,
+        "locked": false,
+        "editable": true
+      },
+      {
+        "id": "s186tbxiw",
+        "type": "text",
+        "text": "Klass",
+        "placeholder": "Klass",
+        "fieldLabel": "Klass",
+        "x": 100,
+        "y": 60,
+        "w": 300,
+        "h": 80,
+        "fontSize": 35,
+        "fontFamily": "Montserrat",
+        "fontWeight": 400,
+        "color": "#000000",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 3,
+        "locked": false,
+        "editable": true
+      },
+      {
+        "id": "2kjmpznwb",
+        "type": "image-slot",
+        "placeholder": "Upload image",
+        "fieldLabel": "Photo",
+        "x": 118,
+        "y": 172,
+        "w": 264,
+        "h": 356,
+        "rot": 0,
+        "z": 4,
+        "locked": false,
+        "shape": "rect",
+        "borderRadius": 0,
+        "borderColor": "#cccccc",
+        "imageData": null
+      }
+    ],
+    "thumbnail": ""
+  },
+  "allTemplates": [],
+  "welcomeTemplates": [],
+  "basePrice": "399",
+  "regularPrice": "600",
+  "pricing": {
+    "double_extra": 199,
+    "rain_extra": 29,
+    "poster_price": 0,
+    "welcome_price": 249,
+    "welcome_regular": 349
+  },
+  "addons": {
+    "double": false,
+    "raincover": false,
+    "poster": false,
+    "welcome": false
+  },
+  "sale": {
+    "enabled": false,
+    "badge_text": "REA",
+    "badge_icon": "",
+    "discount_pct": 0
+  },
+  "fonts": [],
+  "featuredImage": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-med-rosa-design-731x1024.jpg"
+}

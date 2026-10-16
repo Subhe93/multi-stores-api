@@ -11,6 +11,7 @@ import {
   ValidateNested,
   ValidateIf,
   Min,
+  MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import {
@@ -40,6 +41,13 @@ export class ProductTranslationDto {
   @IsOptional()
   @IsString()
   meta_desc?: string;
+
+  // Short HTML summary (M4.4). On update, `undefined` keeps the stored value
+  // for this locale (X19 carry-over), `null` or '' clears it.
+  @IsOptional()
+  @IsString()
+  @MaxLength(10000)
+  short_description?: string | null;
 }
 
 export class ProductAttributeValueDto {

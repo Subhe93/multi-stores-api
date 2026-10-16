@@ -4,6 +4,17 @@ import { join, normalize, sep } from 'path';
 import sharp from 'sharp';
 import { currencyDecimals } from '../../common/money/currency.util';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
+import {
+  isSnapshotFileRow,
+  snapshotLabel,
+  sortSnapshotRows,
+  type SnapshotValueRow,
+} from '../../common/personalization/snapshot-label';
+import {
+  buildPersonalizationGroups,
+  hasPersonalizationGroups,
+  type PDisplayRow,
+} from '../../common/personalization/display';
 
 // Per-locale phrasing used inside order emails. The admin can edit the
 // surrounding template body in NotificationTemplate, but list headers/labels
@@ -27,6 +38,9 @@ const ITEMS_PHRASES = {
     paid: 'Your payment was received.',
     cod: 'You chose cash on delivery — please pay the courier on arrival.',
     viewOrder: 'View your order',
+    fileUploaded: 'File uploaded',
+    // M4.1: label of a personalization item without a stored label.
+    itemN: 'Item {i}',
   },
   ar: {
     product: 'المنتج',
@@ -46,6 +60,9 @@ const ITEMS_PHRASES = {
     paid: 'تمّ استلام دفعتك.',
     cod: 'اخترتَ الدفع عند الاستلام — يُرجى الدفع للمندوب عند الوصول.',
     viewOrder: 'عرض طلبك',
+    fileUploaded: 'تم رفع ملف',
+    // M4.1: label of a personalization item without a stored label.
+    itemN: 'القطعة {i}',
   },
   tr: {
     product: 'Ürün',
@@ -65,6 +82,9 @@ const ITEMS_PHRASES = {
     paid: 'Ödemeniz alındı.',
     cod: 'Kapıda ödemeyi seçtiniz — teslimat sırasında lütfen kuryeye ödeyin.',
     viewOrder: 'Siparişinizi görüntüleyin',
+    fileUploaded: 'Dosya yüklendi',
+    // M4.1: label of a personalization item without a stored label.
+    itemN: 'Ürün {i}',
   },
   de: {
     product: 'Produkt',
@@ -84,6 +104,9 @@ const ITEMS_PHRASES = {
     paid: 'Ihre Zahlung ist eingegangen.',
     cod: 'Sie haben Nachnahme gewählt — bitte zahlen Sie bei Zustellung.',
     viewOrder: 'Bestellung ansehen',
+    fileUploaded: 'Datei hochgeladen',
+    // M4.1: label of a personalization item without a stored label.
+    itemN: 'Artikel {i}',
   },
   fr: {
     product: 'Produit',
@@ -103,6 +126,9 @@ const ITEMS_PHRASES = {
     paid: 'Votre paiement a été reçu.',
     cod: 'Paiement à la livraison — réglez le coursier à réception.',
     viewOrder: 'Voir votre commande',
+    fileUploaded: 'Fichier téléversé',
+    // M4.1: label of a personalization item without a stored label.
+    itemN: 'Article {i}',
   },
   sv: {
     product: 'Produkt',
@@ -122,6 +148,9 @@ const ITEMS_PHRASES = {
     paid: 'Din betalning har mottagits.',
     cod: 'Du valde betalning vid leverans — vänligen betala kuriren vid ankomst.',
     viewOrder: 'Visa din beställning',
+    fileUploaded: 'Fil uppladdad',
+    // M4.1: label of a personalization item without a stored label.
+    itemN: 'Artikel {i}',
   },
 } as const;
 
@@ -201,6 +230,35 @@ export const orderWithItemsInclude = {
           },
         },
       },
+      // M4.0 (§7): personalization values, read from the frozen snapshot
+      // (the live field only for rows written before it existed).
+      custom_field_values: {
+        orderBy: { id: 'asc' },
+        select: {
+          value: true,
+          file_url: true,
+          field_name: true,
+          field_type: true,
+          field_label: true,
+          display_value: true,
+          sort_order: true,
+          // M4.1 (C1): repeater grouping, option rows and colour meta.
+          group_key: true,
+          group_index: true,
+          group_label: true,
+          source: true,
+          meta: true,
+          custom_field: {
+            select: {
+              name: true,
+              type: true,
+              translations: {
+                select: { locale: true, label: true, option_labels: true },
+              },
+            },
+          },
+        },
+      },
     },
   },
 } satisfies Prisma.OrderInclude;
@@ -221,6 +279,8 @@ function pickTitle(
 }
 
 interface OrderItemForEmail {
+  /** OrderItem.id (key of the `itemImages` overrides). */
+  id?: string;
   quantity: number;
   unit_price: unknown; // Prisma Decimal
   product?: {
@@ -240,6 +300,130 @@ interface OrderItemForEmail {
       variant_option_config?: unknown;
     } | null;
   } | null;
+  /** M4.0: personalization values (snapshot columns + live fallback). */
+  custom_field_values?: (SnapshotValueRow & PersonalizationGroupColumns)[];
+}
+
+/** M4.1 snapshot columns (C1) the grouped rendering reads. */
+export interface PersonalizationGroupColumns {
+  sort_order?: number | null;
+  group_key?: string | null;
+  group_index?: number | null;
+  group_label?: unknown;
+  source?: string | null;
+  meta?: unknown;
+}
+
+/** "Artikel 2" when a grouped row stored no label (localized fallback). */
+export function personalizationItemLabel(
+  locale: string | undefined,
+  index: number,
+): string {
+  return emailPhrases(locale).itemN.replace('{i}', String(index));
+}
+
+/**
+ * One printable personalization line: a field ("Namn: KARIN"), or a
+ * personalization item (M4.1) whose `parts` are its values in order
+ * ("Artikel 2" with ["KARIN", "Röd"]).
+ */
+export interface PersonalizationPrintLine {
+  label: string;
+  text: string;
+  parts?: string[];
+}
+
+/**
+ * Personalization lines of one order line, shared by the email and the
+ * invoice (M4.0 §7 / M4.1 §4.2). Rows without groups give the M4.0 flat
+ * "Label: text" list unchanged. With repeater groups (rows carrying
+ * `group_index`, app only), each item prints once at the position of its
+ * first row, as its label and its values; variant option rows outside a
+ * group are skipped (the variant line shows them).
+ */
+export function personalizationPrintLines(
+  rows: readonly (SnapshotValueRow & PersonalizationGroupColumns)[],
+  locale: string | undefined,
+  primaryLocale: string | undefined,
+  fileText: string,
+): PersonalizationPrintLine[] {
+  if (rows.length === 0) return [];
+  const sorted = sortSnapshotRows(rows);
+  const textOf = (
+    row: SnapshotValueRow,
+  ): { label: string; text: string | null } => {
+    const { label, value } = snapshotLabel(row, locale, primaryLocale);
+    return { label, text: isSnapshotFileRow(row) ? fileText : value };
+  };
+  if (!hasPersonalizationGroups(sorted)) {
+    const out: PersonalizationPrintLine[] = [];
+    for (const row of sorted) {
+      const { label, text } = textOf(row);
+      if (!text) continue;
+      out.push({ label, text });
+    }
+    return out;
+  }
+
+  const display: PDisplayRow[] = sorted.map((row, i) => {
+    const { label, text } = textOf(row);
+    return {
+      label,
+      value: text,
+      group_key: row.group_key ?? null,
+      group_index: typeof row.group_index === 'number' ? row.group_index : null,
+      group_label: (row.group_label ?? null) as PDisplayRow['group_label'],
+      source: row.source ?? 'FIELD',
+      meta: (row.meta ?? null) as PDisplayRow['meta'],
+      // Already sorted: keep this order inside the groups.
+      sort_order: i,
+    };
+  });
+  const { groups } = buildPersonalizationGroups(display, {
+    locale,
+    primary: primaryLocale,
+    defaultGroupLabel: (index) => personalizationItemLabel(locale, index),
+  });
+  const out: PersonalizationPrintLine[] = [];
+  const printed = new Set<string>();
+  for (const row of display) {
+    if (typeof row.group_index !== 'number') {
+      if (row.source === 'OPTION' || !row.value) continue;
+      out.push({ label: row.label, text: row.value });
+      continue;
+    }
+    const id = `${row.group_key ?? ''}#${row.group_index}`;
+    if (printed.has(id)) continue;
+    printed.add(id);
+    const group = groups.find(
+      (g) => g.key === (row.group_key ?? '') && g.index === row.group_index,
+    );
+    const parts = (group?.entries ?? [])
+      .map((e) => e.value)
+      .filter((v): v is string => typeof v === 'string' && v !== '');
+    if (!group || parts.length === 0) continue;
+    out.push({ label: group.label, text: parts.join(', '), parts });
+  }
+  return out;
+}
+
+/**
+ * "Label: text" pairs of a line's personalization (M4.0 §7): sorted by the
+ * snapshot's sort order, labels and option texts in the email's locale, and
+ * a phrase instead of a URL for files (customer files are private). Empty
+ * for a line without values.
+ */
+function personalizationLines(
+  item: OrderItemForEmail,
+  locale: string | undefined,
+  primaryLocale: string | undefined,
+): PersonalizationPrintLine[] {
+  return personalizationPrintLines(
+    item.custom_field_values ?? [],
+    locale,
+    primaryLocale,
+    emailPhrases(locale).fileUploaded,
+  );
 }
 
 function variantLabel(options: unknown): string {
@@ -337,6 +521,13 @@ export function renderOrderItems(
   currency: string,
   locale: string | undefined,
   publicBase: string,
+  primaryLocale?: string,
+  /**
+   * Per order item image that wins over the product images (an app's
+   * `itemImages` hook, e.g. the designer proof). Absent or empty: the output
+   * is byte-identical to the renderer without overrides.
+   */
+  imageOverrides?: Readonly<Record<string, string>>,
 ): { items_html: string; items_text: string } {
   const phrases = emailPhrases(locale);
   const lang = pickLocale(locale);
@@ -364,18 +555,39 @@ export function renderOrderItems(
         variantImage ||
         item.custom_product?.product?.images?.[0]?.url ||
         item.product?.images?.[0]?.url;
-      const imgUrl = imgPath ? absoluteUrl(imgPath, publicBase) : '';
+      const override = item.id ? imageOverrides?.[item.id] : undefined;
+      const imgUrl = override
+        ? absoluteUrl(override, publicBase)
+        : imgPath
+          ? absoluteUrl(imgPath, publicBase)
+          : '';
       const vLabel = variantLabel(item.variant?.options);
       const unit = Number(item.unit_price ?? 0);
       const line = unit * item.quantity;
+      // Appended to the variant line, so a line without values renders
+      // exactly as before (G0).
+      const valuesHtml = personalizationLines(item, locale, primaryLocale)
+        .map(
+          (v) =>
+            // M4.1 items: "Artikel 2: KARIN · Röd" (each part escaped).
+            `<div style="color:#71717a;font-size:11px;margin-top:2px;">${esc(v.label)}: ${v.parts ? v.parts.map((x) => esc(x)).join(' · ') : esc(v.text)}</div>`,
+        )
+        .join('');
 
       return `<tr>
   <td style="padding:12px 8px;border-bottom:1px solid #e4e4e7;vertical-align:top;">
-    ${imgUrl ? `<img src="${esc(imgUrl)}" alt="${esc(title)}" width="64" height="64" style="display:block;border-radius:6px;border:1px solid #e4e4e7;object-fit:cover;" />` : ''}
+    ${
+      override
+        ? // An override keeps its own aspect ratio (a portrait proof is never squashed).
+          `<img src="${esc(imgUrl)}" alt="${esc(title)}" width="64" style="display:block;width:64px;height:auto;border-radius:6px;border:1px solid #e4e4e7;" />`
+        : imgUrl
+          ? `<img src="${esc(imgUrl)}" alt="${esc(title)}" width="64" height="64" style="display:block;border-radius:6px;border:1px solid #e4e4e7;object-fit:cover;" />`
+          : ''
+    }
   </td>
   <td style="padding:12px 8px;border-bottom:1px solid #e4e4e7;vertical-align:top;font-size:13px;color:#18181b;">
     <div style="font-weight:600;">${esc(title)}</div>
-    ${vLabel ? `<div style="color:#71717a;font-size:11px;margin-top:2px;">${esc(vLabel)}</div>` : ''}
+    ${vLabel ? `<div style="color:#71717a;font-size:11px;margin-top:2px;">${esc(vLabel)}</div>` : ''}${valuesHtml}
     <div style="color:#71717a;font-size:11px;margin-top:2px;">${phrases.qty}: ${item.quantity}</div>
   </td>
   <td style="padding:12px 8px;border-bottom:1px solid #e4e4e7;vertical-align:top;text-align:end;font-size:13px;color:#18181b;font-weight:600;white-space:nowrap;">
@@ -400,7 +612,13 @@ export function renderOrderItems(
       const vLabel = variantLabel(item.variant?.options);
       const unit = Number(item.unit_price ?? 0);
       const line = unit * item.quantity;
-      return `- ${title}${vLabel ? ` (${vLabel})` : ''} × ${item.quantity} — ${formatMoney(line, currency)}`;
+      const valuesText = personalizationLines(item, locale, primaryLocale)
+        .map(
+          (v) => `
+    ${v.label}: ${v.text}`,
+        )
+        .join('');
+      return `- ${title}${vLabel ? ` (${vLabel})` : ''} × ${item.quantity} — ${formatMoney(line, currency)}${valuesText}`;
     })
     .join('\n');
 
@@ -918,6 +1136,15 @@ export interface OrderMailExtension {
    * Files to attach to the customer email of this event. `onSent` runs only
    * after the message was actually handed to an SMTP server.
    */
+  /**
+   * Per order item images that replace the product image in the items block
+   * (`OrderItem.id` → absolute or API-relative URL). Optional; an item
+   * without an entry keeps its product image.
+   */
+  itemImages?(
+    order: OrderForEmail,
+    event: OrderEmailEvent,
+  ): Promise<Record<string, string>>;
   attachments?(
     order: OrderForEmail,
     event: OrderEmailEvent,

@@ -107,7 +107,7 @@ describe('StoresService.findSlugByCustomDomain', () => {
     );
     expect(prisma.store.findUnique).toHaveBeenCalledWith({
       where: { custom_domain: 'shop.legacy.com' },
-      select: { slug: true, is_active: true },
+      select: { id: true, slug: true, is_active: true },
     });
   });
 
@@ -133,7 +133,7 @@ describe('StoresService.findSlugByCustomDomain', () => {
     });
     expect(miss.prisma.store.findUnique).toHaveBeenCalledWith({
       where: { custom_domain: 'namez.se' },
-      select: { slug: true, is_active: true },
+      select: { id: true, slug: true, is_active: true },
     });
     // Another store still owning the host as its legacy custom_domain wins.
     const hit = build({

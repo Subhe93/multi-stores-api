@@ -17,10 +17,13 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { MailService } from '../../mail/mail.service';
 import { OrdersService, type OrderQuote } from '../../orders/orders.service';
 import {
+  type CartLine,
   type CartLineLike,
   type NormalizedCartLine,
   normalizeCartLine,
+  verifiedDesignIds,
 } from '../../cart/cart-line';
+import { DesignerCartService } from '../../designer/designer-cart.service';
 import { normalizeEmail } from '../../../common/email/email.util';
 import { KustomService, withMarket, type StoreContext } from './kustom.service';
 import { MarketsContextService } from '../../markets/markets-context.service';
@@ -269,7 +272,56 @@ export class KustomCheckoutService {
     // b2b app M2.5 (reverse charge): optional and trailing so positional
     // test constructors stay valid. Absent = no exemption is ever applied.
     @Optional() private b2bTax?: B2bTaxExemptionService,
+    // Designer app (M4.2): ownership of designer lines; optional and last.
+    @Optional() private designerCart?: DesignerCartService,
   ) {}
+
+  /**
+   * Designer app: the session snapshot of raw storefront lines. Design
+   * ownership is checked on the RAW lines (their `design_token`) before
+   * normalizing drops the token; verified lines are stored with
+   * `design_verified: true`, the only designs the session's quotes and its
+   * order will trust. Lines without a design are stored exactly as before.
+   */
+  private async snapshotLines(
+    storeId: string,
+    raw: CartLineLike[],
+    customerId: string | null,
+    alreadyVerified: readonly string[] = [],
+  ): Promise<CartLine[]> {
+    const verified =
+      this.designerCart && raw.some((l) => !!l.design_id)
+        ? await this.designerCart.verifySessionDesigns(
+            storeId,
+            raw.map((l) => ({
+              product_id: l.product_id ?? null,
+              custom_product_id: l.custom_product_id ?? null,
+              variant_id: l.variant_id ?? null,
+              design_id: l.design_id ?? null,
+              design_token: l.design_token ?? null,
+            })),
+            customerId,
+            alreadyVerified,
+          )
+        : new Set<string>();
+    return raw.map((l) => {
+      const n = normalizeCartLine(l) as CartLine;
+      return n.design_id && verified.has(n.design_id)
+        ? { ...n, design_verified: true }
+        : n;
+    });
+  }
+
+  /** Designer app: what an order-bound quote of the session may price. */
+  private designOwnership(session: Pick<Session, 'items' | 'customer_id'>): {
+    customerId: string | null;
+    verifiedDesignIds: string[];
+  } {
+    return {
+      customerId: session.customer_id ?? null,
+      verifiedDesignIds: verifiedDesignIds(session.items),
+    };
+  }
 
   // ── Session lookup / auth ───────────────────────────────────────────────
 
@@ -414,7 +466,10 @@ export class KustomCheckoutService {
    * can answer with the contracted redirect.
    */
   private async priceSession(
-    session: Pick<Session, 'id' | 'store_id' | 'items' | 'locale'>,
+    session: Pick<
+      Session,
+      'id' | 'store_id' | 'items' | 'locale' | 'customer_id'
+    >,
     ctx: StoreContext,
     opts: {
       countryCode: string | null;
@@ -453,6 +508,8 @@ export class KustomCheckoutService {
       marketKey: ctx.market?.key ?? null,
       ...(opts.buyerType === 'COMPANY' ? { buyerType: 'COMPANY' } : {}),
       exemptionInputs: opts.exemption ?? null,
+      // Designer app: only the designs this session verified are priced.
+      designOwnership: this.designOwnership(session),
     });
     if (quote.shipping && !quote.shipping.available) {
       return { ok: false, shippingUnavailable: quote.shipping.message };
@@ -854,7 +911,9 @@ export class KustomCheckoutService {
       });
       raw = cart?.items ?? [];
     }
-    const lines = raw.map((l) => normalizeCartLine(l));
+    // Designer app: ownership of designer lines is checked on the raw
+    // lines (tokens) before they are normalized.
+    const lines = await this.snapshotLines(ctx.id, raw, customer?.id ?? null);
     if (!lines.length) {
       throw new BadRequestException({
         code: 'ORDER_CART_EMPTY',
@@ -1034,9 +1093,14 @@ export class KustomCheckoutService {
 
     const data: Prisma.KustomCheckoutSessionUpdateInput = {};
     if (dto.items !== undefined) {
-      data.items = dto.items.map((l) =>
-        normalizeCartLine(l),
-      ) as unknown as Prisma.InputJsonValue;
+      // Designer app: designs already verified by this session keep their
+      // trust; new ones must present their token (or be the customer's).
+      data.items = (await this.snapshotLines(
+        session.store_id,
+        dto.items,
+        session.customer_id ?? null,
+        verifiedDesignIds(session.items),
+      )) as unknown as Prisma.InputJsonValue;
     }
     if (dto.coupon_code !== undefined) {
       data.coupon_code = dto.coupon_code?.trim() || null;
@@ -1621,6 +1685,9 @@ export class KustomCheckoutService {
         },
         {
           lines: this.itemsOf(session),
+          // Designer app: the snapshot trusts only the designs this session
+          // verified when it stored the lines.
+          verifiedDesignIds: verifiedDesignIds(session.items),
           ...(b2b.company ? { companySnapshot: b2b.company } : {}),
           exemptionInputs: exemption,
         },

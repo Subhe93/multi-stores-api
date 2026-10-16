@@ -136,6 +136,21 @@ export class StoreAppsService {
     return row ? isStoreAppRowActive(row) : false;
   }
 
+  /**
+   * Like isEnabled, but null when the app rows could not be read (DB
+   * failure on a cache miss) instead of "off": for callers that must fail
+   * closed rather than fall back to the app-off behaviour.
+   */
+  async enabledOrUnknown(
+    storeId: string,
+    key: StoreAppKey,
+  ): Promise<boolean | null> {
+    const rows = await this.rowsOf(storeId);
+    if (!rows) return null;
+    const row = rows.get(key);
+    return row ? isStoreAppRowActive(row) : false;
+  }
+
   /** The app's settings object, or null when the app is not in effect. */
   async getSettings(
     storeId: string,
@@ -538,6 +553,15 @@ export class StoreAppsService {
       select: storeAppSelect,
     });
     return new Map(rows.map((r) => [r.app_key, r]));
+  }
+
+  /**
+   * Settings were changed outside updateSettings (e.g. the personalization
+   * app renames a `url_prefill` target with a field): drop the cached rows
+   * and revalidate the storefront.
+   */
+  async settingsChanged(storeId: string): Promise<void> {
+    await this.afterMutation(storeId);
   }
 
   private async afterMutation(storeId: string): Promise<void> {

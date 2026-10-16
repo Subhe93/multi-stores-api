@@ -1,0 +1,4 @@
+ID	guid	post_mime_type	post_parent	_wp_attached_file	_wp_attachment_metadata	_wp_attachment_image_alt
+500	https://shop.example/wp-content/uploads/2026/05/mugg-scaled.jpg	image/jpeg	100	2026/05/mugg-scaled.jpg	a:4:{s:5:"width";i:2560;s:6:"height";i:2560;s:4:"file";s:23:"2026/05/mugg-scaled.jpg";s:14:"original_image";s:8:"mugg.jpg";}	En vit mugg
+501	https://shop.example/wp-content/uploads/2026/05/mugg-2.jpg	image/jpeg	0	2026/05/mugg-2.jpg	a:3:{s:5:"width";i:800;s:6:"height";i:800;s:4:"file";s:18:"2026/05/mugg-2.jpg";}	NULL
+502	https://shop.example/wp-content/uploads/2026/05/kategori.jpg	image/jpeg	0	2026/05/kategori.jpg	NULL	NULL

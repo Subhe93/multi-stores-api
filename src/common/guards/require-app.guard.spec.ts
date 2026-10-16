@@ -120,3 +120,16 @@ describe('RequireAppGuard', () => {
     expect(storeApps.isEnabled).not.toHaveBeenCalled();
   });
 });
+
+describe('RequireAppGuard store hand-off (M4.1 fixes)', () => {
+  it('puts the resolved store id on the request for the handler', async () => {
+    const storeApps = makeStoreApps({ s1: ['personalization'] });
+    const guard = new RequireAppGuard(
+      makeReflector('personalization'),
+      storeApps as unknown as StoreAppsService,
+    );
+    const request: Record<string, unknown> = { params: { slug: 'my-shop' } };
+    await expect(guard.canActivate(makeContext(request))).resolves.toBe(true);
+    expect(request.appStoreId).toBe('s1');
+  });
+});

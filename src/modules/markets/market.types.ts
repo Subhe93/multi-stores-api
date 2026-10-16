@@ -80,12 +80,22 @@ export interface StoreByDomainResponse {
   redirect_to?: string;
   market?: MarketRoute;
   markets?: MarketRoute[];
+  /**
+   * Present only when the store has active redirects (M4.4 D17): the proxy
+   * then loads `GET /stores/:slug/redirects?v=<version>` once per version.
+   */
+  redirects_version?: string;
 }
 
 /** `GET /stores/:slug/market-context` (proxy, platform subdomains). */
 export type MarketContextResponse =
-  | { enabled: false }
-  | { enabled: true; market: MarketRoute; markets: MarketRoute[] };
+  | { enabled: false; redirects_version?: string }
+  | {
+      enabled: true;
+      market: MarketRoute;
+      markets: MarketRoute[];
+      redirects_version?: string;
+    };
 
 export interface DomainView {
   id: string;

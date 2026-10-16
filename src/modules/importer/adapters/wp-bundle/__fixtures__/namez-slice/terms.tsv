@@ -1,0 +1,124 @@
+2	simple	simple	0	0
+4	variable	variable	0	0
+15	3D Presenter	3d_presenter	0	0
+24	Vit	vit	0	0
+25	Svart	svart	0	0
+26	Röd	rod	0	0
+27	Gul	gul	0	0
+28	20	20	0	0
+29	25	25	0	0
+30	30	30	0	0
+31	Silver	silver	0	0
+32	Blå	bla	0	0
+33	Orange	orange	0	0
+34	Ljusrosa	ljusrosa	0	0
+35	Rosa	rosa	0	0
+46	Guld	guld	0	0
+47	Med diamant	med-diamant	0	0
+48	Med Månadsstenar	med-manadsstenar	0	0
+49	Utan sten	utan-sten	0	0
+52	50	50	0	0
+53	52	52	0	0
+54	54	54	0	0
+55	57	57	0	0
+56	60	60	0	0
+57	62	62	0	0
+59	1 Inskription	1	0	0
+60	2 Inskriptioner (+50 kr)	2	0	0
+61	3 Inskriptioner (+90 kr)	3	0	0
+62	4 Inskriptioner (+120 kr)	4	0	0
+63	Blank Guld	blank-guld	0	0
+64	Matt Svart	matt-svart	0	0
+65	Blank Silver	blank-silver	0	0
+66	Typewriter	aa-typewriter	0	0
+67	Handwriting	aa-handwriting	0	0
+68	Old London	aa-old-london	0	0
+69	Standard	aa-standard	0	0
+70	Rost	rost	0	0
+71	Presenter till vem	presenter-till-vem	0	0
+73	Present till Svärfar	present-till-svarfar	0	0
+74	Present till svärmor	present-till-svarmor	0	0
+75	Present till pappa	present-till-pappa	0	0
+76	Present till Mamma	present-till-mamma	0	0
+77	Present till syster	present-till-syster	0	0
+78	Present till Bror	present-till-bror	0	0
+79	Present till mormor	present-till-mormor	0	0
+80	Present till morfar	present-till-morfar	0	0
+81	Present till Farmor	present-till-farmor	0	0
+82	Present till farfar	present-till-farfar	0	0
+83	Present till pojkvän	present-till-pojkvan	0	0
+84	Present till flickvän	present-till-flickvan	0	0
+85	Present till par	present-till-par	0	0
+86	Present till Barn	present-till-barn	0	0
+87	Present till Henne	present-till-henne	0	0
+88	Present till Honom	present-till-honom	0	0
+89	Present till Chef	present-till-chef	0	0
+90	Present till Kollega	present-till-kollega	0	0
+91	Present till Företag	present-till-foretag	0	0
+92	Present till flicka	present-till-flicka	0	0
+93	Present till pojke	present-till-pojke	0	0
+94	Present till Sambo	present-till-sambo	0	0
+95	Present till Föräldrar	present-till-foraldrar	0	0
+96	Present till lärare	present-till-larare	0	0
+97	Present till pedagoger	present-till-pedagoger	0	0
+98	Present till kille	present-till-kille	0	0
+99	Present till tjej	present-till-tjej	0	0
+100	Alla hjärtans dag present till pojkvän​	alla-hjartans-dag-present-till-pojkvan	0	0
+101	Alla hjärtans dag present flickvän	alla-hjartans-dag-present-flickvan	0	0
+102	Present till bästa vän	present-till-basta-van	0	0
+103	Present till kvinna​	present-till-kvinna	0	0
+104	Present till Fru​	present-till-fru	0	0
+105	Present till tjejkompis​	present-till-tjejkompis	0	0
+106	Svensk present	svensk-present	0	0
+107	Present till nyfödd	present-till-nyfodd	0	0
+108	Liten (13–16 cm) - 350 kr	liten-13-16-cm	0	0
+109	Mellan (17–21 cm) - 550 kr	mellan-17-21-cm	0	0
+110	Stor (22–30 cm) - 950 kr	stor-22-30-cm	0	0
+111	Present till husdjur	present-till-husdjur	0	0
+112	Present till personal	present-till-personal	0	0
+113	Present till storfiskaren	present-till-storfiskaren	0	0
+114	Mors dag present	mors-dag-present	0	0
+115	Fars dag present	fars-dag-present	0	0
+116	Gå bort present	ga-bort-present	0	0
+117	Inflyttningspresent	inflyttningspresent	0	0
+118	Roliga presenter	roliga-presenter	0	0
+119	Personlig Studentpresent	studentpresent	0	0
+120	1 produkt	ett	0	0
+121	2 produkter	tva	0	0
+122	3 produkter	tre	0	0
+123	4 produkter	fyra	0	0
+124	5 produkter	fem	0	0
+126	Ljusblå	ljusbla	0	0
+127	olivgrön	olivgron	0	0
+128	6 produkter	6-produkter	0	0
+129	1 produkt	1-produkt	0	0
+130	2 produkter	2-produkter	0	0
+131	3 produkter	3-produkter	0	0
+132	4 produkter	4-produkter	0	0
+133	5 produkter	5-produkter	0	0
+134	6 produkter	6-produkter	0	0
+136	1 produkt	1-produkt	0	0
+137	2 produkter	2-produkter	0	0
+138	3D printing	3d-printing	0	0
+139	1 produkt:	1-produkt	0	0
+140	2 produkter	2-produkter	0	0
+141	3 produkter	3-produkter	0	0
+142	4 produkter	4-produkter	0	0
+143	5 produkter	5-produkter	0	0
+144	Namnskyltar	namnskyltar	0	0
+145	3D Namnskyltar	3d-namnskyltar	0	0
+146	Namnhalsband med egen gravyr	namnhalsband-med-egen-gravyr	0	0
+147	Halsband	halsband	0	0
+170	Studentpresent till kille	studentpresent-till-kille	0	0
+171	Studentpresent till tjej	studentpresent-till-tjej	0	0
+172	Dalahäst	dalahast	0	0
+173	svenska presenter till amerikaner	svenska-presenter-till-amerikaner	0	0
+174	Svenska presenter till amerikaner	svenska-presenter-till-amerikaner	0	0
+175	Skulpturer	skulpturer	0	0
+176	Studentskyltar – personliga studentskyltar med foto	studentskyltar	0	0
+178	NPP Poster	npp-poster	0	0
+179	Student 2026	student-2026	0	0
+180	Studentmössa	studentmossa	0	0
+181	Svensk flagga	svensk-flagga	0	0
+182	Nallebjörn	nallebjorn	0	0
+183	Grön	gron	0	0

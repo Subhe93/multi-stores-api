@@ -82,9 +82,22 @@ export const orderForInvoiceInclude = {
         },
       },
       custom_field_values: {
+        orderBy: { id: 'asc' },
         select: {
           value: true,
           file_url: true,
+          // M4.0: order-time snapshot (read first by itemDetails).
+          field_name: true,
+          field_type: true,
+          field_label: true,
+          display_value: true,
+          sort_order: true,
+          // M4.1 (C1): personalization item grouping.
+          group_key: true,
+          group_index: true,
+          group_label: true,
+          source: true,
+          meta: true,
           custom_field: {
             select: {
               name: true,
@@ -319,6 +332,7 @@ export class InvoicesService {
       }),
       bank: bankSnapshot(profile),
       locale,
+      primaryLocale: store?.language_config?.primary_locale ?? null,
       issueDate,
       timezone: profile.timezone,
       dueDays: profile.due_days,

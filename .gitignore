@@ -7,7 +7,7 @@ node_modules
 dist
 
 # User-uploaded files (served at runtime, not source)
-uploads/
+/uploads/
 
 # Private runtime files (rendered invoice PDFs); never served, never committed.
 # Anchored to the repo root so src/modules/invoices/storage/ (source) stays tracked.

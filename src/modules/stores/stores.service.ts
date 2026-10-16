@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
 import { Prisma, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -14,6 +15,7 @@ import { MarketsService } from '../markets/markets.service';
 import { MarketsContextService } from '../markets/markets-context.service';
 import { toMarketRoute } from '../markets/market-context';
 import type { StoreByDomainResponse } from '../markets/market.types';
+import { RedirectsService } from '../redirects/redirects.service';
 import { isReservedDomain } from '../../common/domains/reserved-hosts';
 import { stripBrandFromThemeConfig } from './theme-config';
 import {
@@ -43,6 +45,8 @@ export class StoresService {
     private readonly storeApps: StoreAppsService,
     private readonly markets: MarketsService,
     private readonly marketsContext: MarketsContextService,
+    // Optional so unit tests built without it keep working (no redirects).
+    @Optional() private readonly redirects?: RedirectsService,
   ) {}
 
   async create(userId: string, dto: CreateStoreDto) {
@@ -199,6 +203,18 @@ export class StoresService {
   // store with the markets app on, the market the host belongs to
   // (M1-DESIGN §3.2; market/markets are absent otherwise).
   async findSlugByCustomDomain(host: string): Promise<StoreByDomainResponse> {
+    const res = await this.lookupCustomDomain(host);
+    // M4.4 D17: `redirects_version` only when the store has active redirects
+    // (cached per store); every other answer is byte-identical.
+    const version = this.redirects
+      ? await this.redirects.versionFor(res.storeId)
+      : null;
+    return version ? { ...res.body, redirects_version: version } : res.body;
+  }
+
+  private async lookupCustomDomain(
+    host: string,
+  ): Promise<{ storeId: string; body: StoreByDomainResponse }> {
     const normalized = host.trim().toLowerCase().split(':')[0];
     const notFound = () =>
       new NotFoundException({
@@ -223,23 +239,28 @@ export class StoresService {
           const markets =
             (await this.marketsContext.listLive(domain.store_id)) ?? [];
           return {
-            slug: domain.store.slug,
-            ...(domain.redirect_to ? { redirect_to: domain.redirect_to } : {}),
-            market: toMarketRoute(market ?? defaultMarket),
-            markets,
+            storeId: domain.store_id,
+            body: {
+              slug: domain.store.slug,
+              ...(domain.redirect_to
+                ? { redirect_to: domain.redirect_to }
+                : {}),
+              market: toMarketRoute(market ?? defaultMarket),
+              markets,
+            },
           };
         }
       } else if (domain.store.custom_domain?.toLowerCase() === normalized) {
-        return { slug: domain.store.slug };
+        return { storeId: domain.store_id, body: { slug: domain.store.slug } };
       }
     }
 
     const store = await this.prisma.store.findUnique({
       where: { custom_domain: normalized },
-      select: { slug: true, is_active: true },
+      select: { id: true, slug: true, is_active: true },
     });
     if (!store || !store.is_active) throw notFound();
-    return { slug: store.slug };
+    return { storeId: store.id, body: { slug: store.slug } };
   }
 
   async update(userId: string, dto: UpdateStoreDto) {

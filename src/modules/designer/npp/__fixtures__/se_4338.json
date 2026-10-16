@@ -1,0 +1,110 @@
+{
+  "hideGallery": "1",
+  "cartUrl": "https://namez.se/cart/",
+  "productId": "4338",
+  "templateData": {
+    "id": 4368,
+    "name": "Studentskylt med mjuk design",
+    "size_mode": "budget",
+    "elements": [
+      {
+        "id": "d5v7hquig",
+        "type": "background",
+        "color": "#ffffff",
+        "imageData": "https://namez.se/wp-content/uploads/2026/04/Student-2026-12-scaled.jpg",
+        "z": -10,
+        "locked": false,
+        "imageDataHiRes": "https://namez.se/wp-content/uploads/2026/04/Student-2026-4-1-scaled.png"
+      },
+      {
+        "id": "92i9ycx99",
+        "type": "image-slot",
+        "placeholder": "Upload image",
+        "fieldLabel": "Photo",
+        "x": 63,
+        "y": 221,
+        "w": 312,
+        "h": 371,
+        "rot": 5,
+        "z": 2,
+        "locked": false,
+        "shape": "rect",
+        "borderRadius": 0,
+        "borderColor": "#cccccc",
+        "imageData": null
+      },
+      {
+        "id": "ycsrlqwzs",
+        "type": "text",
+        "text": "Namn",
+        "placeholder": "Namn",
+        "fieldLabel": "Namn",
+        "x": -1,
+        "y": 24,
+        "w": 499,
+        "h": 80,
+        "fontSize": 50,
+        "fontFamily": "Montserrat",
+        "fontWeight": 700,
+        "color": "#000000",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 3,
+        "locked": false,
+        "editable": true
+      },
+      {
+        "id": "a8365ireo",
+        "type": "text",
+        "text": "Klass",
+        "placeholder": "Klass",
+        "fieldLabel": "Klass",
+        "x": 163,
+        "y": 92,
+        "w": 163,
+        "h": 44,
+        "fontSize": 30,
+        "fontFamily": "Montserrat",
+        "fontWeight": 400,
+        "color": "#000000",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 4,
+        "locked": false,
+        "editable": true
+      }
+    ],
+    "thumbnail": ""
+  },
+  "allTemplates": [],
+  "welcomeTemplates": [],
+  "basePrice": "399",
+  "regularPrice": "600",
+  "pricing": {
+    "double_extra": 149,
+    "rain_extra": 29,
+    "poster_price": 179,
+    "welcome_price": 249,
+    "welcome_regular": 349
+  },
+  "addons": {
+    "double": false,
+    "raincover": false,
+    "poster": false,
+    "welcome": false
+  },
+  "sale": {
+    "enabled": false,
+    "badge_text": "REA",
+    "badge_icon": "",
+    "discount_pct": 0
+  },
+  "fonts": [
+    {
+      "family": "Montserrat",
+      "type": "google",
+      "url": ""
+    }
+  ],
+  "featuredImage": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-med-mjuk-design-731x1024.jpg"
+}

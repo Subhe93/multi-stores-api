@@ -96,6 +96,9 @@ describe('StoreAppsService.adminOverview', () => {
       'b2b',
       'invoices',
       'importer',
+      'personalization',
+      'production',
+      'designer',
     ]);
     expect(alpha.apps[0]).toMatchObject({
       key: 'markets',
@@ -116,7 +119,7 @@ describe('StoreAppsService.adminOverview', () => {
       depends_on: ['markets'],
     });
     // A store without rows gets the defaults for every app.
-    expect(beta.apps).toHaveLength(4);
+    expect(beta.apps).toHaveLength(7);
     for (const app of beta.apps) {
       expect(app).toMatchObject({ available: false, enabled: false });
     }

@@ -1,0 +1,5888 @@
+{
+ "version": 1,
+ "about": "M4.1 personalization evaluator cases. Source of truth: multi-stores-shared/src/personalization/. Byte copies live in the api and web personalization folders; every copy runs every case. evaluate: `defs` names a set in `defs` (or is a list); `ctx` is merged over baseContext; `expect.lines` entries are partial (toMatchObject) and the line count must match; `compareToM40` also checks errors/values against validatePersonalization on the M4.0-type top-level fields; `sameAs`/`differentFrom` compare lineKey of the canonical values. Every app-on case also checks: re-evaluating the canonical values gives the same values and price, and the line deltas sum to priceDeltaMinor. `evaluateGuards` (same format as `evaluate`) holds the price-guard cases: prototype keys never price, and a delta that does not fit Decimal(10,2) is the PERSONALIZATION_PRICE_TOO_HIGH error.",
+ "baseContext": {
+  "appEnabled": true,
+  "variantOptions": {},
+  "optionConfig": [],
+  "activeOptionValues": {},
+  "locale": "sv",
+  "primaryLocale": "sv"
+ },
+ "defs": {
+  "p1": [
+   {
+    "id": "n1",
+    "name": "name_1",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 0,
+    "validation_rules": {
+     "max_length": 11,
+     "allowed_chars": "A-Za-z❤"
+    },
+    "ui": {
+     "placement": "before_variants",
+     "transform": "uppercase",
+     "counter": true
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Första texten",
+      "messages": {
+       "required": "Ange ett värde för Första texten.",
+       "allowed_chars": "Endast engelska bokstäver tillåtna (A-Z)."
+      }
+     },
+     {
+      "locale": "en",
+      "label": "First text"
+     }
+    ]
+   },
+   {
+    "id": "n2",
+    "name": "name_2",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 1,
+    "validation_rules": {
+     "max_length": 11,
+     "allowed_chars": "A-Za-z❤"
+    },
+    "linked_validation": {
+     "type": "equal_length",
+     "target": "name_1",
+     "fill_char": "❤"
+    },
+    "ui": {
+     "placement": "before_variants",
+     "transform": "uppercase",
+     "counter": "linked",
+     "insert_char": "❤",
+     "limit_to_target": true
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Andra texten",
+      "messages": {
+       "required": "Ange ett värde för Andra texten.",
+       "equal_length": "Längderna stämmer inte överens!",
+       "allowed_chars": "Endast engelska bokstäver tillåtna (A-Z)."
+      }
+     },
+     {
+      "locale": "en",
+      "label": "Second text"
+     }
+    ]
+   },
+   {
+    "id": "mt",
+    "name": "model_text",
+    "type": "TEXT",
+    "is_required": false,
+    "sort_order": 2,
+    "validation_rules": {
+     "max_length": 25
+    },
+    "ui": {
+     "placement": "before_variants",
+     "counter": true
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Texten på framsidan av modellen"
+     }
+    ]
+   }
+  ],
+  "p2": [
+   {
+    "id": "cn",
+    "name": "custom_name_v3",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 0,
+    "validation_rules": {
+     "max_length": 12,
+     "allowed_chars": "A-Za-zÅÄÖåäö0-9",
+     "pattern": "^[A-Za-zÅÄÖåäö0-9]{1,12}$"
+    },
+    "ui": {
+     "placement": "after_variants"
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Skriv namn här:",
+      "display_label": "Namn",
+      "messages": {
+       "required": "Vänligen skriv ett namn.",
+       "pattern": "Endast bokstäver (A–Z, Å, Ä, Ö) och siffror tillåtna, max 12 tecken.",
+       "allowed_chars": "Endast bokstäver (A–Z, Å, Ä, Ö) och siffror tillåtna, max 12 tecken."
+      }
+     },
+     {
+      "locale": "en",
+      "label": "Write name here:",
+      "display_label": "Name"
+     }
+    ]
+   }
+  ],
+  "p4": [
+   {
+    "id": "f1",
+    "name": "field_1_v2",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 0,
+    "validation_rules": {
+     "max_length": 15
+    },
+    "ui": {
+     "placement": "after_variants"
+    },
+    "conditions": null,
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Framsidan gravyr",
+      "sublabel": "Upp till 15 tecken",
+      "messages": {
+       "required": "Vänligen fyll i alla obligatoriska fält."
+      }
+     }
+    ]
+   },
+   {
+    "id": "f2",
+    "name": "field_2_v2",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 1,
+    "validation_rules": {
+     "max_length": 15
+    },
+    "ui": {
+     "placement": "after_variants"
+    },
+    "conditions": {
+     "match": "all",
+     "rules": [
+      {
+       "source": "option",
+       "key": "Antal inskriptioner",
+       "op": "gte",
+       "value": 2
+      }
+     ]
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Vänster inskription",
+      "sublabel": "Upp till 15 tecken",
+      "messages": {
+       "required": "Vänligen fyll i alla obligatoriska fält."
+      }
+     }
+    ]
+   },
+   {
+    "id": "f3",
+    "name": "field_3_v2",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 2,
+    "validation_rules": {
+     "max_length": 15
+    },
+    "ui": {
+     "placement": "after_variants"
+    },
+    "conditions": {
+     "match": "all",
+     "rules": [
+      {
+       "source": "option",
+       "key": "Antal inskriptioner",
+       "op": "gte",
+       "value": 3
+      }
+     ]
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Baksidan inskription",
+      "sublabel": "Upp till 15 tecken",
+      "messages": {
+       "required": "Vänligen fyll i alla obligatoriska fält."
+      }
+     }
+    ]
+   },
+   {
+    "id": "f4",
+    "name": "field_4_v2",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 3,
+    "validation_rules": {
+     "max_length": 15
+    },
+    "ui": {
+     "placement": "after_variants"
+    },
+    "conditions": {
+     "match": "all",
+     "rules": [
+      {
+       "source": "option",
+       "key": "Antal inskriptioner",
+       "op": "gte",
+       "value": 4
+      }
+     ]
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Höger inskription",
+      "sublabel": "Upp till 15 tecken",
+      "messages": {
+       "required": "Vänligen fyll i alla obligatoriska fält."
+      }
+     }
+    ]
+   }
+  ],
+  "p5": [
+   {
+    "id": "cb",
+    "name": "ppom_details",
+    "type": "CHECKBOX_GROUP",
+    "is_required": false,
+    "sort_order": 0,
+    "options": [
+     "Student 2026",
+     "Studentmössa",
+     "Svensk flagga",
+     "Nallebjörn"
+    ],
+    "ui": {
+     "placement": "after_variants",
+     "default_checked": [
+      "Student 2026",
+      "Studentmössa",
+      "Svensk flagga",
+      "Nallebjörn"
+     ]
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Välj detaljer i designen"
+     },
+     {
+      "locale": "en",
+      "label": "Choose design details",
+      "option_labels": {
+       "Svensk flagga": "Swedish flag"
+      }
+     }
+    ]
+   }
+  ],
+  "checkRules": [
+   {
+    "id": "cr",
+    "name": "extras",
+    "type": "CHECKBOX_GROUP",
+    "is_required": true,
+    "sort_order": 0,
+    "options": [
+     "a",
+     "b",
+     "c",
+     "d"
+    ],
+    "validation_rules": {
+     "min_checked": 2,
+     "max_checked": 3
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Tillval",
+      "messages": {
+       "min_checked": "Välj minst två"
+      }
+     }
+    ]
+   }
+  ],
+  "palette": [
+   {
+    "id": "pc",
+    "name": "color",
+    "type": "COLOR_PALETTE",
+    "is_required": true,
+    "sort_order": 0,
+    "options": [
+     "Röd",
+     "Blå"
+    ],
+    "ui": {
+     "palette_hex": {
+      "Röd": "#dd3333",
+      "Blå": "#1e73be"
+     }
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Färg"
+     },
+     {
+      "locale": "en",
+      "label": "Colour",
+      "option_labels": {
+       "Blå": "Blue"
+      }
+     }
+    ]
+   }
+  ],
+  "fieldConditions": [
+   {
+    "id": "early",
+    "name": "early",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 0,
+    "conditions": {
+     "match": "all",
+     "rules": [
+      {
+       "source": "field",
+       "key": "late",
+       "op": "set"
+      }
+     ]
+    }
+   },
+   {
+    "id": "gift",
+    "name": "gift",
+    "type": "SELECT",
+    "is_required": false,
+    "sort_order": 1,
+    "options": [
+     "Ja",
+     "Nej"
+    ]
+   },
+   {
+    "id": "msg",
+    "name": "gift_message",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 2,
+    "conditions": {
+     "match": "all",
+     "rules": [
+      {
+       "source": "field",
+       "key": "gift",
+       "op": "eq",
+       "value": "Ja"
+      }
+     ]
+    }
+   },
+   {
+    "id": "sig",
+    "name": "signature",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 3,
+    "conditions": {
+     "match": "all",
+     "rules": [
+      {
+       "source": "field",
+       "key": "gift_message",
+       "op": "set"
+      }
+     ]
+    }
+   },
+   {
+    "id": "ex",
+    "name": "extras",
+    "type": "CHECKBOX_GROUP",
+    "is_required": false,
+    "sort_order": 4,
+    "options": [
+     "Gravyr",
+     "Ask"
+    ]
+   },
+   {
+    "id": "eng",
+    "name": "engraving",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 5,
+    "conditions": {
+     "match": "any",
+     "rules": [
+      {
+       "source": "field",
+       "key": "extras",
+       "op": "in",
+       "value": [
+        "Gravyr"
+       ]
+      },
+      {
+       "source": "option",
+       "key": "Modell",
+       "op": "eq",
+       "value": "Gravyr"
+      }
+     ]
+    }
+   },
+   {
+    "id": "late",
+    "name": "late",
+    "type": "TEXT",
+    "is_required": false,
+    "sort_order": 6
+   }
+  ],
+  "pricing": [
+   {
+    "id": "a",
+    "name": "fixed_a",
+    "type": "TEXT",
+    "is_required": false,
+    "sort_order": 0,
+    "pricing": {
+     "mode": "fixed",
+     "amount": 0.1
+    }
+   },
+   {
+    "id": "b",
+    "name": "fixed_b",
+    "type": "TEXT",
+    "is_required": false,
+    "sort_order": 1,
+    "pricing": {
+     "mode": "fixed",
+     "amount": "0.2"
+    }
+   },
+   {
+    "id": "s",
+    "name": "size",
+    "type": "SELECT",
+    "is_required": false,
+    "sort_order": 2,
+    "options": [
+     "S",
+     "M",
+     "L"
+    ],
+    "pricing": {
+     "mode": "per_option",
+     "option_prices": {
+      "S": 0,
+      "M": "5.5",
+      "L": 7.25
+     }
+    }
+   },
+   {
+    "id": "c",
+    "name": "chars",
+    "type": "TEXT",
+    "is_required": false,
+    "sort_order": 3,
+    "pricing": {
+     "mode": "per_char",
+     "amount": 0.1
+    },
+    "linked_validation": {
+     "type": "equal_length",
+     "target": "missing_target",
+     "fill_char": "❤"
+    }
+   },
+   {
+    "id": "k",
+    "name": "addons",
+    "type": "CHECKBOX_GROUP",
+    "is_required": false,
+    "sort_order": 4,
+    "options": [
+     "x",
+     "y",
+     "z"
+    ],
+    "pricing": {
+     "mode": "per_option",
+     "option_prices": {
+      "x": "1.10",
+      "y": "2.20",
+      "z": 0.7
+     }
+    }
+   },
+   {
+    "id": "r",
+    "name": "rounding",
+    "type": "TEXT",
+    "is_required": false,
+    "sort_order": 5,
+    "pricing": {
+     "mode": "fixed",
+     "amount": 1.005
+    }
+   },
+   {
+    "id": "n",
+    "name": "negative",
+    "type": "TEXT",
+    "is_required": false,
+    "sort_order": 6,
+    "pricing": {
+     "mode": "fixed",
+     "amount": -5
+    }
+   },
+   {
+    "id": "u",
+    "name": "upper",
+    "type": "TEXT",
+    "is_required": false,
+    "sort_order": 7,
+    "pricing": {
+     "mode": "per_char",
+     "amount": "1"
+    },
+    "ui": {
+     "transform": "uppercase"
+    }
+   },
+   {
+    "id": "h",
+    "name": "hidden_priced",
+    "type": "TEXT",
+    "is_required": false,
+    "sort_order": 8,
+    "pricing": {
+     "mode": "fixed",
+     "amount": 100
+    },
+    "conditions": {
+     "match": "all",
+     "rules": [
+      {
+       "source": "option",
+       "key": "Modell",
+       "op": "eq",
+       "value": "Lyx"
+      }
+     ]
+    }
+   }
+  ],
+  "pricedRepeater": [
+   {
+    "id": "pr",
+    "name": "items",
+    "type": "REPEATER",
+    "is_required": false,
+    "sort_order": 0,
+    "repeat": {
+     "count": {
+      "option": "Antal"
+     },
+     "start_index": 1,
+     "max": 5
+    },
+    "pricing": {
+     "mode": "per_item",
+     "amount": 2.5
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Sak {i}"
+     }
+    ],
+    "children": [
+     {
+      "id": "pt",
+      "name": "text",
+      "type": "TEXT",
+      "is_required": false,
+      "sort_order": 0,
+      "translations": [
+       {
+        "locale": "sv",
+        "label": "Text"
+       }
+      ]
+     },
+     {
+      "id": "pp",
+      "name": "extra",
+      "type": "TEXT",
+      "is_required": false,
+      "sort_order": 1,
+      "pricing": {
+       "mode": "fixed",
+       "amount": 1
+      }
+     }
+    ]
+   }
+  ],
+  "fixedRepeater": [
+   {
+    "id": "fr",
+    "name": "items",
+    "type": "REPEATER",
+    "is_required": false,
+    "sort_order": 0,
+    "repeat": {
+     "count": {
+      "option": "Antal"
+     },
+     "start_index": 1,
+     "max": 5
+    },
+    "pricing": {
+     "mode": "fixed",
+     "amount": "3"
+    },
+    "children": [
+     {
+      "id": "ft",
+      "name": "text",
+      "type": "TEXT",
+      "is_required": false,
+      "sort_order": 0
+     }
+    ]
+   }
+  ],
+  "mixedLegacy": [
+   {
+    "id": "t1",
+    "name": "name",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 0,
+    "validation_rules": {
+     "max_length": 5
+    },
+    "conditions": {
+     "match": "all",
+     "rules": [
+      {
+       "source": "option",
+       "key": "X",
+       "op": "eq",
+       "value": "never"
+      }
+     ]
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Namn"
+     }
+    ]
+   },
+   {
+    "id": "sel",
+    "name": "size",
+    "type": "SELECT",
+    "is_required": false,
+    "sort_order": 1,
+    "options": [
+     "S",
+     "M"
+    ],
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Storlek",
+      "option_labels": {
+       "M": "Mellan"
+      }
+     },
+     {
+      "locale": "en",
+      "label": "Size",
+      "option_labels": {
+       "M": "Medium"
+      }
+     }
+    ]
+   },
+   {
+    "id": "img",
+    "name": "photos",
+    "type": "MULTI_IMAGE",
+    "is_required": false,
+    "sort_order": 2
+   },
+   {
+    "id": "cbx",
+    "name": "extras",
+    "type": "CHECKBOX_GROUP",
+    "is_required": true,
+    "sort_order": 3,
+    "options": [
+     "a"
+    ]
+   },
+   {
+    "id": "rp",
+    "name": "items",
+    "type": "REPEATER",
+    "is_required": false,
+    "sort_order": 4,
+    "repeat": {
+     "count": {
+      "option": "Antal"
+     },
+     "start_index": 1,
+     "max": 3
+    }
+   },
+   {
+    "id": "rc1",
+    "name": "child",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 0,
+    "parent_id": "rp"
+   }
+  ],
+  "plain": [
+   {
+    "id": "pa",
+    "name": "name",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 0,
+    "validation_rules": {
+     "max_length": 6,
+     "allowed_chars": "A-Za-z❤"
+    }
+   },
+   {
+    "id": "pb",
+    "name": "note",
+    "type": "TEXTAREA",
+    "is_required": false,
+    "sort_order": 1,
+    "validation_rules": {
+     "min_length": 2
+    }
+   },
+   {
+    "id": "pn",
+    "name": "age",
+    "type": "NUMBER",
+    "is_required": false,
+    "sort_order": 2,
+    "validation_rules": {
+     "min_length": 1,
+     "max_length": 99
+    }
+   },
+   {
+    "id": "ps",
+    "name": "size",
+    "type": "SELECT",
+    "is_required": false,
+    "sort_order": 3,
+    "options": [
+     "S",
+     "M"
+    ]
+   }
+  ],
+  "p3": [
+   {
+    "id": "cn",
+    "name": "custom_name_v3",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 0,
+    "validation_rules": {
+     "max_length": 12,
+     "allowed_chars": "A-Za-zÅÄÖåäö0-9",
+     "pattern": "^[A-Za-zÅÄÖåäö0-9]{1,12}$"
+    },
+    "ui": {
+     "placement": "after_variants"
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Skriv namn här:",
+      "display_label": "Namn",
+      "messages": {
+       "required": "Vänligen skriv ett namn.",
+       "pattern": "Endast bokstäver (A–Z, Å, Ä, Ö) och siffror tillåtna, max 12 tecken.",
+       "allowed_chars": "Endast bokstäver (A–Z, Å, Ä, Ö) och siffror tillåtna, max 12 tecken."
+      }
+     },
+     {
+      "locale": "en",
+      "label": "Write name here:",
+      "display_label": "Name"
+     }
+    ]
+   },
+   {
+    "id": "rep",
+    "name": "dnc_items",
+    "type": "REPEATER",
+    "is_required": false,
+    "sort_order": 1,
+    "repeat": {
+     "count": {
+      "option": "Välj antal"
+     },
+     "start_index": 2,
+     "max": 5,
+     "lead": {
+      "fields": [
+       "custom_name_v3"
+      ],
+      "options": [
+       "Färg"
+      ]
+     }
+    },
+    "ui": {
+     "placement": "after_variants",
+     "validation_summary": true
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Artikel {i}"
+     },
+     {
+      "locale": "en",
+      "label": "Item {i}"
+     }
+    ]
+   },
+   {
+    "id": "rc",
+    "name": "color",
+    "type": "COLOR_PALETTE",
+    "is_required": true,
+    "sort_order": 0,
+    "parent_id": "rep",
+    "ui": {
+     "palette_from_option": "Färg"
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Färg",
+      "messages": {
+       "required": "Artikel {i}: Färg måste väljas"
+      }
+     },
+     {
+      "locale": "en",
+      "label": "Colour"
+     }
+    ]
+   },
+   {
+    "id": "rn",
+    "name": "name",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 1,
+    "parent_id": "rep",
+    "validation_rules": {
+     "max_length": 12,
+     "allowed_chars": "A-Za-zÅÄÖåäö0-9",
+     "pattern": "^[A-Za-zÅÄÖåäö0-9]{1,12}$"
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Skriv namn här:",
+      "display_label": "Namn",
+      "messages": {
+       "required": "Artikel {i}: Namn måste fyllas i",
+       "pattern": "Endast bokstäver (A–Z, Å, Ä, Ö) och siffror tillåtna, max 12 tecken."
+      }
+     },
+     {
+      "locale": "en",
+      "label": "Write name here:",
+      "display_label": "Name"
+     }
+    ]
+   }
+  ],
+  "p3tree": [
+   {
+    "id": "cn",
+    "name": "custom_name_v3",
+    "type": "TEXT",
+    "is_required": true,
+    "sort_order": 0,
+    "validation_rules": {
+     "max_length": 12,
+     "allowed_chars": "A-Za-zÅÄÖåäö0-9",
+     "pattern": "^[A-Za-zÅÄÖåäö0-9]{1,12}$"
+    },
+    "ui": {
+     "placement": "after_variants"
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Skriv namn här:",
+      "display_label": "Namn",
+      "messages": {
+       "required": "Vänligen skriv ett namn.",
+       "pattern": "Endast bokstäver (A–Z, Å, Ä, Ö) och siffror tillåtna, max 12 tecken.",
+       "allowed_chars": "Endast bokstäver (A–Z, Å, Ä, Ö) och siffror tillåtna, max 12 tecken."
+      }
+     },
+     {
+      "locale": "en",
+      "label": "Write name here:",
+      "display_label": "Name"
+     }
+    ]
+   },
+   {
+    "id": "rep",
+    "name": "dnc_items",
+    "type": "REPEATER",
+    "is_required": false,
+    "sort_order": 1,
+    "repeat": {
+     "count": {
+      "option": "Välj antal"
+     },
+     "start_index": 2,
+     "max": 5,
+     "lead": {
+      "fields": [
+       "custom_name_v3"
+      ],
+      "options": [
+       "Färg"
+      ]
+     }
+    },
+    "ui": {
+     "placement": "after_variants",
+     "validation_summary": true
+    },
+    "translations": [
+     {
+      "locale": "sv",
+      "label": "Artikel {i}"
+     },
+     {
+      "locale": "en",
+      "label": "Item {i}"
+     }
+    ],
+    "children": [
+     {
+      "id": "rc",
+      "name": "color",
+      "type": "COLOR_PALETTE",
+      "is_required": true,
+      "sort_order": 0,
+      "ui": {
+       "palette_from_option": "Färg"
+      },
+      "translations": [
+       {
+        "locale": "sv",
+        "label": "Färg",
+        "messages": {
+         "required": "Artikel {i}: Färg måste väljas"
+        }
+       },
+       {
+        "locale": "en",
+        "label": "Colour"
+       }
+      ]
+     },
+     {
+      "id": "rn",
+      "name": "name",
+      "type": "TEXT",
+      "is_required": true,
+      "sort_order": 1,
+      "validation_rules": {
+       "max_length": 12,
+       "allowed_chars": "A-Za-zÅÄÖåäö0-9",
+       "pattern": "^[A-Za-zÅÄÖåäö0-9]{1,12}$"
+      },
+      "translations": [
+       {
+        "locale": "sv",
+        "label": "Skriv namn här:",
+        "display_label": "Namn",
+        "messages": {
+         "required": "Artikel {i}: Namn måste fyllas i",
+         "pattern": "Endast bokstäver (A–Z, Å, Ä, Ö) och siffror tillåtna, max 12 tecken."
+        }
+       },
+       {
+        "locale": "en",
+        "label": "Write name here:",
+        "display_label": "Name"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "protoPricing": [
+   {
+    "id": "p",
+    "name": "proto_select",
+    "type": "SELECT",
+    "is_required": false,
+    "sort_order": 0,
+    "options": [
+     "constructor",
+     "toString",
+     "__proto__",
+     "hasOwnProperty",
+     "valueOf",
+     "S"
+    ],
+    "pricing": {
+     "mode": "per_option",
+     "option_prices": {
+      "S": 2
+     }
+    }
+   },
+   {
+    "id": "q",
+    "name": "proto_checks",
+    "type": "CHECKBOX_GROUP",
+    "is_required": false,
+    "sort_order": 1,
+    "options": [
+     "constructor",
+     "toString",
+     "__proto__",
+     "hasOwnProperty",
+     "valueOf",
+     "S"
+    ],
+    "pricing": {
+     "mode": "per_option",
+     "option_prices": {
+      "S": "1.50"
+     }
+    }
+   }
+  ],
+  "protoOwnKey": [
+   {
+    "id": "o",
+    "name": "own_proto",
+    "type": "SELECT",
+    "is_required": false,
+    "sort_order": 0,
+    "options": [
+     "__proto__",
+     "S"
+    ],
+    "pricing": {
+     "mode": "per_option",
+     "option_prices": {
+      "S": 1,
+      "__proto__": 3
+     }
+    }
+   }
+  ],
+  "tooHigh": [
+   {
+    "id": "t",
+    "name": "per_char_max",
+    "type": "TEXT",
+    "is_required": false,
+    "sort_order": 0,
+    "pricing": {
+     "mode": "per_char",
+     "amount": 1000000
+    }
+   },
+   {
+    "id": "f",
+    "name": "fixed_max",
+    "type": "TEXT",
+    "is_required": false,
+    "sort_order": 1,
+    "pricing": {
+     "mode": "fixed",
+     "amount": 1000000
+    }
+   }
+  ]
+ },
+ "evaluate": [
+  {
+   "name": "legacy: P1 mismatch is the M4.0 linked check, no uppercase",
+   "defs": "p1",
+   "ctx": {
+    "appEnabled": false
+   },
+   "raw": {
+    "n1": "Kristofer",
+    "n2": "❤Karin❤"
+   },
+   "compareToM40": true,
+   "expect": {
+    "ok": false,
+    "legacy": true,
+    "values": {
+     "n1": "Kristofer",
+     "n2": "❤Karin❤"
+    },
+    "priceDelta": "0.00",
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_LENGTH_MISMATCH",
+      "field_id": "n2",
+      "field_name": "name_2",
+      "params": {
+       "length": 9,
+       "target": "name_1"
+      },
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "legacy: app-only fields and children are dropped, conditions ignored",
+   "defs": "mixedLegacy",
+   "ctx": {
+    "appEnabled": false,
+    "variantOptions": {
+     "Antal": "2"
+    }
+   },
+   "raw": {
+    "t1": "Anna",
+    "sel": "M",
+    "cbx": [
+     "a"
+    ],
+    "rp": [
+     {
+      "rc1": "x"
+     }
+    ],
+    "rc1": "y"
+   },
+   "compareToM40": true,
+   "expect": {
+    "ok": true,
+    "legacy": true,
+    "values": {
+     "sel": "M",
+     "t1": "Anna"
+    },
+    "visibleIds": [
+     "t1",
+     "sel",
+     "img"
+    ]
+   }
+  },
+  {
+   "name": "legacy: P4 conditions ignored, every field required",
+   "defs": "p4",
+   "ctx": {
+    "appEnabled": false,
+    "variantOptions": {
+     "Antal inskriptioner": "1 Inskription"
+    }
+   },
+   "raw": {
+    "f1": "A"
+   },
+   "compareToM40": true,
+   "expect": {
+    "ok": false,
+    "legacy": true,
+    "values": {
+     "f1": "A"
+    },
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "f2",
+      "field_name": "field_2_v2",
+      "message": ""
+     },
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "f3",
+      "field_name": "field_3_v2",
+      "message": ""
+     },
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "f4",
+      "field_name": "field_4_v2",
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "legacy: lines like the M4.0 snapshot writer (option labels, one line per file, field sort_order)",
+   "defs": "mixedLegacy",
+   "ctx": {
+    "appEnabled": false,
+    "locale": "en"
+   },
+   "raw": {
+    "t1": "Bo",
+    "sel": "M",
+    "img": [
+     "/uploads/customer-previews/a.webp",
+     "/uploads/customer-previews/b.webp"
+    ]
+   },
+   "compareToM40": true,
+   "expect": {
+    "ok": true,
+    "lines": [
+     {
+      "field_id": "t1",
+      "source": "FIELD",
+      "type": "TEXT",
+      "label": "Namn",
+      "value": "Bo",
+      "display_value": "Bo",
+      "is_file": false,
+      "sort_order": 0,
+      "price_delta": "0.00",
+      "group_index": null,
+      "i18n": {
+       "label": {
+        "sv": "Namn"
+       },
+       "display_value": null,
+       "group_label": null
+      }
+     },
+     {
+      "field_id": "sel",
+      "type": "SELECT",
+      "label": "Size",
+      "value": "M",
+      "display_value": "Medium",
+      "sort_order": 1,
+      "i18n": {
+       "label": {
+        "sv": "Storlek",
+        "en": "Size"
+       },
+       "display_value": {
+        "sv": "Mellan",
+        "en": "Medium"
+       },
+       "group_label": null
+      }
+     },
+     {
+      "field_id": "img",
+      "type": "MULTI_IMAGE",
+      "label": "photos",
+      "value": "/uploads/customer-previews/a.webp",
+      "is_file": true,
+      "sort_order": 2,
+      "i18n": {
+       "label": null,
+       "display_value": null,
+       "group_label": null
+      }
+     },
+     {
+      "field_id": "img",
+      "value": "/uploads/customer-previews/b.webp",
+      "is_file": true,
+      "sort_order": 2
+     }
+    ]
+   }
+  },
+  {
+   "name": "legacy: non-object payload",
+   "defs": "p2",
+   "ctx": {
+    "appEnabled": false
+   },
+   "raw": [
+    "Anna"
+   ],
+   "compareToM40": true,
+   "expect": {
+    "ok": false,
+    "values": {},
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_INVALID_PAYLOAD",
+      "field_id": "",
+      "field_name": "",
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "legacy: VS16 kept in stored values (W17)",
+   "defs": "p1",
+   "ctx": {
+    "appEnabled": false
+   },
+   "raw": {
+    "n1": "EVA❤️",
+    "n2": "❤EVA"
+   },
+   "compareToM40": true,
+   "expect": {
+    "ok": true,
+    "values": {
+     "n1": "EVA❤️",
+     "n2": "❤EVA"
+    }
+   }
+  },
+  {
+   "name": "app on, plain fields: values identical to M4.0 (VS16 kept, no transform)",
+   "defs": "plain",
+   "ctx": {},
+   "raw": {
+    "pa": " Eva❤️ ",
+    "pb": "Hej",
+    "pn": "42",
+    "ps": "M",
+    "zz": "dropped"
+   },
+   "compareToM40": true,
+   "expect": {
+    "ok": true,
+    "legacy": false,
+    "values": {
+     "pa": "Eva❤️",
+     "pb": "Hej",
+     "pn": "42",
+     "ps": "M"
+    }
+   }
+  },
+  {
+   "name": "app on, plain fields: issues identical to M4.0",
+   "defs": "plain",
+   "ctx": {},
+   "raw": {
+    "pa": "Evangeline",
+    "pb": "x",
+    "pn": "100",
+    "ps": "XL"
+   },
+   "compareToM40": true,
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_TOO_LONG",
+      "field_id": "pa",
+      "field_name": "name",
+      "params": {
+       "max": 6
+      },
+      "message": ""
+     },
+     {
+      "code": "CUSTOM_FIELD_TOO_SHORT",
+      "field_id": "pb",
+      "field_name": "note",
+      "params": {
+       "min": 2
+      },
+      "message": ""
+     },
+     {
+      "code": "CUSTOM_FIELD_NUMBER_TOO_LARGE",
+      "field_id": "pn",
+      "field_name": "age",
+      "params": {
+       "max": 99
+      },
+      "message": ""
+     },
+     {
+      "code": "CUSTOM_FIELD_INVALID_OPTION",
+      "field_id": "ps",
+      "field_name": "size",
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "app on, plain fields: required and payload type as M4.0",
+   "defs": "plain",
+   "ctx": {},
+   "raw": {
+    "pa": true,
+    "pn": "abc"
+   },
+   "compareToM40": true,
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_INVALID_PAYLOAD",
+      "field_id": "pa",
+      "field_name": "name",
+      "message": ""
+     },
+     {
+      "code": "CUSTOM_FIELD_INVALID_NUMBER",
+      "field_id": "pn",
+      "field_name": "age",
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "app on, plain fields: no values, nothing required missing",
+   "defs": "plain",
+   "ctx": {},
+   "raw": null,
+   "compareToM40": true,
+   "expect": {
+    "ok": false,
+    "values": {},
+    "lines": [],
+    "priceDelta": "0.00",
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "pa",
+      "field_name": "name",
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "app on: non-object payload is the M4.0 payload issue",
+   "defs": "p1",
+   "ctx": {},
+   "raw": "Anna",
+   "expect": {
+    "ok": false,
+    "values": {},
+    "lines": [],
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_INVALID_PAYLOAD",
+      "field_id": "",
+      "field_name": "",
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "app on: payload over the key limit is the M4.0 payload issue",
+   "defs": "p2",
+   "ctx": {},
+   "raw": {
+    "k0": "v",
+    "k1": "v",
+    "k2": "v",
+    "k3": "v",
+    "k4": "v",
+    "k5": "v",
+    "k6": "v",
+    "k7": "v",
+    "k8": "v",
+    "k9": "v",
+    "k10": "v",
+    "k11": "v",
+    "k12": "v",
+    "k13": "v",
+    "k14": "v",
+    "k15": "v",
+    "k16": "v",
+    "k17": "v",
+    "k18": "v",
+    "k19": "v",
+    "k20": "v",
+    "k21": "v",
+    "k22": "v",
+    "k23": "v",
+    "k24": "v",
+    "k25": "v",
+    "k26": "v",
+    "k27": "v",
+    "k28": "v",
+    "k29": "v",
+    "k30": "v",
+    "k31": "v",
+    "k32": "v",
+    "k33": "v",
+    "k34": "v",
+    "k35": "v",
+    "k36": "v",
+    "k37": "v",
+    "k38": "v",
+    "k39": "v",
+    "k40": "v",
+    "k41": "v",
+    "k42": "v",
+    "k43": "v",
+    "k44": "v",
+    "k45": "v",
+    "k46": "v",
+    "k47": "v",
+    "k48": "v",
+    "k49": "v",
+    "k50": "v",
+    "k51": "v",
+    "k52": "v",
+    "k53": "v",
+    "k54": "v",
+    "k55": "v",
+    "k56": "v",
+    "k57": "v",
+    "k58": "v",
+    "k59": "v",
+    "k60": "v",
+    "k61": "v",
+    "k62": "v",
+    "k63": "v",
+    "k64": "v",
+    "k65": "v",
+    "k66": "v",
+    "k67": "v",
+    "k68": "v",
+    "k69": "v",
+    "k70": "v",
+    "k71": "v",
+    "k72": "v",
+    "k73": "v",
+    "k74": "v",
+    "k75": "v",
+    "k76": "v",
+    "k77": "v",
+    "k78": "v",
+    "k79": "v",
+    "k80": "v",
+    "k81": "v",
+    "k82": "v",
+    "k83": "v",
+    "k84": "v",
+    "k85": "v",
+    "k86": "v",
+    "k87": "v",
+    "k88": "v",
+    "k89": "v",
+    "k90": "v",
+    "k91": "v",
+    "k92": "v",
+    "k93": "v",
+    "k94": "v",
+    "k95": "v",
+    "k96": "v",
+    "k97": "v",
+    "k98": "v",
+    "k99": "v",
+    "k100": "v"
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_INVALID_PAYLOAD",
+      "field_id": "",
+      "field_name": "",
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "app on: product without fields",
+   "defs": [],
+   "ctx": {},
+   "raw": {
+    "x": "y"
+   },
+   "expect": {
+    "ok": true,
+    "values": {},
+    "lines": [],
+    "errors": [],
+    "visibleIds": [],
+    "priceDelta": "0.00",
+    "priceDeltaMinor": 0
+   }
+  },
+  {
+   "name": "P1: uppercase and equal length with hearts",
+   "defs": "p1",
+   "ctx": {},
+   "raw": {
+    "n1": "kristofer",
+    "n2": "❤❤karin❤❤"
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "n1": "KRISTOFER",
+     "n2": "❤❤KARIN❤❤"
+    },
+    "visibleIds": [
+     "n1",
+     "n2",
+     "mt"
+    ],
+    "lines": [
+     {
+      "field_id": "n1",
+      "label": "Första texten",
+      "value": "KRISTOFER",
+      "sort_order": 0,
+      "i18n": {
+       "label": {
+        "sv": "Första texten",
+        "en": "First text"
+       }
+      }
+     },
+     {
+      "field_id": "n2",
+      "label": "Andra texten",
+      "value": "❤❤KARIN❤❤",
+      "sort_order": 1
+     }
+    ]
+   }
+  },
+  {
+   "name": "P1: KRISTOFER vs heart-KARIN-heart is a length mismatch with the sv message",
+   "defs": "p1",
+   "ctx": {},
+   "raw": {
+    "n1": "Kristofer",
+    "n2": "❤Karin❤"
+   },
+   "expect": {
+    "ok": false,
+    "values": {
+     "n1": "KRISTOFER",
+     "n2": "❤KARIN❤"
+    },
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_LENGTH_MISMATCH",
+      "field_id": "n2",
+      "field_name": "name_2",
+      "params": {
+       "length": 9,
+       "target": "name_1"
+      },
+      "message": "Längderna stämmer inte överens!"
+     }
+    ]
+   }
+  },
+  {
+   "name": "P1: VS16 hearts are stripped and count 1",
+   "defs": "p1",
+   "ctx": {},
+   "raw": {
+    "n1": "eva❤️",
+    "n2": "❤️Bo❤️"
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "n1": "EVA❤",
+     "n2": "❤BO❤"
+    }
+   }
+  },
+  {
+   "name": "P1: a space is not allowed; missing second text is required",
+   "defs": "p1",
+   "ctx": {},
+   "raw": {
+    "n1": "Anna Karin"
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_INVALID_CHARS",
+      "field_id": "n1",
+      "field_name": "name_1",
+      "params": {
+       "allowed": "A-Za-z❤"
+      },
+      "message": "Endast engelska bokstäver tillåtna (A-Z)."
+     },
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "n2",
+      "field_name": "name_2",
+      "message": "Ange ett värde för Andra texten."
+     }
+    ]
+   }
+  },
+  {
+   "name": "P1: model_text is optional, max 25 code points, not uppercased",
+   "defs": "p1",
+   "ctx": {},
+   "raw": {
+    "n1": "ANNA",
+    "n2": "OLLE",
+    "mt": "För alltid tillsammans och mer"
+   },
+   "expect": {
+    "ok": false,
+    "values": {
+     "mt": "För alltid tillsammans och mer",
+     "n1": "ANNA",
+     "n2": "OLLE"
+    },
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_TOO_LONG",
+      "field_id": "mt",
+      "field_name": "model_text",
+      "params": {
+       "max": 25
+      },
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "P1: model_text kept as typed",
+   "defs": "p1",
+   "ctx": {},
+   "raw": {
+    "n1": "ANNA",
+    "n2": "OLLE",
+    "mt": "För alltid tillsammans"
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "mt": "För alltid tillsammans",
+     "n1": "ANNA",
+     "n2": "OLLE"
+    }
+   }
+  },
+  {
+   "name": "P1: en locale has no message override (UI falls back to i18n)",
+   "defs": "p1",
+   "ctx": {
+    "locale": "en",
+    "primaryLocale": "sv"
+   },
+   "raw": {
+    "n1": "ANNA"
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "n2",
+      "field_name": "name_2",
+      "message": ""
+     }
+    ],
+    "lines": [
+     {
+      "field_id": "n1",
+      "label": "First text"
+     }
+    ]
+   }
+  },
+  {
+   "name": "P1: 12 letters is too long",
+   "defs": "p1",
+   "ctx": {},
+   "raw": {
+    "n1": "ABCDEFGHIJKL",
+    "n2": "ABCDEFGHIJKL"
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_TOO_LONG",
+      "field_id": "n1",
+      "field_name": "name_1",
+      "params": {
+       "max": 11
+      },
+      "message": ""
+     },
+     {
+      "code": "CUSTOM_FIELD_TOO_LONG",
+      "field_id": "n2",
+      "field_name": "name_2",
+      "params": {
+       "max": 11
+      },
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "P2: Åsa1 passes and keeps its case",
+   "defs": "p2",
+   "ctx": {},
+   "raw": {
+    "cn": " Åsa1 "
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "cn": "Åsa1"
+    },
+    "lines": [
+     {
+      "field_id": "cn",
+      "field_name": "custom_name_v3",
+      "source": "FIELD",
+      "type": "TEXT",
+      "label": "Namn",
+      "value": "Åsa1",
+      "display_value": "Åsa1",
+      "group_key": null,
+      "group_index": null,
+      "group_label": null,
+      "meta": null,
+      "price_delta": "0.00",
+      "price_delta_minor": 0,
+      "sort_order": 0,
+      "is_file": false,
+      "i18n": {
+       "label": {
+        "sv": "Namn",
+        "en": "Name"
+       },
+       "display_value": null,
+       "group_label": null
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "P2: Ö-la fails the pattern with the sv message",
+   "defs": "p2",
+   "ctx": {},
+   "raw": {
+    "cn": "Ö-la"
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_INVALID_FORMAT",
+      "field_id": "cn",
+      "field_name": "custom_name_v3",
+      "message": "Endast bokstäver (A–Z, Å, Ä, Ö) och siffror tillåtna, max 12 tecken."
+     }
+    ]
+   }
+  },
+  {
+   "name": "P2: missing name",
+   "defs": "p2",
+   "ctx": {},
+   "raw": {},
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "cn",
+      "field_name": "custom_name_v3",
+      "message": "Vänligen skriv ett namn."
+     }
+    ]
+   }
+  },
+  {
+   "name": "P2: 13 characters is too long (no max_length message)",
+   "defs": "p2",
+   "ctx": {},
+   "raw": {
+    "cn": "Abcdefghijklm"
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_TOO_LONG",
+      "field_id": "cn",
+      "field_name": "custom_name_v3",
+      "params": {
+       "max": 12
+      },
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "P2: en display label",
+   "defs": "p2",
+   "ctx": {
+    "locale": "en"
+   },
+   "raw": {
+    "cn": "Bo"
+   },
+   "expect": {
+    "ok": true,
+    "lines": [
+     {
+      "label": "Name"
+     }
+    ]
+   }
+  },
+  {
+   "name": "P3: count 1 gives no items and no errors; sent items dropped",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "1 produkt",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    }
+   },
+   "raw": {
+    "cn": "Anna",
+    "rep": [
+     {
+      "rc": "Blå",
+      "rn": "Bo"
+     }
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "cn": "Anna"
+    },
+    "visibleIds": [
+     "cn",
+     "rep"
+    ],
+    "lines": [
+     {
+      "field_id": "cn",
+      "group_index": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "P3: count 3 gives items 2..3 with a lead item 1",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "3 produkter",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    }
+   },
+   "raw": {
+    "cn": "Anna",
+    "rep": [
+     {
+      "rc": "Blå",
+      "rn": "Karin"
+     },
+     {
+      "rn": "Olle",
+      "rc": "Svart"
+     }
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "0.00",
+    "visibleIds": [
+     "cn",
+     "rep",
+     "rc",
+     "rn"
+    ],
+    "values": {
+     "cn": "Anna",
+     "rep": [
+      {
+       "rc": "Blå",
+       "rn": "Karin"
+      },
+      {
+       "rc": "Svart",
+       "rn": "Olle"
+      }
+     ]
+    },
+    "lines": [
+     {
+      "field_id": "cn",
+      "source": "FIELD",
+      "label": "Namn",
+      "value": "Anna",
+      "group_key": "dnc_items",
+      "group_index": 1,
+      "group_label": "Artikel 1",
+      "sort_order": 0,
+      "i18n": {
+       "group_label": {
+        "sv": "Artikel 1",
+        "en": "Item 1"
+       }
+      }
+     },
+     {
+      "field_id": null,
+      "field_name": "Färg",
+      "source": "OPTION",
+      "type": "OPTION",
+      "label": "Färg",
+      "value": "Röd",
+      "display_value": "Röd",
+      "group_key": "dnc_items",
+      "group_index": 1,
+      "meta": {
+       "hex": "#dd3333",
+       "option_name": "Färg"
+      },
+      "sort_order": 1,
+      "i18n": {
+       "label": {
+        "sv": "Färg"
+       },
+       "display_value": {
+        "sv": "Röd"
+       },
+       "group_label": {
+        "sv": "Artikel 1",
+        "en": "Item 1"
+       }
+      }
+     },
+     {
+      "field_id": "rc",
+      "field_name": "color",
+      "type": "COLOR_PALETTE",
+      "label": "Färg",
+      "value": "Blå",
+      "group_index": 2,
+      "group_label": "Artikel 2",
+      "meta": {
+       "hex": "#1e73be"
+      },
+      "sort_order": 2
+     },
+     {
+      "field_id": "rn",
+      "field_name": "name",
+      "type": "TEXT",
+      "label": "Namn",
+      "value": "Karin",
+      "group_index": 2,
+      "sort_order": 3
+     },
+     {
+      "field_id": "rc",
+      "value": "Svart",
+      "group_index": 3,
+      "group_label": "Artikel 3",
+      "meta": {
+       "hex": "#000000"
+      },
+      "sort_order": 4
+     },
+     {
+      "field_id": "rn",
+      "value": "Olle",
+      "group_index": 3,
+      "sort_order": 5
+     }
+    ],
+    "snapshot": [
+     {
+      "custom_field_id": "cn",
+      "value": "Anna",
+      "field_name": "custom_name_v3",
+      "field_type": "TEXT",
+      "field_label": {
+       "sv": "Namn",
+       "en": "Name"
+      },
+      "sort_order": 0,
+      "group_key": "dnc_items",
+      "group_index": 1,
+      "group_label": {
+       "sv": "Artikel 1",
+       "en": "Item 1"
+      },
+      "source": "FIELD",
+      "price_delta": "0.00"
+     },
+     {
+      "custom_field_id": null,
+      "value": "Röd",
+      "field_name": "Färg",
+      "field_label": {
+       "sv": "Färg"
+      },
+      "display_value": {
+       "sv": "Röd"
+      },
+      "sort_order": 1,
+      "group_key": "dnc_items",
+      "group_index": 1,
+      "group_label": {
+       "sv": "Artikel 1",
+       "en": "Item 1"
+      },
+      "source": "OPTION",
+      "price_delta": "0.00",
+      "meta": {
+       "hex": "#dd3333",
+       "option_name": "Färg"
+      }
+     },
+     {
+      "custom_field_id": "rc",
+      "value": "Blå",
+      "field_name": "color",
+      "field_type": "COLOR_PALETTE",
+      "field_label": {
+       "sv": "Färg",
+       "en": "Colour"
+      },
+      "sort_order": 2,
+      "group_key": "dnc_items",
+      "group_index": 2,
+      "group_label": {
+       "sv": "Artikel 2",
+       "en": "Item 2"
+      },
+      "source": "FIELD",
+      "price_delta": "0.00",
+      "meta": {
+       "hex": "#1e73be"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "P3: tree input (storefront shape) evaluates like the flat list",
+   "defs": "p3tree",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "3 produkter",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    }
+   },
+   "raw": {
+    "cn": "Anna",
+    "rep": [
+     {
+      "rc": "Blå",
+      "rn": "Karin"
+     },
+     {
+      "rn": "Olle",
+      "rc": "Svart"
+     }
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "cn": "Anna",
+     "rep": [
+      {
+       "rc": "Blå",
+       "rn": "Karin"
+      },
+      {
+       "rc": "Svart",
+       "rn": "Olle"
+      }
+     ]
+    },
+    "visibleIds": [
+     "cn",
+     "rep",
+     "rc",
+     "rn"
+    ],
+    "lineCount": 6
+   }
+  },
+  {
+   "name": "P3: missing colour on item 3 is required with group_index 3",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "3 produkter",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    }
+   },
+   "raw": {
+    "cn": "Anna",
+    "rep": [
+     {
+      "rc": "Blå",
+      "rn": "Karin"
+     },
+     {
+      "rn": "Olle"
+     }
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "rep",
+      "field_name": "dnc_items",
+      "child_id": "rc",
+      "child_name": "color",
+      "group_index": 3,
+      "message": "Artikel 3: Färg måste väljas"
+     }
+    ]
+   }
+  },
+  {
+   "name": "P3: olivgrön is not in the palette of active variants",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "3 produkter",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    }
+   },
+   "raw": {
+    "cn": "Anna",
+    "rep": [
+     {
+      "rc": "Olivgrön",
+      "rn": "Karin"
+     },
+     {
+      "rc": "Svart",
+      "rn": "Olle"
+     }
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_INVALID_OPTION",
+      "field_id": "rep",
+      "field_name": "dnc_items",
+      "child_id": "rc",
+      "child_name": "color",
+      "group_index": 2,
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "P3: without activeOptionValues the whole option is the palette",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "2 produkter",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {}
+   },
+   "raw": {
+    "cn": "Anna",
+    "rep": [
+     {
+      "rc": "Olivgrön",
+      "rn": "Karin"
+     }
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "cn": "Anna",
+     "rep": [
+      {
+       "rc": "Olivgrön",
+       "rn": "Karin"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "P3: extra items are dropped",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "2 produkter",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    }
+   },
+   "raw": {
+    "cn": "Anna",
+    "rep": [
+     {
+      "rc": "Röd",
+      "rn": "Bo"
+     },
+     {
+      "rc": "Svart",
+      "rn": "Olle"
+     },
+     {
+      "rc": "Blå",
+      "rn": "Eva"
+     }
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "cn": "Anna",
+     "rep": [
+      {
+       "rc": "Röd",
+       "rn": "Bo"
+      }
+     ]
+    },
+    "lineCount": 4
+   }
+  },
+  {
+   "name": "P3: empty items report every child in item then child order",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "3 produkter",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    }
+   },
+   "raw": {
+    "cn": "Anna"
+   },
+   "expect": {
+    "ok": false,
+    "values": {
+     "cn": "Anna"
+    },
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "rep",
+      "field_name": "dnc_items",
+      "child_id": "rc",
+      "child_name": "color",
+      "group_index": 2,
+      "message": "Artikel 2: Färg måste väljas"
+     },
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "rep",
+      "field_name": "dnc_items",
+      "child_id": "rn",
+      "child_name": "name",
+      "group_index": 2,
+      "message": "Artikel 2: Namn måste fyllas i"
+     },
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "rep",
+      "field_name": "dnc_items",
+      "child_id": "rc",
+      "child_name": "color",
+      "group_index": 3,
+      "message": "Artikel 3: Färg måste väljas"
+     },
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "rep",
+      "field_name": "dnc_items",
+      "child_id": "rn",
+      "child_name": "name",
+      "group_index": 3,
+      "message": "Artikel 3: Namn måste fyllas i"
+     }
+    ]
+   }
+  },
+  {
+   "name": "P3: child pattern error carries the item index",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "2 produkter",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    }
+   },
+   "raw": {
+    "cn": "Anna",
+    "rep": [
+     {
+      "rc": "Röd",
+      "rn": "Ö-la"
+     }
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_INVALID_FORMAT",
+      "field_id": "rep",
+      "field_name": "dnc_items",
+      "child_id": "rn",
+      "child_name": "name",
+      "group_index": 2,
+      "message": "Endast bokstäver (A–Z, Å, Ä, Ö) och siffror tillåtna, max 12 tecken."
+     }
+    ]
+   }
+  },
+  {
+   "name": "P3: a non-array repeater value is a payload issue",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "2 produkter",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    }
+   },
+   "raw": {
+    "cn": "Anna",
+    "rep": "Karin"
+   },
+   "expect": {
+    "ok": false,
+    "values": {
+     "cn": "Anna"
+    },
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_INVALID_PAYLOAD",
+      "field_id": "rep",
+      "field_name": "dnc_items",
+      "message": ""
+     },
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "rep",
+      "field_name": "dnc_items",
+      "child_id": "rc",
+      "child_name": "color",
+      "group_index": 2,
+      "message": "Artikel 2: Färg måste väljas"
+     },
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "rep",
+      "field_name": "dnc_items",
+      "child_id": "rn",
+      "child_name": "name",
+      "group_index": 2,
+      "message": "Artikel 2: Namn måste fyllas i"
+     }
+    ]
+   }
+  },
+  {
+   "name": "P3: item indexes never shift (empty item 2 kept in place)",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "3 produkter",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    }
+   },
+   "raw": {
+    "cn": "Anna",
+    "rep": [
+     {},
+     {
+      "rc": "Röd",
+      "rn": "Bo"
+     }
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "values": {
+     "cn": "Anna",
+     "rep": [
+      {},
+      {
+       "rc": "Röd",
+       "rn": "Bo"
+      }
+     ]
+    },
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "rep",
+      "field_name": "dnc_items",
+      "child_id": "rc",
+      "child_name": "color",
+      "group_index": 2,
+      "message": "Artikel 2: Färg måste väljas"
+     },
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "rep",
+      "field_name": "dnc_items",
+      "child_id": "rn",
+      "child_name": "name",
+      "group_index": 2,
+      "message": "Artikel 2: Namn måste fyllas i"
+     }
+    ]
+   }
+  },
+  {
+   "name": "P3: count from valueMeta.count",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "Familj",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    }
+   },
+   "raw": {
+    "cn": "Anna",
+    "rep": [
+     {
+      "rc": "Svart",
+      "rn": "Eva"
+     }
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "cn": "Anna",
+     "rep": [
+      {
+       "rc": "Svart",
+       "rn": "Eva"
+      }
+     ]
+    },
+    "lineCount": 4
+   }
+  },
+  {
+   "name": "P3: repeat.max caps the items (9 → items 2..6)",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "9 produkter",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    }
+   },
+   "raw": {
+    "cn": "Anna"
+   },
+   "expect": {
+    "ok": false,
+    "errorCount": 10,
+    "lastError": {
+     "code": "CUSTOM_FIELD_REQUIRED",
+     "field_id": "rep",
+     "field_name": "dnc_items",
+     "child_id": "rn",
+     "child_name": "name",
+     "group_index": 6,
+     "message": "Artikel 6: Namn måste fyllas i"
+    }
+   }
+  },
+  {
+   "name": "P3: missing lead name still emits the lead option line",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "2 produkter",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    }
+   },
+   "raw": {
+    "rep": [
+     {
+      "rc": "Röd",
+      "rn": "Bo"
+     }
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "cn",
+      "field_name": "custom_name_v3",
+      "message": "Vänligen skriv ett namn."
+     }
+    ],
+    "lines": [
+     {
+      "source": "OPTION",
+      "group_index": 1
+     },
+     {
+      "field_id": "rc",
+      "group_index": 2
+     },
+     {
+      "field_id": "rn",
+      "group_index": 2
+     }
+    ]
+   }
+  },
+  {
+   "name": "P3: no quantity selected → no items, lead not grouped",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {},
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    }
+   },
+   "raw": {
+    "cn": "Anna"
+   },
+   "expect": {
+    "ok": true,
+    "lines": [
+     {
+      "field_id": "cn",
+      "group_index": null,
+      "group_key": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "P3: en locale group labels",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "2 produkter",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    },
+    "locale": "en"
+   },
+   "raw": {
+    "cn": "Anna",
+    "rep": [
+     {
+      "rc": "Röd",
+      "rn": "Bo"
+     }
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "lines": [
+     {
+      "label": "Name",
+      "group_label": "Item 1"
+     },
+     {
+      "group_label": "Item 1"
+     },
+     {
+      "label": "Colour",
+      "group_label": "Item 2"
+     },
+     {
+      "label": "Name",
+      "group_label": "Item 2"
+     }
+    ]
+   }
+  },
+  {
+   "name": "P4: with 2 inscriptions field 3 is dropped even when sent",
+   "defs": "p4",
+   "ctx": {
+    "variantOptions": {
+     "Antal inskriptioner": "2 Inskriptioner"
+    }
+   },
+   "raw": {
+    "f1": "Anna",
+    "f2": "Bo",
+    "f3": "Eva"
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "f1": "Anna",
+     "f2": "Bo"
+    },
+    "visibleIds": [
+     "f1",
+     "f2"
+    ],
+    "lineCount": 2
+   }
+  },
+  {
+   "name": "P4: no selection shows only field 1",
+   "defs": "p4",
+   "ctx": {},
+   "raw": {
+    "f2": "Bo"
+   },
+   "expect": {
+    "ok": false,
+    "values": {},
+    "visibleIds": [
+     "f1"
+    ],
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "f1",
+      "field_name": "field_1_v2",
+      "message": "Vänligen fyll i alla obligatoriska fält."
+     }
+    ]
+   }
+  },
+  {
+   "name": "P4: 4 inscriptions require all four",
+   "defs": "p4",
+   "ctx": {
+    "variantOptions": {
+     "Antal inskriptioner": "4 Inskriptioner"
+    }
+   },
+   "raw": {},
+   "expect": {
+    "ok": false,
+    "errorCount": 4,
+    "visibleIds": [
+     "f1",
+     "f2",
+     "f3",
+     "f4"
+    ]
+   }
+  },
+  {
+   "name": "P4: 16 characters is too long",
+   "defs": "p4",
+   "ctx": {
+    "variantOptions": {
+     "Antal inskriptioner": "1 Inskription"
+    }
+   },
+   "raw": {
+    "f1": "Abcdefghijklmnop"
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_TOO_LONG",
+      "field_id": "f1",
+      "field_name": "field_1_v2",
+      "params": {
+       "max": 15
+      },
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "P5: undefined means all default options in option order",
+   "defs": "p5",
+   "ctx": {},
+   "raw": {},
+   "expect": {
+    "ok": true,
+    "values": {
+     "cb": [
+      "Student 2026",
+      "Studentmössa",
+      "Svensk flagga",
+      "Nallebjörn"
+     ]
+    },
+    "lines": [
+     {
+      "field_id": "cb",
+      "type": "CHECKBOX_GROUP",
+      "label": "Välj detaljer i designen",
+      "value": "Student 2026, Studentmössa, Svensk flagga, Nallebjörn",
+      "display_value": "Student 2026, Studentmössa, Svensk flagga, Nallebjörn",
+      "i18n": {
+       "display_value": {
+        "sv": "Student 2026, Studentmössa, Svensk flagga, Nallebjörn",
+        "en": "Student 2026, Studentmössa, Swedish flag, Nallebjörn"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "P5: explicit [] means none (canonical false marker)",
+   "defs": "p5",
+   "ctx": {},
+   "raw": {
+    "cb": []
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "cb": false
+    },
+    "lines": []
+   }
+  },
+  {
+   "name": "P5: the false marker re-evaluates to none",
+   "defs": "p5",
+   "ctx": {},
+   "raw": {
+    "cb": false
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "cb": false
+    },
+    "lines": []
+   }
+  },
+  {
+   "name": "P5: null means none",
+   "defs": "p5",
+   "ctx": {},
+   "raw": {
+    "cb": null
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "cb": false
+    }
+   }
+  },
+  {
+   "name": "P5: deduplicated and canonicalised to option order",
+   "defs": "p5",
+   "ctx": {},
+   "raw": {
+    "cb": [
+     "Nallebjörn",
+     " Student 2026",
+     "Nallebjörn"
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "cb": [
+      "Student 2026",
+      "Nallebjörn"
+     ]
+    }
+   }
+  },
+  {
+   "name": "P5: an unknown option is invalid",
+   "defs": "p5",
+   "ctx": {},
+   "raw": {
+    "cb": [
+     "Pizza",
+     "Studentmössa"
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "values": {
+     "cb": [
+      "Studentmössa"
+     ]
+    },
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_INVALID_OPTION",
+      "field_id": "cb",
+      "field_name": "ppom_details",
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "P5: en display uses option labels",
+   "defs": "p5",
+   "ctx": {
+    "locale": "en"
+   },
+   "raw": {
+    "cb": [
+     "Svensk flagga"
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "lines": [
+     {
+      "label": "Choose design details",
+      "value": "Svensk flagga",
+      "display_value": "Swedish flag"
+     }
+    ]
+   }
+  },
+  {
+   "name": "checkbox: required with none checked",
+   "defs": "checkRules",
+   "ctx": {},
+   "raw": {
+    "cr": []
+   },
+   "expect": {
+    "ok": false,
+    "values": {},
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "cr",
+      "field_name": "extras",
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "checkbox: min_checked with the sv message",
+   "defs": "checkRules",
+   "ctx": {},
+   "raw": {
+    "cr": [
+     "a"
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_MIN_CHECKED",
+      "field_id": "cr",
+      "field_name": "extras",
+      "params": {
+       "min": 2
+      },
+      "message": "Välj minst två"
+     }
+    ]
+   }
+  },
+  {
+   "name": "checkbox: max_checked",
+   "defs": "checkRules",
+   "ctx": {},
+   "raw": {
+    "cr": [
+     "d",
+     "c",
+     "b",
+     "a"
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "values": {
+     "cr": [
+      "a",
+      "b",
+      "c",
+      "d"
+     ]
+    },
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_MAX_CHECKED",
+      "field_id": "cr",
+      "field_name": "extras",
+      "params": {
+       "max": 3
+      },
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "checkbox: a single string is one choice",
+   "defs": "checkRules",
+   "ctx": {},
+   "raw": {
+    "cr": "b"
+   },
+   "expect": {
+    "ok": false,
+    "values": {
+     "cr": [
+      "b"
+     ]
+    },
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_MIN_CHECKED",
+      "field_id": "cr",
+      "field_name": "extras",
+      "params": {
+       "min": 2
+      },
+      "message": "Välj minst två"
+     }
+    ]
+   }
+  },
+  {
+   "name": "checkbox: within bounds",
+   "defs": "checkRules",
+   "ctx": {},
+   "raw": {
+    "cr": [
+     "c",
+     "a"
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "cr": [
+      "a",
+      "c"
+     ]
+    }
+   }
+  },
+  {
+   "name": "checkbox: no defaults and key absent is none (no marker)",
+   "defs": "pricing",
+   "ctx": {},
+   "raw": {},
+   "expect": {
+    "ok": true,
+    "values": {},
+    "lines": []
+   }
+  },
+  {
+   "name": "palette: static options with palette_hex",
+   "defs": "palette",
+   "ctx": {
+    "locale": "en"
+   },
+   "raw": {
+    "pc": "Blå"
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "pc": "Blå"
+    },
+    "lines": [
+     {
+      "field_id": "pc",
+      "label": "Colour",
+      "value": "Blå",
+      "display_value": "Blue",
+      "meta": {
+       "hex": "#1e73be"
+      },
+      "i18n": {
+       "label": {
+        "sv": "Färg",
+        "en": "Colour"
+       },
+       "display_value": {
+        "sv": "Blå",
+        "en": "Blue"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "palette: value outside the palette",
+   "defs": "palette",
+   "ctx": {},
+   "raw": {
+    "pc": "Grön"
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_INVALID_OPTION",
+      "field_id": "pc",
+      "field_name": "color",
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "palette: required",
+   "defs": "palette",
+   "ctx": {},
+   "raw": {},
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "pc",
+      "field_name": "color",
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "palette: a list is not a colour",
+   "defs": "palette",
+   "ctx": {},
+   "raw": {
+    "pc": [
+     "Röd"
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_INVALID_OPTION",
+      "field_id": "pc",
+      "field_name": "color",
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "conditions: gift=Nej hides the message and its dependants",
+   "defs": "fieldConditions",
+   "ctx": {},
+   "raw": {
+    "gift": "Nej",
+    "msg": "Grattis",
+    "sig": "Bo",
+    "late": "x"
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "gift": "Nej",
+     "late": "x"
+    },
+    "visibleIds": [
+     "gift",
+     "ex",
+     "late"
+    ]
+   }
+  },
+  {
+   "name": "conditions: gift=Ja requires the message, which then requires the signature",
+   "defs": "fieldConditions",
+   "ctx": {},
+   "raw": {
+    "gift": "Ja",
+    "msg": "Grattis"
+   },
+   "expect": {
+    "ok": false,
+    "values": {
+     "gift": "Ja",
+     "msg": "Grattis"
+    },
+    "visibleIds": [
+     "gift",
+     "msg",
+     "sig",
+     "ex",
+     "late"
+    ],
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "sig",
+      "field_name": "signature",
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "conditions: a forward reference never shows the field",
+   "defs": "fieldConditions",
+   "ctx": {},
+   "raw": {
+    "early": "x",
+    "late": "set"
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "late": "set"
+    }
+   }
+  },
+  {
+   "name": "conditions: checkbox `in` shows the engraving",
+   "defs": "fieldConditions",
+   "ctx": {},
+   "raw": {
+    "ex": [
+     "Ask",
+     "Gravyr"
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "values": {
+     "ex": [
+      "Gravyr",
+      "Ask"
+     ]
+    },
+    "errors": [
+     {
+      "code": "CUSTOM_FIELD_REQUIRED",
+      "field_id": "eng",
+      "field_name": "engraving",
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "conditions: match any via the option rule",
+   "defs": "fieldConditions",
+   "ctx": {
+    "variantOptions": {
+     "Modell": "Gravyr"
+    }
+   },
+   "raw": {
+    "eng": "ANNA"
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "eng": "ANNA"
+    },
+    "visibleIds": [
+     "gift",
+     "ex",
+     "eng",
+     "late"
+    ]
+   }
+  },
+  {
+   "name": "conditions: neither rule matches",
+   "defs": "fieldConditions",
+   "ctx": {
+    "variantOptions": {
+     "Modell": "Bas"
+    }
+   },
+   "raw": {
+    "ex": [
+     "Ask"
+    ],
+    "eng": "ANNA"
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "ex": [
+      "Ask"
+     ]
+    }
+   }
+  },
+  {
+   "name": "pricing: 0.1 + 0.2 is exactly 0.30",
+   "defs": "pricing",
+   "ctx": {},
+   "raw": {
+    "a": "x",
+    "b": "y"
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "0.30",
+    "priceDeltaMinor": 30,
+    "lines": [
+     {
+      "field_id": "a",
+      "price_delta": "0.10",
+      "price_delta_minor": 10
+     },
+     {
+      "field_id": "b",
+      "price_delta": "0.20"
+     }
+    ]
+   }
+  },
+  {
+   "name": "pricing: per_option on a select",
+   "defs": "pricing",
+   "ctx": {},
+   "raw": {
+    "s": "M"
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "5.50",
+    "lines": [
+     {
+      "field_id": "s",
+      "price_delta": "5.50"
+     }
+    ]
+   }
+  },
+  {
+   "name": "pricing: per_option zero price",
+   "defs": "pricing",
+   "ctx": {},
+   "raw": {
+    "s": "S"
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "0.00"
+   }
+  },
+  {
+   "name": "pricing: per_char 0.1 × 3 is exactly 0.30",
+   "defs": "pricing",
+   "ctx": {},
+   "raw": {
+    "c": "ABC"
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "0.30",
+    "priceDeltaMinor": 30
+   }
+  },
+  {
+   "name": "pricing: per_char excludes the fill character",
+   "defs": "pricing",
+   "ctx": {},
+   "raw": {
+    "c": "❤AB❤️"
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "0.20"
+   }
+  },
+  {
+   "name": "pricing: per_option on a checkbox group sums the options",
+   "defs": "pricing",
+   "ctx": {},
+   "raw": {
+    "k": [
+     "z",
+     "x",
+     "y"
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "4.00",
+    "priceDeltaMinor": 400,
+    "values": {
+     "k": [
+      "x",
+      "y",
+      "z"
+     ]
+    }
+   }
+  },
+  {
+   "name": "pricing: 1.005 rounds half up on the decimal text",
+   "defs": "pricing",
+   "ctx": {},
+   "raw": {
+    "r": "x"
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "1.01",
+    "priceDeltaMinor": 101
+   }
+  },
+  {
+   "name": "pricing: negative amounts are ignored",
+   "defs": "pricing",
+   "ctx": {},
+   "raw": {
+    "n": "x"
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "0.00"
+   }
+  },
+  {
+   "name": "pricing: per_char counts code points after the transform",
+   "defs": "pricing",
+   "ctx": {},
+   "raw": {
+    "u": "åsa"
+   },
+   "expect": {
+    "ok": true,
+    "values": {
+     "u": "ÅSA"
+    },
+    "priceDelta": "3.00"
+   }
+  },
+  {
+   "name": "pricing: a hidden field costs nothing",
+   "defs": "pricing",
+   "ctx": {
+    "variantOptions": {
+     "Modell": "Bas"
+    }
+   },
+   "raw": {
+    "h": "x"
+   },
+   "expect": {
+    "ok": true,
+    "values": {},
+    "priceDelta": "0.00"
+   }
+  },
+  {
+   "name": "pricing: a visible priced field",
+   "defs": "pricing",
+   "ctx": {
+    "variantOptions": {
+     "Modell": "Lyx"
+    }
+   },
+   "raw": {
+    "h": "x"
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "100.00",
+    "priceDeltaMinor": 10000
+   }
+  },
+  {
+   "name": "pricing: an empty field costs nothing",
+   "defs": "pricing",
+   "ctx": {},
+   "raw": {
+    "a": "  "
+   },
+   "expect": {
+    "ok": true,
+    "values": {},
+    "priceDelta": "0.00"
+   }
+  },
+  {
+   "name": "pricing: everything together",
+   "defs": "pricing",
+   "ctx": {},
+   "raw": {
+    "a": "x",
+    "b": "y",
+    "s": "L",
+    "c": "AB",
+    "k": [
+     "y"
+    ],
+    "r": "x",
+    "u": "ab"
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "12.96",
+    "priceDeltaMinor": 1296
+   }
+  },
+  {
+   "name": "pricing: per_item repeater counts items with a value",
+   "defs": "pricedRepeater",
+   "ctx": {
+    "variantOptions": {
+     "Antal": "3"
+    }
+   },
+   "raw": {
+    "pr": [
+     {
+      "pt": "A"
+     },
+     {},
+     {
+      "pt": "C",
+      "pp": "x"
+     }
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "6.00",
+    "values": {
+     "pr": [
+      {
+       "pt": "A"
+      },
+      {},
+      {
+       "pp": "x",
+       "pt": "C"
+      }
+     ]
+    },
+    "lines": [
+     {
+      "field_id": "pt",
+      "group_index": 1,
+      "group_label": "Sak 1",
+      "price_delta": "2.50"
+     },
+     {
+      "field_id": "pt",
+      "group_index": 3,
+      "price_delta": "2.50"
+     },
+     {
+      "field_id": "pp",
+      "group_index": 3,
+      "price_delta": "1.00"
+     }
+    ]
+   }
+  },
+  {
+   "name": "pricing: per_item repeater with no values",
+   "defs": "pricedRepeater",
+   "ctx": {
+    "variantOptions": {
+     "Antal": "2"
+    }
+   },
+   "raw": {
+    "pr": [
+     {},
+     {}
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "0.00",
+    "values": {},
+    "lines": []
+   }
+  },
+  {
+   "name": "pricing: fixed repeater price is charged once",
+   "defs": "fixedRepeater",
+   "ctx": {
+    "variantOptions": {
+     "Antal": "3"
+    }
+   },
+   "raw": {
+    "fr": [
+     {
+      "ft": "A"
+     },
+     {
+      "ft": "B"
+     },
+     {}
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "3.00",
+    "lines": [
+     {
+      "field_id": "ft",
+      "price_delta": "3.00"
+     },
+     {
+      "field_id": "ft",
+      "price_delta": "0.00"
+     }
+    ]
+   }
+  },
+  {
+   "name": "pricing: app off never prices",
+   "defs": "pricing",
+   "ctx": {
+    "appEnabled": false
+   },
+   "raw": {
+    "a": "x",
+    "s": "M"
+   },
+   "compareToM40": true,
+   "expect": {
+    "ok": true,
+    "priceDelta": "0.00",
+    "priceDeltaMinor": 0
+   }
+  },
+  {
+   "name": "canonical: key order does not change values or the line key",
+   "defs": "p3",
+   "ctx": {
+    "variantOptions": {
+     "Välj antal": "3 produkter",
+     "Färg": "Röd"
+    },
+    "optionConfig": [
+     {
+      "name": "Välj antal",
+      "style": "card",
+      "values": [
+       "1 produkt",
+       "2 produkter",
+       "3 produkter",
+       "4 produkter",
+       "5 produkter",
+       "Familj"
+      ],
+      "valueMeta": {
+       "Familj": {
+        "count": 2,
+        "label": "Familj"
+       }
+      }
+     },
+     {
+      "name": "Färg",
+      "style": "color",
+      "values": [
+       "Röd",
+       "Blå",
+       "Svart",
+       "Olivgrön"
+      ],
+      "colorMap": {
+       "Röd": "#dd3333",
+       "Blå": "#1e73be",
+       "Svart": "#000000",
+       "Olivgrön": "#556b2f"
+      }
+     }
+    ],
+    "activeOptionValues": {
+     "Färg": [
+      "Röd",
+      "Blå",
+      "Svart"
+     ]
+    }
+   },
+   "raw": {
+    "rep": [
+     {
+      "rn": "Karin",
+      "rc": "Blå"
+     },
+     {
+      "rc": "Svart",
+      "rn": "Olle"
+     }
+    ],
+    "cn": "Anna",
+    "junk": "x"
+   },
+   "sameAs": {
+    "cn": "Anna",
+    "rep": [
+     {
+      "rc": "Blå",
+      "rn": "Karin"
+     },
+     {
+      "rn": "Olle",
+      "rc": "Svart"
+     }
+    ]
+   },
+   "expect": {
+    "ok": true
+   }
+  },
+  {
+   "name": "canonical: uppercase and VS removal make equal personalization merge",
+   "defs": "p1",
+   "ctx": {},
+   "raw": {
+    "n1": "eva❤️",
+    "n2": "bo❤❤"
+   },
+   "sameAs": {
+    "n1": "EVA❤",
+    "n2": "BO❤❤"
+   },
+   "expect": {
+    "ok": true
+   }
+  },
+  {
+   "name": "canonical: checkbox order does not split lines",
+   "defs": "p5",
+   "ctx": {},
+   "raw": {
+    "cb": [
+     "Nallebjörn",
+     "Student 2026"
+    ]
+   },
+   "sameAs": {
+    "cb": [
+     "Student 2026",
+     "Nallebjörn"
+    ]
+   },
+   "expect": {
+    "ok": true
+   }
+  },
+  {
+   "name": "canonical: different names give different line keys",
+   "defs": "p2",
+   "ctx": {},
+   "raw": {
+    "cn": "Anna"
+   },
+   "differentFrom": {
+    "cn": "Olle"
+   },
+   "expect": {
+    "ok": true
+   }
+  },
+  {
+   "name": "canonical: default checkboxes differ from explicit none",
+   "defs": "p5",
+   "ctx": {},
+   "raw": {},
+   "differentFrom": {
+    "cb": []
+   },
+   "expect": {
+    "ok": true
+   }
+  }
+ ],
+ "conditions": [
+  {
+   "name": "no conditions",
+   "conditions": null,
+   "expected": true
+  },
+  {
+   "name": "empty rules",
+   "conditions": {
+    "match": "all",
+    "rules": []
+   },
+   "expected": true
+  },
+  {
+   "name": "option eq match",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "Färg",
+      "op": "eq",
+      "value": "Röd"
+     }
+    ]
+   },
+   "options": {
+    "Färg": "Röd"
+   },
+   "expected": true
+  },
+  {
+   "name": "option eq mismatch",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "Färg",
+      "op": "eq",
+      "value": "Blå"
+     }
+    ]
+   },
+   "options": {
+    "Färg": "Röd"
+   },
+   "expected": false
+  },
+  {
+   "name": "option neq",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "Färg",
+      "op": "neq",
+      "value": "Blå"
+     }
+    ]
+   },
+   "options": {
+    "Färg": "Röd"
+   },
+   "expected": true
+  },
+  {
+   "name": "option neq with no selection is false",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "Färg",
+      "op": "neq",
+      "value": "Blå"
+     }
+    ]
+   },
+   "options": {},
+   "expected": false
+  },
+  {
+   "name": "option unset with no selection",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "Färg",
+      "op": "unset"
+     }
+    ]
+   },
+   "options": {},
+   "expected": true
+  },
+  {
+   "name": "option unset with a selection",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "Färg",
+      "op": "unset"
+     }
+    ]
+   },
+   "options": {
+    "Färg": "Röd"
+   },
+   "expected": false
+  },
+  {
+   "name": "option set with no selection",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "Färg",
+      "op": "set"
+     }
+    ]
+   },
+   "options": {
+    "Färg": ""
+   },
+   "expected": false
+  },
+  {
+   "name": "option in",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "Färg",
+      "op": "in",
+      "value": [
+       "Blå",
+       "Röd"
+      ]
+     }
+    ]
+   },
+   "options": {
+    "Färg": "Röd"
+   },
+   "expected": true
+  },
+  {
+   "name": "option nin",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "Färg",
+      "op": "nin",
+      "value": [
+       "Blå",
+       "Röd"
+      ]
+     }
+    ]
+   },
+   "options": {
+    "Färg": "Röd"
+   },
+   "expected": false
+  },
+  {
+   "name": "option gte from the leading integer",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "Antal inskriptioner",
+      "op": "gte",
+      "value": 2
+     }
+    ]
+   },
+   "options": {
+    "Antal inskriptioner": "2 Inskriptioner"
+   },
+   "expected": true
+  },
+  {
+   "name": "option gte fails below",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "Antal inskriptioner",
+      "op": "gte",
+      "value": 3
+     }
+    ]
+   },
+   "options": {
+    "Antal inskriptioner": "2 Inskriptioner"
+   },
+   "expected": false
+  },
+  {
+   "name": "option lt",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "Antal inskriptioner",
+      "op": "lt",
+      "value": "2"
+     }
+    ]
+   },
+   "options": {
+    "Antal inskriptioner": "1 Inskription"
+   },
+   "expected": true
+  },
+  {
+   "name": "option gt from valueMeta.count",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "Paket",
+      "op": "gt",
+      "value": 2
+     }
+    ]
+   },
+   "options": {
+    "Paket": "Familj"
+   },
+   "optionConfig": [
+    {
+     "name": "Paket",
+     "values": [
+      "Familj"
+     ],
+     "valueMeta": {
+      "Familj": {
+       "count": 4
+      }
+     }
+    }
+   ],
+   "expected": true
+  },
+  {
+   "name": "option lte with a value without a number counts 0",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "Paket",
+      "op": "lte",
+      "value": 0
+     }
+    ]
+   },
+   "options": {
+    "Paket": "Fem"
+   },
+   "expected": true
+  },
+  {
+   "name": "field eq string",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "field",
+      "key": "gift",
+      "op": "eq",
+      "value": "Ja"
+     }
+    ]
+   },
+   "fields": {
+    "gift": "Ja"
+   },
+   "expected": true
+  },
+  {
+   "name": "field in on a checkbox list",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "field",
+      "key": "extras",
+      "op": "in",
+      "value": [
+       "Gravyr",
+       "X"
+      ]
+     }
+    ]
+   },
+   "fields": {
+    "extras": [
+     "Ask",
+     "Gravyr"
+    ]
+   },
+   "expected": true
+  },
+  {
+   "name": "field nin on a checkbox list",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "field",
+      "key": "extras",
+      "op": "nin",
+      "value": [
+       "Gravyr"
+      ]
+     }
+    ]
+   },
+   "fields": {
+    "extras": [
+     "Ask",
+     "Gravyr"
+    ]
+   },
+   "expected": false
+  },
+  {
+   "name": "field eq on a checkbox list means contains",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "field",
+      "key": "extras",
+      "op": "eq",
+      "value": "Ask"
+     }
+    ]
+   },
+   "fields": {
+    "extras": [
+     "Ask"
+    ]
+   },
+   "expected": true
+  },
+  {
+   "name": "field gt numeric string",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "field",
+      "key": "age",
+      "op": "gt",
+      "value": 3
+     }
+    ]
+   },
+   "fields": {
+    "age": "5"
+   },
+   "expected": true
+  },
+  {
+   "name": "field gte with a decimal comma",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "field",
+      "key": "size",
+      "op": "gte",
+      "value": 2.5
+     }
+    ]
+   },
+   "fields": {
+    "size": "2,5"
+   },
+   "expected": true
+  },
+  {
+   "name": "field lte with a non-numeric value",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "field",
+      "key": "size",
+      "op": "lte",
+      "value": 10
+     }
+    ]
+   },
+   "fields": {
+    "size": "abc"
+   },
+   "expected": false
+  },
+  {
+   "name": "field unset when missing",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "field",
+      "key": "gift",
+      "op": "unset"
+     }
+    ]
+   },
+   "fields": {},
+   "expected": true
+  },
+  {
+   "name": "field set is false for the explicit-none checkbox marker",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "field",
+      "key": "extras",
+      "op": "set"
+     }
+    ]
+   },
+   "fields": {
+    "extras": false
+   },
+   "expected": false
+  },
+  {
+   "name": "match any: one true",
+   "conditions": {
+    "match": "any",
+    "rules": [
+     {
+      "source": "option",
+      "key": "A",
+      "op": "eq",
+      "value": "1"
+     },
+     {
+      "source": "option",
+      "key": "B",
+      "op": "eq",
+      "value": "2"
+     }
+    ]
+   },
+   "options": {
+    "B": "2"
+   },
+   "expected": true
+  },
+  {
+   "name": "match all: one false",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "A",
+      "op": "eq",
+      "value": "1"
+     },
+     {
+      "source": "option",
+      "key": "B",
+      "op": "eq",
+      "value": "2"
+     }
+    ]
+   },
+   "options": {
+    "B": "2"
+   },
+   "expected": false
+  },
+  {
+   "name": "unknown op rules are ignored",
+   "conditions": {
+    "match": "all",
+    "rules": [
+     {
+      "source": "option",
+      "key": "A",
+      "op": "regex",
+      "value": ".*"
+     }
+    ]
+   },
+   "options": {},
+   "expected": true
+  },
+  {
+   "name": "unknown match falls back to all",
+   "conditions": {
+    "match": "some",
+    "rules": [
+     {
+      "source": "option",
+      "key": "A",
+      "op": "set"
+     },
+     {
+      "source": "option",
+      "key": "B",
+      "op": "set"
+     }
+    ]
+   },
+   "options": {
+    "A": "x"
+   },
+   "expected": false
+  }
+ ],
+ "optionCount": [
+  {
+   "name": "map wins",
+   "count": {
+    "option": "Q",
+    "map": {
+     "ett": 1,
+     "två": 2
+    }
+   },
+   "options": {
+    "Q": "två"
+   },
+   "expected": 2
+  },
+  {
+   "name": "map 0 wins over the leading integer",
+   "count": {
+    "option": "Q",
+    "map": {
+     "4 st": 0
+    }
+   },
+   "options": {
+    "Q": "4 st"
+   },
+   "expected": 0
+  },
+  {
+   "name": "valueMeta.count",
+   "count": {
+    "option": "Q"
+   },
+   "options": {
+    "Q": "Tre"
+   },
+   "optionConfig": [
+    {
+     "name": "Q",
+     "valueMeta": {
+      "Tre": {
+       "count": 3
+      }
+     }
+    }
+   ],
+   "expected": 3
+  },
+  {
+   "name": "leading integer",
+   "count": {
+    "option": "Q"
+   },
+   "options": {
+    "Q": "2 Inskriptioner"
+   },
+   "expected": 2
+  },
+  {
+   "name": "leading integer with a dash",
+   "count": {
+    "option": "Q"
+   },
+   "options": {
+    "Q": "6-produkter"
+   },
+   "expected": 6
+  },
+  {
+   "name": "no number",
+   "count": {
+    "option": "Q"
+   },
+   "options": {
+    "Q": "fem"
+   },
+   "expected": 0
+  },
+  {
+   "name": "no selection",
+   "count": {
+    "option": "Q"
+   },
+   "options": {},
+   "expected": 0
+  },
+  {
+   "name": "negative meta count is ignored",
+   "count": {
+    "option": "Q"
+   },
+   "options": {
+    "Q": "2 st"
+   },
+   "optionConfig": [
+    {
+     "name": "Q",
+     "valueMeta": {
+      "2 st": {
+       "count": -1
+      }
+     }
+    }
+   ],
+   "expected": 2
+  }
+ ],
+ "money": [
+  {
+   "input": 0,
+   "minor": 0
+  },
+  {
+   "input": 10,
+   "minor": 1000
+  },
+  {
+   "input": "5.5",
+   "minor": 550
+  },
+  {
+   "input": "7,25",
+   "minor": 725
+  },
+  {
+   "input": 1.005,
+   "minor": 101
+  },
+  {
+   "input": 2.675,
+   "minor": 268
+  },
+  {
+   "input": 0.1,
+   "minor": 10
+  },
+  {
+   "input": "0.004",
+   "minor": 0
+  },
+  {
+   "input": "0.005",
+   "minor": 1
+  },
+  {
+   "input": -1,
+   "minor": 0
+  },
+  {
+   "input": "abc",
+   "minor": 0
+  },
+  {
+   "input": "1e3",
+   "minor": 0
+  },
+  {
+   "input": null,
+   "minor": 0
+  },
+  {
+   "input": 1000001,
+   "minor": 0
+  },
+  {
+   "input": "1000000",
+   "minor": 100000000
+  },
+  {
+   "input": " 12.345 ",
+   "minor": 1235
+  }
+ ],
+ "formatMoney": [
+  {
+   "minor": 0,
+   "text": "0.00"
+  },
+  {
+   "minor": 5,
+   "text": "0.05"
+  },
+  {
+   "minor": 1234,
+   "text": "12.34"
+  },
+  {
+   "minor": 100,
+   "text": "1.00"
+  },
+  {
+   "minor": 100000000,
+   "text": "1000000.00"
+  }
+ ],
+ "truncate": [
+  {
+   "input": "KRISTOFERXYZ",
+   "max": 11,
+   "expected": "KRISTOFERXY"
+  },
+  {
+   "input": "A❤️B",
+   "max": 2,
+   "expected": "A❤️"
+  },
+  {
+   "input": "ÅSA",
+   "max": 2,
+   "expected": "ÅS"
+  },
+  {
+   "input": "éx",
+   "max": 1,
+   "expected": "é"
+  },
+  {
+   "input": "ABC",
+   "max": 5,
+   "expected": "ABC"
+  },
+  {
+   "input": "😀😀",
+   "max": 1,
+   "expected": "😀"
+  }
+ ],
+ "insertAtCaret": [
+  {
+   "name": "insert at the start",
+   "value": "KARIN",
+   "caret": 0,
+   "ch": "❤",
+   "max": 11,
+   "expected": {
+    "value": "❤KARIN",
+    "caret": 1
+   }
+  },
+  {
+   "name": "refused at the limit",
+   "value": "KARIN",
+   "caret": 5,
+   "ch": "❤",
+   "max": 5,
+   "expected": null
+  },
+  {
+   "name": "refused at the limit with VS16 not counted",
+   "value": "KARI❤️",
+   "caret": 0,
+   "ch": "❤",
+   "max": 5,
+   "expected": null
+  },
+  {
+   "name": "no limit",
+   "value": "KA",
+   "caret": 1,
+   "ch": "❤",
+   "max": null,
+   "expected": {
+    "value": "K❤A",
+    "caret": 2
+   }
+  },
+  {
+   "name": "never splits a surrogate pair",
+   "value": "😀",
+   "caret": 1,
+   "ch": "❤",
+   "max": 5,
+   "expected": {
+    "value": "😀❤",
+    "caret": 3
+   }
+  },
+  {
+   "name": "caret clamped to the end",
+   "value": "AB",
+   "caret": 99,
+   "ch": "❤",
+   "max": 5,
+   "expected": {
+    "value": "AB❤",
+    "caret": 3
+   }
+  }
+ ],
+ "display": [
+  {
+   "name": "flat rows only; OPTION outside a group skipped",
+   "rows": [
+    {
+     "label": "Namn",
+     "value": "Anna",
+     "sort_order": 0
+    },
+    {
+     "label": "Färg",
+     "value": "Röd",
+     "source": "OPTION",
+     "sort_order": 1
+    }
+   ],
+   "expected": {
+    "groups": [],
+    "flat": [
+     {
+      "label": "Namn",
+      "value": "Anna"
+     }
+    ]
+   }
+  },
+  {
+   "name": "groups sorted by index; hex from meta or hex; labels by locale",
+   "opts": {
+    "locale": "en",
+    "primary": "sv"
+   },
+   "rows": [
+    {
+     "label": "Namn",
+     "value": "Karin",
+     "group_key": "dnc_items",
+     "group_index": 2,
+     "group_label": {
+      "sv": "Artikel 2",
+      "en": "Item 2"
+     },
+     "sort_order": 3
+    },
+    {
+     "label": "Färg",
+     "value": "Blå",
+     "group_key": "dnc_items",
+     "group_index": 2,
+     "group_label": {
+      "sv": "Artikel 2",
+      "en": "Item 2"
+     },
+     "meta": {
+      "hex": "#1e73be"
+     },
+     "sort_order": 2
+    },
+    {
+     "label": "Namn",
+     "value": "Anna",
+     "group_key": "dnc_items",
+     "group_index": 1,
+     "group_label": {
+      "sv": "Artikel 1"
+     },
+     "sort_order": 0
+    },
+    {
+     "label": "Färg",
+     "value": "Röd",
+     "group_key": "dnc_items",
+     "group_index": 1,
+     "group_label": {
+      "sv": "Artikel 1"
+     },
+     "source": "OPTION",
+     "hex": "#dd3333",
+     "sort_order": 1
+    },
+    {
+     "label": "Text",
+     "value": "För alltid",
+     "sort_order": 9
+    }
+   ],
+   "expected": {
+    "groups": [
+     {
+      "key": "dnc_items",
+      "index": 1,
+      "label": "Artikel 1",
+      "entries": [
+       {
+        "label": "Namn",
+        "value": "Anna",
+        "source": "FIELD"
+       },
+       {
+        "label": "Färg",
+        "value": "Röd",
+        "source": "OPTION",
+        "hex": "#dd3333"
+       }
+      ]
+     },
+     {
+      "key": "dnc_items",
+      "index": 2,
+      "label": "Item 2",
+      "entries": [
+       {
+        "label": "Färg",
+        "value": "Blå",
+        "source": "FIELD",
+        "hex": "#1e73be"
+       },
+       {
+        "label": "Namn",
+        "value": "Karin",
+        "source": "FIELD"
+       }
+      ]
+     }
+    ],
+    "flat": [
+     {
+      "label": "Text",
+      "value": "För alltid"
+     }
+    ]
+   },
+   "groupText": [
+    "Anna, Röd",
+    "Blå, Karin"
+   ]
+  },
+  {
+   "name": "missing group label uses the default label",
+   "useDefaultLabel": true,
+   "rows": [
+    {
+     "label": "Namn",
+     "value": "Bo",
+     "group_key": "items",
+     "group_index": 3,
+     "group_label": null
+    }
+   ],
+   "expected": {
+    "groups": [
+     {
+      "key": "items",
+      "index": 3,
+      "label": "Item 3",
+      "entries": [
+       {
+        "label": "Namn",
+        "value": "Bo",
+        "source": "FIELD"
+       }
+      ]
+     }
+    ],
+    "flat": []
+   }
+  },
+  {
+   "name": "missing group label without a default is the index",
+   "rows": [
+    {
+     "label": "Namn",
+     "value": "Bo",
+     "group_key": "items",
+     "group_index": 3
+    }
+   ],
+   "expected": {
+    "groups": [
+     {
+      "key": "items",
+      "index": 3,
+      "label": "3",
+      "entries": [
+       {
+        "label": "Namn",
+        "value": "Bo",
+        "source": "FIELD"
+       }
+      ]
+     }
+    ],
+    "flat": []
+   }
+  },
+  {
+   "name": "rows without sort_order keep input order after sorted ones",
+   "rows": [
+    {
+     "label": "B",
+     "value": "2"
+    },
+    {
+     "label": "A",
+     "value": "1",
+     "sort_order": 0
+    },
+    {
+     "label": "C",
+     "value": "3"
+    }
+   ],
+   "expected": {
+    "groups": [],
+    "flat": [
+     {
+      "label": "A",
+      "value": "1"
+     },
+     {
+      "label": "B",
+      "value": "2"
+     },
+     {
+      "label": "C",
+      "value": "3"
+     }
+    ]
+   }
+  },
+  {
+   "name": "DESIGN rows stay flat",
+   "rows": [
+    {
+     "label": "Namn",
+     "value": "Bo",
+     "source": "DESIGN"
+    }
+   ],
+   "expected": {
+    "groups": [],
+    "flat": [
+     {
+      "label": "Namn",
+      "value": "Bo"
+     }
+    ]
+   }
+  },
+  {
+   "name": "empty input",
+   "rows": null,
+   "expected": {
+    "groups": [],
+    "flat": []
+   }
+  }
+ ],
+ "groupLabels": [
+  {
+   "name": "not grouped",
+   "row": {
+    "group_index": null,
+    "group_label": {
+     "sv": "Artikel 1"
+    }
+   },
+   "expected": null
+  },
+  {
+   "name": "locale",
+   "row": {
+    "group_index": 2,
+    "group_label": {
+     "sv": "Artikel 2",
+     "en": "Item 2"
+    }
+   },
+   "locale": "en",
+   "primary": "sv",
+   "expected": "Item 2"
+  },
+  {
+   "name": "primary fallback",
+   "row": {
+    "group_index": 2,
+    "group_label": {
+     "sv": "Artikel 2",
+     "en": "Item 2"
+    }
+   },
+   "locale": "de",
+   "primary": "sv",
+   "expected": "Artikel 2"
+  },
+  {
+   "name": "en fallback",
+   "row": {
+    "group_index": 2,
+    "group_label": {
+     "en": "Item 2",
+     "fr": "Article 2"
+    }
+   },
+   "locale": "de",
+   "primary": "sv",
+   "expected": "Item 2"
+  },
+  {
+   "name": "first fallback",
+   "row": {
+    "group_index": 2,
+    "group_label": {
+     "fr": "Article 2"
+    }
+   },
+   "locale": "de",
+   "primary": "sv",
+   "expected": "Article 2"
+  },
+  {
+   "name": "no label",
+   "row": {
+    "group_index": 2,
+    "group_label": null
+   },
+   "expected": null
+  }
+ ],
+ "evaluateGuards": [
+  {
+   "name": "guard: per_option \"constructor\" never reads the prototype",
+   "defs": "protoPricing",
+   "ctx": {},
+   "raw": {
+    "p": "constructor"
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "0.00",
+    "priceDeltaMinor": 0,
+    "lines": [
+     {
+      "field_id": "p",
+      "value": "constructor",
+      "price_delta": "0.00",
+      "price_delta_minor": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "guard: per_option \"toString\" never reads the prototype",
+   "defs": "protoPricing",
+   "ctx": {},
+   "raw": {
+    "p": "toString"
+   },
+   "expect": {
+    "ok": true,
+    "priceDeltaMinor": 0,
+    "lines": [
+     {
+      "field_id": "p",
+      "price_delta_minor": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "guard: per_option \"__proto__\" without an own price costs nothing",
+   "defs": "protoPricing",
+   "ctx": {},
+   "raw": {
+    "p": "__proto__"
+   },
+   "expect": {
+    "ok": true,
+    "priceDeltaMinor": 0,
+    "lines": [
+     {
+      "field_id": "p",
+      "value": "__proto__",
+      "price_delta_minor": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "guard: checkbox with prototype names sums own prices only",
+   "defs": "protoPricing",
+   "ctx": {},
+   "raw": {
+    "q": [
+     "constructor",
+     "toString",
+     "__proto__",
+     "hasOwnProperty",
+     "valueOf",
+     "S"
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "1.50",
+    "priceDeltaMinor": 150,
+    "lines": [
+     {
+      "field_id": "q",
+      "price_delta": "1.50",
+      "price_delta_minor": 150
+     }
+    ]
+   }
+  },
+  {
+   "name": "guard: an own \"__proto__\" price key is a real price",
+   "defs": "protoOwnKey",
+   "ctx": {},
+   "raw": {
+    "o": "__proto__"
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "3.00",
+    "priceDeltaMinor": 300,
+    "lines": [
+     {
+      "field_id": "o",
+      "price_delta_minor": 300
+     }
+    ]
+   }
+  },
+  {
+   "name": "guard: a line over 99 999 999.99 is PERSONALIZATION_PRICE_TOO_HIGH (never 0)",
+   "defs": "tooHigh",
+   "ctx": {},
+   "raw": {
+    "t": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "PERSONALIZATION_PRICE_TOO_HIGH",
+      "field_id": "",
+      "field_name": "",
+      "message": ""
+     }
+    ],
+    "priceDelta": "0.00",
+    "priceDeltaMinor": 0,
+    "lines": [
+     {
+      "field_id": "t",
+      "price_delta_minor": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "guard: a sum over 99 999 999.99 is PERSONALIZATION_PRICE_TOO_HIGH",
+   "defs": "tooHigh",
+   "ctx": {},
+   "raw": {
+    "t": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "f": "x"
+   },
+   "expect": {
+    "ok": false,
+    "errors": [
+     {
+      "code": "PERSONALIZATION_PRICE_TOO_HIGH",
+      "field_id": "",
+      "field_name": "",
+      "message": ""
+     }
+    ],
+    "priceDeltaMinor": 0
+   }
+  },
+  {
+   "name": "guard: the largest allowed sum prices normally",
+   "defs": "tooHigh",
+   "ctx": {},
+   "raw": {
+    "t": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "f": "x"
+   },
+   "expect": {
+    "ok": true,
+    "priceDelta": "99000000.00",
+    "priceDeltaMinor": 9900000000
+   }
+  }
+ ]
+}

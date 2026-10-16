@@ -21,6 +21,7 @@ import { OrdersService } from '../orders/orders.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
 import { InvoiceTriggersService } from '../invoices/invoice-triggers.service';
+import { DesignerTriggersService } from '../designer/designer-triggers.service';
 import {
   isKustomEnabledForStore,
   kustomCreatorSelect,
@@ -57,8 +58,10 @@ export class PaymentsService {
     private notifications: NotificationsService,
     private mail: MailService,
     private markets: MarketsContextService,
-    // Invoices app (M3 D5): optional and last; no-op without the app.
+    // Invoices app (M3 D5): optional; no-op without the app.
     @Optional() private readonly invoices?: InvoiceTriggersService,
+    // Designer app (M4.2 WP5): optional and last; no-op without the app.
+    @Optional() private readonly designerTriggers?: DesignerTriggersService,
   ) {}
 
   // ── Config resolution (DB first, env fallback) ─────────────────────────────
@@ -1087,6 +1090,14 @@ export class PaymentsService {
     // the invoice). Not gated on `changed`, so a retried delivery heals a
     // failed issuance; issuing is idempotent.
     await this.invoices?.onOrderPaid({
+      id: orderId,
+      store_id: orderRow.store_id,
+      payment_status: 'paid',
+    });
+
+    // Designer app: queue the print renders of the order's designed items
+    // (enqueue only, never throws; idempotent on a replayed event).
+    await this.designerTriggers?.onOrderPaid({
       id: orderId,
       store_id: orderRow.store_id,
       payment_status: 'paid',

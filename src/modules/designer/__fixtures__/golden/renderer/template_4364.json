@@ -1,0 +1,657 @@
+{
+ "template": "template_4364",
+ "renderer_version": "1.0.0",
+ "cases": {
+  "sv@proof:2": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {
+      "auob3hc00": "Åsa Öberg-Ängström",
+      "gr7h4vk8x": "NA3b"
+     },
+     "photos": {
+      "sbp2th9uf": {
+       "asset_id": "photo-landscape",
+       "width": 4000,
+       "height": 3000,
+       "adj": {
+        "zoom": 1.6,
+        "rot": 17,
+        "panX": 0.2,
+        "panY": 0.75
+       }
+      }
+     }
+    },
+    "mode": "proof",
+    "scale": 2,
+    "locale": "sv"
+   },
+   "canvas": {
+    "width": 1000,
+    "height": 1400
+   },
+   "report": {
+    "fitted": {
+     "auob3hc00": 49.5,
+     "gr7h4vk8x": 30
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 82,
+   "sha256": "8ac2d15ac3d37c9ed0c1769a9519ef5e3033717b801dc3c0ef2ca344d98602e7",
+   "log": [
+    ["clearRect",0,0,1000,1400],
+    ["save"],
+    ["drawImage","pending:bg_web",0,0,1000,1400],
+    ["restore"],
+    ["save"],
+    ["translate",502,753],
+    ["rotate",0],
+    ["translate",-502,-753],
+    ["save"],
+    ["beginPath"],
+    ["rect",236,380,532,746],
+    ["clip"],
+    ["translate",819.84,641.1],
+    ["rotate",0.296706],
+    ["translate",-819.84,-641.1],
+    ["drawImage","photo-landscape",24.106667,44.3,1591.466667,1193.6],
+    ["restore"],
+    ["restore"],
+    ["save"],
+    ["translate",497,176],
+    ["rotate",0],
+    ["translate",-497,-176],
+    ["fitScan","Åsa Öberg-Ängström","400 354px \"Righteous\"","400 297px \"Righteous\"",20,2940.3],
+    ["=font","400 99px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Åsa Öberg-Ängström",497,176],
+    ["restore"],
+    ["save"],
+    ["translate",500,280],
+    ["rotate",0],
+    ["translate",-500,-280],
+    ["fitScan","NA3b","400 180px \"Righteous\"","400 180px \"Righteous\"",1,446.4],
+    ["=font","400 60px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","NA3b",500,280],
+    ["restore"]
+   ]
+  },
+  "sv@print:6": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {
+      "auob3hc00": "Åsa Öberg-Ängström",
+      "gr7h4vk8x": "NA3b"
+     },
+     "photos": {
+      "sbp2th9uf": {
+       "asset_id": "photo-landscape",
+       "width": 4000,
+       "height": 3000,
+       "adj": {
+        "zoom": 1.6,
+        "rot": 17,
+        "panX": 0.2,
+        "panY": 0.75
+       }
+      }
+     }
+    },
+    "mode": "print",
+    "scale": 6,
+    "locale": "sv"
+   },
+   "canvas": {
+    "width": 3000,
+    "height": 4200
+   },
+   "report": {
+    "fitted": {
+     "auob3hc00": 49.5,
+     "gr7h4vk8x": 30
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 82,
+   "sha256": "b972f92fa3995228d5b54e19f8f07ba472f225d57b62587e8b4691026b5ef8c6",
+   "log": [
+    ["clearRect",0,0,3000,4200],
+    ["save"],
+    ["drawImage","pending:bg_print",0,0,3000,4200],
+    ["restore"],
+    ["save"],
+    ["translate",1506,2259],
+    ["rotate",0],
+    ["translate",-1506,-2259],
+    ["save"],
+    ["beginPath"],
+    ["rect",708,1140,1596,2238],
+    ["clip"],
+    ["translate",2459.52,1923.3],
+    ["rotate",0.296706],
+    ["translate",-2459.52,-1923.3],
+    ["drawImage","photo-landscape",72.32,132.9,4774.4,3580.8],
+    ["restore"],
+    ["restore"],
+    ["save"],
+    ["translate",1491,528],
+    ["rotate",0],
+    ["translate",-1491,-528],
+    ["fitScan","Åsa Öberg-Ängström","400 354px \"Righteous\"","400 297px \"Righteous\"",20,2940.3],
+    ["=font","400 297px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Åsa Öberg-Ängström",1491,528],
+    ["restore"],
+    ["save"],
+    ["translate",1500,840],
+    ["rotate",0],
+    ["translate",-1500,-840],
+    ["fitScan","NA3b","400 180px \"Righteous\"","400 180px \"Righteous\"",1,446.4],
+    ["=font","400 180px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","NA3b",1500,840],
+    ["restore"]
+   ]
+  },
+  "long@proof:2": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {
+      "auob3hc00": "Maximiliana Charlotta Åkesson-Lindqvist ❤️",
+      "gr7h4vk8x": "Teknikprogrammet ❤️ Göteborgs Högre Allmänna Läroverk för Flickor 2026"
+     },
+     "photos": {
+      "sbp2th9uf": {
+       "asset_id": "photo-portrait",
+       "width": 2400,
+       "height": 3600,
+       "adj": {
+        "zoom": 2.3,
+        "rot": -45,
+        "panX": 0.1,
+        "panY": 0.9
+       }
+      }
+     }
+    },
+    "mode": "proof",
+    "scale": 2,
+    "locale": "sv"
+   },
+   "canvas": {
+    "width": 1000,
+    "height": 1400
+   },
+   "report": {
+    "fitted": {
+     "auob3hc00": 23,
+     "gr7h4vk8x": 8
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 276,
+   "sha256": "c3dd630ced5daf3190dca192c5c20064d0f0354277b602b49fd2ec6feae6eafd",
+   "log": [
+    ["clearRect",0,0,1000,1400],
+    ["save"],
+    ["drawImage","pending:bg_web",0,0,1000,1400],
+    ["restore"],
+    ["save"],
+    ["translate",502,753],
+    ["rotate",0],
+    ["translate",-502,-753],
+    ["save"],
+    ["beginPath"],
+    ["rect",236,380,532,746],
+    ["clip"],
+    ["translate",778.64,317.24],
+    ["rotate",-0.785398],
+    ["translate",-778.64,-317.24],
+    ["drawImage","photo-portrait",166.84,-600.46,1223.6,1835.4],
+    ["restore"],
+    ["restore"],
+    ["save"],
+    ["translate",497,176],
+    ["rotate",0],
+    ["translate",-497,-176],
+    ["fitScan","Maximiliana Charlotta Åkesson-Lindqvist ❤️","400 354px \"Righteous\"","400 138px \"Righteous\"",73,2920.08],
+    ["=font","400 46px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Maximiliana Charlotta Åkesson-Lindqvist ❤️",497,176],
+    ["restore"],
+    ["save"],
+    ["translate",500,280],
+    ["rotate",0],
+    ["translate",-500,-280],
+    ["fitScan","Teknikprogrammet ❤️ Göteborgs Högre Allmänna Läroverk för Flickor 2026","400 180px \"Righteous\"","400 48px \"Righteous\"",45,1750.08],
+    ["=font","400 16px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Teknikprogrammet ❤️ Göteborgs Högre Allmänna Läroverk för Flickor 2026",500,280],
+    ["restore"]
+   ]
+  },
+  "long@print:6": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {
+      "auob3hc00": "Maximiliana Charlotta Åkesson-Lindqvist ❤️",
+      "gr7h4vk8x": "Teknikprogrammet ❤️ Göteborgs Högre Allmänna Läroverk för Flickor 2026"
+     },
+     "photos": {
+      "sbp2th9uf": {
+       "asset_id": "photo-portrait",
+       "width": 2400,
+       "height": 3600,
+       "adj": {
+        "zoom": 2.3,
+        "rot": -45,
+        "panX": 0.1,
+        "panY": 0.9
+       }
+      }
+     }
+    },
+    "mode": "print",
+    "scale": 6,
+    "locale": "sv"
+   },
+   "canvas": {
+    "width": 3000,
+    "height": 4200
+   },
+   "report": {
+    "fitted": {
+     "auob3hc00": 23,
+     "gr7h4vk8x": 8
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 276,
+   "sha256": "8c79dae6b14e3ec32f30b1e8d4d0283e3ae0176122a964b486cc53953cdd4da3",
+   "log": [
+    ["clearRect",0,0,3000,4200],
+    ["save"],
+    ["drawImage","pending:bg_print",0,0,3000,4200],
+    ["restore"],
+    ["save"],
+    ["translate",1506,2259],
+    ["rotate",0],
+    ["translate",-1506,-2259],
+    ["save"],
+    ["beginPath"],
+    ["rect",708,1140,1596,2238],
+    ["clip"],
+    ["translate",2335.92,951.72],
+    ["rotate",-0.785398],
+    ["translate",-2335.92,-951.72],
+    ["drawImage","photo-portrait",500.52,-1801.38,3670.8,5506.2],
+    ["restore"],
+    ["restore"],
+    ["save"],
+    ["translate",1491,528],
+    ["rotate",0],
+    ["translate",-1491,-528],
+    ["fitScan","Maximiliana Charlotta Åkesson-Lindqvist ❤️","400 354px \"Righteous\"","400 138px \"Righteous\"",73,2920.08],
+    ["=font","400 138px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Maximiliana Charlotta Åkesson-Lindqvist ❤️",1491,528],
+    ["restore"],
+    ["save"],
+    ["translate",1500,840],
+    ["rotate",0],
+    ["translate",-1500,-840],
+    ["fitScan","Teknikprogrammet ❤️ Göteborgs Högre Allmänna Läroverk för Flickor 2026","400 180px \"Righteous\"","400 48px \"Righteous\"",45,1750.08],
+    ["=font","400 48px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Teknikprogrammet ❤️ Göteborgs Högre Allmänna Läroverk för Flickor 2026",1500,840],
+    ["restore"]
+   ]
+  },
+  "defaults@proof:2": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {},
+     "photos": {}
+    },
+    "mode": "proof",
+    "scale": 2,
+    "locale": "sv"
+   },
+   "canvas": {
+    "width": 1000,
+    "height": 1400
+   },
+   "report": {
+    "fitted": {
+     "auob3hc00": 59,
+     "gr7h4vk8x": 30
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 39,
+   "sha256": "0069c5abe0197768eae7269828e3eb2533c84bbc668445a35ed5837207475439",
+   "log": [
+    ["clearRect",0,0,1000,1400],
+    ["save"],
+    ["drawImage","pending:bg_web",0,0,1000,1400],
+    ["restore"],
+    ["save"],
+    ["translate",502,753],
+    ["rotate",0],
+    ["translate",-502,-753],
+    ["=fillStyle","#e8e8e8"],
+    ["beginPath"],
+    ["rect",236,380,532,746],
+    ["fill"],
+    ["restore"],
+    ["save"],
+    ["translate",497,176],
+    ["rotate",0],
+    ["translate",-497,-176],
+    ["fitScan","Namn","400 354px \"Righteous\"","400 354px \"Righteous\"",1,835.44],
+    ["=font","400 118px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Namn",497,176],
+    ["restore"],
+    ["save"],
+    ["translate",500,280],
+    ["rotate",0],
+    ["translate",-500,-280],
+    ["fitScan","Klass","400 180px \"Righteous\"","400 180px \"Righteous\"",1,478.8],
+    ["=font","400 60px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Klass",500,280],
+    ["restore"]
+   ]
+  },
+  "defaults@print:6": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {},
+     "photos": {}
+    },
+    "mode": "print",
+    "scale": 6,
+    "locale": "sv"
+   },
+   "canvas": {
+    "width": 3000,
+    "height": 4200
+   },
+   "report": {
+    "fitted": {
+     "auob3hc00": 59,
+     "gr7h4vk8x": 30
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 39,
+   "sha256": "855d7df139e02dafa86f7c66e2037483764ee31acb4de3f9f185e6b60068eee6",
+   "log": [
+    ["clearRect",0,0,3000,4200],
+    ["save"],
+    ["drawImage","pending:bg_print",0,0,3000,4200],
+    ["restore"],
+    ["save"],
+    ["translate",1506,2259],
+    ["rotate",0],
+    ["translate",-1506,-2259],
+    ["=fillStyle","#e8e8e8"],
+    ["beginPath"],
+    ["rect",708,1140,1596,2238],
+    ["fill"],
+    ["restore"],
+    ["save"],
+    ["translate",1491,528],
+    ["rotate",0],
+    ["translate",-1491,-528],
+    ["fitScan","Namn","400 354px \"Righteous\"","400 354px \"Righteous\"",1,835.44],
+    ["=font","400 354px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Namn",1491,528],
+    ["restore"],
+    ["save"],
+    ["translate",1500,840],
+    ["rotate",0],
+    ["translate",-1500,-840],
+    ["fitScan","Klass","400 180px \"Righteous\"","400 180px \"Righteous\"",1,478.8],
+    ["=font","400 180px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Klass",1500,840],
+    ["restore"]
+   ]
+  },
+  "sv@edit:2": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {
+      "auob3hc00": "Åsa Öberg-Ängström",
+      "gr7h4vk8x": "NA3b"
+     },
+     "photos": {
+      "sbp2th9uf": {
+       "asset_id": "photo-landscape",
+       "width": 4000,
+       "height": 3000,
+       "adj": {
+        "zoom": 1.6,
+        "rot": 17,
+        "panX": 0.2,
+        "panY": 0.75
+       }
+      }
+     }
+    },
+    "mode": "edit",
+    "scale": 2,
+    "locale": "sv",
+    "ui": {
+     "activeSlotId": "sbp2th9uf",
+     "uiFontFamily": "system-ui"
+    }
+   },
+   "canvas": {
+    "width": 1000,
+    "height": 1400
+   },
+   "report": {
+    "fitted": {
+     "auob3hc00": 49.5,
+     "gr7h4vk8x": 30
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 96,
+   "sha256": "ceb8909a36c1808a140a3b9aa654f7d11e7be3ba26ebd45c8bd6617d1f65e1b9",
+   "log": [
+    ["clearRect",0,0,1000,1400],
+    ["save"],
+    ["drawImage","pending:bg_web",0,0,1000,1400],
+    ["restore"],
+    ["save"],
+    ["translate",502,753],
+    ["rotate",0],
+    ["translate",-502,-753],
+    ["save"],
+    ["beginPath"],
+    ["rect",236,380,532,746],
+    ["clip"],
+    ["translate",819.84,641.1],
+    ["rotate",0.296706],
+    ["translate",-819.84,-641.1],
+    ["drawImage","photo-landscape",24.106667,44.3,1591.466667,1193.6],
+    ["restore"],
+    ["restore"],
+    ["save"],
+    ["translate",497,176],
+    ["rotate",0],
+    ["translate",-497,-176],
+    ["fitScan","Åsa Öberg-Ängström","400 354px \"Righteous\"","400 297px \"Righteous\"",20,2940.3],
+    ["=font","400 99px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Åsa Öberg-Ängström",497,176],
+    ["restore"],
+    ["save"],
+    ["translate",500,280],
+    ["rotate",0],
+    ["translate",-500,-280],
+    ["fitScan","NA3b","400 180px \"Righteous\"","400 180px \"Righteous\"",1,446.4],
+    ["=font","400 60px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","NA3b",500,280],
+    ["restore"],
+    ["save"],
+    ["translate",502,753],
+    ["rotate",0],
+    ["translate",-502,-753],
+    ["setLineDash",[]],
+    ["=strokeStyle","#2563eb"],
+    ["=lineWidth",2],
+    ["strokeRect",236,380,532,746],
+    ["=fillStyle","#2563eb"],
+    ["fillRect",232,376,8,8],
+    ["fillRect",764,376,8,8],
+    ["fillRect",232,1122,8,8],
+    ["fillRect",764,1122,8,8],
+    ["restore"]
+   ]
+  },
+  "defaults@edit:2": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {},
+     "photos": {}
+    },
+    "mode": "edit",
+    "scale": 2,
+    "locale": "sv",
+    "ui": {
+     "uiFontFamily": "system-ui"
+    }
+   },
+   "canvas": {
+    "width": 1000,
+    "height": 1400
+   },
+   "report": {
+    "fitted": {
+     "auob3hc00": 59,
+     "gr7h4vk8x": 30
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 49,
+   "sha256": "0f98e51db2b602e4df62f1f9cee6e9960e60a28cca44f274ba656705686ef1a7",
+   "log": [
+    ["clearRect",0,0,1000,1400],
+    ["save"],
+    ["drawImage","pending:bg_web",0,0,1000,1400],
+    ["restore"],
+    ["save"],
+    ["translate",502,753],
+    ["rotate",0],
+    ["translate",-502,-753],
+    ["=fillStyle","#e8e8e8"],
+    ["beginPath"],
+    ["rect",236,380,532,746],
+    ["fill"],
+    ["=strokeStyle","#cccccc"],
+    ["=lineWidth",4],
+    ["setLineDash",[12,8]],
+    ["strokeRect",238,382,528,742],
+    ["setLineDash",[]],
+    ["=fillStyle","#aaa"],
+    ["=font","28px \"system-ui\""],
+    ["=textAlign","center"],
+    ["=textBaseline","middle"],
+    ["fillText","Ladda upp bild",502,753],
+    ["restore"],
+    ["save"],
+    ["translate",497,176],
+    ["rotate",0],
+    ["translate",-497,-176],
+    ["fitScan","Namn","400 354px \"Righteous\"","400 354px \"Righteous\"",1,835.44],
+    ["=font","400 118px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Namn",497,176],
+    ["restore"],
+    ["save"],
+    ["translate",500,280],
+    ["rotate",0],
+    ["translate",-500,-280],
+    ["fitScan","Klass","400 180px \"Righteous\"","400 180px \"Righteous\"",1,478.8],
+    ["=font","400 60px \"Righteous\""],
+    ["=fillStyle","#005fa8"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Klass",500,280],
+    ["restore"]
+   ]
+  }
+ }
+}

@@ -5,9 +5,11 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
+  Inject,
   Optional,
 } from '@nestjs/common';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
@@ -38,9 +40,11 @@ import { MailService } from '../mail/mail.service';
 import { InvoiceTriggersService } from '../invoices/invoice-triggers.service';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import {
+  currencyDecimals,
   resolveOrderCurrency,
   roundMoney,
 } from '../../common/money/currency.util';
+import { allocateLargestRemainder } from '../../common/money/tax.util';
 import { MarketsContextService } from '../markets/markets-context.service';
 import {
   MarketPricingService,
@@ -82,6 +86,39 @@ import type {
 } from '../b2b/b2b.types';
 import { B2bTaxExemptionService } from '../b2b/b2b-tax-exemption.service';
 import {
+  PersonalizationCoreService,
+  type LineContext,
+  type OrderValueRow,
+} from '../../common/personalization/personalization-core.service';
+import type { NormalizedValues } from '../../common/personalization/rules';
+import { CustomerUploadsService } from '../customer-uploads/customer-uploads.service';
+import {
+  assertAmountFits,
+  assertPriceEvaluated,
+  PersonalizationService,
+  type ActiveVariantsCache,
+} from '../personalization/personalization.service';
+import { personalizationInvalid } from '../personalization/personalization-runtime';
+import type {
+  PFieldDef,
+  PLine,
+  PResult,
+} from '../../common/personalization/types';
+import { ProductionTriggersService } from '../production/production-triggers.service';
+import {
+  isProductionFilter,
+  productionWhere,
+} from '../production/production-where';
+import {
+  DesignerCartService,
+  type DesignerLine,
+  type DesignerLineMode,
+} from '../designer/designer-cart.service';
+import {
+  DESIGNER_TRIGGERS_PORT,
+  type DesignerTriggersPort,
+} from '../../common/ports/designer-triggers.port';
+import {
   customerVatEvidence,
   decideTaxExemption,
   type ExemptionInputs,
@@ -119,21 +156,12 @@ interface OrderItemImageSource {
   } | null;
 }
 
-/** A custom field value a customer submitted for one order line. */
-interface PendingFieldValue {
-  custom_field_id: string;
-  value?: string;
-  file_url?: string;
-}
-
 /**
- * An order line as create() accumulates it before order.create():
- * the Prisma row plus the field values, which are split off (and deleted
- * from the object) right before the insert.
+ * An order line as create() accumulates it before order.create(). Its
+ * custom field values are created nested (`custom_field_values.create`,
+ * M4.0 K8), inside the same insert as the order.
  */
-type PendingOrderItem = Prisma.OrderItemUncheckedCreateWithoutOrderInput & {
-  _custom_field_values?: PendingFieldValue[];
-};
+type PendingOrderItem = Prisma.OrderItemUncheckedCreateWithoutOrderInput;
 
 /** The store columns order pricing depends on. */
 interface OrderStoreContext extends TaxStoreFields {
@@ -153,6 +181,8 @@ interface OrderStoreContext extends TaxStoreFields {
   b2bEnabled: boolean;
   /** b2b app: the buyer type this request runs as (PERSON when the app is off). */
   buyerType: BuyerType;
+  /** Personalization app (M4.1 D2): in effect for the store (false when off). */
+  personalizationEnabled: boolean;
 }
 
 /** A stock reservation to apply atomically right before the order row. */
@@ -169,6 +199,24 @@ interface PricedLine {
   /** Tax class / exemption of the product behind the line. */
   taxClassId: string | null;
   taxExempt: boolean;
+  /**
+   * Personalization app (M4.1): the evaluator result of an app line (its
+   * canonical values and snapshot lines); null on the M4.0 path.
+   */
+  personalization: PResult | null;
+  /** Per-unit personalization delta in the order currency (0 = none). */
+  personalizationAmount: number;
+}
+
+/** What priceLine() needs to evaluate a line's personalization (M4.1). */
+interface LinePersonalizationInput {
+  ctx: LineContext;
+  /** Raw values of the line (cart JSON or the request's customization). */
+  raw: unknown;
+  locale?: string | null;
+  ref: { line_id?: string; line_index?: number };
+  /** Active variants per product, shared by every line of the quote / order. */
+  activeCache?: ActiveVariantsCache;
 }
 
 type CouponValidation = {
@@ -276,6 +324,12 @@ export interface CreateOrderOptions {
    * or reverse charge is off.
    */
   exemptionInputs?: ExemptionInputs | null;
+  /**
+   * Designer app: design ids whose ownership the stored checkout session
+   * verified (Kustom snapshot, `verifiedDesignIds(session.items)`). With
+   * `lines`, only these designs are trusted; absent = none.
+   */
+  verifiedDesignIds?: readonly string[];
 }
 
 function deriveCommissionStatus(orderStatus: OrderStatus): CommissionStatus {
@@ -307,7 +361,7 @@ function deriveFulfillmentStatus(
     case OrderStatus.MANUFACTURING:
       return FulfillmentStatus.MANUFACTURING;
     case OrderStatus.QUALITY_CHECK:
-      return FulfillmentStatus.MANUFACTURING;
+      return FulfillmentStatus.QUALITY_CHECK;
     case OrderStatus.SHIPPED:
       return FulfillmentStatus.SHIPPED;
     case OrderStatus.DELIVERED:
@@ -323,8 +377,12 @@ const FULFILLMENT_RANK: Record<FulfillmentStatus, number> = {
   [FulfillmentStatus.PENDING]: 0,
   [FulfillmentStatus.PROCESSING]: 1,
   [FulfillmentStatus.MANUFACTURING]: 2,
-  [FulfillmentStatus.SHIPPED]: 3,
-  [FulfillmentStatus.DELIVERED]: 4,
+  // M4.3: QUALITY_CHECK is its own stage between MANUFACTURING and SHIPPED.
+  // Legacy items left on MANUFACTURING (no data migration) still rank 2, and
+  // the recompute is advance-only, so a QC order header is never pulled back.
+  [FulfillmentStatus.QUALITY_CHECK]: 3,
+  [FulfillmentStatus.SHIPPED]: 4,
+  [FulfillmentStatus.DELIVERED]: 5,
 };
 
 // How long a card order may hold its stock reservation while unpaid. Stripe
@@ -355,8 +413,10 @@ function fulfillmentStageToOrderStatus(rank: number): OrderStatus | null {
     case 2:
       return OrderStatus.MANUFACTURING;
     case 3:
-      return OrderStatus.SHIPPED;
+      return OrderStatus.QUALITY_CHECK;
     case 4:
+      return OrderStatus.SHIPPED;
+    case 5:
       return OrderStatus.DELIVERED;
     default:
       return null; // 0 (PENDING): leave the pre-fulfillment status alone
@@ -388,7 +448,95 @@ export class OrdersService {
     // b2b app M2.5 (reverse charge): optional and trailing for the same
     // reason. Absent = no exemption is ever applied.
     @Optional() private readonly b2bTax?: B2bTaxExemptionService,
+    // M4.0 (C28): required by DI (no @Optional). Typed optional only so the
+    // positional test constructors stay valid; see `core` / `uploads`.
+    private readonly personalizationCore?: PersonalizationCoreService,
+    private readonly customerUploads?: CustomerUploadsService,
+    // M4.1 personalization app (C28): optional, before production. Absent
+    // or app off = every line takes the M4.0 path.
+    @Optional() private readonly personalization?: PersonalizationService,
+    // M4.3 production app (C28): optional and trailing. Absent or app off =
+    // no checklist work (one cached isEnabled per hook).
+    @Optional() private readonly production?: ProductionTriggersService,
+    // M4.2 designer app (C28): optional and trailing. Absent = no line is
+    // ever a designer line and no designer trigger runs.
+    @Optional() private readonly designerCart?: DesignerCartService,
+    @Optional()
+    @Inject(DESIGNER_TRIGGERS_PORT)
+    private readonly designerTriggers?: DesignerTriggersPort,
   ) {}
+
+  /**
+   * Designer app (C29 step 2): per line, the validated designer line or
+   * null. One cached isEnabled for a store without the app; without the
+   * service injected every entry is null.
+   */
+  private async planDesignerLines(
+    orderStore: OrderStoreContext,
+    lines: NormalizedCartLine[],
+    contexts: LineContext[],
+    opts: {
+      mode: DesignerLineMode;
+      customerId?: string | null;
+      tokens?: (string | null | undefined)[];
+      refs: { line_id?: string; line_index?: number }[];
+      verifiedDesignIds?: readonly string[] | null;
+    },
+  ): Promise<(DesignerLine | null)[]> {
+    if (!this.designerCart) return lines.map(() => null);
+    return this.designerCart.planLines(
+      orderStore.id,
+      lines.map((l, i) => ({
+        product_id: l.custom_product_id
+          ? null
+          : (l.product_id ?? contexts[i]?.productId ?? null),
+        custom_product_id: l.custom_product_id,
+        variant_id: l.variant_id,
+        design_id: l.design_id ?? null,
+        design_token: opts.tokens?.[i] ?? null,
+      })),
+      {
+        mode: opts.mode,
+        customerId: opts.customerId,
+        refs: opts.refs,
+        verifiedDesignIds: opts.verifiedDesignIds,
+      },
+    );
+  }
+
+  /** Runs a designer trigger; a failure never breaks the order flow. */
+  private async fireDesigner(
+    fn: (t: DesignerTriggersPort) => Promise<void>,
+  ): Promise<void> {
+    if (!this.designerTriggers) return;
+    try {
+      await fn(this.designerTriggers);
+    } catch (err) {
+      this.logger.warn(
+        `Designer trigger failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  private fallbackCore?: PersonalizationCoreService;
+  private fallbackUploads?: CustomerUploadsService;
+
+  /** Customer uploads (injected, or built on this Prisma in unit tests). */
+  private get uploads(): CustomerUploadsService {
+    if (this.customerUploads) return this.customerUploads;
+    this.fallbackUploads ??= new CustomerUploadsService(this.prisma);
+    return this.fallbackUploads;
+  }
+
+  /** Personalization core (injected, or built on this Prisma in unit tests). */
+  private get core(): PersonalizationCoreService {
+    if (this.personalizationCore) return this.personalizationCore;
+    this.fallbackCore ??= new PersonalizationCoreService(
+      this.prisma,
+      this.uploads,
+    );
+    return this.fallbackCore;
+  }
 
   /** Register a callback to run once an order's status becomes SHIPPED. */
   registerShippedHook(hook: ShippedHook): void {
@@ -444,12 +592,38 @@ export class OrdersService {
         },
       },
       custom_field_values: {
-        include: { custom_field: { include: { translations: true } } },
+        // Stable row order (MULTI_IMAGE files keep their insert order).
+        orderBy: { id: 'asc' as const },
+        include: {
+          custom_field: { include: { translations: true } },
+          // M4.0 WP-B: the private original behind a customer file value.
+          upload: {
+            select: {
+              id: true,
+              preview_url: true,
+              original_name: true,
+              mime: true,
+              width: true,
+              height: true,
+              purged_at: true,
+            },
+          },
+        },
       },
       bundle_offer: {
         include: {
           translations: true,
           bundle: { include: { translations: true } },
+        },
+      },
+      // M4.2 designer: the frozen design of the line (proof image). The key
+      // is removed again for lines without one (withItemImages).
+      design: {
+        select: {
+          id: true,
+          store_id: true,
+          proof_key: true,
+          files_purged_at: true,
         },
       },
     },
@@ -503,10 +677,29 @@ export class OrdersService {
     void _kt;
     return {
       ...rest,
-      items: items.map((it) => ({
-        ...(it as object),
-        image_url: this.resolveOrderItemImage(it as OrderItemImageSource),
-      })),
+      items: items.map((it) => {
+        // M4.2 designer: a designed line shows its signed proof; lines
+        // without a design lose the (null) relation key, so their shape is
+        // exactly what it was before the app.
+        const { design, ...line } = it as {
+          design?: {
+            id: string;
+            store_id: string;
+            proof_key: string | null;
+            files_purged_at: Date | null;
+          } | null;
+        };
+        const proofUrl =
+          design && this.designerCart
+            ? this.designerCart.orderItemProofUrl(design)
+            : null;
+        return {
+          ...line,
+          image_url:
+            proofUrl ?? this.resolveOrderItemImage(it as OrderItemImageSource),
+          ...(design ? { design: { id: design.id, proof_url: proofUrl } } : {}),
+        };
+      }),
     } as T;
   }
 
@@ -579,12 +772,17 @@ export class OrdersService {
     const resolvedBuyerType = b2bEnabled
       ? await this.b2b.resolveBuyerType(orderStore.id, buyerType)
       : 'PERSON';
+    // Personalization app (M4.1): one cached flag; false without the app.
+    const personalizationEnabled = this.personalization
+      ? await this.personalization.isEnabled(orderStore.id)
+      : false;
     return {
       ...store,
       primary_locale: language_config?.primary_locale ?? null,
       market,
       b2bEnabled,
       buyerType: resolvedBuyerType,
+      personalizationEnabled,
     };
   }
 
@@ -647,6 +845,8 @@ export class OrdersService {
     orderStore: OrderStoreContext,
     /** Market override rows of the whole order (loadPricesForLines). */
     marketRows: MarketPriceMap | null = null,
+    /** M4.1: the line's personalization (evaluated for app lines only). */
+    pz: LinePersonalizationInput | null = null,
   ): Promise<PricedLine> {
     const isIndependentStore = orderStore.store_type === StoreType.INDEPENDENT;
     let unitPrice = 0;
@@ -664,6 +864,13 @@ export class OrdersService {
       basePrice: number;
       adjustment: number;
     } | null = null;
+    // Personalization app (D2): set only for this store creator's own
+    // products (the branches below have checked ownership).
+    let appProduct: {
+      id: string;
+      variant_option_config: unknown;
+    } | null = null;
+    let appVariantOptions: unknown = {};
 
     if (item.custom_product_id) {
       // Custom product (with or without a selected variant)
@@ -771,6 +978,8 @@ export class OrdersService {
 
       unitPrice =
         Number(variant.product.base_price) + Number(variant.price_adjustment);
+      appProduct = variant.product;
+      appVariantOptions = variant.options;
       marketInput = {
         product_id: variant.product_id,
         variant_id: variant.id,
@@ -806,6 +1015,7 @@ export class OrdersService {
       }
 
       unitPrice = Number(product.base_price);
+      appProduct = product;
       marketInput = {
         product_id: product.id,
         variant_id: null,
@@ -858,6 +1068,66 @@ export class OrdersService {
       );
       if (marketPrice == null) this.rejectForeignItem();
       unitPrice = marketPrice;
+    }
+
+    // Personalization app (M4.1 D4, C29): app lines are evaluated here so
+    // the cart, the quote (Kustom) and the order price them identically.
+    // The per-unit delta (base currency) is converted like every base
+    // amount and added after the market price, before the bundle discount.
+    let personalization: PResult | null = null;
+    let personalizationAmount = 0;
+    const appDefs = pz
+      ? ((pz.ctx.allFields ?? pz.ctx.fields) as unknown as PFieldDef[])
+      : [];
+    if (
+      pz &&
+      appProduct &&
+      this.personalization &&
+      this.personalization.needsEvaluator(appDefs)
+    ) {
+      // The fields were loaded for the line's product (a variant-only line
+      // resolves it from the variant): never evaluate another product's.
+      if (pz.ctx.productId && pz.ctx.productId !== appProduct.id) {
+        this.rejectForeignItem();
+      }
+      // Fail closed: with M4.1 config, an app state that could not be read
+      // is a 503, never the app-off price (cached flag first).
+      const appOn =
+        orderStore.personalizationEnabled ||
+        (await this.personalization.isEnabledStrict(orderStore.id));
+      if (appOn) {
+        await this.personalization.assertVariantChosen(
+          appProduct.id,
+          item.variant_id,
+          pz.activeCache,
+        );
+        personalization = await this.personalization.evaluateLine({
+          product: appProduct,
+          variantOptions: appVariantOptions,
+          defs: appDefs,
+          raw: pz.raw,
+          locale: pz.locale,
+          primaryLocale: orderStore.primary_locale,
+          activeCache: pz.activeCache,
+        });
+        assertPriceEvaluated(personalization);
+        if (!personalization.ok) {
+          throw personalizationInvalid(personalization.errors, pz.ref);
+        }
+        if (personalization.priceDeltaMinor > 0) {
+          const delta = Number(personalization.priceDelta);
+          personalizationAmount = orderStore.market
+            ? this.marketPricing.convertMoney(orderStore.market, delta)
+            : roundMoney(delta);
+          unitPrice = roundMoney(unitPrice + personalizationAmount);
+          // Every amount must fit its Decimal(10,2) column.
+          assertAmountFits(
+            personalizationAmount,
+            unitPrice,
+            this.lineTotal(unitPrice, item.quantity),
+          );
+        }
+      }
     }
 
     // Apply bundle pricing if this cart line carries a bundle offer
@@ -935,7 +1205,33 @@ export class OrdersService {
       stockOp,
       taxClassId,
       taxExempt,
+      personalization,
+      personalizationAmount,
     };
+  }
+
+  /**
+   * Personalization app (M4.1 C1): evaluator lines with their per-unit
+   * `price_delta` in the order currency. In a market the converted line
+   * total (`personalization_amount`) is split over the priced lines by
+   * largest remainder, so the rows always sum exactly to it.
+   */
+  private orderCurrencyLines(
+    lines: readonly PLine[],
+    market: MarketContext | null,
+    personalizationAmount: number,
+  ): PLine[] {
+    if (!market) return [...lines];
+    const factor = 10 ** Math.min(2, currencyDecimals(market.currency));
+    const shares = allocateLargestRemainder(
+      Math.round(personalizationAmount * factor),
+      lines.map((l) => l.price_delta_minor),
+    );
+    return lines.map((l, i) =>
+      l.price_delta_minor > 0
+        ? { ...l, price_delta: (shares[i] / factor).toFixed(2) }
+        : l,
+    );
   }
 
   /** The line total as the order stores it (rounded, never a float sum). */
@@ -1329,6 +1625,17 @@ export class OrdersService {
        * evidence). Undefined = prepared here from the caches only.
        */
       exemptionInputs?: ExemptionInputs | null;
+      /** Cart row ids, index-aligned with `lines` (logged-in cart quote). */
+      lineIds?: (string | undefined)[];
+      /**
+       * Designer app: an order-bound quote (Kustom session pricing). Only
+       * the designs the session verified, or owned by `customerId`, are
+       * priced; anything else is 403 DESIGNER_DESIGN_FORBIDDEN.
+       */
+      designOwnership?: {
+        customerId: string | null;
+        verifiedDesignIds: readonly string[];
+      } | null;
     },
   ): Promise<OrderQuote> {
     const orderStore = await this.loadOrderStore(
@@ -1365,8 +1672,77 @@ export class OrdersService {
     const marketRows = orderStore.market
       ? await this.marketPricing.loadPricesForLines(orderStore.market, items)
       : null;
-    for (const item of items) {
-      const priced = await this.priceLine(item, orderStore, marketRows);
+    // M4.0 (K2): field rules of every line, batched (Kustom budget, W14).
+    const fieldContexts = await this.core.loadContexts(items, {
+      onVariantMismatch: () => this.rejectForeignItem(),
+    });
+    // M4.2 designer (C29 step 2): price-only check of designer lines (the
+    // token, when a guest line sends one, must match).
+    const designerLines = await this.planDesignerLines(
+      orderStore,
+      items,
+      fieldContexts,
+      {
+        mode: 'quote',
+        ...(opts.designOwnership
+          ? {
+              customerId: opts.designOwnership.customerId,
+              verifiedDesignIds: opts.designOwnership.verifiedDesignIds,
+            }
+          : {}),
+        tokens: lines.map((l) => l.design_token),
+        refs: items.map((_, index) => {
+          const lineId = opts.lineIds?.[index];
+          return lineId
+            ? { line_id: lineId, line_index: index }
+            : { line_index: index };
+        }),
+      },
+    );
+    // M4.1: active variants per product, one query per product per quote.
+    const activeCache: ActiveVariantsCache = new Map();
+    const quotedValues: {
+      ctx: LineContext;
+      values: NormalizedValues;
+      ref: { line_id?: string; line_index: number };
+    }[] = [];
+    for (const [index, item] of items.entries()) {
+      const lineId = opts.lineIds?.[index];
+      const ref = lineId
+        ? { line_id: lineId, line_index: index }
+        : { line_index: index };
+      // A designer line carries no field values (C29): no personalization
+      // input, no field rules; its designer delta is 0 (D9).
+      const designer = designerLines[index];
+      const priced = await this.priceLine(
+        item,
+        orderStore,
+        marketRows,
+        designer
+          ? null
+          : {
+              ctx: fieldContexts[index],
+              raw: item.custom_fields,
+              locale: opts.locale,
+              ref,
+              activeCache,
+            },
+      );
+      quotedValues.push({
+        ctx: fieldContexts[index],
+        // M4.1: an app line's values come from the evaluator (priceLine).
+        values: designer
+          ? {}
+          : priced.personalization
+            ? (priced.personalization.values as NormalizedValues)
+            : this.core.assertLine(
+                item.custom_fields,
+                fieldContexts[index],
+                opts.locale,
+                ref,
+              ),
+        ref,
+      });
       const totalPrice = this.lineTotal(priced.unitPrice, item.quantity);
       unitLines.push({ unit_price: priced.unitPrice, quantity: item.quantity });
       const providerBaseForItem = this.lineTotal(
@@ -1391,6 +1767,13 @@ export class OrdersService {
         tax_exempt: priced.taxExempt,
       });
     }
+    // Customer files behind preview URLs must still be linkable to an order
+    // of this store (same check as create); no query without preview URLs.
+    await this.core.assertUploadsAvailable(
+      quotedValues,
+      orderStore.id,
+      opts.locale,
+    );
     subtotal = roundMoney(subtotal);
     providerBaseTotal = roundMoney(providerBaseTotal);
 
@@ -1501,12 +1884,16 @@ export class OrdersService {
     },
   ): Promise<OrderQuote> {
     let lines: CartLineLike[] = dto.lines ?? [];
+    let lineIds: (string | undefined)[] | undefined;
     if (!lines.length && userId) {
       const customer = await this.prisma.customer.findUnique({
         where: { user_id: userId },
         select: { cart: { select: { items: true } } },
       });
       lines = customer?.cart?.items ?? [];
+      // Cart rows: personalization errors also name the row (line_id), so
+      // the storefront can point at the product whatever the row order.
+      lineIds = lines.map((l) => (l as { id?: string }).id);
     }
     if (!lines.length) {
       throw new BadRequestException({
@@ -1515,6 +1902,7 @@ export class OrdersService {
       });
     }
     return this.quoteLines(dto.store_id, lines, {
+      lineIds,
       countryCode: dto.country_code?.trim().toUpperCase() || null,
       region: dto.region ?? null,
       postcode: dto.postcode ?? null,
@@ -1654,8 +2042,64 @@ export class OrdersService {
     const marketRows = orderStore.market
       ? await this.marketPricing.loadPricesForLines(orderStore.market, lines)
       : null;
-    for (const item of lines) {
-      const priced = await this.priceLine(item, orderStore, marketRows);
+    // M4.0: field definitions + creator values of every line, batched; the
+    // validated values per line feed the snapshot writer after the loop.
+    const fieldContexts = await this.core.loadContexts(lines, {
+      onVariantMismatch: () => this.rejectForeignItem(),
+    });
+    // M4.2 designer (C29 step 2): designer lines are validated here (owner
+    // and completeness). A stored checkout snapshot trusts only the designs
+    // its session verified when it stored the lines.
+    const designerLines = await this.planDesignerLines(
+      orderStore,
+      lines,
+      fieldContexts,
+      {
+        mode: opts.lines ? 'snapshot' : 'order',
+        customerId: customer.id,
+        verifiedDesignIds: opts.lines ? (opts.verifiedDesignIds ?? []) : null,
+        refs: lines.map((l, index) =>
+          l.id ? { line_id: l.id } : { line_index: index },
+        ),
+      },
+    );
+    // M4.1: active variants per product, one query per product per order.
+    const activeCache: ActiveVariantsCache = new Map();
+    const lineValues: {
+      ctx: LineContext;
+      values: NormalizedValues;
+      /** M4.1: snapshot lines of an app line (order currency). */
+      lines?: PLine[];
+    }[] = [];
+    for (const [index, item] of lines.entries()) {
+      // M4.0 (§4): the line's personalization source: the per-item
+      // customization of the request when present, else the cart row /
+      // snapshot line's custom_fields. M4.1: evaluated inside priceLine
+      // for app lines (never trusted, priced server-side).
+      const dtoCustomization = item.id
+        ? dto.item_customizations?.[item.id]
+        : undefined;
+      const rawValues = dtoCustomization?.custom_field_values?.length
+        ? this.core.valuesFromLegacyDto(dtoCustomization.custom_field_values)
+        : item.custom_fields;
+      const lineRef = item.id ? { line_id: item.id } : { line_index: index };
+      // M4.2: a designer line carries no field values (C29); its price is
+      // the product's (designer delta 0, D9).
+      const designer = designerLines[index];
+      const priced = await this.priceLine(
+        item,
+        orderStore,
+        marketRows,
+        designer
+          ? null
+          : {
+              ctx: fieldContexts[index],
+              raw: rawValues,
+              locale: dto.locale,
+              ref: lineRef,
+              activeCache,
+            },
+      );
       const {
         unitPrice,
         originalUnitPrice,
@@ -1683,84 +2127,32 @@ export class OrdersService {
       });
       unitLines.push({ unit_price: unitPrice, quantity: item.quantity });
 
-      // Build custom field values from cart item's custom_fields JSON
-      // Format: { "field-uuid": "value" } or { "field-uuid": "https://...url" }
-      const dtoCustomization = item.id
-        ? dto.item_customizations?.[item.id]
-        : undefined;
-      const cartFields = item.custom_fields as Record<string, any> | null;
-      let fieldValues: {
-        custom_field_id: string;
-        value?: string;
-        file_url?: string;
-      }[] = [];
-
-      if (dtoCustomization?.custom_field_values?.length) {
-        fieldValues = dtoCustomization.custom_field_values;
-      } else if (cartFields && typeof cartFields === 'object') {
-        fieldValues = Object.entries(cartFields)
-          .filter(([, v]) => v !== '' && v != null)
-          .map(([fieldId, val]) => {
-            const strVal = Array.isArray(val) ? val.join(', ') : String(val);
-            const isUrl =
-              strVal.startsWith('http') || strVal.startsWith('/uploads');
-            return {
-              custom_field_id: fieldId,
-              value: isUrl ? undefined : strVal,
-              file_url: isUrl ? strVal : undefined,
-            };
-          });
-      }
-
-      // Validate required custom fields (skip fields already filled by creator)
-      const productIdForFields =
-        item.product_id ||
-        (item.custom_product_id
-          ? (
-              await this.prisma.customProduct.findUnique({
-                where: { id: item.custom_product_id },
-                select: { product_id: true },
-              })
-            )?.product_id
-          : null);
-
-      if (productIdForFields) {
-        const requiredFields = await this.prisma.productCustomField.findMany({
-          where: { product_id: productIdForFields, is_required: true },
-          include: { translations: true },
-        });
-
-        // Get creator-provided field values (for custom products)
-        let creatorFilledIds: string[] = [];
-        if (item.custom_product_id) {
-          const creatorValues =
-            await this.prisma.customProductFieldValue.findMany({
-              where: { custom_product_id: item.custom_product_id },
-              select: { custom_field_id: true, value: true, file_url: true },
-            });
-          creatorFilledIds = creatorValues
-            .filter((cv) => cv.value || cv.file_url)
-            .map((cv) => cv.custom_field_id);
-        }
-
-        const filledIds = fieldValues.map((fv) => fv.custom_field_id);
-        for (const rf of requiredFields) {
-          // Skip if creator already filled this field
-          if (creatorFilledIds.includes(rf.id)) continue;
-
-          const isFilled =
-            filledIds.includes(rf.id) &&
-            fieldValues.some(
-              (fv) => fv.custom_field_id === rf.id && (fv.value || fv.file_url),
-            );
-          if (!isFilled) {
-            const label = rf.translations?.[0]?.label || rf.name || rf.id;
-            throw new BadRequestException(
-              `Required field "${label}" is missing`,
-            );
-          }
-        }
-      }
+      // M4.0: validated against the product's fields (unknown keys
+      // dropped, creator values injected); M4.1 app lines: the evaluator's
+      // canonical values and lines.
+      lineValues.push(
+        designer
+          ? { ctx: fieldContexts[index], values: {} }
+          : priced.personalization
+            ? {
+                ctx: fieldContexts[index],
+                values: priced.personalization.values as NormalizedValues,
+                lines: this.orderCurrencyLines(
+                  priced.personalization.lines,
+                  orderStore.market,
+                  priced.personalizationAmount,
+                ),
+              }
+            : {
+                ctx: fieldContexts[index],
+                values: this.core.assertLine(
+                  rawValues,
+                  fieldContexts[index],
+                  dto.locale,
+                  lineRef,
+                ),
+              },
+      );
 
       orderItems.push({
         product_id: item.product_id,
@@ -1776,9 +2168,74 @@ export class OrdersService {
         fulfiller_id: fulfillerId,
         customer_design_url: dtoCustomization?.customer_design_url,
         design_notes: dtoCustomization?.design_notes,
-        _custom_field_values: fieldValues.length > 0 ? fieldValues : undefined,
+        // M4.1 (C3): per-unit delta; the key is absent (null) without one.
+        ...(priced.personalizationAmount > 0
+          ? { personalization_amount: priced.personalizationAmount }
+          : {}),
       });
     }
+
+    // M4.0 (K8, C19): snapshot rows built from the validated values and
+    // created nested inside order.create below, so they can never be
+    // matched to the wrong line nor written outside the insert. Lines
+    // without values get no key at all (G0).
+    const uploadsByUrl = await this.core.resolveUploads(
+      lineValues,
+      orderStore.id,
+    );
+    // M4.2 designer (D11, C19): each designed line freezes its design
+    // (`items.create[].design.create`, same insert as the order, so the
+    // order id is chosen here) and gets one `source:'DESIGN'` value row per
+    // text. Orders without designer lines keep a database-generated id.
+    const designIds: string[] = [];
+    // Frozen at the state_version validated + snapshotted here (markOrdered).
+    const designFreeze: { id: string; state_version: number }[] = [];
+    let orderId: string | undefined;
+    const designSnapshots = new Map<
+      number,
+      Awaited<ReturnType<DesignerCartService['snapshot']>>
+    >();
+    for (const [index, designer] of designerLines.entries()) {
+      if (!designer || !this.designerCart) continue;
+      orderId ??= randomUUID();
+      designIds.push(designer.design.id);
+      designFreeze.push({
+        id: designer.design.id,
+        state_version: designer.design.state_version,
+      });
+      designSnapshots.set(
+        index,
+        await this.designerCart.snapshot(designer, {
+          orderId,
+          storeId: orderStore.id,
+          locale: dto.locale,
+          primaryLocale: orderStore.primary_locale,
+        }),
+      );
+    }
+    const attachUploadIds: string[] = [];
+    lineValues.forEach(({ ctx, values, lines: appLines }, index) => {
+      const ref = lines[index].id
+        ? { line_id: lines[index].id }
+        : { line_index: index };
+      const design = designSnapshots.get(index);
+      if (design) orderItems[index].design = { create: design.create };
+      const rows: OrderValueRow[] = this.core.buildOrderValues(
+        ref,
+        ctx,
+        values,
+        {
+          uploads: uploadsByUrl,
+          locale: dto.locale,
+          // M4.1: app lines become grouped snapshot rows (C1/C19).
+          ...(appLines ? { lines: appLines } : {}),
+          ...(design ? { designTexts: design.designTexts } : {}),
+        },
+      );
+      if (rows.length === 0) return;
+      orderItems[index].custom_field_values = { create: rows };
+      attachUploadIds.push(...this.core.uploadIdsOf(rows));
+    });
 
     subtotal = roundMoney(subtotal);
     providerBaseTotal = roundMoney(providerBaseTotal);
@@ -1952,13 +2409,6 @@ export class OrdersService {
 
     const total = totals.total;
 
-    // Extract custom field values before creating order (Prisma doesn't know _custom_field_values)
-    const itemFieldValues = orderItems.map((item) => {
-      const vals = item._custom_field_values;
-      delete item._custom_field_values;
-      return vals;
-    });
-
     // Determine payment status based on method. Both online methods start
     // in awaiting_payment; Kustom additionally gets the random secret that is
     // embedded in its push/validation callback URLs.
@@ -2051,50 +2501,91 @@ export class OrdersService {
       include: { items: true; timeline: true; address: true };
     }>;
     try {
-      order = await this.prisma.order.create({
-        data: {
-          order_number: this.generateOrderNumber(),
-          customer_id: customer.id,
-          address_id: dto.address_id,
-          store_id: dto.store_id || undefined,
-          subtotal,
-          shipping_cost: shippingCost,
-          discount_amount: discountAmount,
-          total,
-          currency,
-          tax_rate_bp: tax.headline_rate_bp,
-          tax_amount: tax.tax_total,
-          tax_pricing_mode: tax.tax_pricing_mode,
-          tax_basis_country: tax.tax_basis_country,
-          tax_lines: tax.tax_lines as unknown as Prisma.InputJsonValue,
-          shipping_tax_rate_bp: tax.shipping_tax_rate_bp,
-          shipping_tax_amount: tax.shipping_tax_amount,
-          shipping_method_id: shippingMethod?.id ?? null,
-          shipping_method_name: shippingMethod?.name ?? null,
-          shipping_method_type: shippingMethod?.type ?? null,
-          payment_method: paymentMethod,
-          payment_status: paymentStatus,
-          stripe_payment_id: dto.stripe_payment_intent_id,
-          kustom_push_token: kustomPushToken,
-          notes: dto.notes,
-          ...marketColumns,
-          ...b2bColumns,
-          ...exemptColumns,
-          items: { create: orderItems },
-          timeline: {
-            create: {
-              status: 'PENDING',
-              note: 'Order created',
-              actor: 'system',
+      // M4.0: the order, its lines and their custom field values are one
+      // insert. Uploads behind the values are marked attached in the same
+      // transaction; an order without uploads keeps the single insert.
+      const createOrder = (client: Prisma.TransactionClient) =>
+        client.order.create({
+          data: {
+            ...(orderId ? { id: orderId } : {}),
+            order_number: this.generateOrderNumber(),
+            customer_id: customer.id,
+            address_id: dto.address_id,
+            store_id: dto.store_id || undefined,
+            subtotal,
+            shipping_cost: shippingCost,
+            discount_amount: discountAmount,
+            total,
+            currency,
+            tax_rate_bp: tax.headline_rate_bp,
+            tax_amount: tax.tax_total,
+            tax_pricing_mode: tax.tax_pricing_mode,
+            tax_basis_country: tax.tax_basis_country,
+            tax_lines: tax.tax_lines as unknown as Prisma.InputJsonValue,
+            shipping_tax_rate_bp: tax.shipping_tax_rate_bp,
+            shipping_tax_amount: tax.shipping_tax_amount,
+            shipping_method_id: shippingMethod?.id ?? null,
+            shipping_method_name: shippingMethod?.name ?? null,
+            shipping_method_type: shippingMethod?.type ?? null,
+            payment_method: paymentMethod,
+            payment_status: paymentStatus,
+            stripe_payment_id: dto.stripe_payment_intent_id,
+            kustom_push_token: kustomPushToken,
+            notes: dto.notes,
+            ...marketColumns,
+            ...b2bColumns,
+            ...exemptColumns,
+            items: { create: orderItems },
+            timeline: {
+              create: {
+                status: 'PENDING',
+                note: 'Order created',
+                actor: 'system',
+              },
             },
           },
-        },
-        include: {
-          items: true,
-          timeline: true,
-          address: true,
-        },
-      });
+          include: {
+            // M4.2: designed lines answer with their proof and `design`
+            // block like every read path (withItemImages); orders without
+            // designs keep the plain items.
+            items:
+              designIds.length > 0
+                ? {
+                    include: {
+                      design: {
+                        select: {
+                          id: true,
+                          store_id: true,
+                          proof_key: true,
+                          files_purged_at: true,
+                        },
+                      },
+                    },
+                  }
+                : true,
+            timeline: true,
+            address: true,
+          },
+        });
+      // M4.2: ordered designs are frozen in the same transaction (their
+      // photos now follow the order's retention clock).
+      order =
+        attachUploadIds.length === 0 && designIds.length === 0
+          ? await createOrder(this.prisma)
+          : await this.prisma.$transaction(async (tx) => {
+              const created = await createOrder(tx);
+              if (attachUploadIds.length > 0) {
+                await this.uploads.markAttached(
+                  attachUploadIds,
+                  orderStore.id,
+                  tx,
+                );
+              }
+              if (designIds.length > 0) {
+                await this.designerCart?.markOrdered(tx, designFreeze);
+              }
+              return created;
+            });
     } catch (err) {
       console.error('[OrderCreate] Failed to create order:', err);
       // Order creation failed AFTER stock was decremented — restore so the
@@ -2102,25 +2593,18 @@ export class OrdersService {
       await this.restoreStock(decrementedStock);
       if (redemptionClaimed)
         await this.promotionsService.releaseRedemption(redemptionClaimed);
+      // Coded errors raised inside the transaction (markAttached:
+      // CUSTOMER_UPLOAD_EXPIRED) keep their body.
+      if (err instanceof HttpException) throw err;
       throw new BadRequestException(
         err instanceof Error ? err.message : 'Failed to create order',
       );
     }
 
-    // Save custom field values for each order item
-    for (let i = 0; i < order.items.length; i++) {
-      const fieldValues = itemFieldValues[i];
-      if (fieldValues?.length) {
-        await this.prisma.orderCustomFieldValue.createMany({
-          data: fieldValues.map((fv) => ({
-            order_item_id: order.items[i].id,
-            custom_field_id: fv.custom_field_id,
-            value: fv.value,
-            file_url: fv.file_url,
-          })),
-        });
-      }
-    }
+    // Production app (M4.3, X32): generate the checklist from the rows the
+    // insert above just wrote. Best-effort, outside the transaction; a
+    // no-op (one cached isEnabled) for stores without the app.
+    await this.production?.onOrderCreated(order.id, order.store_id);
 
     // Record coupon usage
     if (couponValidation && dto.coupon_code) {
@@ -2198,6 +2682,17 @@ export class OrdersService {
         store_id: order.store_id,
         payment_method: paymentMethod,
       });
+      // Designer app (WP5 port): a COD order is payable now, so its print
+      // files are requested. Only orders with designs reach the trigger.
+      if (designIds.length > 0) {
+        await this.fireDesigner((t) =>
+          t.onCodOrderCreated({
+            id: order.id,
+            store_id: order.store_id,
+            payment_method: paymentMethod,
+          }),
+        );
+      }
       await this.mail.dispatchOrderEmail(order.id, 'order_confirmation');
       await this.mail.dispatchOrderEmail(order.id, 'new_order_owner');
     }
@@ -2397,12 +2892,21 @@ export class OrdersService {
     status?: OrderStatus,
     marketKey?: string,
     buyer?: string,
+    production?: string,
   ) {
     if (role === UserRole.PROVIDER) {
       return this.findByProvider(userId, page, limit, status);
     }
     if (role === UserRole.CREATOR) {
-      return this.findByCreator(userId, page, limit, status, marketKey, buyer);
+      return this.findByCreator(
+        userId,
+        page,
+        limit,
+        status,
+        marketKey,
+        buyer,
+        production,
+      );
     }
     return { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
   }
@@ -2472,6 +2976,7 @@ export class OrdersService {
     status?: OrderStatus,
     marketKey?: string,
     buyer?: string,
+    production?: string,
   ) {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
@@ -2489,6 +2994,16 @@ export class OrdersService {
       ...(marketKey ? { market: { key: marketKey } } : {}),
       ...this.buyerWhere(buyer),
     };
+    // Production app (M4.3 §3.8): `?production=in_production|ready|
+    // not_started`. Read only when the value is valid and the app is on, so
+    // stores without the app keep ignoring the parameter.
+    if (
+      isProductionFilter(production) &&
+      this.production &&
+      (await this.production.isEnabled(creator.store.id))
+    ) {
+      where.AND = [productionWhere(production)];
+    }
 
     const [data, total] = await Promise.all([
       this.prisma.order.findMany({
@@ -2752,9 +3267,15 @@ export class OrdersService {
    * item (only SHIPPED once every item ships, DELIVERED once all are delivered).
    * Advance-only — never rolls a status backward — and leaves terminal states
    * (CANCELLED/REFUNDED/RETURNED) untouched.
+   *
+   * The one exception is an explicit quality-check reject (`qcReject`: a
+   * fulfiller sent their QC lines back to MANUFACTURING): a QUALITY_CHECK
+   * header then returns to MANUFACTURING, but only when no line remains at
+   * QUALITY_CHECK or later.
    */
   private async recomputeOrderStatusFromItems(
     orderId: string,
+    opts: { qcReject?: boolean } = {},
   ): Promise<{ from: OrderStatus; to: OrderStatus } | null> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
@@ -2774,17 +3295,26 @@ export class OrdersService {
     });
     if (items.length === 0) return null;
 
-    const minRank = Math.min(
-      ...items.map((i) => FULFILLMENT_RANK[i.fulfillment_status] ?? 0),
-    );
-    const candidate = fulfillmentStageToOrderStatus(minRank);
-    if (!candidate) return null;
-    // Advance only.
-    if (
-      (ORDER_STATUS_RANK[candidate] ?? 0) <=
-      (ORDER_STATUS_RANK[order.status] ?? 0)
-    ) {
-      return null;
+    const ranks = items.map((i) => FULFILLMENT_RANK[i.fulfillment_status] ?? 0);
+    const qcRank = FULFILLMENT_RANK[FulfillmentStatus.QUALITY_CHECK];
+    const rejected =
+      opts.qcReject === true &&
+      order.status === OrderStatus.QUALITY_CHECK &&
+      ranks.every((r) => r < qcRank);
+    let candidate: OrderStatus | null;
+    if (rejected) {
+      // The single permitted step back (explicit QC reject).
+      candidate = OrderStatus.MANUFACTURING;
+    } else {
+      candidate = fulfillmentStageToOrderStatus(Math.min(...ranks));
+      if (!candidate) return null;
+      // Advance only.
+      if (
+        (ORDER_STATUS_RANK[candidate] ?? 0) <=
+        (ORDER_STATUS_RANK[order.status] ?? 0)
+      ) {
+        return null;
+      }
     }
 
     await this.prisma.order.update({
@@ -2795,7 +3325,9 @@ export class OrdersService {
       data: {
         order_id: orderId,
         status: candidate,
-        note: 'Auto-updated from item fulfillment',
+        note: rejected
+          ? 'Quality check rejected: back to manufacturing'
+          : 'Auto-updated from item fulfillment',
         actor: 'system',
       },
     });
@@ -2814,6 +3346,18 @@ export class OrdersService {
       },
       order.status,
       candidate,
+    );
+    // Designer app (WP5 port): shipped / delivered dates for retention.
+    await this.fireDesigner((t) =>
+      t.onStatusChanged(
+        {
+          id: orderId,
+          store_id: order.store_id,
+          payment_method: order.payment_method,
+        },
+        order.status,
+        candidate,
+      ),
     );
     return { from: order.status, to: candidate };
   }
@@ -2920,6 +3464,10 @@ export class OrdersService {
       // Invoices app: issue (COD delivered) or credit (cancelled / refunded)
       // before the status email, so the document can be attached.
       await this.invoices?.onStatusChanged(order, order.status, dto.status);
+      // Designer app (WP5 port): terminal / shipped bookkeeping of designs.
+      await this.fireDesigner((t) =>
+        t.onStatusChanged(order, order.status, dto.status),
+      );
       await this.dispatchStatusEmail(id, order.status, dto.status, dto.note);
       return this.findById(id, actorId, actorRole);
     }
@@ -2966,7 +3514,13 @@ export class OrdersService {
       },
     });
 
-    const transition = await this.recomputeOrderStatusFromItems(id);
+    // An explicit "reject → back to MANUFACTURING" on a QC order may move
+    // the header back (the only backwards step the recompute allows).
+    const transition = await this.recomputeOrderStatusFromItems(id, {
+      qcReject:
+        order.status === OrderStatus.QUALITY_CHECK &&
+        dto.status === OrderStatus.MANUFACTURING,
+    });
     if (transition) {
       await this.dispatchStatusEmail(
         id,
@@ -3157,6 +3711,11 @@ export class OrdersService {
     // Invoices app (L2): a released authorization always credits the
     // invoice in full (credit_on_cancel does not apply: nothing was captured).
     await this.invoices?.onAuthorizationReleased(order);
+    // Designer app: the order is CANCELLED — its designs become terminal
+    // (pending renders withdrawn, retention counts from now).
+    await this.fireDesigner((t) =>
+      t.onStatusChanged(order, order.status, OrderStatus.CANCELLED),
+    );
     return { changed: true };
   }
 
@@ -3192,6 +3751,12 @@ export class OrdersService {
     // permanently locked by an order that won't ship. Idempotent because
     // markOrderFailed only runs the flip once per order (guarded payment_status).
     await this.restoreOrderItemsStock(orderId);
+    // Designer app: nothing was bought — the order's designs become terminal
+    // and the frozen designs editable / orderable again (a Kustom retry of
+    // the same session re-orders them).
+    await this.fireDesigner(async (t) => {
+      await t.onPaymentFailed?.(order);
+    });
     return { order, changed: true };
   }
 
@@ -3245,6 +3810,10 @@ export class OrdersService {
 
     // Invoices app: full credit note before the email, so it can be attached.
     await this.invoices?.onFullRefund(order);
+    // Designer app (WP5 port): a refunded order is terminal for its designs.
+    await this.fireDesigner((t) =>
+      t.onStatusChanged(order, order.status, OrderStatus.REFUNDED),
+    );
 
     // The customer paid us; they should hear about the refund from us, not
     // only from their bank statement. Skipped when the order was already

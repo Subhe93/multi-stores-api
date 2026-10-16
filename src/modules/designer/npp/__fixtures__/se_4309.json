@@ -1,0 +1,146 @@
+{
+  "hideGallery": "1",
+  "cartUrl": "https://namez.se/cart/",
+  "productId": "4309",
+  "templateData": {
+    "id": 4308,
+    "name": "studentskylt med guldtext",
+    "size_mode": "budget",
+    "elements": [
+      {
+        "id": "fnu5v8xdg",
+        "type": "background",
+        "color": "#ffffff",
+        "imageData": "https://namez.se/wp-content/uploads/2026/04/Student-2026-2-scaled.png",
+        "z": -10,
+        "locked": false,
+        "imageDataHiRes": "https://namez.se/wp-content/uploads/2026/04/Student-2026-3-scaled.png"
+      },
+      {
+        "id": "b3poke85i",
+        "type": "image-slot",
+        "placeholder": "Upload image",
+        "fieldLabel": "Photo",
+        "x": 77,
+        "y": 135,
+        "w": 343,
+        "h": 450,
+        "rot": 0,
+        "z": 2,
+        "locked": false,
+        "shape": "rect",
+        "borderRadius": 0,
+        "borderColor": "#cccccc",
+        "imageData": null
+      },
+      {
+        "id": "3kfdpwple",
+        "type": "deco-image",
+        "imageData": "https://namez.se/wp-content/uploads/2026/04/ChatGPT-Image-Apr-19-2026-11_10_23-PM.png",
+        "x": 9,
+        "y": 420,
+        "w": 121,
+        "h": 178,
+        "rot": 0,
+        "z": 3,
+        "locked": false
+      },
+      {
+        "id": "excetwi1x",
+        "type": "deco-image",
+        "imageData": "https://namez.se/wp-content/uploads/2026/04/ChatGPT-Image-Apr-19-2026-11_15_49-PM.png",
+        "x": 86,
+        "y": 532,
+        "w": 292,
+        "h": 160,
+        "rot": 0,
+        "z": 4,
+        "locked": false
+      },
+      {
+        "id": "63x4rv4qi",
+        "type": "deco-image",
+        "imageData": "https://namez.se/wp-content/uploads/2026/04/ChatGPT-Image-Apr-16-2026-11_47_23-PM.png",
+        "x": 24,
+        "y": 556,
+        "w": 125,
+        "h": 86,
+        "rot": 0,
+        "z": 3,
+        "locked": false
+      },
+      {
+        "id": "i9bylqrdu",
+        "type": "text",
+        "text": "Namn",
+        "placeholder": "Namn",
+        "fieldLabel": "Namn",
+        "x": 96,
+        "y": 25,
+        "w": 300,
+        "h": 68,
+        "fontSize": 50,
+        "fontFamily": "Montserrat",
+        "fontWeight": 700,
+        "color": "#000000",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 6,
+        "locked": false,
+        "editable": true
+      },
+      {
+        "id": "88z14t3n6",
+        "type": "text",
+        "text": "Klass",
+        "placeholder": "Klass",
+        "fieldLabel": "Klass",
+        "x": 94,
+        "y": 84,
+        "w": 300,
+        "h": 44,
+        "fontSize": 35,
+        "fontFamily": "Montserrat",
+        "fontWeight": 600,
+        "color": "#000000",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 6,
+        "locked": false,
+        "editable": true
+      }
+    ],
+    "thumbnail": ""
+  },
+  "allTemplates": [],
+  "welcomeTemplates": [],
+  "basePrice": "399",
+  "regularPrice": "600",
+  "pricing": {
+    "double_extra": 149,
+    "rain_extra": 29,
+    "poster_price": 179,
+    "welcome_price": 249,
+    "welcome_regular": 349
+  },
+  "addons": {
+    "double": false,
+    "raincover": false,
+    "poster": false,
+    "welcome": false
+  },
+  "sale": {
+    "enabled": false,
+    "badge_text": "REA",
+    "badge_icon": "",
+    "discount_pct": 0
+  },
+  "fonts": [
+    {
+      "family": "Montserrat",
+      "type": "google",
+      "url": ""
+    }
+  ],
+  "featuredImage": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-med-guldtext-namez-731x1024.jpg"
+}

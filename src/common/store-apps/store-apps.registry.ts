@@ -10,6 +10,9 @@ export const STORE_APP_KEYS = [
   'b2b',
   'invoices',
   'importer',
+  'personalization',
+  'production',
+  'designer',
 ] as const;
 
 export type StoreAppKey = (typeof STORE_APP_KEYS)[number];
@@ -77,6 +80,50 @@ export const STORE_APPS: Record<StoreAppKey, StoreAppDefinition> = {
     requires_independent: true,
     depends_on: ['markets'],
     expose_settings_to_storefront: false,
+  },
+  // M4.1: advanced product personalization (repeaters, conditions, presets,
+  // variation cards). Applies only to the creator's own products.
+  personalization: {
+    key: 'personalization',
+    name_key: 'personalization.name',
+    description_key: 'personalization.description',
+    requires_independent: false,
+    depends_on: [],
+    // retention_days and free_shipping_country stay private.
+    expose_settings_to_storefront: true,
+    public_settings_keys: [
+      'free_shipping_badge',
+      'card_price_mode',
+      'validation_summary',
+      'url_prefill',
+      'listing_cta',
+    ],
+  },
+  // M4.3: per-order production checklist (post-order only).
+  production: {
+    key: 'production',
+    name_key: 'production.name',
+    description_key: 'production.description',
+    requires_independent: false,
+    depends_on: [],
+    expose_settings_to_storefront: false,
+  },
+  // M4.2: product designer (templates in mm, storefront canvas editor,
+  // server-rendered print files). Independent-only: the creator is the sole
+  // fulfiller of designed lines.
+  designer: {
+    key: 'designer',
+    name_key: 'designer.name',
+    description_key: 'designer.description',
+    requires_independent: true,
+    depends_on: [],
+    // Retention and print settings stay private.
+    expose_settings_to_storefront: true,
+    public_settings_keys: [
+      'max_upload_mb',
+      'min_effective_dpi_warning',
+      'shop_button_text',
+    ],
   },
 };
 

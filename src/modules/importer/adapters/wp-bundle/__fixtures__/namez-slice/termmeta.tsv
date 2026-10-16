@@ -1,0 +1,760 @@
+11	15	product_count_product_cat	20
+14	15	display_type	
+15	15	thumbnail_id	0
+18	24	order	0
+19	24	product_attribute_color	#ffffff
+20	25	order	0
+21	25	product_attribute_color	#000000
+22	26	order	0
+23	26	product_attribute_color	#dd3333
+24	27	order	0
+25	27	product_attribute_color	#eeee22
+26	28	order	0
+27	29	order	0
+28	30	order	0
+29	31	order	0
+30	31	product_attribute_color	#d8d8d8
+31	32	order	0
+32	32	product_attribute_color	#1e73be
+33	33	order	0
+34	33	product_attribute_color	#f48d27
+35	34	order	0
+38	34	product_attribute_color	#f7e0ea
+39	35	order	0
+42	35	product_attribute_color	#ea4682
+70	46	order	0
+73	46	product_attribute_color	#b49840
+74	47	order	0
+77	47	product_attribute_image	2838
+78	48	order	0
+81	48	product_attribute_image	2839
+82	49	order	0
+85	49	product_attribute_image	2840
+92	52	order	0
+95	53	order	0
+98	54	order	0
+101	55	order	0
+104	56	order	0
+107	57	order	0
+113	59	order	0
+116	60	order	0
+119	61	order	0
+122	62	order	0
+125	63	order	0
+128	63	product_attribute_color	#b49840
+129	64	order	0
+132	64	product_attribute_color	#000000
+133	65	order	0
+136	65	product_attribute_color	#d8d8d8
+137	66	order	0
+140	66	product_attribute_image	3000
+141	67	order	0
+144	67	product_attribute_image	2998
+145	68	order	0
+148	68	product_attribute_image	2999
+149	69	order	0
+152	69	product_attribute_image	3001
+153	70	order	0
+156	70	product_attribute_color	#793a24
+157	71	order	0
+158	71	thumbnail_id	0
+159	71	display_type	
+167	73	order	0
+168	73	thumbnail_id	0
+169	73	display_type	
+172	73	rank_math_seo_score	100
+173	73	rank_math_focus_keyword	present till svärfar
+174	73	rank_math_title	Present till svärfar – Personliga presenter | Namez
+175	73	rank_math_description	Present till svärfar – unika och personliga presenter som imponerar. Hos 3D NameZ hittar du den perfekta presenten till födelsedag, jul eller namnsdag.
+176	74	order	0
+177	74	thumbnail_id	0
+178	74	display_type	
+181	74	rank_math_seo_score	100
+182	74	rank_math_title	Present till svärmor – Personliga &amp; unika presenter | Namez
+183	74	rank_math_description	Present till svärmor hittar du hos namez. Personliga och unika presenter – perfekta till födelsedag, jul eller namnsdag.
+184	74	rank_math_focus_keyword	Present till svärmor
+185	75	order	0
+186	75	thumbnail_id	0
+187	75	display_type	
+190	75	rank_math_seo_score	100
+191	75	rank_math_title	Present till pappa – Personliga &amp; unika presenter | namez
+192	75	rank_math_description	Present till pappa hittar du hos namez. Personliga och unika presenter – perfekta till födelsedag, fars dag eller jul.
+193	75	rank_math_focus_keyword	Present till pappa
+194	76	order	0
+195	76	thumbnail_id	0
+196	76	display_type	
+199	76	rank_math_seo_score	100
+200	76	rank_math_focus_keyword	Present till mamma
+201	76	rank_math_title	Present till mamma – Personliga &amp; unika presenter | namez
+202	76	rank_math_description	Present till mamma hittar du hos namez. Personliga och unika presenter – perfekta som födelsedagspresent, mors dag present eller julklapp.
+203	77	order	0
+204	77	thumbnail_id	0
+205	77	display_type	
+208	77	rank_math_seo_score	100
+209	77	rank_math_title	Present till syster – Personliga &amp; unika presenter | namez
+210	77	rank_math_description	Present till syster hittar du hos namez. Personliga och unika presenter – perfekta som födelsedagspresent, studentpresent eller julklapp.
+211	77	rank_math_focus_keyword	Present till syster
+212	78	order	0
+213	78	thumbnail_id	0
+214	78	display_type	
+217	78	rank_math_seo_score	100
+218	78	rank_math_focus_keyword	Present till bror
+219	78	rank_math_title	Present till bror – Personliga &amp; unika presenter | namez
+220	78	rank_math_description	Present till bror hittar du hos namez. Personliga och unika presenter – perfekta som födelsedagspresent, studentpresent eller julklapp.
+221	79	order	0
+222	79	thumbnail_id	0
+223	79	display_type	
+226	79	rank_math_seo_score	100
+227	79	rank_math_title	Present till mormor – Personliga &amp; unika presenter | namez
+228	79	rank_math_description	Present till mormor hittar du hos namez. Personliga och unika presenter – perfekta som födelsedagspresent, julklapp eller mors dag present.
+229	79	rank_math_focus_keyword	Present till mormor
+230	80	order	0
+231	80	thumbnail_id	0
+232	80	display_type	
+235	80	rank_math_seo_score	100
+236	80	rank_math_focus_keyword	Present till morfar
+237	80	rank_math_title	Present till morfar – Personliga &amp; unika presenter | namez
+238	80	rank_math_description	Present till morfar hittar du hos namez. Personliga och unika presenter – perfekta som födelsedagspresent, julklapp eller fars dag present.
+239	81	order	0
+240	81	thumbnail_id	0
+241	81	display_type	
+244	81	rank_math_seo_score	100
+245	81	rank_math_focus_keyword	Present till farmor
+246	81	rank_math_title	Present till farmor – Personliga &amp; unika presenter | namez
+247	81	rank_math_description	Present till farmor hittar du hos namez. Personliga och unika presenter – perfekta som födelsedagspresent, julklapp eller mors dag present.
+248	82	order	0
+249	82	thumbnail_id	0
+250	82	display_type	
+253	82	rank_math_seo_score	100
+254	82	rank_math_title	Present till farfar – Personliga &amp; unika presenter | namez
+255	82	rank_math_description	Present till farfar hittar du hos namez. Personliga och unika presenter – perfekta som födelsedagspresent, julklapp eller fars dag present.
+256	82	rank_math_focus_keyword	Present till farfar
+257	83	order	0
+258	83	thumbnail_id	0
+259	83	display_type	
+262	83	rank_math_seo_score	100
+263	83	rank_math_focus_keyword	Present till pojkvän
+264	83	rank_math_title	Present till pojkvän – Personliga, romantiska &amp; unika presenter | namez
+265	83	rank_math_description	Present till pojkvän hittar du hos namez. Personliga, romantiska och unika presenter – perfekta som födelsedagspresent, julklapp eller årsdag present.
+266	84	order	0
+267	84	thumbnail_id	0
+268	84	display_type	
+271	84	rank_math_seo_score	100
+272	84	rank_math_title	Present till flickvän – Personliga, romantiska &amp; unika presenter | namez
+273	84	rank_math_description	Present till flickvän hittar du hos namez. Personliga, romantiska och unika presenter – perfekta som födelsedagspresent, årsdag present eller julklapp.
+274	84	rank_math_focus_keyword	Present till flickvän
+275	85	order	0
+276	85	thumbnail_id	0
+277	85	display_type	
+280	85	rank_math_seo_score	100
+281	85	rank_math_title	Present till par – Personliga, romantiska &amp; unika presenter | namez
+282	85	rank_math_description	Present till par hittar du hos namez. Personliga, romantiska och unika presenter – perfekta som bröllopspresent, förlovningspresent eller inflyttningspresent.
+283	85	rank_math_focus_keyword	Present till par
+284	86	order	0
+285	86	thumbnail_id	0
+286	86	display_type	
+289	86	rank_math_seo_score	100
+290	86	rank_math_focus_keyword	Present till Barn
+291	86	rank_math_title	Present till barn – Roliga, personliga &amp; unika presenter | namez
+292	86	rank_math_description	Present till barn hittar du hos namez. Roliga, personliga och unika presenter – perfekta som födelsedagspresent, julklapp eller skolavslutningspresent.
+293	87	order	0
+294	87	thumbnail_id	0
+295	87	display_type	
+298	87	rank_math_seo_score	100
+299	87	rank_math_focus_keyword	Present till Henne
+300	87	rank_math_title	Present till henne – Personliga, unika &amp; roliga presenter | namez
+301	87	rank_math_description	Present till henne hittar du hos namez. Personliga, unika och roliga presenter – perfekta som födelsedagspresent, julklapp eller studentpresent.
+302	88	order	0
+303	88	thumbnail_id	0
+304	88	display_type	
+307	88	rank_math_seo_score	100
+308	88	rank_math_title	Present till honom – Personliga, roliga &amp; unika presenter | namez
+309	88	rank_math_description	Present till honom hittar du hos namez. Personliga, roliga och unika presenter – perfekta som födelsedagspresent, studentpresent eller julklapp till en kille.
+310	88	rank_math_focus_keyword	Present till honom
+311	89	order	0
+312	89	thumbnail_id	0
+313	89	display_type	
+316	89	rank_math_seo_score	100
+317	89	rank_math_focus_keyword	Present till Chef
+318	89	rank_math_title	Present till chef – Personliga, unika &amp; stilrena presenter | namez
+319	89	rank_math_description	Present till chef hittar du hos namez. Personliga, unika och stilrena presenter – perfekta för kvinnlig chef, manlig chef, födelsedag eller avtackning.
+320	90	order	0
+321	90	thumbnail_id	0
+322	90	display_type	
+325	90	rank_math_seo_score	100
+326	90	rank_math_focus_keyword	Present till Kollega
+327	90	rank_math_title	Present till kollega – Personliga, roliga &amp; omtänksamma presenter | namez
+328	90	rank_math_description	Present till kollega hittar du hos namez. Personliga, roliga och omtänksamma presenter – perfekta som födelsedagspresent, avskedspresent eller avtackningspresent.
+329	91	order	0
+330	91	thumbnail_id	0
+331	91	display_type	
+334	91	rank_math_seo_score	100
+335	91	rank_math_focus_keyword	Present till Företag
+336	91	rank_math_title	Present till företag – Personliga &amp; unika företagspresenter | namez
+337	91	rank_math_description	Present till företag hittar du hos namez. Personliga och unika företagspresenter – perfekta som företagsgåvor, julklapp till anställda eller gåva till kunder.
+338	92	order	0
+339	92	thumbnail_id	0
+340	92	display_type	
+343	92	rank_math_seo_score	100
+344	92	rank_math_title	Present till flicka – Personliga, roliga &amp; unika presenter | namez
+345	92	rank_math_description	Present till flicka hittar du hos namez. Personliga, roliga och unika presenter – perfekta som födelsedagspresent, julklapp eller present till en 6-åring eller 12-åring.
+346	92	rank_math_focus_keyword	Present till flicka
+347	93	order	0
+348	93	thumbnail_id	0
+349	93	display_type	
+352	93	rank_math_seo_score	100
+353	93	rank_math_title	Present till pojke – Personliga, roliga &amp; unika presenter | namez
+354	93	rank_math_description	Present till pojke hittar du hos namez. Personliga, roliga och unika presenter – perfekta som födelsedagspresent, julklapp eller present till en 6-åring eller 12-åring.
+355	93	rank_math_focus_keyword	Present till pojke
+356	94	order	0
+357	94	thumbnail_id	0
+358	94	display_type	
+361	94	rank_math_seo_score	100
+362	94	rank_math_title	Present till sambo – Personliga, romantiska &amp; unika presenter | namez
+363	94	rank_math_description	Present till sambo hittar du hos namez. Personliga, romantiska och unika presenter – perfekta som födelsedagspresent, julklapp eller årsdag present.
+364	94	rank_math_focus_keyword	Present till sambo
+365	95	order	0
+366	95	thumbnail_id	0
+367	95	display_type	
+370	95	rank_math_seo_score	100
+371	95	rank_math_focus_keyword	Present till Föräldrar
+372	95	rank_math_title	Present till föräldrar – Personliga, unika &amp; roliga presenter | namez
+373	95	rank_math_description	Present till föräldrar hittar du hos namez. Personliga, unika och roliga presenter – perfekta som födelsedagspresent, julklapp eller present till nyblivna föräldrar.
+374	96	order	0
+375	96	thumbnail_id	0
+376	96	display_type	
+379	96	rank_math_seo_score	100
+380	96	rank_math_title	Present till lärare – Personliga, roliga &amp; unika tackpresenter | namez
+381	96	rank_math_description	Present till lärare hittar du hos namez. Personliga, roliga och unika tackpresenter – perfekta som sommarpresent, julklapp eller födelsedagspresent.
+382	96	rank_math_focus_keyword	Present till lärare
+383	97	order	0
+384	97	thumbnail_id	0
+385	97	display_type	
+388	97	rank_math_seo_score	100
+389	97	rank_math_focus_keyword	Present till pedagoger
+390	97	rank_math_title	Present till pedagoger – Personliga, unika &amp; omtänksamma presenter | namez
+391	97	rank_math_description	Present till pedagoger hittar du hos namez. Personliga, unika och omtänksamma tackpresenter – perfekta som julklapp, sommarpresent eller födelsedagspresent.
+392	98	order	0
+393	98	thumbnail_id	0
+394	98	display_type	
+397	98	rank_math_focus_keyword	Present till kille
+398	98	rank_math_title	Present till kille – Personliga, roliga &amp; unika presenter | namez
+399	98	rank_math_description	Present till kille hittar du hos namez. Personliga, roliga och unika presenter – perfekta som födelsedagspresent, studentpresent eller julklapp.
+400	98	rank_math_seo_score	100
+401	99	order	0
+402	99	thumbnail_id	0
+403	99	display_type	
+406	99	rank_math_seo_score	100
+407	99	rank_math_focus_keyword	Present till tjej
+408	99	rank_math_title	Present till tjej – Personliga, roliga &amp; unika presenter | namez
+409	99	rank_math_description	Present till tjej hittar du hos namez. Personliga, roliga och unika presenter – perfekta som födelsedagspresent, julklapp eller studentpresent till tjejer.
+410	100	order	0
+411	100	thumbnail_id	0
+412	100	display_type	
+415	100	rank_math_seo_score	100
+416	100	rank_math_focus_keyword	Alla hjärtans dag present till pojkvän
+417	100	rank_math_title	Alla hjärtans dag present till pojkvän – Personliga &amp; romantiska presenter | namez
+418	100	rank_math_description	Alla hjärtans dag present till pojkvän hittar du hos namez. Personliga, romantiska och unika presenter – perfekta för att visa din kärlek den 14 februari.
+419	101	order	0
+420	101	thumbnail_id	0
+421	101	display_type	
+424	101	rank_math_seo_score	90
+425	101	rank_math_focus_keyword	Alla hjärtans dag present till flickvän
+426	101	rank_math_title	Alla hjärtans dag present till flickvän – Personliga &amp; romantiska presenter | namez
+427	101	rank_math_description	Alla hjärtans dag present till flickvän hittar du hos namez. Personliga, romantiska och unika presenter – perfekta för att fira kärleken den 14 februari.
+428	102	order	0
+429	102	thumbnail_id	0
+430	102	display_type	
+433	102	rank_math_seo_score	100
+434	102	rank_math_focus_keyword	Present till bästa vän
+435	102	rank_math_title	Present till bästa vän – Personliga, roliga &amp; unika presenter | namez
+436	102	rank_math_description	Present till bästa vän hittar du hos namez. Personliga, roliga och unika presenter – perfekta som födelsedagspresent, julklapp eller vänskapsgåva.
+437	103	order	0
+438	103	thumbnail_id	0
+439	103	display_type	
+442	103	rank_math_seo_score	100
+443	103	rank_math_title	Present till kvinna – Personliga, unika &amp; minnesvärda presenter | namez
+444	103	rank_math_description	Present till kvinna hittar du hos namez. Personliga, unika och minnesvärda presenter – perfekta som födelsedagspresent, julklapp eller studentpresent.
+445	103	rank_math_focus_keyword	Present till kvinna
+446	104	order	0
+447	104	thumbnail_id	0
+448	104	display_type	
+451	104	rank_math_seo_score	100
+452	104	rank_math_focus_keyword	Present till fru
+453	104	rank_math_title	Present till fru – Personliga, romantiska &amp; unika presenter | namez
+454	104	rank_math_description	Present till fru hittar du hos namez. Personliga, romantiska och unika presenter – perfekta som födelsedagspresent, julklapp eller årsdag present.
+455	105	order	0
+456	105	thumbnail_id	0
+457	105	display_type	
+460	105	rank_math_seo_score	100
+461	105	rank_math_focus_keyword	Present till tjejkompis
+462	105	rank_math_title	Present till tjejkompis – Personliga, roliga &amp; unika presenter | name
+463	105	rank_math_description	Present till tjejkompis hittar du hos namez. Personliga, roliga och unika presenter – perfekta som födelsedagspresent, julklapp eller vänskapspresent.
+464	106	order	0
+465	106	thumbnail_id	0
+466	106	display_type	
+469	106	rank_math_seo_score	100
+470	106	rank_math_focus_keyword	Svensk present
+471	106	rank_math_title	Svensk present – Personliga, unika &amp; traditionella svenska presenter | namez
+472	106	rank_math_description	Svensk present till amerikan eller som souvenir? Hos namez hittar du svenska presenter med personlig design – unika, roliga och traditionella gåvor från Sverige.\n\nSlug: svensk-present
+473	107	order	0
+474	107	thumbnail_id	0
+475	107	display_type	
+478	107	rank_math_seo_score	100
+479	107	rank_math_focus_keyword	Present till nyfödd
+480	107	rank_math_title	Present till nyfödd – Personliga, unika &amp; omtänksamma presenter | namez
+481	107	rank_math_description	Present till nyfödd hittar du hos namez. Personliga, unika och omtänksamma presenter – perfekta för flicka, kille, föräldrar eller när du vill skicka present till nyfödd.
+482	71	product_count_product_cat	7
+483	74	product_count_product_cat	3
+484	90	product_count_product_cat	3
+485	75	product_count_product_cat	5
+486	91	product_count_product_cat	3
+487	107	product_count_product_cat	3
+488	76	product_count_product_cat	3
+489	92	product_count_product_cat	3
+490	77	product_count_product_cat	3
+491	93	product_count_product_cat	4
+492	78	product_count_product_cat	4
+493	94	product_count_product_cat	3
+494	79	product_count_product_cat	3
+495	95	product_count_product_cat	3
+496	80	product_count_product_cat	3
+497	96	product_count_product_cat	3
+498	81	product_count_product_cat	3
+499	97	product_count_product_cat	3
+500	82	product_count_product_cat	4
+501	98	product_count_product_cat	3
+502	83	product_count_product_cat	3
+503	99	product_count_product_cat	3
+504	84	product_count_product_cat	3
+505	100	product_count_product_cat	4
+506	85	product_count_product_cat	3
+507	101	product_count_product_cat	5
+508	86	product_count_product_cat	4
+509	102	product_count_product_cat	3
+510	87	product_count_product_cat	3
+511	103	product_count_product_cat	3
+512	88	product_count_product_cat	3
+513	104	product_count_product_cat	3
+514	73	product_count_product_cat	3
+515	89	product_count_product_cat	3
+516	105	product_count_product_cat	3
+517	108	order	1
+520	109	order	2
+523	110	order	3
+528	111	order	0
+529	111	thumbnail_id	0
+530	111	display_type	
+533	111	rank_math_seo_score	100
+534	111	rank_math_title	Present till husdjur – Personliga, roliga &amp; unika presenter | namez
+535	111	rank_math_description	Present till husdjur hittar du hos namez. Personliga, roliga och unika presenter – perfekta för hund, katt eller andra husdjur som förtjänar något speciellt.
+536	111	rank_math_focus_keyword	Present till husdjur
+537	112	order	0
+538	112	thumbnail_id	0
+539	112	display_type	
+542	112	rank_math_seo_score	100
+543	112	rank_math_focus_keyword	Present till personal
+544	112	rank_math_title	Present till personal – Personliga, unika &amp; uppskattade företagsgåvor | namez
+545	112	rank_math_description	Present till personal hittar du hos namez. Personliga, unika och uppskattade presenter – perfekta som julklapp, sommarpresent eller tackpresent till personalen.
+546	113	order	0
+547	113	thumbnail_id	0
+548	113	display_type	
+551	113	rank_math_seo_score	100
+552	113	rank_math_focus_keyword	Present till storfiskaren
+553	113	rank_math_title	Present till storfiskaren – Personliga, roliga &amp; unika presenter | namez
+554	113	rank_math_description	Present till storfiskaren hittar du hos namez. Personliga, roliga och unika presenter – perfekta som födelsedagspresent, julklapp eller bästa presenten till fiskare.
+555	114	order	0
+556	114	thumbnail_id	0
+557	114	display_type	
+560	114	rank_math_seo_score	100
+561	114	rank_math_title	Mors dag present – Personliga, unika &amp; minnesvärda gåvor | namez
+562	114	rank_math_description	Mors dag present hittar du hos namez. Personliga, unika och minnesvärda gåvor – perfekta som bästa mors dag present för att fira mamma.
+563	114	rank_math_focus_keyword	Mors dag present
+564	115	order	0
+565	115	thumbnail_id	0
+566	115	display_type	
+569	115	rank_math_seo_score	100
+570	115	rank_math_title	Fars dag present – Personliga, unika &amp; minnesvärda gåvor | namez
+571	115	rank_math_description	Fars dag present hittar du hos namez. Personliga, unika och minnesvärda gåvor – perfekta som bästa fars dag present för att fira pappa.
+572	115	rank_math_focus_keyword	Fars dag present
+573	116	order	0
+574	116	thumbnail_id	0
+575	116	display_type	
+578	116	rank_math_seo_score	100
+579	116	rank_math_title	Gå bort present – Personliga, unika &amp; omtänksamma gåvor | namez
+580	116	rank_math_description	Gå bort present hittar du hos namez. Personliga, unika och omtänksamma presenter – perfekta när du blir bortbjuden på middag, fest eller högtid.
+581	116	rank_math_focus_keyword	Gå bort present
+582	117	order	0
+583	117	thumbnail_id	0
+584	117	display_type	
+587	117	rank_math_seo_score	100
+588	117	rank_math_title	Inflyttningspresent – Personliga, roliga &amp; unika presenter | namez
+589	117	rank_math_description	Inflyttningspresent hittar du hos namez. Personliga, roliga och unika presenter – perfekta som bästa inflyttningspresent till nyinflyttade vänner eller familj.
+590	117	rank_math_focus_keyword	Inflyttningspresent
+591	118	order	0
+592	118	thumbnail_id	0
+593	118	display_type	
+596	118	rank_math_seo_score	100
+597	118	rank_math_title	Roliga presenter – Unika, personliga &amp; kreativa gåvor | namez
+598	118	rank_math_description	Roliga presenter hittar du hos namez. Unika och personliga roliga gåvor – perfekta som födelsedagspresenter, julklappar eller oväntade överraskningar.
+599	118	rank_math_focus_keyword	Roliga presenter
+600	119	order	0
+601	119	thumbnail_id	0
+602	119	display_type	
+605	119	rank_math_seo_score	100
+606	119	rank_math_title	Studentpresent – Personliga, unika & minnesvärda gåvor | namez
+607	119	rank_math_description	Studentpresent hittar du hos namez. Personliga, unika och roliga studentpresenter – perfekta som bästa presenten till student kille eller tjej.
+608	119	rank_math_focus_keyword	Studentpresent
+609	113	product_count_product_cat	3
+610	114	product_count_product_cat	3
+611	115	product_count_product_cat	3
+612	116	product_count_product_cat	3
+613	117	product_count_product_cat	3
+614	118	product_count_product_cat	3
+615	119	product_count_product_cat	4
+616	111	product_count_product_cat	3
+617	112	product_count_product_cat	3
+618	106	product_count_product_cat	2
+619	71	rank_math_seo_score	100
+620	71	rank_math_title	Presenter till vem – Personliga, roliga &amp; unika gåvor | namez
+621	71	rank_math_description	Presenter till vem hittar du hos namez. Personliga, roliga och unika presenter – perfekta som födelsedagspresenter, julklappar och gåvor till familj, vänner och kollegor.
+622	71	rank_math_focus_keyword	Presenter till vem
+623	108	price	350 kr
+624	108	_price	field_68d3eac4474dc
+625	108	label	Liten
+626	108	_label	field_68d3eb17474df
+627	108	extra	
+628	108	_extra	field_68d3eb27474e0
+629	108	size	(13–16 cm)
+630	108	_size	field_68d3eb3f474e1
+631	108	shipment	
+632	108	_shipment	field_68d3f31384ea6
+633	109	price	550 kr
+634	109	_price	field_68d3eac4474dc
+635	109	label	Mellan 
+636	109	_label	field_68d3eb17474df
+637	109	extra	Mest populär
+638	109	_extra	field_68d3eb27474e0
+639	109	size	(17–21 cm)
+640	109	_size	field_68d3eb3f474e1
+641	109	shipment	Fri frakt
+642	109	_shipment	field_68d3f31384ea6
+643	110	price	950 kr
+644	110	_price	field_68d3eac4474dc
+645	110	label	Stor
+646	110	_label	field_68d3eb17474df
+647	110	extra	Störst intryck
+648	110	_extra	field_68d3eb27474e0
+649	110	size	(22–30 cm)
+650	110	_size	field_68d3eb3f474e1
+651	110	shipment	Fri frakt
+652	110	_shipment	field_68d3f31384ea6
+653	109	colorbadge	#f56cff
+654	109	_colorbadge	field_68d509bcb1a49
+655	108	colorbadge	
+656	108	_colorbadge	field_68d509bcb1a49
+657	110	colorbadge	#fbde31
+658	110	_colorbadge	field_68d509bcb1a49
+659	120	order	1
+662	121	order	2
+665	122	order	3
+668	123	order	4
+671	124	order	5
+674	120	price	199 kr
+675	120	_price	field_68d3eac4474dc
+676	120	label	1 produkt
+677	120	_label	field_68d3eb17474df
+678	120	extra	
+679	120	_extra	field_68d3eb27474e0
+680	120	size	
+681	120	_size	field_68d3eb3f474e1
+682	120	shipment	
+683	120	_shipment	field_68d3f31384ea6
+684	120	colorbadge	
+685	120	_colorbadge	field_68d509bcb1a49
+686	121	price	349 kr
+687	121	_price	field_68d3eac4474dc
+688	121	label	2 produkter
+689	121	_label	field_68d3eb17474df
+690	121	extra	
+691	121	_extra	field_68d3eb27474e0
+692	121	size	
+693	121	_size	field_68d3eb3f474e1
+694	121	shipment	
+695	121	_shipment	field_68d3f31384ea6
+696	121	colorbadge	
+697	121	_colorbadge	field_68d509bcb1a49
+698	122	price	499 kr
+699	122	_price	field_68d3eac4474dc
+700	122	label	3 produkter
+701	122	_label	field_68d3eb17474df
+702	122	extra	mest populärt
+703	122	_extra	field_68d3eb27474e0
+704	122	size	
+705	122	_size	field_68d3eb3f474e1
+706	122	shipment	Fri frakt 🚚
+707	122	_shipment	field_68d3f31384ea6
+708	122	colorbadge	#FFD84D
+709	122	_colorbadge	field_68d509bcb1a49
+710	123	price	629 kr 
+711	123	_price	field_68d3eac4474dc
+712	123	label	4 produkter
+713	123	_label	field_68d3eb17474df
+714	123	extra	
+715	123	_extra	field_68d3eb27474e0
+716	123	size	
+717	123	_size	field_68d3eb3f474e1
+718	123	shipment	Fri frakt
+719	123	_shipment	field_68d3f31384ea6
+720	123	colorbadge	
+721	123	_colorbadge	field_68d509bcb1a49
+722	124	price	749 kr
+723	124	_price	field_68d3eac4474dc
+724	124	label	5 produkter
+725	124	_label	field_68d3eb17474df
+726	124	extra	
+727	124	_extra	field_68d3eb27474e0
+728	124	size	
+729	124	_size	field_68d3eb3f474e1
+730	124	shipment	Fri frakt
+731	124	_shipment	field_68d3f31384ea6
+732	124	colorbadge	
+733	124	_colorbadge	field_68d509bcb1a49
+736	126	order	0
+739	126	product_attribute_color	#2596be
+740	127	order	0
+743	127	product_attribute_color	#697537
+744	128	order	6
+745	128	price	
+746	128	_price	field_68d3eac4474dc
+747	128	label	
+748	128	_label	field_68d3eb17474df
+749	128	extra	
+750	128	_extra	field_68d3eb27474e0
+751	128	size	
+752	128	_size	field_68d3eb3f474e1
+753	128	shipment	
+754	128	_shipment	field_68d3f31384ea6
+755	128	colorbadge	
+756	128	_colorbadge	field_68d509bcb1a49
+759	129	order	1
+762	130	order	2
+765	131	order	3
+768	132	order	4
+771	133	order	5
+774	134	order	6
+777	129	price	99 kr
+778	129	_price	field_68d3eac4474dc
+779	129	label	1 produkt
+780	129	_label	field_68d3eb17474df
+781	129	extra	
+782	129	_extra	field_68d3eb27474e0
+783	129	size	
+784	129	_size	field_68d3eb3f474e1
+785	129	shipment	
+786	129	_shipment	field_68d3f31384ea6
+787	129	colorbadge	
+788	129	_colorbadge	field_68d509bcb1a49
+789	130	price	189 kr
+790	130	_price	field_68d3eac4474dc
+791	130	label	2 produkter
+792	130	_label	field_68d3eb17474df
+793	130	extra	
+794	130	_extra	field_68d3eb27474e0
+795	130	size	
+796	130	_size	field_68d3eb3f474e1
+797	130	shipment	
+798	130	_shipment	field_68d3f31384ea6
+799	130	colorbadge	
+800	130	_colorbadge	field_68d509bcb1a49
+801	131	price	269 kr
+802	131	_price	field_68d3eac4474dc
+803	131	label	3 produkter
+804	131	_label	field_68d3eb17474df
+805	131	extra	
+806	131	_extra	field_68d3eb27474e0
+807	131	size	
+808	131	_size	field_68d3eb3f474e1
+809	131	shipment	
+810	131	_shipment	field_68d3f31384ea6
+811	131	colorbadge	
+812	131	_colorbadge	field_68d509bcb1a49
+813	132	price	349 kr
+814	132	_price	field_68d3eac4474dc
+815	132	label	4 produkter
+816	132	_label	field_68d3eb17474df
+817	132	extra	
+818	132	_extra	field_68d3eb27474e0
+819	132	size	
+820	132	_size	field_68d3eb3f474e1
+821	132	shipment	
+822	132	_shipment	field_68d3f31384ea6
+823	132	colorbadge	
+824	132	_colorbadge	field_68d509bcb1a49
+825	133	price	429 kr
+826	133	_price	field_68d3eac4474dc
+827	133	label	5 produkter
+828	133	_label	field_68d3eb17474df
+829	133	extra	
+830	133	_extra	field_68d3eb27474e0
+831	133	size	
+832	133	_size	field_68d3eb3f474e1
+833	133	shipment	
+834	133	_shipment	field_68d3f31384ea6
+835	133	colorbadge	
+836	133	_colorbadge	field_68d509bcb1a49
+837	134	price	499 kr
+838	134	_price	field_68d3eac4474dc
+839	134	label	6 produkter
+840	134	_label	field_68d3eb17474df
+841	134	extra	
+842	134	_extra	field_68d3eb27474e0
+843	134	size	
+844	134	_size	field_68d3eb3f474e1
+845	134	shipment	
+846	134	_shipment	field_68d3f31384ea6
+847	134	colorbadge	
+848	134	_colorbadge	field_68d509bcb1a49
+851	136	order	1
+854	136	price	199 kr
+855	136	_price	field_68d3eac4474dc
+856	136	label	1 produkt
+857	136	_label	field_68d3eb17474df
+858	136	extra	
+859	136	_extra	field_68d3eb27474e0
+860	136	size	
+861	136	_size	field_68d3eb3f474e1
+862	136	shipment	
+863	136	_shipment	field_68d3f31384ea6
+864	136	colorbadge	
+865	136	_colorbadge	field_68d509bcb1a49
+866	137	order	2
+867	137	price	349 kr
+868	137	_price	field_68d3eac4474dc
+869	137	label	2 produkter
+870	137	_label	field_68d3eb17474df
+871	137	extra	
+872	137	_extra	field_68d3eb27474e0
+873	137	size	
+874	137	_size	field_68d3eb3f474e1
+875	137	shipment	
+876	137	_shipment	field_68d3f31384ea6
+877	137	colorbadge	
+878	137	_colorbadge	field_68d509bcb1a49
+881	138	order	0
+884	138	product_count_product_cat	3
+885	139	order	0
+886	139	price	275 kr
+887	139	_price	field_68d3eac4474dc
+888	139	label	1 produkt
+889	139	_label	field_68d3eb17474df
+890	139	extra	
+891	139	_extra	field_68d3eb27474e0
+892	139	size	
+893	139	_size	field_68d3eb3f474e1
+894	139	shipment	
+895	139	_shipment	field_68d3f31384ea6
+896	139	colorbadge	
+897	139	_colorbadge	field_68d509bcb1a49
+900	140	order	0
+901	140	price	499 kr
+902	140	_price	field_68d3eac4474dc
+903	140	label	2 produkter
+904	140	_label	field_68d3eb17474df
+905	140	extra	
+906	140	_extra	field_68d3eb27474e0
+907	140	size	
+908	140	_size	field_68d3eb3f474e1
+909	140	shipment	Fri frakt 🚚
+910	140	_shipment	field_68d3f31384ea6
+911	140	colorbadge	
+912	140	_colorbadge	field_68d509bcb1a49
+915	141	order	0
+916	141	price	699 kr
+917	141	_price	field_68d3eac4474dc
+918	141	label	3 produkter
+919	141	_label	field_68d3eb17474df
+920	141	extra	Mest Populärt ⭐
+921	141	_extra	field_68d3eb27474e0
+922	141	size	
+923	141	_size	field_68d3eb3f474e1
+924	141	shipment	Fri frakt 🚚
+925	141	_shipment	field_68d3f31384ea6
+926	141	colorbadge	#FFD84D
+927	141	_colorbadge	field_68d509bcb1a49
+930	142	order	0
+931	142	price	899 kr
+932	142	_price	field_68d3eac4474dc
+933	142	label	4 produkter
+934	142	_label	field_68d3eb17474df
+935	142	extra	
+936	142	_extra	field_68d3eb27474e0
+937	142	size	
+938	142	_size	field_68d3eb3f474e1
+939	142	shipment	Fri frakt 🚚
+940	142	_shipment	field_68d3f31384ea6
+941	142	colorbadge	
+942	142	_colorbadge	field_68d509bcb1a49
+945	143	order	0
+946	143	price	999 kr
+947	143	_price	field_68d3eac4474dc
+948	143	label	5 produkter
+949	143	_label	field_68d3eb17474df
+950	143	extra	
+951	143	_extra	field_68d3eb27474e0
+952	143	size	
+953	143	_size	field_68d3eb3f474e1
+954	143	shipment	Fri frakt 🚚
+955	143	_shipment	field_68d3f31384ea6
+956	143	colorbadge	
+957	143	_colorbadge	field_68d509bcb1a49
+960	144	order	0
+961	144	thumbnail_id	0
+962	144	display_type	
+965	145	order	0
+966	145	thumbnail_id	0
+967	145	display_type	
+970	144	product_count_product_cat	6
+971	145	product_count_product_cat	6
+972	146	order	0
+973	146	thumbnail_id	0
+974	146	display_type	
+977	147	order	0
+978	147	thumbnail_id	0
+979	147	display_type	
+1094	170	order	0
+1095	170	thumbnail_id	0
+1096	170	display_type	
+1099	171	order	0
+1100	171	thumbnail_id	0
+1101	171	display_type	
+1104	119	rank_math_robots	a:1:{i:0;s:5:"index";}
+1105	119	rank_math_canonical_url	
+1110	172	product_count_product_tag	1
+1111	173	product_count_product_tag	1
+1112	174	order	0
+1113	174	thumbnail_id	0
+1114	174	display_type	
+1117	174	rank_math_seo_score	100
+1118	174	rank_math_focus_keyword	Svenska presenter till amerikaner
+1119	175	order	0
+1122	175	product_count_product_cat	1
+1123	174	product_count_product_cat	1
+1124	176	order	0
+1125	176	thumbnail_id	4356
+1126	176	display_type	
+1129	144	rank_math_seo_score	4
+1130	144	rank_math_description	Upptäck personliga studentskyltar med foto, namn och klass. Välj mellan stilrena, moderna och roliga studentskyltar inför studentdagen.
+1131	144	rank_math_focus_keyword	Studentskyltar
+1132	176	product_count_product_cat	9
+1133	144	rank_math_title	%term% %sep% %sitename%
+1134	144	rank_math_robots	a:1:{i:0;s:5:"index";}
+1135	144	rank_math_canonical_url	
+1140	170	product_count_product_cat	1
+1141	171	product_count_product_cat	1
+1142	179	order	1
+1145	180	order	2
+1148	181	order	3
+1151	182	order	4
+1154	183	order	0
+1157	183	product_attribute_color	#07af0f

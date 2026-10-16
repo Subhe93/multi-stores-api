@@ -1,0 +1,110 @@
+{
+  "hideGallery": "1",
+  "cartUrl": "https://namez.se/cart/",
+  "productId": "4332",
+  "templateData": {
+    "id": 4273,
+    "name": "Studentskylt med klassisk design",
+    "size_mode": "budget",
+    "elements": [
+      {
+        "id": "jegb2b3pn",
+        "type": "background",
+        "color": "#ffffff",
+        "imageData": "https://namez.se/wp-content/uploads/2026/04/Stilren-studentskylt-med-foto-scaled.jpg",
+        "z": -10,
+        "locked": false
+      },
+      {
+        "id": "nbpz06rrg",
+        "type": "text",
+        "text": "Namn",
+        "placeholder": "Enter Namn",
+        "fieldLabel": "Namn",
+        "x": 90,
+        "y": 40,
+        "w": 300,
+        "h": 52,
+        "fontSize": 73,
+        "fontFamily": "Montserrat",
+        "fontWeight": 600,
+        "color": "#ffffff",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 2,
+        "locked": false,
+        "editable": true,
+        "uppercase": false
+      },
+      {
+        "id": "kgakvmyxo",
+        "type": "text",
+        "text": "Klass",
+        "placeholder": "Klass",
+        "fieldLabel": "Klass",
+        "x": 174,
+        "y": 118,
+        "w": 132,
+        "h": 33,
+        "fontSize": 35,
+        "fontFamily": "Montserrat",
+        "fontWeight": 400,
+        "color": "#ffffff",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 3,
+        "locked": false,
+        "editable": true
+      },
+      {
+        "id": "1r0adoxwh",
+        "type": "image-slot",
+        "placeholder": "Upload image",
+        "fieldLabel": "Photo",
+        "x": 113,
+        "y": 171,
+        "w": 271,
+        "h": 359,
+        "rot": 0,
+        "z": 4,
+        "locked": false,
+        "shape": "rect",
+        "borderRadius": 0,
+        "borderColor": "#cccccc",
+        "imageData": null
+      }
+    ],
+    "thumbnail": ""
+  },
+  "allTemplates": [],
+  "welcomeTemplates": [],
+  "basePrice": "399",
+  "regularPrice": "600",
+  "pricing": {
+    "double_extra": 149,
+    "rain_extra": 29,
+    "poster_price": 179,
+    "welcome_price": 249,
+    "welcome_regular": 349
+  },
+  "addons": {
+    "double": false,
+    "raincover": false,
+    "poster": false,
+    "welcome": false
+  },
+  "sale": {
+    "enabled": false,
+    "badge_text": "REA",
+    "badge_icon": "",
+    "discount_pct": 0
+  },
+  "fonts": [
+    {
+      "family": "Montserrat",
+      "type": "google",
+      "url": ""
+    }
+  ],
+  "featuredImage": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-med-klassisk-design-1-731x1024.jpg"
+}

@@ -1,12 +1,22 @@
 import { currencyDecimals } from '../../common/money/currency.util';
 import {
+  isSnapshotFileRow,
+  snapshotLabel,
+  sortSnapshotRows,
+  SNAPSHOT_LABEL_FALLBACK,
+} from '../../common/personalization/snapshot-label';
+import {
   allocateLargestRemainder,
   includedTaxMinor,
   MAX_RATE_BP,
   roundSymmetric,
 } from '../../common/money/tax.util';
 import { deriveNetTotals } from '../taxes/tax.service';
-import { formatPaymentMethod } from '../mail/order-mail.helpers';
+import {
+  formatPaymentMethod,
+  personalizationPrintLines,
+} from '../mail/order-mail.helpers';
+import { hasPersonalizationGroups } from '../../common/personalization/display';
 import type { TaxExemptReason } from '../b2b/b2b.types';
 import {
   INVOICE_SNAPSHOT_VERSION,
@@ -55,6 +65,18 @@ export interface SnapshotOrderItem {
   custom_field_values?: {
     value: string | null;
     file_url: string | null;
+    // M4.0 snapshot of the field at order time (null on rows written before).
+    field_name?: string | null;
+    field_type?: string | null;
+    field_label?: unknown;
+    display_value?: unknown;
+    sort_order?: number | null;
+    // M4.1 grouping columns (C1); absent on rows read without them.
+    group_key?: string | null;
+    group_index?: number | null;
+    group_label?: unknown;
+    source?: string | null;
+    meta?: unknown;
     custom_field: {
       name: string;
       type: string;
@@ -122,6 +144,8 @@ export interface BuildInvoiceInput {
   bank: Omit<InvoiceBankDetails, 'reference'>;
   /** One of the six supported locales. */
   locale: string;
+  /** The store's primary locale (label fallback of personalization rows). */
+  primaryLocale?: string | null;
   /** YYYY-MM-DD in the seller's timezone. */
   issueDate: string;
   /** Seller timezone (order date is printed in it). */
@@ -183,11 +207,10 @@ function itemTitle(item: SnapshotOrderItem, locale: string): string {
   );
 }
 
-const FILE_FIELD_TYPES = new Set(['IMAGE', 'FILE', 'MULTI_IMAGE']);
-
 function itemDetails(
   item: SnapshotOrderItem,
   locale: string,
+  primaryLocale?: string | null,
 ): InvoiceLineDetail[] {
   const details: InvoiceLineDetail[] = [];
   const options = item.variant?.options;
@@ -200,25 +223,30 @@ function itemDetails(
       });
     }
   }
-  for (const cf of item.custom_field_values ?? []) {
-    const field = cf.custom_field;
-    const tr = pick(field?.translations, locale);
-    const label = tr?.label || field?.name || '';
-    const isFile =
-      !!cf.file_url || (field ? FILE_FIELD_TYPES.has(field.type) : false);
-    let value: string | null = null;
-    if (isFile) {
-      value = 'file';
-    } else if (cf.value !== null && cf.value !== '') {
-      const labels =
-        tr?.option_labels && typeof tr.option_labels === 'object'
-          ? (tr.option_labels as Record<string, unknown>)
-          : null;
-      const optionLabel = labels?.[cf.value];
-      value =
-        typeof optionLabel === 'string' && optionLabel ? optionLabel : cf.value;
+  // M4.1: personalization items (repeater groups) print one detail each,
+  // "Artikel 2: KARIN, Röd"; option rows never print alone. Only orders
+  // of the personalization app carry groups.
+  const values = item.custom_field_values ?? [];
+  if (hasPersonalizationGroups(values)) {
+    for (const line of personalizationPrintLines(
+      values,
+      locale,
+      primaryLocale ?? undefined,
+      'file',
+    )) {
+      if (!line.label || line.label === SNAPSHOT_LABEL_FALLBACK) continue;
+      details.push({ label: line.label, value: line.text });
     }
-    if (!label || !value) continue;
+    return details;
+  }
+  // M4.0: labels and option texts come from the order-time snapshot, so a
+  // renamed or deleted field prints what the buyer saw; rows without a
+  // snapshot fall back to the live field (snapshotLabel).
+  for (const cf of sortSnapshotRows(values)) {
+    const { label, value: text } = snapshotLabel(cf, locale);
+    const isFile = isSnapshotFileRow(cf) || !!cf.file_url;
+    const value = isFile ? 'file' : text;
+    if (!label || label === SNAPSHOT_LABEL_FALLBACK || !value) continue;
     details.push({ label, value });
   }
   return details;
@@ -430,7 +458,7 @@ export function buildInvoiceSnapshot(
       kind: 'item',
       description: itemTitle(item, locale),
       sku: item.variant?.sku || item.product?.sku || null,
-      details: itemDetails(item, locale),
+      details: itemDetails(item, locale, input.primaryLocale),
       qty: item.quantity,
       unit_net: toMajor(unitNet),
       vat_rate_bp: rate,

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { MarketsContextService } from '../markets/markets-context.service';
@@ -17,6 +17,17 @@ import {
   isKustomEnabledForStore,
   kustomCreatorSelect,
 } from '../payments/kustom/kustom.eligibility';
+import { PersonalizationService } from '../personalization/personalization.service';
+import {
+  legacyRow,
+  shapeFieldsForStorefront,
+  shapeOptionConfigForStorefront,
+  usesAdvancedFields,
+  usesAdvancedOptionConfig,
+} from '../personalization/personalization-runtime';
+import type { PFieldDef } from '../../common/personalization/types';
+import { DesignerTemplatesService } from '../designer/designer-templates.service';
+import { countPublishedInCollections } from './collection-counts';
 
 /** The legacy freeform Store.theme_config JSON as getStore() reads it. */
 interface LegacyThemeConfig {
@@ -41,6 +52,41 @@ interface PromotionConditions {
 /** A variant row plus the custom price its CustomProductVariant carries. */
 type PricedVariant = ProductVariant & { _custom_price?: number };
 
+/** Drops the importer identity (`external_ref`) from a variant before it is served. */
+export function publicVariant<T extends { external_ref?: unknown }>(
+  v: T,
+): Omit<T, 'external_ref'> {
+  const { external_ref: _ref, ...rest } = v;
+  void _ref;
+  return rest;
+}
+
+/**
+ * Public shape of a store collection: no importer identity, owner id or
+ * matching rules (the web reads none of them).
+ */
+export function publicCreatorCategory<
+  T extends {
+    external_ref?: unknown;
+    creator_id?: unknown;
+    match_rule?: unknown;
+    match_tags?: unknown;
+  },
+>(c: T): Omit<T, 'external_ref' | 'creator_id' | 'match_rule' | 'match_tags'> {
+  const {
+    external_ref: _ref,
+    creator_id: _owner,
+    match_rule: _rule,
+    match_tags: _tags,
+    ...rest
+  } = c;
+  void _ref;
+  void _owner;
+  void _rule;
+  void _tags;
+  return rest;
+}
+
 /** What the custom-product price helpers read; every query includes more. */
 interface CustomProductPricingSource {
   pricing_type: PricingType;
@@ -64,7 +110,76 @@ export class StorefrontService {
     private readonly markets: MarketsContextService,
     private readonly marketPricing: MarketPricingService,
     private readonly taxService: TaxService,
+    // M4.1 personalization app: optional and trailing (positional tests).
+    // Absent = every product payload is the M4.0 one.
+    @Optional() private readonly personalization?: PersonalizationService,
+    // M4.2 designer app: optional and trailing (positional tests). Absent or
+    // app off = no `designer` key in the product payload.
+    @Optional() private readonly designerTemplates?: DesignerTemplatesService,
   ) {}
+
+  /**
+   * Personalization app (D2/D10): whether a creator's own product gets the
+   * app payload. Only asked (one cached flag) for a product that uses an
+   * M4.1 feature; every other product keeps the M4.0 payload.
+   */
+  private async personalizationOn(
+    storeId: string,
+    fields: readonly PFieldDef[],
+    optionConfig: unknown,
+  ): Promise<boolean> {
+    if (!this.personalization) return false;
+    if (!usesAdvancedFields(fields) && !usesAdvancedOptionConfig(optionConfig))
+      return false;
+    return this.personalization.isEnabled(storeId);
+  }
+
+  /**
+   * The storefront `personalization` block (contract §1): the
+   * free-shipping threshold already in the request currency.
+   */
+  private async personalizationBlock(
+    store: {
+      id: string;
+      store_type: StoreType;
+      currency: string | null;
+      tax_country?: string | null;
+    },
+    productId: string,
+    market: MarketContext | null,
+    /** The product's own shipping profile when already loaded (no re-resolution). */
+    profile?: Parameters<PersonalizationService['freeShippingThreshold']>[4],
+  ): Promise<{
+    enabled: true;
+    free_shipping_threshold: number | null;
+    currency: string;
+  }> {
+    const service = this.personalization!;
+    const settings = await service.settings(store.id);
+    let threshold: number | null = null;
+    try {
+      threshold = await service.freeShippingThreshold(
+        productId,
+        store,
+        market,
+        settings,
+        profile,
+      );
+    } catch {
+      // A badge must never break the product page.
+      threshold = null;
+    }
+    let currency: string;
+    if (market) {
+      currency = market.currency;
+    } else {
+      const config = await this.prisma.platformConfig.findFirst({
+        select: { default_currency: true },
+      });
+      currency = resolveStoreCurrency(store, config?.default_currency);
+    }
+    return { enabled: true, free_shipping_threshold: threshold, currency };
+  }
 
   /**
    * b2b app (D2): the estimated tax rate (basis points) of each product -
@@ -586,21 +701,24 @@ export class StorefrontService {
     });
 
     // Normalize own products too (Decimal → Number)
-    const mappedOwn = ownProducts.map((p) => ({
-      ...p,
-      base_price: Number(p.base_price),
-      compare_at_price: p.compare_at_price
-        ? Number(p.compare_at_price)
-        : undefined,
-      variants: (p.variants || []).map((v) => ({
-        ...v,
-        price: Number(p.base_price) + Number(v.price_adjustment || 0),
-        compare_at_price: v.compare_at_price
-          ? Number(v.compare_at_price)
+    // cost_price is a merchant-only margin input; never serve it publicly.
+    const mappedOwn = ownProducts.map(
+      ({ cost_price: _costPrice, external_ref: _externalRef, ...p }) => ({
+        ...p,
+        base_price: Number(p.base_price),
+        compare_at_price: p.compare_at_price
+          ? Number(p.compare_at_price)
           : undefined,
-        stock: v.stock_quantity ?? 999,
-      })),
-    }));
+        variants: (p.variants || []).map((v) => ({
+          ...publicVariant(v),
+          price: Number(p.base_price) + Number(v.price_adjustment || 0),
+          compare_at_price: v.compare_at_price
+            ? Number(v.compare_at_price)
+            : undefined,
+          stock: v.stock_quantity ?? 999,
+        })),
+      }),
+    );
 
     // Fetch all active creator promotions (non-coupon) for badge display
     const now = new Date();
@@ -631,9 +749,31 @@ export class StorefrontService {
           translations: p.translations,
         }));
 
-    const ownListed = market
+    const ownPriced = market
       ? await this.applyMarketPrices(market, mappedOwn)
       : mappedOwn;
+    // Personalization app (C36): with the app off, stored card config is
+    // not exposed (`valueMeta` removed, `card` shown as `text`). Products
+    // without it are returned as they are.
+    const listingAppOn =
+      !!this.personalization &&
+      ownPriced.some((p) =>
+        usesAdvancedOptionConfig(p.variant_option_config),
+      ) &&
+      (await this.personalization.isEnabled(store.id));
+    const ownListed = listingAppOn
+      ? ownPriced
+      : ownPriced.map((p) =>
+          usesAdvancedOptionConfig(p.variant_option_config)
+            ? {
+                ...p,
+                variant_option_config: shapeOptionConfigForStorefront(
+                  p.variant_option_config,
+                  false,
+                ) as typeof p.variant_option_config,
+              }
+            : p,
+        );
 
     const ownWithPromos = ownListed.map((p) => ({
       ...p,
@@ -751,7 +891,7 @@ export class StorefrontService {
         },
         custom_fields: {
           include: { translations: true },
-          orderBy: { sort_order: 'asc' },
+          orderBy: [{ sort_order: 'asc' as const }, { id: 'asc' as const }],
         },
         faqs: {
           include: { translations: true },
@@ -802,15 +942,40 @@ export class StorefrontService {
         productId: product.id,
       });
 
+      // Personalization app (M4.1 C36): tree + valueMeta + block when on;
+      // otherwise the M4.0 rows (new columns removed, app rows dropped).
+      const fieldDefs = product.custom_fields as unknown as PFieldDef[];
+      const appOn = await this.personalizationOn(
+        store.id,
+        fieldDefs,
+        product.variant_option_config,
+      );
+
+      // cost_price is a merchant-only margin input; never serve it publicly.
+      const {
+        cost_price: _costPrice,
+        external_ref: _externalRef,
+        ...publicProduct
+      } = product;
+      // Designer app (M4.2 §4.1): the editor block, only when the app is on
+      // and the product's link is enabled; the key is absent otherwise.
+      const designer = this.designerTemplates
+        ? await this.designerTemplates.storefrontBlock(store.id, product.id)
+        : null;
       const shaped = {
-        ...product,
+        ...publicProduct,
+        custom_fields: shapeFieldsForStorefront(product.custom_fields, appOn),
+        variant_option_config: shapeOptionConfigForStorefront(
+          product.variant_option_config,
+          appOn,
+        ) as typeof product.variant_option_config,
         shipping_profile: shippingProfile,
         base_price: prodBasePrice,
         compare_at_price: product.compare_at_price
           ? Number(product.compare_at_price)
           : undefined,
         variants: (product.variants || []).map((v) => ({
-          ...v,
+          ...publicVariant(v),
           price: prodBasePrice + Number(v.price_adjustment || 0),
           compare_at_price: v.compare_at_price
             ? Number(v.compare_at_price)
@@ -819,11 +984,25 @@ export class StorefrontService {
         })),
         creator_categories: (product.creator_categories || [])
           .map((pcc) => pcc.creator_category)
-          .filter((cc) => cc && cc.is_active !== false),
+          .filter((cc) => cc && cc.is_active !== false)
+          .map(publicCreatorCategory),
         promotions,
         bundles,
         // b2b app: estimated rate (variants share the product's class).
         ...(await this.taxRateEntry(store, product)),
+        ...(appOn
+          ? {
+              personalization: await this.personalizationBlock(
+                store,
+                product.id,
+                market,
+                // Own profile only: a missing one resolves to the creator's
+                // default inside freeThresholdFor.
+                product.shipping_profile ?? undefined,
+              ),
+            }
+          : {}),
+        ...(designer ? { designer } : {}),
       };
       if (market) {
         // Market prices; a product hidden in this market is a 404 here.
@@ -892,7 +1071,7 @@ export class StorefrontService {
             },
             custom_fields: {
               include: { translations: true },
-              orderBy: { sort_order: 'asc' },
+              orderBy: [{ sort_order: 'asc' as const }, { id: 'asc' as const }],
             },
             faqs: {
               include: { translations: true },
@@ -928,8 +1107,12 @@ export class StorefrontService {
     const prefilledFieldIds = new Set(
       customProduct.field_values.map((fv) => fv.custom_field_id),
     );
-    const customerFields = customProduct.product.custom_fields.filter(
-      (cf) => !prefilledFieldIds.has(cf.id),
+    // Custom products are always legacy (D2): the M4.0 rows.
+    const customerFields = shapeFieldsForStorefront(
+      customProduct.product.custom_fields.filter(
+        (cf) => !prefilledFieldIds.has(cf.id),
+      ),
+      false,
     );
 
     const baseProduct = customProduct.product;
@@ -970,7 +1153,10 @@ export class StorefrontService {
       status: customProduct.status,
       product_type: baseProduct.product_type,
       customization_type: baseProduct.customization_type,
-      variant_option_config: baseProduct.variant_option_config,
+      variant_option_config: shapeOptionConfigForStorefront(
+        baseProduct.variant_option_config,
+        false,
+      ),
       translations: customProduct.translations,
       images:
         customProduct.mockup_images.length > 0
@@ -986,10 +1172,18 @@ export class StorefrontService {
       category: baseProduct.category,
       creator_categories: (customProduct.creator_categories || [])
         .map((cpcc) => cpcc.creator_category)
-        .filter((cc) => cc && cc.is_active !== false),
+        .filter((cc) => cc && cc.is_active !== false)
+        .map(publicCreatorCategory),
       custom_fields: customerFields,
       faqs: [...(customProduct.faqs || []), ...baseProduct.faqs],
-      field_values: customProduct.field_values,
+      field_values: customProduct.field_values.map((fv) =>
+        fv.custom_field
+          ? {
+              ...fv,
+              custom_field: legacyRow(fv.custom_field),
+            }
+          : fv,
+      ),
       pricing_type: customProduct.pricing_type,
       shipping_profile: shippingProfile,
       promotions,
@@ -1100,9 +1294,33 @@ export class StorefrontService {
       orderBy: [{ parent_id: 'asc' }, { sort_order: 'asc' }],
     });
 
-    type Node = (typeof rows)[number] & { children: Node[] };
+    // M4.4: `published_product_count` is added to every row, but only when
+    // some row is flagged `noindex_when_empty` (other stores: no extra query,
+    // unchanged shape). The web noindexes empty flagged collections.
+    const flagged = rows.some((r) => r.noindex_when_empty);
+    const counts = flagged
+      ? await countPublishedInCollections(
+          this.prisma,
+          store.creator.id,
+          store.store_type !== StoreType.INDEPENDENT,
+          rows,
+        )
+      : null;
+
+    type Node = ReturnType<
+      typeof publicCreatorCategory<(typeof rows)[number]>
+    > & {
+      children: Node[];
+      published_product_count?: number;
+    };
     const map = new Map<string, Node>();
-    rows.forEach((r) => map.set(r.id, { ...r, children: [] }));
+    rows.forEach((r) =>
+      map.set(r.id, {
+        ...publicCreatorCategory(r),
+        ...(counts ? { published_product_count: counts.get(r.id) ?? 0 } : {}),
+        children: [],
+      }),
+    );
     const roots: Node[] = [];
     for (const node of map.values()) {
       if (node.parent_id && map.has(node.parent_id)) {
@@ -1231,7 +1449,14 @@ export class StorefrontService {
         // from the sitemap entirely.
         this.prisma.creatorCategory.findMany({
           where: { creator_id: store.creator.id, is_active: true },
-          select: { slug: true, updated_at: true },
+          select: {
+            id: true,
+            slug: true,
+            updated_at: true,
+            noindex_when_empty: true,
+            match_rule: true,
+            match_tags: true,
+          },
         }),
         // Legal pages are platform content rendered under each store's own
         // /legal/{slug}, so they belong in the store's sitemap too.
@@ -1239,6 +1464,22 @@ export class StorefrontService {
           select: { slug: true, updated_at: true },
         }),
       ]);
+
+    // M4.4: collections flagged `noindex_when_empty` are left out while they
+    // list no published product (queries only when a flag is set).
+    const flaggedCollections = collections.filter((c) => c.noindex_when_empty);
+    const emptyCollectionIds = new Set<string>();
+    if (flaggedCollections.length) {
+      const counts = await countPublishedInCollections(
+        this.prisma,
+        store.creator.id,
+        store.store_type !== StoreType.INDEPENDENT,
+        flaggedCollections,
+      );
+      for (const c of flaggedCollections) {
+        if (!counts.get(c.id)) emptyCollectionIds.add(c.id);
+      }
+    }
 
     return {
       locales,
@@ -1280,10 +1521,12 @@ export class StorefrontService {
           return { slug: t.slug, slugs, lastmod: p.updated_at };
         })
         .filter((p): p is { slug: string; lastmod: Date } => !!p),
-      collections: collections.map((c) => ({
-        slug: c.slug,
-        lastmod: c.updated_at,
-      })),
+      collections: collections
+        .filter((c) => !emptyCollectionIds.has(c.id))
+        .map((c) => ({
+          slug: c.slug,
+          lastmod: c.updated_at,
+        })),
       legal_pages: legalPages.map((p) => ({
         slug: p.slug,
         lastmod: p.updated_at,
@@ -1479,7 +1722,7 @@ export class StorefrontService {
     return sourceVariants.map((v) => {
       const price = this.computeVariantPrice(cp, v);
       return {
-        ...v,
+        ...publicVariant(v),
         _custom_price: undefined,
         price,
         compare_at_price: v.compare_at_price

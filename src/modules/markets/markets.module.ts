@@ -9,6 +9,7 @@ import { MarketPricingService } from './market-pricing.service';
 import { DomainsService } from './domains.service';
 import { FxService } from './fx.service';
 import { PaymentCheckService } from './payment-check.service';
+import { RedirectsModule } from '../redirects/redirects.module';
 
 // Regular (non-global) module. It depends only on the global Prisma /
 // StoreApps / Revalidation / Crypto modules, so Storefront, Cart, Orders,
@@ -16,7 +17,8 @@ import { PaymentCheckService } from './payment-check.service';
 // builds its own platform Stripe client for the same reason (PaymentsModule
 // imports OrdersModule, which imports this module).
 @Module({
-  imports: [ConfigModule],
+  // RedirectsModule: market-context answers `redirects_version` (M4.4).
+  imports: [ConfigModule, RedirectsModule],
   controllers: [
     MarketsAdminController,
     MarketsPublicController,

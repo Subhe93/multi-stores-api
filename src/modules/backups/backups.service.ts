@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common';
 import { Backup, BackupKind, BackupStatus, Prisma } from '@prisma/client';
 import { createReadStream, promises as fs } from 'fs';
-import { basename, join, resolve } from 'path';
+import { basename, isAbsolute, join, relative, resolve } from 'path';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   fileTimestamp,
@@ -21,7 +21,8 @@ import {
   parseDatabaseUrl,
   pgDump,
   pgRestore,
-  tarCreate,
+  isTolerableTarWarning,
+  runTool,
   tarExtract,
   toolAvailable,
   ToolError,
@@ -34,6 +35,7 @@ import {
   UpdateBackupSettingsDto,
 } from './dto/backups.dto';
 import { computeNextRunAt, SlotConfig } from './backup-schedule';
+import { defaultPrivateStorageDir } from '../../common/storage/private-file-storage';
 
 /** Name of the folder (relative to cwd) archived with a backup. */
 const UPLOADS_DIR = 'uploads';
@@ -309,9 +311,38 @@ export class BackupsService implements OnModuleInit {
       if (uploadsFile) {
         // An empty uploads folder still yields a valid (tiny) archive.
         await fs.mkdir(join(process.cwd(), UPLOADS_DIR), { recursive: true });
-        await tarCreate(uploadsFile, process.cwd(), UPLOADS_DIR, {
-          timeoutMs: BACKUP_TIMEOUT_MS,
-        });
+        // Private files (customer upload originals, invoice PDFs, ...) travel
+        // in the same archive when they live under the working directory.
+        // Restore still extracts `uploads/` only.
+        const privateDirs = await privateArchiveDirs();
+        const dirs = [UPLOADS_DIR, ...privateDirs];
+        try {
+          await runTool(
+            'tar',
+            [
+              '-czf',
+              uploadsFile,
+              // In-flight atomic-write temp files of private storage.
+              '--exclude=.*.tmp',
+              '-C',
+              process.cwd(),
+              ...dirs,
+            ],
+            { timeoutMs: BACKUP_TIMEOUT_MS },
+          );
+        } catch (err) {
+          // Files purged or replaced in private storage during the run do
+          // not invalidate the archive (see isTolerableTarWarning).
+          if (
+            !(err instanceof ToolError) ||
+            !isTolerableTarWarning(err.result, privateDirs)
+          ) {
+            throw err;
+          }
+          this.logger.warn(
+            `Backup ${row.id}: tar reported private files changing during the archive (tolerated): ${err.result.stderrTail}`,
+          );
+        }
         uploadsSize = (await fs.stat(uploadsFile)).size;
       }
 
@@ -537,6 +568,15 @@ export class BackupsService implements OnModuleInit {
       // 4. Uploads, only on explicit request: entries are extracted under
       //    `uploads/` only; files that exist today and are not in the archive
       //    stay in place.
+      //    MANUAL STEP for private storage (customer upload originals,
+      //    invoice PDFs): the same archive also holds `storage/` (or the
+      //    PRIVATE_STORAGE_DIR / INVOICE_STORAGE_DIR folders under the working
+      //    directory) but it is never extracted automatically. To restore it,
+      //    stop the API and run from the API working directory:
+      //      tar -xzf <uploads-…tar.gz> -C . storage
+      //    (list the folders first with `tar -tzf <file> | cut -d/ -f1 | sort -u`).
+      //    Files purged by retention after the backup come back as files, but
+      //    their CustomerUpload rows keep `purged_at`, so they stay unserved.
       if (restoreUploads) {
         this.logger.warn(
           `RESTORE: extracting ${basename(row.uploads_file!)} over ${UPLOADS_DIR}/`,
@@ -726,5 +766,35 @@ async function removeIfExists(file: string | null | undefined) {
 function isNotFound(err: unknown): boolean {
   return (
     err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025'
+  );
+}
+
+/**
+ * Private storage roots to add to the uploads archive (M4.0 §8.6):
+ * `PRIVATE_STORAGE_DIR` (default `<cwd>/storage`, which also holds the
+ * default invoice storage) and `INVOICE_STORAGE_DIR`, each only when it
+ * exists inside the working directory. Paths are relative to cwd, deduped,
+ * and nested roots are covered by their parent.
+ */
+async function privateArchiveDirs(): Promise<string[]> {
+  const cwd = process.cwd();
+  const candidates = [defaultPrivateStorageDir()];
+  const invoiceDir = process.env.INVOICE_STORAGE_DIR?.trim();
+  if (invoiceDir) candidates.push(resolve(invoiceDir));
+  const rels: string[] = [];
+  for (const abs of candidates) {
+    const rel = relative(cwd, abs);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) continue;
+    if (rel.split(/[\\/]/)[0] === UPLOADS_DIR) continue;
+    try {
+      if (!(await fs.stat(abs)).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    rels.push(rel.split('\\').join('/'));
+  }
+  rels.sort((a, b) => a.length - b.length);
+  return rels.filter(
+    (r, i) => !rels.slice(0, i).some((p) => r === p || r.startsWith(`${p}/`)),
   );
 }

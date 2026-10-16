@@ -539,3 +539,140 @@ describe('hasStackedTaxRates', () => {
     expect(hasStackedTaxRates(o)).toBe(true);
   });
 });
+
+describe('buildInvoiceSnapshot (personalization items, M4.1)', () => {
+  const order = () =>
+    makeOrder({
+      mode: TaxPricingMode.INCLUSIVE,
+      currency: 'SEK',
+      lines: LINE_SETS.single25,
+      shipping: 49,
+      discount: 0,
+    });
+  const row = (over: Record<string, unknown>) => ({
+    value: null,
+    file_url: null,
+    custom_field: null,
+    ...over,
+  });
+
+  it('one detail per item ("Artikel 2: KARIN, Blå"); option rows never alone; flat rows kept', () => {
+    const o = order();
+    o.items[0].variant = { sku: null, options: { Färg: 'Röd' } };
+    o.items[0].custom_field_values = [
+      row({
+        value: 'Hej',
+        field_name: 'note',
+        field_label: { sv: 'Hälsning' },
+        sort_order: 0,
+      }),
+      row({
+        value: 'KRISTOFER',
+        field_name: 'custom_name_v3',
+        field_label: { sv: 'Namn' },
+        sort_order: 1,
+        group_key: 'dnc_items',
+        group_index: 1,
+        group_label: { sv: 'Artikel 1' },
+      }),
+      row({
+        value: 'Röd',
+        field_name: 'Färg',
+        field_label: { sv: 'Färg' },
+        sort_order: 2,
+        group_key: 'dnc_items',
+        group_index: 1,
+        group_label: { sv: 'Artikel 1' },
+        source: 'OPTION',
+        meta: { hex: '#dd3333' },
+      }),
+      row({
+        value: 'Blå',
+        field_name: 'color',
+        field_label: { sv: 'Färg' },
+        sort_order: 4,
+        group_key: 'dnc_items',
+        group_index: 2,
+        group_label: { sv: 'Artikel 2' },
+      }),
+      row({
+        value: 'KARIN',
+        field_name: 'name',
+        field_label: { sv: 'Namn' },
+        sort_order: 3,
+        group_key: 'dnc_items',
+        group_index: 2,
+        group_label: { sv: 'Artikel 2' },
+      }),
+      // A stray OPTION row outside a group is never printed alone.
+      row({
+        value: 'Röd',
+        field_name: 'Färg',
+        sort_order: 9,
+        source: 'OPTION',
+      }),
+    ];
+    const s = buildInvoiceSnapshot(input(o));
+    expect(s.lines[0].details).toEqual([
+      { label: 'Färg', value: 'Röd' },
+      { label: 'Hälsning', value: 'Hej' },
+      { label: 'Artikel 1', value: 'KRISTOFER, Röd' },
+      { label: 'Artikel 2', value: 'KARIN, Blå' },
+    ]);
+  });
+
+  it('rows without groups keep the M4.0 details exactly', () => {
+    const o = order();
+    o.items[0].custom_field_values = [
+      row({
+        value: 'Hej',
+        field_name: 'note',
+        field_label: { sv: 'Hälsning' },
+        sort_order: 0,
+      }),
+      row({
+        value: null,
+        file_url: '/uploads/x.png',
+        field_name: 'logo',
+        field_type: 'IMAGE',
+        sort_order: 1,
+      }),
+    ];
+    expect(buildInvoiceSnapshot(input(o)).lines[0].details).toEqual([
+      { label: 'Hälsning', value: 'Hej' },
+      { label: 'logo', value: 'file' },
+    ]);
+  });
+});
+
+describe('buildInvoiceSnapshot personalization labels (M4.1 fixes)', () => {
+  it('group labels fall back to the store primary locale before any other language', () => {
+    const o = makeOrder({
+      mode: TaxPricingMode.INCLUSIVE,
+      currency: 'SEK',
+      lines: LINE_SETS.single25,
+      shipping: 49,
+      discount: 0,
+    });
+    o.items[0].custom_field_values = [
+      {
+        value: 'KARIN',
+        file_url: null,
+        custom_field: null,
+        field_name: 'name',
+        field_label: { sv: 'Namn', de: 'Name' },
+        sort_order: 0,
+        group_key: 'dnc_items',
+        group_index: 2,
+        group_label: { sv: 'Artikel 2', de: 'Artikel 2 (de)' },
+      },
+    ] as never;
+    // Invoice in French: no French label; the primary (de) wins over sv.
+    const withPrimary = buildInvoiceSnapshot(
+      input(o, { locale: 'fr', primaryLocale: 'de' }),
+    );
+    expect(withPrimary.lines[0].details).toEqual([
+      { label: 'Artikel 2 (de)', value: 'KARIN' },
+    ]);
+  });
+});

@@ -284,3 +284,45 @@ export function fileTimestamp(date: Date): string {
     `-${p(date.getHours())}${p(date.getMinutes())}${p(date.getSeconds())}`
   );
 }
+
+/**
+ * True when a failed `tar -c` only warned that files under `privateDirs`
+ * changed or vanished while being read (GNU tar exit code 1). Private
+ * storage writes are atomic (temp file + rename; the temp files are excluded
+ * from the archive), so every archived private file is either the old or
+ * the new complete version, and a vanished one was just purged: the archive
+ * is still valid. Any other message, a warning about a path outside
+ * `privateDirs` (e.g. a public upload written in place) or a stderr tail too
+ * long to read in full is not tolerated.
+ */
+export function isTolerableTarWarning(
+  result: ToolResult,
+  privateDirs: readonly string[],
+): boolean {
+  if (result.code !== 1 || result.timedOut || !privateDirs.length) return false;
+  const lines = result.stderrTail
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (!lines.length) return false;
+  const roots = privateDirs.map((d) =>
+    d.replace(/\\/g, '/').replace(/\/+$/, ''),
+  );
+  for (const line of lines) {
+    if (
+      /^tar: Exiting with failure status due to previous errors$/i.test(line)
+    ) {
+      continue;
+    }
+    const m =
+      /^tar: (.+): (?:file changed as we read it|File removed before we read it|Cannot stat: No such file or directory)$/i.exec(
+        line,
+      );
+    if (!m) return false;
+    const file = m[1].replace(/\\/g, '/');
+    if (!roots.some((r) => file === r || file.startsWith(`${r}/`))) {
+      return false;
+    }
+  }
+  return true;
+}

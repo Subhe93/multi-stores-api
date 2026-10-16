@@ -1,0 +1,181 @@
+{
+  "external_ref": "woo:namez.se:npp_template:4350",
+  "name": "Billig studentskylt med foto",
+  "include": true,
+  "spec": {
+    "schema": "designer.template/1",
+    "unit": "mm",
+    "width": 500,
+    "height": 700,
+    "bleed_mm": 0,
+    "render": {
+      "preview_px_per_mm": 2,
+      "print_px_per_mm": 6,
+      "fit_ref_px_per_mm": 6
+    },
+    "fonts": [
+      {
+        "family": "Anton",
+        "weight": 400,
+        "style": "normal",
+        "asset_id": "pending:font:Anton:400:normal"
+      },
+      {
+        "family": "Montserrat",
+        "weight": 600,
+        "style": "normal",
+        "asset_id": "pending:font:Montserrat:600:normal"
+      }
+    ],
+    "surfaces": [
+      {
+        "key": "front",
+        "background": {
+          "color": "#ffffff",
+          "fit": "stretch",
+          "web": {
+            "asset_id": "pending:bg_web",
+            "width": 0,
+            "height": 0
+          },
+          "print": {
+            "asset_id": "pending:bg_print",
+            "width": 0,
+            "height": 0
+          }
+        },
+        "elements": [
+          {
+            "id": "xdbizz77v",
+            "x": 88,
+            "y": 129,
+            "w": 325,
+            "h": 447,
+            "rot": 0,
+            "z": 2,
+            "locked": false,
+            "type": "image_slot",
+            "label": {
+              "sv": "Foto"
+            },
+            "placeholder": {
+              "sv": "Ladda upp bild"
+            },
+            "shape": "rect",
+            "radius": 0,
+            "border_color": "#cccccc",
+            "required": true,
+            "adj_limits": {
+              "zoom": [1, 3],
+              "rot": [-180, 180]
+            },
+            "default_adj": {
+              "zoom": 1,
+              "rot": 0,
+              "panX": 0.5,
+              "panY": 0.5
+            }
+          },
+          {
+            "id": "yaymfva1j",
+            "x": 4,
+            "y": 19,
+            "w": 497,
+            "h": 82,
+            "rot": 0,
+            "z": 3,
+            "locked": false,
+            "type": "text",
+            "label": {
+              "sv": "Namn"
+            },
+            "placeholder": {
+              "sv": "Namn"
+            },
+            "default_text": "Namn",
+            "font": {
+              "family": "Anton",
+              "weight": 400,
+              "style": "normal"
+            },
+            "size": 66,
+            "color": "#ffffff",
+            "align": "center",
+            "transform": "none",
+            "fit": {
+              "mode": "shrink",
+              "step": 0.5,
+              "min": 6,
+              "pad_ref_px": 8
+            },
+            "inset": 4,
+            "editable": true,
+            "required": true,
+            "max_length": 40,
+            "direction": "ltr",
+            "source_label": "Namn"
+          },
+          {
+            "id": "s4qdhdvfe",
+            "x": 102,
+            "y": 86,
+            "w": 300,
+            "h": 32,
+            "rot": 0,
+            "z": 4,
+            "locked": false,
+            "type": "text",
+            "label": {
+              "sv": "Klass"
+            },
+            "placeholder": {
+              "sv": "Klass"
+            },
+            "default_text": "Klass",
+            "font": {
+              "family": "Montserrat",
+              "weight": 600,
+              "style": "normal"
+            },
+            "size": 31,
+            "color": "#ffffff",
+            "align": "center",
+            "transform": "none",
+            "fit": {
+              "mode": "shrink",
+              "step": 0.5,
+              "min": 6,
+              "pad_ref_px": 8
+            },
+            "inset": 4,
+            "editable": true,
+            "required": true,
+            "max_length": 40,
+            "direction": "ltr",
+            "source_label": "Klass"
+          }
+        ]
+      }
+    ]
+  },
+  "fetch": [
+    {
+      "key": "pending:bg_web",
+      "role": "bg_web",
+      "url": "https://namez.se/wp-content/uploads/2026/04/Billig-studentskylt-med-foto-small.jpg",
+      "fallback_url": "https://namez.se/wp-content/uploads/2026/04/Billig-studentskylt-med-foto-small-scaled.jpg"
+    },
+    {
+      "key": "pending:bg_print",
+      "role": "bg_print",
+      "url": "https://namez.se/wp-content/uploads/2026/04/Billig-studentskylt-med-foto-big.png",
+      "fallback_url": "https://namez.se/wp-content/uploads/2026/04/Billig-studentskylt-med-foto-big-scaled.png"
+    },
+    {
+      "key": "pending:thumb",
+      "role": "thumb",
+      "url": "https://namez.se/wp-content/uploads/npp-thumbnails/poster-9MTKxbDcd15P.jpg"
+    }
+  ],
+  "warnings": ["FONT_WEIGHT_SUBSTITUTED", "FONT_UNDECLARED"]
+}

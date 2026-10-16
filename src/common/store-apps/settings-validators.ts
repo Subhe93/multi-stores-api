@@ -1,6 +1,9 @@
 import type { StoreAppKey } from './store-apps.registry';
 import { validateB2bSettings } from '../../modules/b2b/b2b-settings';
 import { validateInvoiceSettings } from '../../modules/invoices/invoice-settings';
+import { validatePersonalizationSettings } from '../../modules/personalization/personalization-settings';
+import { validateProductionSettings } from '../../modules/production/production-settings';
+import { validateDesignerSettings } from '../../modules/designer/designer-settings';
 
 // Per-app settings validators run by StoreAppsService.updateSettings before
 // the settings object is stored. Pure functions only (no injection), so the
@@ -11,6 +14,9 @@ const SETTINGS_VALIDATORS: Partial<
 > = {
   b2b: validateB2bSettings,
   invoices: validateInvoiceSettings,
+  personalization: validatePersonalizationSettings,
+  production: validateProductionSettings,
+  designer: validateDesignerSettings,
 };
 
 /** Problems with `settings` for `key`; empty = accepted. */

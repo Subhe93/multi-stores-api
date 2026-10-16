@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
@@ -11,6 +12,7 @@ import {
   UpdateProductDto,
   ProductVariantSyncDto,
   ProductImageSyncDto,
+  ProductTranslationDto,
 } from './dto/product.dto';
 import { UserRole, ProductStatus, ProductType, Prisma } from '@prisma/client';
 import { BundlesService } from '../bundles/bundles.service';
@@ -21,6 +23,124 @@ import {
 } from '../bundles/bundle-economics.util';
 import { BundleOfferLike } from '../bundles/bundle-pricing.util';
 import { TaxManagementService } from '../taxes/tax-management.service';
+import { StoreAppsService } from '../store-apps/store-apps.service';
+import { validateOptionConfig } from '../personalization/personalization-config.validator';
+import {
+  appRequired,
+  configInvalid,
+  creatorProductOnly,
+  optionInUse,
+} from '../personalization/personalization.errors';
+import {
+  brokenOptionReferences,
+  introducesCardConfig,
+} from '../personalization/personalization-option-refs';
+import { isPlainObject } from '../../common/personalization/rules';
+
+/**
+ * Public projection of `GET /products` (anonymous callers and non-owners):
+ * no cost price, no importer identities, published provider catalogue only.
+ */
+export const PUBLIC_PRODUCT_LIST_SELECT = {
+  id: true,
+  provider_id: true,
+  category_id: true,
+  product_type: true,
+  customization_type: true,
+  base_price: true,
+  compare_at_price: true,
+  track_inventory: true,
+  stock_quantity: true,
+  status: true,
+  is_featured: true,
+  created_at: true,
+  updated_at: true,
+  translations: true,
+  images: { take: 1, orderBy: { sort_order: 'asc' as const } },
+  category: { include: { translations: true } },
+  variants: {
+    select: {
+      id: true,
+      product_id: true,
+      sku: true,
+      price_adjustment: true,
+      compare_at_price: true,
+      stock_quantity: true,
+      is_active: true,
+      options: true,
+    },
+  },
+  provider: { select: { id: true, company_name: true } },
+} satisfies Prisma.ProductSelect;
+
+export interface ProductListViewer {
+  userId?: string;
+  role?: UserRole;
+}
+
+export type ProductListFilters = {
+  page?: number;
+  limit?: number;
+  category_id?: string;
+  product_type?: string;
+  status?: ProductStatus;
+  provider_id?: string;
+  creator_id?: string;
+  owner_type?: 'provider' | 'creator';
+  search?: string;
+  is_featured?: boolean;
+};
+
+/**
+ * Product as served to a non-owner: drops the cost price, the importer
+ * identities (product + variants) and the internals of linked collections.
+ */
+export function redactProductForNonOwner<
+  T extends {
+    cost_price?: unknown;
+    external_ref?: unknown;
+    variants?: { external_ref?: unknown }[];
+    creator_categories?: {
+      creator_category?: {
+        external_ref?: unknown;
+        creator_id?: unknown;
+        match_rule?: unknown;
+        match_tags?: unknown;
+      } | null;
+    }[];
+  },
+>(product: T): Omit<T, 'cost_price' | 'external_ref'> {
+  const { cost_price: _cost, external_ref: _ref, ...rest } = product;
+  void _cost;
+  void _ref;
+  const out: Record<string, unknown> = { ...rest };
+  if (Array.isArray(product.variants)) {
+    out.variants = product.variants.map((v) => {
+      const { external_ref: _vref, ...vr } = v;
+      void _vref;
+      return vr;
+    });
+  }
+  if (Array.isArray(product.creator_categories)) {
+    out.creator_categories = product.creator_categories.map((link) => {
+      const cc = link.creator_category;
+      if (!cc) return link;
+      const {
+        external_ref: _cref,
+        creator_id: _owner,
+        match_rule: _rule,
+        match_tags: _tags,
+        ...pub
+      } = cc;
+      void _cref;
+      void _owner;
+      void _rule;
+      void _tags;
+      return { ...link, creator_category: pub };
+    });
+  }
+  return out as Omit<T, 'cost_price' | 'external_ref'>;
+}
 
 @Injectable()
 export class ProductsService {
@@ -29,7 +149,61 @@ export class ProductsService {
     private bundlesService: BundlesService,
     private readonly revalidation: RevalidationService,
     private readonly taxes: TaxManagementService,
+    // Global module; optional so positional tests stay short (the
+    // personalization app then counts as disabled).
+    @Optional() private readonly storeApps?: StoreAppsService,
   ) {}
+
+  /**
+   * Personalization app checks of a `variant_option_config` write (M4.1):
+   * - the app's keys are well formed (400 PERSONALIZATION_CONFIG_INVALID,
+   *   paths `variant_option_config[i].valueMeta.<value>.<key>`);
+   * - new or changed variation-card keys (`style:'card'`, `valueMeta`)
+   *   need the app on a creator product; stored values that come back
+   *   unchanged are accepted (same gate rule as custom fields);
+   * - an option (or option value) still read by the product's
+   *   personalization fields cannot be renamed or removed (409
+   *   PERSONALIZATION_OPTION_IN_USE {fields, options}).
+   */
+  private async assertOptionConfigWrite(
+    product: { id: string; creator_id: string | null } | null,
+    creatorId: string | null | undefined,
+    oldConfig: unknown,
+    newConfig: unknown,
+  ): Promise<void> {
+    const issues = validateOptionConfig(newConfig);
+    if (issues.length > 0) throw configInvalid(issues);
+    if (introducesCardConfig(oldConfig, newConfig)) {
+      if (!creatorId) throw creatorProductOnly();
+      const store = await this.prisma.store.findUnique({
+        where: { creator_id: creatorId },
+        select: { id: true },
+      });
+      const on =
+        !!store &&
+        !!this.storeApps &&
+        (await this.storeApps.isEnabled(store.id, 'personalization'));
+      if (!on) throw appRequired();
+    }
+    if (!product || !Array.isArray(oldConfig)) return;
+    const fields = await this.prisma.productCustomField.findMany({
+      where: { product_id: product.id },
+      select: {
+        id: true,
+        name: true,
+        parent_id: true,
+        type: true,
+        conditions: true,
+        pricing: true,
+        repeat: true,
+        ui: true,
+      },
+    });
+    const broken = brokenOptionReferences(fields, oldConfig, newConfig);
+    if (broken.fields.length > 0) {
+      throw optionInUse(broken.fields, broken.options);
+    }
+  }
 
   /**
    * A product may only use a platform tax class or a class of the store
@@ -133,7 +307,7 @@ export class ProductsService {
     tags: true,
     custom_fields: {
       include: { translations: true },
-      orderBy: { sort_order: 'asc' as const },
+      orderBy: [{ sort_order: 'asc' as const }, { id: 'asc' as const }],
     },
     faqs: {
       include: { translations: true },
@@ -358,6 +532,14 @@ export class ProductsService {
       dto.shipping_profile_id,
       productData,
     );
+    if (data.variant_option_config !== undefined) {
+      await this.assertOptionConfigWrite(
+        null,
+        productData.creator_id,
+        null,
+        data.variant_option_config,
+      );
+    }
 
     // Create the product
     const product = await this.prisma.product.create({
@@ -434,22 +616,79 @@ export class ProductsService {
     return this.findById(product.id);
   }
 
-  async findAll(filters: {
-    page?: number;
-    limit?: number;
-    category_id?: string;
-    product_type?: string;
-    status?: ProductStatus;
-    provider_id?: string;
-    creator_id?: string;
-    owner_type?: 'provider' | 'creator';
-    search?: string;
-    is_featured?: boolean;
-  }) {
-    const { page = 1, limit = 20, ...rest } = filters;
-    const skip = (page - 1) * limit;
-    const where: Prisma.ProductWhereInput = {};
+  /**
+   * `GET /products`. Admins and owners filtering their own catalogue
+   * (`creator_id` / `provider_id` of the caller) get the full rows; everyone
+   * else, anonymous callers included, only sees PUBLISHED provider products
+   * through `PUBLIC_PRODUCT_LIST_SELECT`. Filtering by somebody else's
+   * creator id is refused (creator catalogues are public per store only,
+   * through the storefront API).
+   */
+  async listForViewer(
+    filters: ProductListFilters,
+    viewer: ProductListViewer = {},
+  ) {
+    if (viewer.role === UserRole.ADMIN) return this.findAll(filters);
 
+    if (filters.creator_id) {
+      const own =
+        viewer.userId && viewer.role === UserRole.CREATOR
+          ? await this.prisma.creator.findUnique({
+              where: { user_id: viewer.userId },
+              select: { id: true },
+            })
+          : null;
+      if (!own || own.id !== filters.creator_id) {
+        throw new ForbiddenException({
+          code: 'PRODUCT_LIST_FORBIDDEN',
+          message: 'You can only list your own products',
+        });
+      }
+      return this.findAll(filters);
+    }
+
+    if (filters.provider_id && viewer.userId) {
+      const own =
+        viewer.role === UserRole.PROVIDER
+          ? await this.prisma.provider.findUnique({
+              where: { user_id: viewer.userId },
+              select: { id: true },
+            })
+          : null;
+      if (own && own.id === filters.provider_id) return this.findAll(filters);
+    }
+
+    const page = filters.page ?? 1;
+    const limit = filters.limit ?? 20;
+    const empty = { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
+    if (filters.status && filters.status !== ProductStatus.PUBLISHED) {
+      return empty;
+    }
+    if (filters.owner_type === 'creator') return empty;
+    const where = this.listWhere({
+      ...filters,
+      status: ProductStatus.PUBLISHED,
+      creator_id: undefined,
+    });
+    where.provider_id = filters.provider_id ?? { not: null };
+    const [data, total] = await Promise.all([
+      this.prisma.product.findMany({
+        skip: (page - 1) * limit,
+        take: limit,
+        where,
+        select: PUBLIC_PRODUCT_LIST_SELECT,
+        orderBy: { created_at: 'desc' },
+      }),
+      this.prisma.product.count({ where }),
+    ]);
+    return {
+      data,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  private listWhere(rest: ProductListFilters): Prisma.ProductWhereInput {
+    const where: Prisma.ProductWhereInput = {};
     if (rest.category_id) where.category_id = rest.category_id;
     if (rest.product_type)
       where.product_type = rest.product_type as ProductType;
@@ -466,6 +705,14 @@ export class ProductsService {
         },
       };
     }
+    return where;
+  }
+
+  /** Full rows: admins, owners and internal callers only (never anonymous). */
+  async findAll(filters: ProductListFilters) {
+    const { page = 1, limit = 20, ...rest } = filters;
+    const skip = (page - 1) * limit;
+    const where = this.listWhere(rest);
 
     const [data, total] = await Promise.all([
       this.prisma.product.findMany({
@@ -547,11 +794,7 @@ export class ProductsService {
       const owns = userId
         ? await this.userOwnsProduct(product, userId, userRole)
         : false;
-      if (!owns) {
-        const { cost_price: _cost, ...rest } = product;
-        void _cost;
-        return rest;
-      }
+      if (!owns) return redactProductForNonOwner(product);
     }
     return product;
   }
@@ -607,6 +850,14 @@ export class ProductsService {
 
     await this.assertTaxClassAllowed(dto.tax_class_id, product.creator_id);
     await this.assertShippingProfileAllowed(dto.shipping_profile_id, product);
+    if (data.variant_option_config !== undefined) {
+      await this.assertOptionConfigWrite(
+        product,
+        product.creator_id,
+        product.variant_option_config,
+        data.variant_option_config,
+      );
+    }
 
     // Update the product
     await this.prisma.product.update({
@@ -669,11 +920,15 @@ export class ProductsService {
 
     // تحديث الترجمات
     if (translations) {
+      // Translations are deleted and recreated, so fields the client did not
+      // send must be carried over or they are wiped (M4.4 X19):
+      // short_description `undefined` = keep the stored value of that locale.
+      const rows = await this.withTranslationCarryOver(id, translations);
       await this.prisma.productTranslation.deleteMany({
         where: { product_id: id },
       });
       await this.prisma.productTranslation.createMany({
-        data: translations.map((t) => ({ ...t, product_id: id })),
+        data: rows.map((t) => ({ ...t, product_id: id })),
       });
     }
 
@@ -724,6 +979,38 @@ export class ProductsService {
   }
 
   /**
+   * X19 carry-over for the translation delete-and-recreate in update():
+   * a translation whose `short_description` is `undefined` keeps the value
+   * stored for the same locale; `null`/'' clears it. One read, and only when
+   * some row omits the field.
+   */
+  private async withTranslationCarryOver(
+    productId: string,
+    translations: ProductTranslationDto[],
+  ): Promise<ProductTranslationDto[]> {
+    if (!translations.some((t) => t.short_description === undefined)) {
+      return translations.map((t) => ({
+        ...t,
+        short_description: t.short_description || null,
+      }));
+    }
+    const stored = await this.prisma.productTranslation.findMany({
+      where: { product_id: productId },
+      select: { locale: true, short_description: true },
+    });
+    const byLocale = new Map(
+      stored.map((r) => [r.locale, r.short_description]),
+    );
+    return translations.map((t) => ({
+      ...t,
+      short_description:
+        t.short_description === undefined
+          ? (byLocale.get(t.locale) ?? null)
+          : t.short_description || null,
+    }));
+  }
+
+  /**
    * Duplicate a product with all its relations. The clone is always created
    * as DRAFT, never featured, and titles/slugs are suffixed with "(Copy)" to
    * stay distinct from the source. Unique fields like SKU are cleared or
@@ -739,7 +1026,10 @@ export class ProductsService {
         attributes: true,
         variants: true,
         tags: true,
-        custom_fields: { include: { translations: true } },
+        custom_fields: {
+          include: { translations: true },
+          orderBy: [{ sort_order: 'asc' as const }, { id: 'asc' as const }],
+        },
         faqs: { include: { translations: true } },
       },
     });
@@ -793,6 +1083,9 @@ export class ProductsService {
             slug: `${t.slug}-copy-${created.id.slice(0, 6)}`,
             meta_title: t.meta_title,
             meta_desc: t.meta_desc,
+            // M4.4 X20: copied; external refs are never copied (the clone
+            // is not the imported product).
+            short_description: t.short_description,
           })),
         });
       }
@@ -852,9 +1145,37 @@ export class ProductsService {
         });
       }
 
-      // Custom fields with their translations.
-      for (const cf of source.custom_fields) {
-        await tx.productCustomField.create({
+      // Custom fields with their translations. M4.1 (X20): the
+      // personalization columns are copied too, parents before children so
+      // `parent_id` can be remapped to the cloned parent. JSON nulls are
+      // left out (SQL NULL); fields without M4.1 data are copied as before.
+      const fieldIdMap = new Map<string, string>();
+      const json = (v: Prisma.JsonValue | null) =>
+        v === null ? undefined : (v as Prisma.InputJsonValue);
+      // A legacy link that targets a field by id points at the copy by
+      // name (names are copied unchanged; links resolve by name, C16).
+      const nameById = new Map(
+        source.custom_fields.map((cf) => [cf.id, cf.name]),
+      );
+      const linkOf = (link: Prisma.JsonValue | null) => {
+        if (!isPlainObject(link)) return link as Prisma.InputJsonValue;
+        const target = typeof link.target === 'string' ? link.target : '';
+        const legacy =
+          typeof link.target_field_id === 'string' ? link.target_field_id : '';
+        const name = nameById.get(target) ?? nameById.get(legacy);
+        if (name === undefined) return link as Prisma.InputJsonValue;
+        const { target_field_id: _legacy, ...rest } = link;
+        return { ...rest, target: name } as Prisma.InputJsonValue;
+      };
+      const parentsFirst = [
+        ...source.custom_fields.filter((cf) => !cf.parent_id),
+        ...source.custom_fields.filter((cf) => !!cf.parent_id),
+      ];
+      for (const cf of parentsFirst) {
+        // A child whose parent is not part of the product is skipped.
+        const parentId = cf.parent_id ? fieldIdMap.get(cf.parent_id) : null;
+        if (parentId === undefined) continue;
+        const clone = await tx.productCustomField.create({
           data: {
             product_id: created.id,
             name: cf.name,
@@ -863,18 +1184,38 @@ export class ProductsService {
             placeholder: cf.placeholder,
             options: cf.options as Prisma.InputJsonValue,
             validation_rules: cf.validation_rules as Prisma.InputJsonValue,
-            linked_validation: cf.linked_validation as Prisma.InputJsonValue,
+            linked_validation: linkOf(cf.linked_validation),
             sort_order: cf.sort_order,
+            ...(parentId ? { parent_id: parentId } : {}),
+            ...(cf.conditions !== null && { conditions: json(cf.conditions) }),
+            ...(cf.pricing !== null && { pricing: json(cf.pricing) }),
+            ...(cf.repeat !== null && { repeat: json(cf.repeat) }),
+            ...(cf.ui !== null && { ui: json(cf.ui) }),
+            ...(cf.preset_key !== null && { preset_key: cf.preset_key }),
+            // preset_ref is an external source ref (e.g. woo:<host>:product:<id>);
+            // a copy is a new product, so it is never carried over (X20).
             translations: {
               create: cf.translations.map((t) => ({
                 locale: t.locale,
                 label: t.label,
                 placeholder: t.placeholder,
                 option_labels: t.option_labels as Prisma.InputJsonValue,
+                ...(t.display_label !== null && {
+                  display_label: t.display_label,
+                }),
+                ...(t.sublabel !== null && { sublabel: t.sublabel }),
+                ...(t.note !== null && { note: t.note }),
+                ...(t.help_text !== null && { help_text: t.help_text }),
+                ...(t.help_image_url !== null && {
+                  help_image_url: t.help_image_url,
+                }),
+                ...(t.messages !== null && { messages: json(t.messages) }),
               })),
             },
           },
+          select: { id: true },
         });
+        fieldIdMap.set(cf.id, clone.id);
       }
 
       // FAQs with their translations.
@@ -1036,7 +1377,7 @@ export class ProductsService {
         tags: true,
         custom_fields: {
           include: { translations: true },
-          orderBy: { sort_order: 'asc' },
+          orderBy: [{ sort_order: 'asc' as const }, { id: 'asc' as const }],
         },
         faqs: {
           include: { translations: true },
@@ -1074,11 +1415,15 @@ export class ProductsService {
         include: { zones: true },
       });
       if (defaultProfile) {
-        return { ...product, shipping_profile: defaultProfile };
+        return redactProductForNonOwner({
+          ...product,
+          shipping_profile: defaultProfile,
+        });
       }
     }
 
-    return product;
+    // The importing creator is not the owner: no cost price or importer refs.
+    return redactProductForNonOwner(product);
   }
 
   private async checkOwnership(

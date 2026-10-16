@@ -1,0 +1,2 @@
+tax_rate_id	tax_rate_country	tax_rate_state	tax_rate	tax_rate_name	tax_rate_priority	tax_rate_compound	tax_rate_shipping	tax_rate_order	tax_rate_class
+1	SE		25.0000	Moms	1	0	1	0	

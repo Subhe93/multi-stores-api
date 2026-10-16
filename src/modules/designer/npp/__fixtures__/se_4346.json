@@ -1,0 +1,128 @@
+{
+  "hideGallery": "1",
+  "cartUrl": "https://namez.se/cart/",
+  "productId": "4346",
+  "templateData": {
+    "id": 4355,
+    "name": "Studentskylt pris",
+    "size_mode": "budget",
+    "elements": [
+      {
+        "id": "kcah4wxax",
+        "type": "background",
+        "color": "#ffffff",
+        "imageData": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-pris-big-scaled.jpg",
+        "z": -10,
+        "locked": false,
+        "imageDataHiRes": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-pris-small-scaled.png"
+      },
+      {
+        "id": "xgv7p6c5g",
+        "type": "deco-image",
+        "imageData": "https://namez.se/wp-content/uploads/2026/04/bojon.png",
+        "x": 0,
+        "y": 406,
+        "w": 160,
+        "h": 200,
+        "rot": 0,
+        "z": 4,
+        "locked": false
+      },
+      {
+        "id": "137pxk46h",
+        "type": "text",
+        "text": "Namn",
+        "placeholder": "Namn",
+        "fieldLabel": "Namn",
+        "x": 1,
+        "y": 1,
+        "w": 504,
+        "h": 80,
+        "fontSize": 61,
+        "fontFamily": "Montserrat",
+        "fontWeight": 700,
+        "color": "#ffffff",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 3,
+        "locked": false,
+        "editable": true
+      },
+      {
+        "id": "6gbltbf0p",
+        "type": "text",
+        "text": "Klass",
+        "placeholder": "Klass",
+        "fieldLabel": "Klass",
+        "x": 97,
+        "y": 78,
+        "w": 300,
+        "h": 43,
+        "fontSize": 36,
+        "fontFamily": "Montserrat",
+        "fontWeight": 400,
+        "color": "#ffffff",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 4,
+        "locked": false,
+        "editable": true
+      },
+      {
+        "id": "hzagncqgf",
+        "type": "deco-image",
+        "imageData": "https://namez.se/wp-content/uploads/2026/04/ChatGPT-Image-Apr-16-2026-11_47_23-PM.png",
+        "x": 329,
+        "y": 60,
+        "w": 169,
+        "h": 108,
+        "rot": 0,
+        "z": 5,
+        "locked": false
+      },
+      {
+        "id": "wayaptiut",
+        "type": "image-slot",
+        "placeholder": "Upload image",
+        "fieldLabel": "Photo",
+        "x": 90,
+        "y": 129,
+        "w": 322,
+        "h": 448,
+        "rot": 0,
+        "z": 3,
+        "locked": false,
+        "shape": "rect",
+        "borderRadius": 0,
+        "borderColor": "#cccccc",
+        "imageData": null
+      }
+    ],
+    "thumbnail": ""
+  },
+  "allTemplates": [],
+  "welcomeTemplates": [],
+  "basePrice": "399",
+  "regularPrice": "900",
+  "pricing": {
+    "double_extra": 149,
+    "rain_extra": 29,
+    "poster_price": 179,
+    "welcome_price": 249,
+    "welcome_regular": 349
+  },
+  "addons": {
+    "double": false,
+    "raincover": false,
+    "poster": false,
+    "welcome": false
+  },
+  "sale": {
+    "enabled": false,
+    "badge_text": "REA",
+    "badge_icon": "",
+    "discount_pct": 0
+  },
+  "fonts": [],
+  "featuredImage": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-pris-731x1024.jpg"
+}

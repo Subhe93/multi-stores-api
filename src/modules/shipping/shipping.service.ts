@@ -703,6 +703,50 @@ export class ShippingService {
   }
 
   /**
+   * Free-shipping threshold of one product for a destination country (M4.1
+   * §4.7, variation-card badge), in the base currency. Same profile and zone
+   * resolution as checkout: the lowest `free_threshold` of the zone's active
+   * DELIVERY methods, or the zone's legacy column when it has no methods.
+   * Null when the product has no profile, the country no zone, or no method
+   * ever ships free.
+   */
+  async freeThresholdFor(
+    productId: string,
+    countryCode: string | null | undefined,
+    /**
+     * The product's own profile with its zones and methods when the caller
+     * already loaded it (storefront product read); skips the resolution.
+     */
+    loadedProfile?: { zones: ZoneWithMethods[] } | null,
+  ): Promise<number | null> {
+    const country = countryCode?.trim().toUpperCase();
+    if (!country) return null;
+    let profile: { zones: ZoneWithMethods[] } | null = loadedProfile ?? null;
+    if (!profile) {
+      const [profileId] = await this.resolveProfileIds([productId]);
+      if (!profileId) return null;
+      profile = await this.prisma.shippingProfile.findUnique({
+        where: { id: profileId },
+        include: zonesInclude,
+      });
+    }
+    const zone = profile ? this.findZone(profile.zones, country) : undefined;
+    if (!zone) return null;
+    if (zone.methods.length === 0) {
+      return zone.free_threshold != null ? Number(zone.free_threshold) : null;
+    }
+    const thresholds = zone.methods
+      .filter(
+        (m) =>
+          m.is_active &&
+          m.type === ShippingMethodType.DELIVERY &&
+          m.free_threshold != null,
+      )
+      .map((m) => Number(m.free_threshold));
+    return thresholds.length > 0 ? Math.min(...thresholds) : null;
+  }
+
+  /**
    * Back-compat wrapper: the cheapest quoted method as the single cost the
    * pre-methods API returned. Nothing new should depend on it.
    */

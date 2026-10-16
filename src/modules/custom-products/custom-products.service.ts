@@ -140,7 +140,7 @@ export class CustomProductsService {
         variants: { where: { is_active: true } },
         custom_fields: {
           include: { translations: true },
-          orderBy: { sort_order: 'asc' as const },
+          orderBy: [{ sort_order: 'asc' as const }, { id: 'asc' as const }],
         },
       },
     },

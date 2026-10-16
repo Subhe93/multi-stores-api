@@ -1,0 +1,173 @@
+{
+  "external_ref": "woo:namez.se:npp_template:4364",
+  "name": "Studentskylt med snabb leverans",
+  "include": true,
+  "spec": {
+    "schema": "designer.template/1",
+    "unit": "mm",
+    "width": 500,
+    "height": 700,
+    "bleed_mm": 0,
+    "render": {
+      "preview_px_per_mm": 2,
+      "print_px_per_mm": 6,
+      "fit_ref_px_per_mm": 6
+    },
+    "fonts": [
+      {
+        "family": "Righteous",
+        "weight": 400,
+        "style": "normal",
+        "asset_id": "pending:font:Righteous:400:normal"
+      }
+    ],
+    "surfaces": [
+      {
+        "key": "front",
+        "background": {
+          "color": "#ffffff",
+          "fit": "stretch",
+          "web": {
+            "asset_id": "pending:bg_web",
+            "width": 0,
+            "height": 0
+          },
+          "print": {
+            "asset_id": "pending:bg_print",
+            "width": 0,
+            "height": 0
+          }
+        },
+        "elements": [
+          {
+            "id": "sbp2th9uf",
+            "x": 118,
+            "y": 190,
+            "w": 266,
+            "h": 373,
+            "rot": 0,
+            "z": 2,
+            "locked": false,
+            "type": "image_slot",
+            "label": {
+              "sv": "Foto"
+            },
+            "placeholder": {
+              "sv": "Ladda upp bild"
+            },
+            "shape": "rect",
+            "radius": 0,
+            "border_color": "#cccccc",
+            "required": true,
+            "adj_limits": {
+              "zoom": [1, 3],
+              "rot": [-180, 180]
+            },
+            "default_adj": {
+              "zoom": 1,
+              "rot": 0,
+              "panX": 0.5,
+              "panY": 0.5
+            }
+          },
+          {
+            "id": "auob3hc00",
+            "x": 1,
+            "y": 48,
+            "w": 495,
+            "h": 80,
+            "rot": 0,
+            "z": 3,
+            "locked": false,
+            "type": "text",
+            "label": {
+              "sv": "Namn"
+            },
+            "placeholder": {
+              "sv": "Namn"
+            },
+            "default_text": "Namn",
+            "font": {
+              "family": "Righteous",
+              "weight": 400,
+              "style": "normal"
+            },
+            "size": 59,
+            "color": "#005fa8",
+            "align": "center",
+            "transform": "none",
+            "fit": {
+              "mode": "shrink",
+              "step": 0.5,
+              "min": 6,
+              "pad_ref_px": 8
+            },
+            "inset": 4,
+            "editable": true,
+            "required": true,
+            "max_length": 40,
+            "direction": "ltr",
+            "source_label": "Namn"
+          },
+          {
+            "id": "gr7h4vk8x",
+            "x": 100,
+            "y": 100,
+            "w": 300,
+            "h": 80,
+            "rot": 0,
+            "z": 4,
+            "locked": false,
+            "type": "text",
+            "label": {
+              "sv": "Klass"
+            },
+            "placeholder": {
+              "sv": "Klass"
+            },
+            "default_text": "Klass",
+            "font": {
+              "family": "Righteous",
+              "weight": 400,
+              "style": "normal"
+            },
+            "size": 30,
+            "color": "#005fa8",
+            "align": "center",
+            "transform": "none",
+            "fit": {
+              "mode": "shrink",
+              "step": 0.5,
+              "min": 6,
+              "pad_ref_px": 8
+            },
+            "inset": 4,
+            "editable": true,
+            "required": true,
+            "max_length": 40,
+            "direction": "ltr",
+            "source_label": "Klass"
+          }
+        ]
+      }
+    ]
+  },
+  "fetch": [
+    {
+      "key": "pending:bg_web",
+      "role": "bg_web",
+      "url": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-med-snabb-leverans.png"
+    },
+    {
+      "key": "pending:bg_print",
+      "role": "bg_print",
+      "url": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-med-snabb-leverans.png"
+    },
+    {
+      "key": "pending:thumb",
+      "role": "thumb",
+      "url": "https://namez.se/wp-content/uploads/npp-thumbnails/poster-JEaysrkGM1si.jpg"
+    }
+  ],
+  "warnings": ["PRINT_BG_SAME_AS_WEB"]
+}

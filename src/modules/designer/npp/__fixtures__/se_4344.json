@@ -1,0 +1,110 @@
+{
+  "hideGallery": "1",
+  "cartUrl": "https://namez.se/cart/",
+  "productId": "4344",
+  "templateData": {
+    "id": 4364,
+    "name": "Studentskylt med snabb leverans",
+    "size_mode": "budget",
+    "elements": [
+      {
+        "id": "3740vhtf1",
+        "type": "background",
+        "color": "#ffffff",
+        "imageData": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-med-snabb-leverans.png",
+        "z": -10,
+        "locked": false,
+        "imageDataHiRes": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-med-snabb-leverans.png"
+      },
+      {
+        "id": "sbp2th9uf",
+        "type": "image-slot",
+        "placeholder": "Upload image",
+        "fieldLabel": "Photo",
+        "x": 118,
+        "y": 190,
+        "w": 266,
+        "h": 373,
+        "rot": 0,
+        "z": 2,
+        "locked": false,
+        "shape": "rect",
+        "borderRadius": 0,
+        "borderColor": "#cccccc",
+        "imageData": null
+      },
+      {
+        "id": "auob3hc00",
+        "type": "text",
+        "text": "Namn",
+        "placeholder": "Namn",
+        "fieldLabel": "Namn",
+        "x": 1,
+        "y": 48,
+        "w": 495,
+        "h": 80,
+        "fontSize": 59,
+        "fontFamily": "Righteous",
+        "fontWeight": 400,
+        "color": "#005fa8",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 3,
+        "locked": false,
+        "editable": true
+      },
+      {
+        "id": "gr7h4vk8x",
+        "type": "text",
+        "text": "Klass",
+        "placeholder": "Klass",
+        "fieldLabel": "Klass",
+        "x": 100,
+        "y": 100,
+        "w": 300,
+        "h": 80,
+        "fontSize": 30,
+        "fontFamily": "Righteous",
+        "fontWeight": 400,
+        "color": "#005fa8",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 4,
+        "locked": false,
+        "editable": true
+      }
+    ],
+    "thumbnail": ""
+  },
+  "allTemplates": [],
+  "welcomeTemplates": [],
+  "basePrice": "399",
+  "regularPrice": "600",
+  "pricing": {
+    "double_extra": 149,
+    "rain_extra": 29,
+    "poster_price": 179,
+    "welcome_price": 249,
+    "welcome_regular": 349
+  },
+  "addons": {
+    "double": false,
+    "raincover": false,
+    "poster": false,
+    "welcome": false
+  },
+  "sale": {
+    "enabled": false,
+    "badge_text": "REA",
+    "badge_icon": "",
+    "discount_pct": 0
+  },
+  "fonts": [
+    {
+      "family": "Righteous",
+      "type": "google",
+      "url": ""
+    }
+  ],
+  "featuredImage": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-med-snabb-leverans-731x1024.jpg"
+}

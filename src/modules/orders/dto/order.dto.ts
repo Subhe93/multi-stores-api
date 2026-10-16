@@ -7,6 +7,7 @@ import {
   IsArray,
   IsInt,
   IsObject,
+  IsUUID,
   Matches,
   Max,
   MaxLength,
@@ -189,6 +190,17 @@ export class QuoteLineDto {
   @IsOptional()
   @IsObject()
   custom_fields?: Record<string, unknown> | null;
+
+  // Designer app (M4.2): the line's customer design (a guest line also
+  // sends its design token, checked when given).
+  @IsOptional()
+  @IsUUID()
+  design_id?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  design_token?: string | null;
 }
 
 // `POST /orders/quote`: price lines (or the caller's server cart when

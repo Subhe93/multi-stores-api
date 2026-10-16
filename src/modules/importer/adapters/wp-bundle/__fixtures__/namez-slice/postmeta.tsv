@@ -1,0 +1,3796 @@
+9854	2207	_edit_lock	1779273135:41
+9855	2207	_edit_last	1
+25074	3213	_edit_lock	1779273222:41
+25075	3213	_edit_last	1
+27583	3355	_edit_lock	1779273121:41
+27584	3355	_edit_last	41
+44472	4273	_edit_lock	1776630126:41
+44473	4273	_edit_last	41
+44476	4273	_npp_elements	[{"id":"jegb2b3pn","type":"background","color":"#ffffff","imageData":"https://namez.se/wp-content/uploads/2026/04/Stilren-studentskylt-med-foto-scaled.jpg","z":-10,"locked":false},{"id":"nbpz06rrg","type":"text","text":"Namn","placeholder":"Enter Namn","fieldLabel":"Namn","x":90,"y":40,"w":300,"h":52,"fontSize":73,"fontFamily":"Montserrat","fontWeight":600,"color":"#ffffff","textAlign":"center","rot":0,"z":2,"locked":false,"editable":true,"uppercase":false},{"id":"kgakvmyxo","type":"text","text":"Klass","placeholder":"Klass","fieldLabel":"Klass","x":174,"y":118,"w":132,"h":33,"fontSize":35,"fontFamily":"Montserrat","fontWeight":400,"color":"#ffffff","textAlign":"center","rot":0,"z":3,"locked":false,"editable":true},{"id":"1r0adoxwh","type":"image-slot","placeholder":"Upload image","fieldLabel":"Photo","x":113,"y":171,"w":271,"h":359,"rot":0,"z":4,"locked":false,"shape":"rect","borderRadius":0,"borderColor":"#cccccc","imageData":null}]
+44477	4273	_npp_size_mode	budget
+44478	4273	_npp_fonts	[{"family":"Montserrat","type":"google","url":""}]
+44479	4273	_npp_thumbnail_url	https://namez.se/wp-content/uploads/npp-thumbnails/poster-0IBMp6sF5Zgb.jpg
+44991	4315	_npp_elements	[{"id":"8frbptawy","type":"background","color":"#ffffff","imageData":"https://namez.se/wp-content/uploads/2026/04/Student-2026-1-scaled.jpg","z":-10,"locked":false,"imageDataHiRes":"https://namez.se/wp-content/uploads/2026/04/Student-2026-4.png"},{"id":"yp6jnu7ld","type":"text","text":"Text","placeholder":"Enter text","fieldLabel":"Text","x":99,"y":17,"w":300,"h":80,"fontSize":50,"fontFamily":"Montserrat","fontWeight":700,"color":"#000000","textAlign":"center","rot":0,"z":2,"locked":false,"editable":true},{"id":"s186tbxiw","type":"text","text":"Klass","placeholder":"Klass","fieldLabel":"Klass","x":100,"y":60,"w":300,"h":80,"fontSize":35,"fontFamily":"Montserrat","fontWeight":400,"color":"#000000","textAlign":"center","rot":0,"z":3,"locked":false,"editable":true},{"id":"2kjmpznwb","type":"image-slot","placeholder":"Upload image","fieldLabel":"Photo","x":118,"y":172,"w":264,"h":356,"rot":0,"z":4,"locked":false,"shape":"rect","borderRadius":0,"borderColor":"#cccccc","imageData":null}]
+44992	4315	_npp_size_mode	budget
+44993	4315	_npp_fonts	[]
+44994	4315	_npp_thumbnail_url	https://namez.se/wp-content/uploads/npp-thumbnails/poster-wozvEsxERmFP.jpg
+29229	3484	_edit_lock	1772843597:41
+29230	3484	rank_math_seo_score	24
+29231	3484	rank_math_contentai_score	a:5:{s:8:"keywords";s:5:"74.51";s:9:"wordCount";s:1:"0";s:9:"linkCount";s:1:"0";s:12:"headingCount";s:1:"0";s:10:"mediaCount";s:1:"0";}
+29232	3484	_edit_last	41
+29233	3484	_enable_custom_text_fields_v2	no
+29234	3484	_enable_custom_text_field_v3	yes
+29235	3484	_enable_custom_text_fields	no
+29236	3484	total_sales	2
+29237	3484	_tax_status	taxable
+29238	3484	_tax_class	
+29239	3484	_manage_stock	no
+29240	3484	_backorders	no
+29241	3484	_sold_individually	no
+29242	3484	_virtual	no
+29243	3484	_downloadable	no
+29244	3484	_download_limit	-1
+29245	3484	_download_expiry	-1
+29246	3484	_stock	NULL
+29247	3484	_stock_status	instock
+29248	3484	_wc_average_rating	0
+29249	3484	_wc_review_count	0
+29250	3484	_product_version	10.5.3
+29251	3484	_wc_gla_visibility	sync-and-show
+29252	3484	_wc_facebook_sync_enabled_v2	yes
+29253	3484	fb_visibility	yes
+29254	3484	fb_product_description	
+29255	3484	fb_rich_text_description	
+29256	3484	_wc_facebook_product_image_source	product
+29257	3484	fb_product_video	a:0:{}
+29258	3484	fb_brand	
+29259	3484	fb_mpn	
+29260	3484	fb_size	
+29261	3484	fb_color	
+29262	3484	fb_material	
+29263	3484	fb_pattern	
+29264	3484	fb_age_group	
+29265	3484	fb_gender	
+29266	3484	fb_product_condition	
+29267	3484	first_video_in_gallery_	
+29268	3484	_first_video_in_gallery_	field_6707e6cd261f6
+29269	3484	intro_image	
+29270	3484	_intro_image	field_4090e95b5c217
+29271	3484	product_intro_image_landscape	
+29272	3484	_product_intro_image_landscape	field_8d36554b57374
+29273	3484	product_intro_image_landscape_hover	
+29274	3484	_product_intro_image_landscape_hover	field_cbfb84ac9bc8b
+29275	3484	product_teaser_image_bg_square	
+29276	3484	_product_teaser_image_bg_square	field_d374512b73473
+29277	3484	product_teaser_image_bg_square_text_color	
+29278	3484	_product_teaser_image_bg_square_text_color	field_8801a9211ce1a
+29279	3484	product_teaser_image_bg_landscape	
+29280	3484	_product_teaser_image_bg_landscape	field_f638d75a9a059
+29281	3484	product_teaser_image_bg_landscape_text_color	
+29282	3484	_product_teaser_image_bg_landscape_text_color	field_fd263f063efcb
+29283	3484	product_care_instructions	
+29284	3484	_product_care_instructions	field_d4042dbe3580a
+29285	3484	product_size_fit	
+29286	3484	_product_size_fit	field_7af6baa7a9797
+29287	3484	product_delivery	
+29288	3484	_product_delivery	field_8702f453e0685
+29289	3484	product_shop_link	
+29290	3484	_product_shop_link	field_16352dd7823bf
+29291	3484	hint_1	
+29292	3484	_hint_1	field_68c6c7d7277d9
+29293	3484	hint_2	
+29294	3484	_hint_2	field_68c6c809277da
+29295	3484	hint_3	
+29296	3484	_hint_3	field_68c6c828277db
+29297	3484	rank_math_internal_links_processed	1
+29298	3484	rank_math_primary_product_brand	0
+29299	3484	rank_math_primary_product_cat	145
+29300	3484	_wc_gla_notification_status	updated
+29305	3484	_last_change_time	1759788452
+29851	3484	_thumbnail_id	3500
+29852	3484	_product_image_gallery	3500,3501,3502,3503,3505,3504,3507,3506
+29853	3484	_product_attributes	a:1:{s:7:"pa_farg";a:6:{s:4:"name";s:7:"pa_farg";s:5:"value";s:0:"";s:8:"position";i:0;s:10:"is_visible";i:1;s:12:"is_variation";i:1;s:11:"is_taxonomy";i:1;}}
+30394	3484	_price	199
+39736	3484	rank_math_analytic_object_id	3
+41874	3484	_enable_dnc_v2_name_color_fields	no
+41875	3484	_dnc_v2_attribute_slug	valj-antal
+41876	3484	_enable_dynamic_name_color_fields	no
+43603	3484	_wp_old_slug	3d-bokstav-med-namn
+6380	2229	_edit_last	41
+6381	2229	_edit_lock	1772837216:41
+6382	2229	total_sales	154
+6383	2229	_tax_status	taxable
+6384	2229	_tax_class	
+6385	2229	_manage_stock	no
+6386	2229	_backorders	no
+6387	2229	_sold_individually	no
+6388	2229	_virtual	no
+6389	2229	_downloadable	no
+6390	2229	_download_limit	-1
+6391	2229	_download_expiry	-1
+6392	2229	_stock	NULL
+6393	2229	_stock_status	instock
+6394	2229	_wc_average_rating	0
+6395	2229	_wc_review_count	0
+6396	2229	_product_version	10.5.3
+6397	2229	intro_image	
+6398	2229	_intro_image	field_4090e95b5c217
+6399	2229	product_intro_image_landscape	
+6400	2229	_product_intro_image_landscape	field_8d36554b57374
+6401	2229	product_intro_image_landscape_hover	
+6402	2229	_product_intro_image_landscape_hover	field_cbfb84ac9bc8b
+6403	2229	product_teaser_image_bg_square	
+6404	2229	_product_teaser_image_bg_square	field_d374512b73473
+6405	2229	product_teaser_image_bg_square_text_color	
+6406	2229	_product_teaser_image_bg_square_text_color	field_8801a9211ce1a
+6407	2229	product_teaser_image_bg_landscape	
+6408	2229	_product_teaser_image_bg_landscape	field_f638d75a9a059
+6409	2229	product_teaser_image_bg_landscape_text_color	
+6410	2229	_product_teaser_image_bg_landscape_text_color	field_fd263f063efcb
+6411	2229	product_care_instructions	
+6412	2229	_product_care_instructions	field_d4042dbe3580a
+6413	2229	product_size_fit	<h2 data-start="921" data-end="945">Storlekar &amp; pris</h2>\n<ul data-start="946" data-end="1183">\n \t<li data-start="946" data-end="1017">\n<p data-start="948" data-end="1017"><strong data-start="948" data-end="968">Liten (13–16 cm)</strong> – 350 kr – perfekt som liten personlig gåva 🎁</p>\n</li>\n \t<li data-start="1018" data-end="1101">\n<p data-start="1020" data-end="1101"><strong data-start="1020" data-end="1041">Mellan (17–21 cm)</strong> – 550 kr – mest populär, balans mellan pris och storlek ✨</p>\n</li>\n \t<li data-start="1102" data-end="1183">\n<p data-start="1104" data-end="1183"><strong data-start="1104" data-end="1123">Stor (22–30 cm)</strong> – 950 kr – imponerande storlek, perfekt som minnesgåva 🏆</p>\n</li>\n</ul>
+6414	2229	_product_size_fit	field_7af6baa7a9797
+6415	2229	product_delivery	<h4 class="uk-h4 uk-margin-small uk-text-center">Snabb leverans</h4>\n<div class="uk-panel uk-margin uk-text-center">Leverans inom 3–5 arbetsdagar i Sverige</div>
+6416	2229	_product_delivery	field_8702f453e0685
+6417	2229	product_shop_link	
+6418	2229	_product_shop_link	field_16352dd7823bf
+6430	2229	_product_image_gallery	2483,3187,3189,3186,3181,3182,3188
+6435	2229	_product_attributes	a:2:{s:10:"pa_storlek";a:6:{s:4:"name";s:10:"pa_storlek";s:5:"value";s:0:"";s:8:"position";i:0;s:10:"is_visible";i:1;s:12:"is_variation";i:1;s:11:"is_taxonomy";i:1;}s:7:"pa_farg";a:6:{s:4:"name";s:7:"pa_farg";s:5:"value";s:0:"";s:8:"position";i:1;s:10:"is_visible";i:1;s:12:"is_variation";i:1;s:11:"is_taxonomy";i:1;}}
+6436	2229	_sku	3d-name
+7508	2229	_wp_old_slug	personlig-3d-namnpresent-gor-dina-ord-till-en-present__trashed
+7536	2229	_wp_old_slug	personlig-3d-namnpresent-gor-dina-ord-till-en-present
+7550	2229	_enable_custom_text_fields	yes
+8663	2229	fb_product_group_id	919313427360926
+8759	2229	_wc_facebook_commerce_enabled	no
+9856	2229	first_video_in_gallery_	https://namez.se/wp-content/uploads/2024/09/copy-806DF7E5-71E0-42F9-80D2-71CD13E715FA.mp4
+9857	2229	_first_video_in_gallery_	field_6707e6cd261f6
+9877	2229	rank_math_internal_links_processed	1
+9909	2229	rank_math_schema_WooCommerceProduct	a:2:{s:5:"@type";s:18:"WooCommerceProduct";s:8:"metadata";a:3:{s:5:"title";s:19:"WooCommerce Product";s:4:"type";s:8:"template";s:9:"isPrimary";b:1;}}
+9911	2229	rank_math_seo_score	27
+9912	2229	rank_math_contentai_score	a:5:{s:8:"keywords";s:5:"74.51";s:9:"wordCount";s:1:"0";s:9:"linkCount";s:1:"0";s:12:"headingCount";s:1:"0";s:10:"mediaCount";s:1:"0";}
+9913	2229	rank_math_primary_product_cat	0
+9914	2229	rank_math_primary_fb_product_set	0
+10895	2229	rank_math_primary_product_brand	0
+16228	2229	_enable_custom_text_fields_v2	no
+16611	2229	fb_brand	
+16618	2229	_wc_facebook_sync_enabled_v2	yes
+16619	2229	fb_visibility	yes
+16623	2229	_wc_facebook_sync_enabled	yes
+16690	2229	_wc_gla_visibility	sync-and-show
+16693	2229	_wc_gla_sync_status	synced
+24855	2229	_wc_gla_notification_status	updated
+24887	2229	fb_mpn	
+24888	2229	fb_size	
+24889	2229	fb_color	
+24890	2229	fb_material	
+24891	2229	fb_pattern	
+24892	2229	fb_age_group	
+24893	2229	fb_gender	
+24894	2229	fb_product_condition	
+24895	2229	fb_product_description	
+24896	2229	fb_rich_text_description	
+24897	2229	_wc_facebook_product_image_source	product
+24898	2229	fb_product_video	a:0:{}
+24907	2229	_thumbnail_id	2569
+25076	2229	hint_1	
+25077	2229	_hint_1	field_68c6c7d7277d9
+25078	2229	hint_2	
+25079	2229	_hint_2	field_68c6c809277da
+25080	2229	hint_3	
+25081	2229	_hint_3	field_68c6c828277db
+27550	2229	_wc_gla_synced_at	1791688013
+27551	2229	_wc_gla_google_ids	a:1:{s:2:"SE";s:14:"sv~SE~gla_3249";}
+27563	2229	rank_math_schema_VideoObject	a:12:{s:5:"@type";s:11:"VideoObject";s:8:"metadata";a:8:{s:5:"title";s:5:"Video";s:4:"type";s:8:"template";s:9:"shortcode";s:15:"s-68d323ce3ae3b";s:9:"isPrimary";b:0;s:23:"reviewLocationShortcode";s:24:"[rank_math_rich_snippet]";s:8:"category";s:12:"%categories%";s:4:"tags";s:6:"%tags%";s:15:"isAutoGenerated";b:1;}s:4:"name";s:11:"%seo_title%";s:11:"description";s:17:"%seo_description%";s:10:"uploadDate";s:20:"%date(Y-m-dTH:i:sP)%";s:12:"thumbnailUrl";s:16:"%post_thumbnail%";s:8:"embedUrl";s:94:"https://player.vimeo.com/video/1119936433?h=be062cb7e4&amp;title=0&amp;byline=0&amp;portrait=0";s:10:"contentUrl";s:0:"";s:8:"duration";s:0:"";s:5:"width";s:0:"";s:6:"height";s:0:"";s:16:"isFamilyFriendly";b:1;}
+27565	2229	rank_math_schema_VideoObject	a:12:{s:5:"@type";s:11:"VideoObject";s:8:"metadata";a:8:{s:5:"title";s:5:"Video";s:4:"type";s:8:"template";s:9:"shortcode";s:15:"s-68d323ce3ae42";s:9:"isPrimary";b:0;s:23:"reviewLocationShortcode";s:24:"[rank_math_rich_snippet]";s:8:"category";s:12:"%categories%";s:4:"tags";s:6:"%tags%";s:15:"isAutoGenerated";b:1;}s:4:"name";s:11:"%seo_title%";s:11:"description";s:17:"%seo_description%";s:10:"uploadDate";s:20:"%date(Y-m-dTH:i:sP)%";s:12:"thumbnailUrl";s:16:"%post_thumbnail%";s:8:"embedUrl";s:94:"https://player.vimeo.com/video/1119936381?h=fc43d25725&amp;title=0&amp;byline=0&amp;portrait=0";s:10:"contentUrl";s:0:"";s:8:"duration";s:0:"";s:5:"width";s:0:"";s:6:"height";s:0:"";s:16:"isFamilyFriendly";b:1;}
+27572	2229	_price	350
+27573	2229	_price	550
+27574	2229	_price	950
+28197	2229	rank_math_schema_VideoObject	a:12:{s:5:"@type";s:11:"VideoObject";s:8:"metadata";a:8:{s:5:"title";s:5:"Video";s:4:"type";s:8:"template";s:9:"shortcode";s:15:"s-68d94a512fbfd";s:9:"isPrimary";b:0;s:23:"reviewLocationShortcode";s:24:"[rank_math_rich_snippet]";s:8:"category";s:12:"%categories%";s:4:"tags";s:6:"%tags%";s:15:"isAutoGenerated";b:1;}s:4:"name";s:41:"copy_1CE26EEF-EC92-463E-9E8F-FC55B15DF68A";s:11:"description";s:17:"%seo_description%";s:10:"uploadDate";s:19:"2025-09-26 16:16:37";s:12:"thumbnailUrl";s:80:"https://namez.se/wp-content/uploads/2025/09/copy_1ce26eef-ec92-463e-9e8f-fc5.jpg";s:8:"embedUrl";s:94:"https://player.vimeo.com/video/1122325293?h=09f1e0d824&amp;title=0&amp;byline=0&amp;portrait=0";s:10:"contentUrl";s:0:"";s:8:"duration";s:5:"PT25S";s:5:"width";i:1078;s:6:"height";i:1920;s:16:"isFamilyFriendly";b:1;}
+39744	2229	rank_math_analytic_object_id	11
+43567	2229	_enable_custom_text_field_v3	no
+43568	2229	_enable_dnc_v2_name_color_fields	no
+43569	2229	_dnc_v2_attribute_slug	valj-antal
+43570	2229	_enable_dynamic_name_color_fields	no
+53197	2229	_wc_gla_mc_status	disapproved
+10837	2826	_edit_lock	1774947522:41
+10838	2826	_edit_last	1
+10839	2826	rank_math_internal_links_processed	1
+10840	2826	rank_math_seo_score	20
+10841	2826	rank_math_contentai_score	a:5:{s:8:"keywords";s:5:"74.51";s:9:"wordCount";s:1:"0";s:9:"linkCount";s:1:"0";s:12:"headingCount";s:1:"0";s:10:"mediaCount";s:1:"0";}
+10842	2826	_enable_custom_text_fields	no
+10843	2826	total_sales	3
+10844	2826	_tax_status	taxable
+10845	2826	_tax_class	
+10846	2826	_manage_stock	no
+10847	2826	_backorders	no
+10848	2826	_sold_individually	no
+10849	2826	_virtual	no
+10850	2826	_downloadable	no
+10851	2826	_download_limit	-1
+10852	2826	_download_expiry	-1
+10853	2826	_stock	NULL
+10854	2826	_stock_status	instock
+10855	2826	_wc_average_rating	0
+10856	2826	_wc_review_count	0
+10857	2826	_product_version	10.2.2
+10858	2826	_wc_facebook_sync_enabled	yes
+10859	2826	fb_visibility	yes
+10860	2826	fb_product_description	
+10861	2826	_wc_facebook_product_image_source	product
+10862	2826	first_video_in_gallery_	
+10863	2826	_first_video_in_gallery_	field_6707e6cd261f6
+10864	2826	intro_image	
+10865	2826	_intro_image	field_4090e95b5c217
+10866	2826	product_intro_image_landscape	
+10867	2826	_product_intro_image_landscape	field_8d36554b57374
+10868	2826	product_intro_image_landscape_hover	
+10869	2826	_product_intro_image_landscape_hover	field_cbfb84ac9bc8b
+10870	2826	product_teaser_image_bg_square	
+10871	2826	_product_teaser_image_bg_square	field_d374512b73473
+10872	2826	product_teaser_image_bg_square_text_color	
+10873	2826	_product_teaser_image_bg_square_text_color	field_8801a9211ce1a
+10874	2826	product_teaser_image_bg_landscape	
+10875	2826	_product_teaser_image_bg_landscape	field_f638d75a9a059
+10876	2826	product_teaser_image_bg_landscape_text_color	
+10877	2826	_product_teaser_image_bg_landscape_text_color	field_fd263f063efcb
+10878	2826	product_care_instructions	
+10879	2826	_product_care_instructions	field_d4042dbe3580a
+10880	2826	product_size_fit	
+10881	2826	_product_size_fit	field_7af6baa7a9797
+10882	2826	product_delivery	
+10883	2826	_product_delivery	field_8702f453e0685
+10884	2826	product_shop_link	
+10885	2826	_product_shop_link	field_16352dd7823bf
+10886	2826	rank_math_primary_product_brand	0
+10887	2826	rank_math_primary_product_cat	15
+10888	2826	rank_math_primary_fb_product_set	0
+10891	2826	_thumbnail_id	2827
+10892	2826	_product_attributes	a:3:{s:7:"pa_farg";a:6:{s:4:"name";s:7:"pa_farg";s:5:"value";s:0:"";s:8:"position";i:0;s:10:"is_visible";i:1;s:12:"is_variation";i:1;s:11:"is_taxonomy";i:1;}s:21:"pa_gravyr-teckensnitt";a:6:{s:4:"name";s:21:"pa_gravyr-teckensnitt";s:5:"value";s:0:"";s:8:"position";i:1;s:10:"is_visible";i:1;s:12:"is_variation";i:1;s:11:"is_taxonomy";i:1;}s:22:"pa_antal-inskriptioner";a:6:{s:4:"name";s:22:"pa_antal-inskriptioner";s:5:"value";s:0:"";s:8:"position";i:2;s:10:"is_visible";i:1;s:12:"is_variation";i:1;s:11:"is_taxonomy";i:1;}}
+10896	2826	fb_product_group_id	9503062729727559
+10898	2826	fb_product_item_id	9503062893060876
+10909	2826	_product_image_gallery	2829,3074,2830,2831,2832,2833
+10912	2826	rank_math_focus_keyword	Namnhalsband Flera Namn
+13599	2826	_enable_custom_text_fields_v2	yes
+16203	2826	_price	390
+16204	2826	_price	440
+16205	2826	_price	480
+16206	2826	_price	510
+16620	2826	_wc_facebook_sync_enabled_v2	yes
+16780	2826	_wc_gla_visibility	sync-and-show
+16782	2826	_wc_gla_synced_at	1790650896
+16783	2826	_wc_gla_sync_status	synced
+16784	2826	_wc_gla_google_ids	a:1:{s:2:"SE";s:14:"sv~SE~gla_3049";}
+29150	2826	_enable_custom_text_field_v3	no
+29151	2826	_wc_gla_notification_status	updated
+29152	2826	fb_brand	
+29153	2826	fb_mpn	
+29154	2826	fb_size	
+29155	2826	fb_color	
+29156	2826	fb_material	
+29157	2826	fb_pattern	
+29158	2826	fb_age_group	
+29159	2826	fb_gender	
+29160	2826	fb_product_condition	
+29221	2826	fb_rich_text_description	
+29222	2826	fb_product_video	a:0:{}
+29223	2826	hint_1	
+29224	2826	_hint_1	field_68c6c7d7277d9
+29225	2826	hint_2	
+29226	2826	_hint_2	field_68c6c809277da
+29227	2826	hint_3	
+29228	2826	_hint_3	field_68c6c828277db
+39739	2826	rank_math_analytic_object_id	6
+53195	2826	_wc_gla_mc_status	disapproved
+39764	4106	rank_math_internal_links_processed	1
+39765	4106	total_sales	11
+39766	4106	_tax_status	taxable
+39767	4106	_tax_class	
+39768	4106	_manage_stock	no
+39769	4106	_backorders	no
+39770	4106	_sold_individually	no
+39772	4106	_virtual	no
+39773	4106	_downloadable	no
+39775	4106	_download_limit	-1
+39776	4106	_download_expiry	-1
+39778	4106	_stock	NULL
+39779	4106	_stock_status	instock
+39780	4106	_wc_average_rating	0
+39781	4106	_wc_review_count	0
+39782	4106	_product_attributes	a:2:{s:25:"pa_namnskylt_stor_bokstav";a:6:{s:4:"name";s:25:"pa_namnskylt_stor_bokstav";s:5:"value";s:0:"";s:8:"position";i:0;s:10:"is_visible";i:1;s:12:"is_variation";i:1;s:11:"is_taxonomy";i:1;}s:7:"pa_farg";a:6:{s:4:"name";s:7:"pa_farg";s:5:"value";s:0:"";s:8:"position";i:1;s:10:"is_visible";i:1;s:12:"is_variation";i:1;s:11:"is_taxonomy";i:1;}}
+39783	4106	_product_version	10.6.1
+39784	4106	rank_math_internal_links_processed	1
+39785	4106	rank_math_seo_score	29
+39786	4106	rank_math_contentai_score	a:5:{s:8:"keywords";s:5:"74.51";s:9:"wordCount";s:1:"0";s:9:"linkCount";s:1:"0";s:12:"headingCount";s:1:"0";s:10:"mediaCount";s:1:"0";}
+39787	4106	_enable_custom_text_fields_v2	no
+39788	4106	_enable_custom_text_fields	no
+39789	4106	_wc_gla_visibility	sync-and-show
+39790	4106	_wc_facebook_sync_enabled_v2	yes
+39791	4106	fb_visibility	yes
+39792	4106	fb_product_description	
+39793	4106	fb_rich_text_description	
+39794	4106	_wc_facebook_product_image_source	product
+39795	4106	fb_product_video	a:0:{}
+39796	4106	fb_brand	
+39797	4106	fb_mpn	
+39798	4106	fb_size	
+39799	4106	fb_color	
+39800	4106	fb_material	
+39801	4106	fb_pattern	
+39802	4106	fb_age_group	
+39803	4106	fb_gender	
+39804	4106	fb_product_condition	
+39805	4106	first_video_in_gallery_	
+39806	4106	_first_video_in_gallery_	field_6707e6cd261f6
+39807	4106	intro_image	
+39808	4106	_intro_image	field_4090e95b5c217
+39809	4106	product_intro_image_landscape	
+39810	4106	_product_intro_image_landscape	field_8d36554b57374
+39811	4106	product_intro_image_landscape_hover	
+39812	4106	_product_intro_image_landscape_hover	field_cbfb84ac9bc8b
+39813	4106	product_teaser_image_bg_square	
+39814	4106	_product_teaser_image_bg_square	field_d374512b73473
+39815	4106	product_teaser_image_bg_square_text_color	
+39816	4106	_product_teaser_image_bg_square_text_color	field_8801a9211ce1a
+39817	4106	product_teaser_image_bg_landscape	
+39818	4106	_product_teaser_image_bg_landscape	field_f638d75a9a059
+39819	4106	product_teaser_image_bg_landscape_text_color	
+39820	4106	_product_teaser_image_bg_landscape_text_color	field_fd263f063efcb
+39821	4106	product_care_instructions	
+39822	4106	_product_care_instructions	field_d4042dbe3580a
+39823	4106	product_size_fit	
+39824	4106	_product_size_fit	field_7af6baa7a9797
+39825	4106	product_delivery	
+39826	4106	_product_delivery	field_8702f453e0685
+39827	4106	product_shop_link	
+39828	4106	_product_shop_link	field_16352dd7823bf
+39829	4106	hint_1	
+39830	4106	_hint_1	field_68c6c7d7277d9
+39831	4106	hint_2	
+39832	4106	_hint_2	field_68c6c809277da
+39833	4106	hint_3	
+39834	4106	_hint_3	field_68c6c828277db
+39835	4106	rank_math_primary_product_brand	0
+39836	4106	rank_math_primary_product_cat	145
+39837	4106	_wc_gla_notification_status	updated
+39838	4106	_enable_custom_text_field_v3	yes
+39839	4106	_last_change_time	1772581619
+39840	4106	_enable_dynamic_name_color_fields	no
+39841	4106	rank_math_robots	a:1:{i:0;s:5:"index";}
+39842	4106	_enable_dnc_v2_name_color_fields	yes
+39843	4106	rank_math_analytic_object_id	18
+40964	4106	_edit_lock	1776408112:41
+40965	4106	_edit_last	41
+40969	4106	_thumbnail_id	4142
+41055	4106	_dnc_v2_attribute_slug	namnskylt_stor_bokstav
+42956	4106	_wc_gla_sync_status	synced
+43055	4106	fb_product_group_id	967685005843980
+43604	4106	_wp_old_slug	3d-namnskylt-med-stor-bokstav
+43613	4106	_product_image_gallery	4216,4210,4211,4212,4213,4215
+43616	4106	_wc_gla_synced_at	1791688014
+43617	4106	_wc_gla_google_ids	a:1:{s:2:"SE";s:14:"sv~SE~gla_4209";}
+43737	4106	_price	275
+43738	4106	_price	499
+43739	4106	_price	699
+43740	4106	_price	899
+43741	4106	_price	999
+53196	4106	_wc_gla_mc_status	disapproved
+44241	4256	_edit_lock	1778614171:41
+44242	4256	rank_math_seo_score	84
+44243	4256	rank_math_contentai_score	a:5:{s:8:"keywords";s:5:"74.51";s:9:"wordCount";s:1:"0";s:9:"linkCount";s:1:"0";s:12:"headingCount";s:1:"0";s:10:"mediaCount";s:1:"0";}
+44244	4256	rank_math_focus_keyword	present från sverige
+44245	4256	_edit_last	41
+44246	4256	_enable_custom_text_fields_v2	no
+44247	4256	_enable_custom_text_field_v3	no
+44248	4256	_enable_custom_text_fields	no
+44249	4256	_enable_dnc_v2_name_color_fields	no
+44250	4256	_dnc_v2_attribute_slug	valj-antal
+44251	4256	_enable_dynamic_name_color_fields	no
+44252	4256	total_sales	0
+44253	4256	_tax_status	taxable
+44254	4256	_tax_class	
+44255	4256	_manage_stock	no
+44256	4256	_backorders	no
+44257	4256	_sold_individually	no
+44258	4256	_virtual	no
+44259	4256	_downloadable	no
+44260	4256	_download_limit	-1
+44261	4256	_download_expiry	-1
+44262	4256	_stock	NULL
+44263	4256	_stock_status	instock
+44264	4256	_wc_average_rating	0
+44265	4256	_wc_review_count	0
+44266	4256	_product_version	10.6.1
+44267	4256	_wc_gla_visibility	sync-and-show
+44268	4256	first_video_in_gallery_	https://namez.se/wp-content/uploads/2026/03/present-till-utlandet-till-amerikaner.mp4
+44269	4256	_first_video_in_gallery_	field_6707e6cd261f6
+44270	4256	intro_image	
+44271	4256	_intro_image	field_4090e95b5c217
+44272	4256	product_intro_image_landscape	
+44273	4256	_product_intro_image_landscape	field_8d36554b57374
+44274	4256	product_intro_image_landscape_hover	
+44275	4256	_product_intro_image_landscape_hover	field_cbfb84ac9bc8b
+44276	4256	product_teaser_image_bg_square	
+44277	4256	_product_teaser_image_bg_square	field_d374512b73473
+44278	4256	product_teaser_image_bg_square_text_color	
+44279	4256	_product_teaser_image_bg_square_text_color	field_8801a9211ce1a
+44280	4256	product_teaser_image_bg_landscape	
+44281	4256	_product_teaser_image_bg_landscape	field_f638d75a9a059
+44282	4256	product_teaser_image_bg_landscape_text_color	
+44283	4256	_product_teaser_image_bg_landscape_text_color	field_fd263f063efcb
+44284	4256	product_care_instructions	<ul>\n \t<li data-section-id="1mdfs71" data-start="983" data-end="1018">Modern och minimalistisk design</li>\n \t<li data-section-id="dzwlgu" data-start="1019" data-end="1050">Elegant silverfärgad finish</li>\n \t<li data-section-id="loqrwk" data-start="1051" data-end="1092">Inspirerad av svensk och nordisk stil</li>\n \t<li data-section-id="pahegz" data-start="1093" data-end="1129">Lätt att placera i olika miljöer</li>\n \t<li data-section-id="4htog8" data-start="1130" data-end="1169">Passar som present eller dekoration</li>\n</ul>
+44285	4256	_product_care_instructions	field_d4042dbe3580a
+44286	4256	product_size_fit	
+44287	4256	_product_size_fit	field_7af6baa7a9797
+44288	4256	product_delivery	
+44289	4256	_product_delivery	field_8702f453e0685
+44290	4256	product_shop_link	
+44291	4256	_product_shop_link	field_16352dd7823bf
+44292	4256	hint_1	
+44293	4256	_hint_1	field_68c6c7d7277d9
+44294	4256	hint_2	
+44295	4256	_hint_2	field_68c6c809277da
+44296	4256	hint_3	
+44297	4256	_hint_3	field_68c6c828277db
+44298	4256	rank_math_internal_links_processed	1
+44299	4256	_wc_facebook_sync_enabled_v2	yes
+44300	4256	fb_visibility	yes
+44301	4256	fb_product_description	
+44302	4256	fb_rich_text_description	
+44303	4256	_wc_facebook_product_image_source	product
+44304	4256	fb_product_video	a:0:{}
+44305	4256	fb_brand	
+44306	4256	fb_mpn	
+44307	4256	fb_size	
+44308	4256	fb_color	
+44309	4256	fb_material	
+44310	4256	fb_pattern	
+44311	4256	fb_age_group	
+44312	4256	fb_gender	
+44313	4256	fb_product_condition	
+44317	4256	_thumbnail_id	4257
+44318	4256	_regular_price	275
+44319	4256	_price	275
+44320	4256	rank_math_primary_product_cat	175
+44323	4256	_product_image_gallery	
+44324	4256	_wc_gla_sync_status	has-errors
+44325	4256	rank_math_analytic_object_id	19
+44326	4256	_wc_gla_synced_at	1781146964
+44327	4256	_wc_gla_google_ids	a:1:{s:2:"SE";s:21:"online:sv:SE:gla_4256";}
+44328	4256	rank_math_schema_WooCommerceProduct	a:2:{s:5:"@type";s:18:"WooCommerceProduct";s:8:"metadata";a:3:{s:5:"title";s:19:"WooCommerce Product";s:4:"type";s:8:"template";s:9:"isPrimary";b:1;}}
+44329	4256	rank_math_schema_VideoObject	a:12:{s:5:"@type";s:11:"VideoObject";s:8:"metadata";a:8:{s:5:"title";s:5:"Video";s:4:"type";s:8:"template";s:9:"shortcode";s:15:"s-69c684ffd9b75";s:9:"isPrimary";b:1;s:23:"reviewLocationShortcode";s:24:"[rank_math_rich_snippet]";s:8:"category";s:12:"%categories%";s:4:"tags";s:6:"%tags%";s:15:"isAutoGenerated";b:1;}s:4:"name";s:11:"%seo_title%";s:11:"description";s:17:"%seo_description%";s:10:"uploadDate";s:20:"%date(Y-m-dTH:i:sP)%";s:12:"thumbnailUrl";s:16:"%post_thumbnail%";s:8:"embedUrl";s:0:"";s:10:"contentUrl";s:85:"https://namez.se/wp-content/uploads/2026/03/present-till-utlandet-till-amerikaner.mp4";s:8:"duration";s:0:"";s:5:"width";i:720;s:6:"height";i:720;s:16:"isFamilyFriendly";b:1;}
+51012	4256	_wc_gla_errors	a:1:{s:13:"internalError";s:102:"Product limit exceeded. For more information check https://support.google.com/merchants/answer/9727343";}
+51587	4256	_wc_gla_failed_sync_attempts	5
+51588	4256	_wc_gla_sync_failed_at	1785096460
+44480	4275	_edit_lock	1777833535:41
+44481	4275	rank_math_seo_score	85
+44482	4275	rank_math_contentai_score	a:5:{s:8:"keywords";s:5:"74.51";s:9:"wordCount";s:1:"0";s:9:"linkCount";s:1:"0";s:12:"headingCount";s:1:"0";s:10:"mediaCount";s:1:"0";}
+44483	4275	_edit_last	41
+44484	4275	_enable_custom_text_fields_v2	no
+44485	4275	_enable_custom_text_field_v3	no
+44486	4275	_enable_custom_text_fields	no
+44487	4275	_npp_enabled	1
+44488	4275	_npp_template_id	4315
+44489	4275	_npp_addons	{"double":false,"raincover":false,"poster":false,"welcome":false}
+44490	4275	_npp_pricing	{"double_extra":199,"rain_extra":29,"poster_price":0,"welcome_price":249,"welcome_regular":349}
+44491	4275	_enable_dnc_v2_name_color_fields	no
+44492	4275	_dnc_v2_attribute_slug	valj-antal
+44493	4275	_enable_dynamic_name_color_fields	no
+44494	4275	_regular_price	600
+44495	4275	_sale_price	399
+44496	4275	total_sales	0
+44497	4275	_tax_status	taxable
+44498	4275	_tax_class	
+44499	4275	_manage_stock	no
+44500	4275	_backorders	no
+44501	4275	_sold_individually	no
+44502	4275	_virtual	no
+44503	4275	_downloadable	no
+44504	4275	_download_limit	-1
+44505	4275	_download_expiry	-1
+44506	4275	_stock	NULL
+44507	4275	_stock_status	instock
+44508	4275	_wc_average_rating	0
+44509	4275	_wc_review_count	0
+44510	4275	_product_version	10.7.0
+44511	4275	_price	399
+44512	4275	_wc_gla_visibility	sync-and-show
+44513	4275	first_video_in_gallery_	
+44514	4275	_first_video_in_gallery_	field_6707e6cd261f6
+44515	4275	intro_image	
+44516	4275	_intro_image	field_4090e95b5c217
+44517	4275	product_intro_image_landscape	
+44518	4275	_product_intro_image_landscape	field_8d36554b57374
+44519	4275	product_intro_image_landscape_hover	
+44520	4275	_product_intro_image_landscape_hover	field_cbfb84ac9bc8b
+44521	4275	product_teaser_image_bg_square	
+44522	4275	_product_teaser_image_bg_square	field_d374512b73473
+44523	4275	product_teaser_image_bg_square_text_color	
+44524	4275	_product_teaser_image_bg_square_text_color	field_8801a9211ce1a
+44525	4275	product_teaser_image_bg_landscape	
+44526	4275	_product_teaser_image_bg_landscape	field_f638d75a9a059
+44527	4275	product_teaser_image_bg_landscape_text_color	
+44528	4275	_product_teaser_image_bg_landscape_text_color	field_fd263f063efcb
+44529	4275	product_care_instructions	
+44530	4275	_product_care_instructions	field_d4042dbe3580a
+44531	4275	product_size_fit	
+44532	4275	_product_size_fit	field_7af6baa7a9797
+44533	4275	product_delivery	
+44534	4275	_product_delivery	field_8702f453e0685
+44535	4275	product_shop_link	
+44536	4275	_product_shop_link	field_16352dd7823bf
+44537	4275	hint_1	
+44538	4275	_hint_1	field_68c6c7d7277d9
+44539	4275	hint_2	
+44540	4275	_hint_2	field_68c6c809277da
+44541	4275	hint_3	
+44542	4275	_hint_3	field_68c6c828277db
+44543	4275	rank_math_internal_links_processed	1
+44544	4275	_wc_facebook_sync_enabled_v2	yes
+44545	4275	fb_visibility	yes
+44546	4275	fb_product_description	
+44547	4275	fb_rich_text_description	
+44548	4275	_wc_facebook_product_image_source	product
+44549	4275	fb_product_video	a:0:{}
+44550	4275	fb_brand	
+44551	4275	fb_mpn	
+44552	4275	fb_size	
+44553	4275	fb_color	
+44554	4275	fb_material	
+44555	4275	fb_pattern	
+44556	4275	fb_age_group	
+44557	4275	fb_gender	
+44558	4275	fb_product_condition	
+44559	4275	_wc_gla_sync_status	synced
+44560	4275	rank_math_analytic_object_id	20
+44677	4275	_last_change_time	1777039074
+44678	4275	_wp_old_slug	studentskylt-rosa-blommor
+44679	4275	rank_math_primary_product_cat	176
+44680	4275	rank_math_focus_keyword	stilren studentskylt
+44682	4275	rank_math_description	Beställ en stilren studentskylt med foto, namn och klass. En personlig och enkel design som passar perfekt till studentdagen.
+44689	4275	_wc_gla_synced_at	1791688014
+44690	4275	_wc_gla_google_ids	a:1:{s:2:"SE";s:14:"sv~SE~gla_4275";}
+44878	4275	_thumbnail_id	4325
+47273	4275	rank_math_robots	a:1:{i:0;s:5:"index";}
+51589	4275	_wc_gla_sync_hash	a:1:{s:5:"sv|SE";s:32:"6077b5441764d6735f4b0a58463fd583";}
+53155	4275	_wc_gla_mc_status	disapproved
+45226	4326	_edit_lock	1777881853:41
+45227	4326	rank_math_seo_score	17
+45228	4326	rank_math_contentai_score	a:5:{s:8:"keywords";s:5:"74.51";s:9:"wordCount";s:1:"0";s:9:"linkCount";s:1:"0";s:12:"headingCount";s:1:"0";s:10:"mediaCount";s:1:"0";}
+45229	4326	_edit_last	41
+45230	4326	_enable_custom_text_fields_v2	no
+45231	4326	_enable_custom_text_field_v3	no
+45232	4326	_enable_custom_text_fields	no
+45233	4326	_npp_enabled	1
+45234	4326	_npp_template_id	4273
+45235	4326	_npp_addons	{"double":false,"raincover":false,"poster":false,"welcome":false}
+45236	4326	_npp_pricing	{"double_extra":149,"rain_extra":29,"poster_price":179,"welcome_price":249,"welcome_regular":349}
+45237	4326	_enable_dnc_v2_name_color_fields	no
+45238	4326	_dnc_v2_attribute_slug	valj-antal
+45239	4326	_enable_dynamic_name_color_fields	no
+45240	4326	total_sales	0
+45241	4326	_tax_status	taxable
+45242	4326	_tax_class	
+45243	4326	_manage_stock	no
+45244	4326	_backorders	no
+45245	4326	_sold_individually	no
+45246	4326	_virtual	no
+45247	4326	_downloadable	no
+45248	4326	_download_limit	-1
+45249	4326	_download_expiry	-1
+45250	4326	_stock	NULL
+45251	4326	_stock_status	instock
+45252	4326	_wc_average_rating	0
+45253	4326	_wc_review_count	0
+45254	4326	_product_version	10.7.0
+45255	4326	_wc_gla_visibility	sync-and-show
+45256	4326	first_video_in_gallery_	
+45257	4326	_first_video_in_gallery_	field_6707e6cd261f6
+45258	4326	intro_image	
+45259	4326	_intro_image	field_4090e95b5c217
+45260	4326	product_intro_image_landscape	
+45261	4326	_product_intro_image_landscape	field_8d36554b57374
+45262	4326	product_intro_image_landscape_hover	
+45263	4326	_product_intro_image_landscape_hover	field_cbfb84ac9bc8b
+45264	4326	product_teaser_image_bg_square	
+45265	4326	_product_teaser_image_bg_square	field_d374512b73473
+45266	4326	product_teaser_image_bg_square_text_color	
+45267	4326	_product_teaser_image_bg_square_text_color	field_8801a9211ce1a
+45268	4326	product_teaser_image_bg_landscape	
+45269	4326	_product_teaser_image_bg_landscape	field_f638d75a9a059
+45270	4326	product_teaser_image_bg_landscape_text_color	
+45271	4326	_product_teaser_image_bg_landscape_text_color	field_fd263f063efcb
+45272	4326	product_care_instructions	
+45273	4326	_product_care_instructions	field_d4042dbe3580a
+45274	4326	product_size_fit	
+45275	4326	_product_size_fit	field_7af6baa7a9797
+45276	4326	product_delivery	
+45277	4326	_product_delivery	field_8702f453e0685
+45278	4326	product_shop_link	
+45279	4326	_product_shop_link	field_16352dd7823bf
+45280	4326	hint_1	
+45281	4326	_hint_1	field_68c6c7d7277d9
+45282	4326	hint_2	
+45283	4326	_hint_2	field_68c6c809277da
+45284	4326	hint_3	
+45285	4326	_hint_3	field_68c6c828277db
+45286	4326	rank_math_internal_links_processed	1
+45287	4326	_wc_facebook_sync_enabled_v2	yes
+45288	4326	fb_visibility	yes
+45289	4326	fb_product_description	
+45290	4326	fb_rich_text_description	
+45291	4326	_wc_facebook_product_image_source	product
+45292	4326	fb_product_video	a:0:{}
+45293	4326	fb_brand	
+45294	4326	fb_mpn	
+45295	4326	fb_size	
+45296	4326	fb_color	
+45297	4326	fb_material	
+45298	4326	fb_pattern	
+45299	4326	fb_age_group	
+45300	4326	fb_gender	
+45301	4326	fb_product_condition	
+47049	4326	rank_math_primary_product_cat	176
+47050	4326	_wp_old_date	2026-04-23
+47051	4326	_regular_price	100
+47052	4326	_sale_price	25
+47053	4326	_price	25
+47054	4326	_wc_gla_sync_status	has-errors
+47055	4326	rank_math_analytic_object_id	44
+47057	4326	_wc_gla_errors	a:1:{s:13:"internalError";s:102:"Product limit exceeded. For more information check https://support.google.com/merchants/answer/9727343";}
+47272	4326	_last_change_time	1777642003
+51593	4326	_wc_gla_failed_sync_attempts	5
+51594	4326	_wc_gla_sync_failed_at	1785096460
+47430	4414	rank_math_internal_links_processed	1
+47431	4414	total_sales	46
+47432	4414	_tax_status	taxable
+47433	4414	_tax_class	
+47434	4414	_manage_stock	no
+47435	4414	_backorders	no
+47436	4414	_sold_individually	no
+47437	4414	_virtual	no
+47438	4414	_downloadable	no
+47440	4414	_download_limit	-1
+47441	4414	_download_expiry	-1
+47442	4414	_thumbnail_id	4505
+47443	4414	_stock	NULL
+47444	4414	_stock_status	instock
+47445	4414	_wc_average_rating	0
+47446	4414	_wc_review_count	0
+47448	4414	_product_version	10.7.0
+47449	4414	rank_math_internal_links_processed	1
+47450	4414	rank_math_internal_links_processed	1
+47451	4414	rank_math_seo_score	32
+47452	4414	rank_math_contentai_score	a:5:{s:8:"keywords";s:5:"74.51";s:9:"wordCount";s:1:"0";s:9:"linkCount";s:1:"0";s:12:"headingCount";s:1:"0";s:10:"mediaCount";s:1:"0";}
+47453	4414	_enable_custom_text_fields_v2	no
+47454	4414	_enable_custom_text_fields	no
+47455	4414	_wc_gla_visibility	sync-and-show
+47456	4414	_wc_facebook_sync_enabled_v2	yes
+47457	4414	fb_visibility	yes
+47458	4414	fb_product_description	
+47459	4414	fb_rich_text_description	
+47460	4414	_wc_facebook_product_image_source	product
+47461	4414	fb_product_video	a:0:{}
+47462	4414	fb_brand	
+47463	4414	fb_mpn	
+47464	4414	fb_size	
+47465	4414	fb_color	
+47466	4414	fb_material	
+47467	4414	fb_pattern	
+47468	4414	fb_age_group	
+47469	4414	fb_gender	
+47470	4414	fb_product_condition	
+47471	4414	first_video_in_gallery_	https://namez.se/wp-content/uploads/2026/05/Student-present-namez.mp4
+47472	4414	_first_video_in_gallery_	field_6707e6cd261f6
+47473	4414	intro_image	
+47474	4414	_intro_image	field_4090e95b5c217
+47475	4414	product_intro_image_landscape	
+47476	4414	_product_intro_image_landscape	field_8d36554b57374
+47477	4414	product_intro_image_landscape_hover	
+47478	4414	_product_intro_image_landscape_hover	field_cbfb84ac9bc8b
+47479	4414	product_teaser_image_bg_square	
+47480	4414	_product_teaser_image_bg_square	field_d374512b73473
+47481	4414	product_teaser_image_bg_square_text_color	
+47482	4414	_product_teaser_image_bg_square_text_color	field_8801a9211ce1a
+47483	4414	product_teaser_image_bg_landscape	
+47484	4414	_product_teaser_image_bg_landscape	field_f638d75a9a059
+47485	4414	product_teaser_image_bg_landscape_text_color	
+47486	4414	_product_teaser_image_bg_landscape_text_color	field_fd263f063efcb
+47487	4414	product_care_instructions	
+47488	4414	_product_care_instructions	field_d4042dbe3580a
+47489	4414	product_size_fit	[namez_card]
+47490	4414	_product_size_fit	field_7af6baa7a9797
+47491	4414	product_delivery	
+47492	4414	_product_delivery	field_8702f453e0685
+47493	4414	product_shop_link	
+47494	4414	_product_shop_link	field_16352dd7823bf
+47495	4414	hint_1	
+47496	4414	_hint_1	field_68c6c7d7277d9
+47497	4414	hint_2	
+47498	4414	_hint_2	field_68c6c809277da
+47499	4414	hint_3	
+47500	4414	_hint_3	field_68c6c828277db
+47501	4414	rank_math_primary_product_brand	0
+47502	4414	rank_math_primary_product_cat	145
+47503	4414	_wc_gla_notification_status	updated
+47504	4414	_enable_custom_text_field_v3	yes
+47505	4414	_last_change_time	1778888441
+47506	4414	_enable_dynamic_name_color_fields	no
+47507	4414	rank_math_robots	a:1:{i:0;s:5:"index";}
+47508	4414	_enable_dnc_v2_name_color_fields	yes
+47509	4414	rank_math_analytic_object_id	45
+47510	4414	_dnc_v2_attribute_slug	namnskylt_stor_bokstav
+48601	4414	_edit_lock	1780318017:41
+48602	4414	_edit_last	41
+48603	4414	_npp_enabled	0
+48604	4414	_npp_template_id	0
+48605	4414	_npp_addons	{"double":true,"raincover":true,"poster":true,"welcome":false}
+48606	4414	_npp_pricing	{"double_extra":149,"rain_extra":29,"poster_price":179,"welcome_price":249,"welcome_regular":349}
+48611	4414	_wc_gla_sync_status	synced
+49430	4414	_product_attributes	a:2:{s:7:"pa_farg";a:6:{s:4:"name";s:7:"pa_farg";s:5:"value";s:0:"";s:8:"position";i:0;s:10:"is_visible";i:1;s:12:"is_variation";i:1;s:11:"is_taxonomy";i:1;}s:27:"pa_valj-detaljer-i-designen";a:6:{s:4:"name";s:27:"pa_valj-detaljer-i-designen";s:5:"value";s:0:"";s:8:"position";i:1;s:10:"is_visible";i:1;s:12:"is_variation";i:0;s:11:"is_taxonomy";i:1;}}
+49593	4414	fb_product_group_id	1286330543697831
+49600	4414	_product_image_gallery	4501,4503,4504
+49603	4414	_wp_old_slug	personlig-studentpresent-till-kille-eller-tjej-2026-3d-namnskylt-med-namn
+49612	4414	rank_math_schema_WooCommerceProduct	a:2:{s:5:"@type";s:18:"WooCommerceProduct";s:8:"metadata";a:3:{s:5:"title";s:19:"WooCommerce Product";s:4:"type";s:8:"template";s:9:"isPrimary";b:1;}}
+49613	4414	rank_math_schema_VideoObject	a:12:{s:5:"@type";s:11:"VideoObject";s:8:"metadata";a:8:{s:5:"title";s:5:"Video";s:4:"type";s:8:"template";s:9:"shortcode";s:15:"s-6a03a6da1d9d5";s:9:"isPrimary";b:1;s:23:"reviewLocationShortcode";s:24:"[rank_math_rich_snippet]";s:8:"category";s:12:"%categories%";s:4:"tags";s:6:"%tags%";s:15:"isAutoGenerated";b:1;}s:4:"name";s:11:"%seo_title%";s:11:"description";s:17:"%seo_description%";s:10:"uploadDate";s:20:"%date(Y-m-dTH:i:sP)%";s:12:"thumbnailUrl";s:16:"%post_thumbnail%";s:8:"embedUrl";s:0:"";s:10:"contentUrl";s:69:"https://namez.se/wp-content/uploads/2026/05/Student-present-namez.mp4";s:8:"duration";s:0:"";s:5:"width";i:720;s:6:"height";i:960;s:16:"isFamilyFriendly";b:1;}
+50178	4414	_wc_gla_synced_at	1791688015
+50179	4414	_wc_gla_google_ids	a:1:{s:2:"SE";s:14:"sv~SE~gla_4520";}
+50196	4414	_price	275
+50207	4414	_product_meta_id	a:1:{i:0;i:2;}
+53199	4414	_wc_gla_mc_status	disapproved
+14321	2985	_variation_description	
+14322	2985	total_sales	0
+14323	2985	_tax_status	taxable
+14324	2985	_tax_class	parent
+14325	2985	_manage_stock	no
+14326	2985	_backorders	no
+14327	2985	_sold_individually	no
+14328	2985	_virtual	no
+14329	2985	_downloadable	no
+14330	2985	_download_limit	-1
+14331	2985	_download_expiry	-1
+14332	2985	_stock	NULL
+14333	2985	_stock_status	instock
+14334	2985	_wc_average_rating	0
+14335	2985	_wc_review_count	0
+14336	2985	attribute_pa_farg	blank-guld
+14337	2985	attribute_pa_antal-inskriptioner	1
+14338	2985	_product_version	9.6.0
+14540	2985	_thumbnail_id	0
+14619	2985	_sale_price	
+14620	2985	_price	390
+14660	2985	_regular_price	390
+14339	2986	_variation_description	
+14340	2986	total_sales	0
+14341	2986	_tax_status	taxable
+14342	2986	_tax_class	parent
+14343	2986	_manage_stock	no
+14344	2986	_backorders	no
+14345	2986	_sold_individually	no
+14346	2986	_virtual	no
+14347	2986	_downloadable	no
+14348	2986	_download_limit	-1
+14349	2986	_download_expiry	-1
+14350	2986	_stock	NULL
+14351	2986	_stock_status	instock
+14352	2986	_wc_average_rating	0
+14353	2986	_wc_review_count	0
+14354	2986	attribute_pa_farg	blank-silver
+14355	2986	attribute_pa_antal-inskriptioner	1
+14356	2986	_product_version	9.6.0
+14551	2986	_thumbnail_id	0
+14611	2986	_sale_price	
+14612	2986	_price	390
+14661	2986	_regular_price	390
+14357	2987	_variation_description	
+14358	2987	total_sales	0
+14359	2987	_tax_status	taxable
+14360	2987	_tax_class	parent
+14361	2987	_manage_stock	no
+14362	2987	_backorders	no
+14363	2987	_sold_individually	no
+14364	2987	_virtual	no
+14365	2987	_downloadable	no
+14366	2987	_download_limit	-1
+14367	2987	_download_expiry	-1
+14368	2987	_stock	NULL
+14369	2987	_stock_status	instock
+14370	2987	_wc_average_rating	0
+14371	2987	_wc_review_count	0
+14372	2987	attribute_pa_farg	matt-svart
+14373	2987	attribute_pa_antal-inskriptioner	1
+14374	2987	_product_version	9.6.0
+14561	2987	_thumbnail_id	0
+14603	2987	_sale_price	
+14606	2987	_price	390
+14662	2987	_regular_price	390
+14375	2988	_variation_description	
+14376	2988	total_sales	0
+14377	2988	_tax_status	taxable
+14378	2988	_tax_class	parent
+14379	2988	_manage_stock	no
+14380	2988	_backorders	no
+14381	2988	_sold_individually	no
+14382	2988	_virtual	no
+14383	2988	_downloadable	no
+14384	2988	_download_limit	-1
+14385	2988	_download_expiry	-1
+14386	2988	_stock	NULL
+14387	2988	_stock_status	instock
+14388	2988	_wc_average_rating	0
+14389	2988	_wc_review_count	0
+14390	2988	attribute_pa_farg	blank-guld
+14391	2988	attribute_pa_antal-inskriptioner	2
+14392	2988	_product_version	9.6.0
+14573	2988	_thumbnail_id	0
+14601	2988	_sale_price	
+14602	2988	_price	440
+14663	2988	_regular_price	440
+14393	2989	_variation_description	
+14394	2989	total_sales	0
+14395	2989	_tax_status	taxable
+14396	2989	_tax_class	parent
+14397	2989	_manage_stock	no
+14398	2989	_backorders	no
+14399	2989	_sold_individually	no
+14400	2989	_virtual	no
+14401	2989	_downloadable	no
+14402	2989	_download_limit	-1
+14403	2989	_download_expiry	-1
+14404	2989	_stock	NULL
+14405	2989	_stock_status	instock
+14406	2989	_wc_average_rating	0
+14407	2989	_wc_review_count	0
+14408	2989	attribute_pa_farg	blank-silver
+14409	2989	attribute_pa_antal-inskriptioner	2
+14410	2989	_product_version	9.6.0
+14583	2989	_thumbnail_id	0
+14593	2989	_sale_price	
+14594	2989	_price	440
+14664	2989	_regular_price	440
+14411	2990	_variation_description	
+14412	2990	total_sales	0
+14413	2990	_tax_status	taxable
+14414	2990	_tax_class	parent
+14415	2990	_manage_stock	no
+14416	2990	_backorders	no
+14417	2990	_sold_individually	no
+14418	2990	_virtual	no
+14419	2990	_downloadable	no
+14420	2990	_download_limit	-1
+14421	2990	_download_expiry	-1
+14422	2990	_stock	NULL
+14423	2990	_stock_status	instock
+14424	2990	_wc_average_rating	0
+14425	2990	_wc_review_count	0
+14426	2990	attribute_pa_farg	matt-svart
+14427	2990	attribute_pa_antal-inskriptioner	2
+14428	2990	_product_version	9.6.0
+14584	2990	_sale_price	
+14585	2990	_thumbnail_id	0
+14587	2990	_price	440
+14665	2990	_regular_price	440
+14429	2991	_variation_description	
+14430	2991	total_sales	0
+14431	2991	_tax_status	taxable
+14432	2991	_tax_class	parent
+14433	2991	_manage_stock	no
+14434	2991	_backorders	no
+14435	2991	_sold_individually	no
+14436	2991	_virtual	no
+14437	2991	_downloadable	no
+14438	2991	_download_limit	-1
+14439	2991	_download_expiry	-1
+14440	2991	_stock	NULL
+14441	2991	_stock_status	instock
+14442	2991	_wc_average_rating	0
+14443	2991	_wc_review_count	0
+14444	2991	attribute_pa_farg	blank-guld
+14445	2991	attribute_pa_antal-inskriptioner	3
+14446	2991	_product_version	9.6.0
+14574	2991	_sale_price	
+14575	2991	_thumbnail_id	0
+14582	2991	_price	480
+14666	2991	_regular_price	480
+14447	2992	_variation_description	
+14448	2992	total_sales	0
+14449	2992	_tax_status	taxable
+14450	2992	_tax_class	parent
+14451	2992	_manage_stock	no
+14452	2992	_backorders	no
+14453	2992	_sold_individually	no
+14454	2992	_virtual	no
+14455	2992	_downloadable	no
+14456	2992	_download_limit	-1
+14457	2992	_download_expiry	-1
+14458	2992	_stock	NULL
+14459	2992	_stock_status	instock
+14460	2992	_wc_average_rating	0
+14461	2992	_wc_review_count	0
+14462	2992	attribute_pa_farg	blank-silver
+14463	2992	attribute_pa_antal-inskriptioner	3
+14464	2992	_product_version	9.6.0
+14570	2992	_sale_price	
+14571	2992	_thumbnail_id	0
+14572	2992	_price	480
+14667	2992	_regular_price	480
+14465	2993	_variation_description	
+14466	2993	total_sales	0
+14467	2993	_tax_status	taxable
+14468	2993	_tax_class	parent
+14469	2993	_manage_stock	no
+14470	2993	_backorders	no
+14471	2993	_sold_individually	no
+14472	2993	_virtual	no
+14473	2993	_downloadable	no
+14474	2993	_download_limit	-1
+14475	2993	_download_expiry	-1
+14476	2993	_stock	NULL
+14477	2993	_stock_status	instock
+14478	2993	_wc_average_rating	0
+14479	2993	_wc_review_count	0
+14480	2993	attribute_pa_farg	matt-svart
+14481	2993	attribute_pa_antal-inskriptioner	3
+14482	2993	_product_version	9.6.0
+14560	2993	_sale_price	
+14562	2993	_thumbnail_id	0
+14563	2993	_price	480
+14668	2993	_regular_price	480
+14483	2994	_variation_description	
+14484	2994	total_sales	0
+14485	2994	_tax_status	taxable
+14486	2994	_tax_class	parent
+14487	2994	_manage_stock	no
+14488	2994	_backorders	no
+14489	2994	_sold_individually	no
+14490	2994	_virtual	no
+14491	2994	_downloadable	no
+14492	2994	_download_limit	-1
+14493	2994	_download_expiry	-1
+14494	2994	_stock	NULL
+14495	2994	_stock_status	instock
+14496	2994	_wc_average_rating	0
+14497	2994	_wc_review_count	0
+14498	2994	attribute_pa_farg	blank-guld
+14499	2994	attribute_pa_antal-inskriptioner	4
+14500	2994	_product_version	9.6.0
+14550	2994	_sale_price	
+14552	2994	_thumbnail_id	0
+14553	2994	_price	510
+14669	2994	_regular_price	510
+14501	2995	_variation_description	
+14502	2995	total_sales	0
+14503	2995	_tax_status	taxable
+14504	2995	_tax_class	parent
+14505	2995	_manage_stock	no
+14506	2995	_backorders	no
+14507	2995	_sold_individually	no
+14508	2995	_virtual	no
+14509	2995	_downloadable	no
+14510	2995	_download_limit	-1
+14511	2995	_download_expiry	-1
+14512	2995	_stock	NULL
+14513	2995	_stock_status	instock
+14514	2995	_wc_average_rating	0
+14515	2995	_wc_review_count	0
+14516	2995	attribute_pa_farg	blank-silver
+14517	2995	attribute_pa_antal-inskriptioner	4
+14518	2995	_product_version	9.6.0
+14541	2995	_sale_price	
+14542	2995	_thumbnail_id	0
+14543	2995	_price	510
+14670	2995	_regular_price	510
+14519	2996	_variation_description	
+14520	2996	total_sales	0
+14521	2996	_tax_status	taxable
+14522	2996	_tax_class	parent
+14523	2996	_manage_stock	no
+14524	2996	_backorders	no
+14525	2996	_sold_individually	no
+14526	2996	_virtual	no
+14527	2996	_downloadable	no
+14528	2996	_download_limit	-1
+14529	2996	_download_expiry	-1
+14530	2996	_stock	NULL
+14531	2996	_stock_status	instock
+14532	2996	_wc_average_rating	0
+14533	2996	_wc_review_count	0
+14534	2996	attribute_pa_farg	matt-svart
+14535	2996	attribute_pa_antal-inskriptioner	4
+14536	2996	_product_version	9.6.0
+14537	2996	_sale_price	
+14538	2996	_thumbnail_id	0
+14539	2996	_price	510
+14671	2996	_regular_price	510
+14700	3002	_variation_description	
+14701	3002	total_sales	0
+14702	3002	_tax_status	taxable
+14703	3002	_tax_class	parent
+14704	3002	_manage_stock	no
+14705	3002	_backorders	no
+14706	3002	_sold_individually	no
+14707	3002	_virtual	no
+14708	3002	_downloadable	no
+14709	3002	_download_limit	-1
+14710	3002	_download_expiry	-1
+14711	3002	_stock	NULL
+14712	3002	_stock_status	instock
+14713	3002	_wc_average_rating	0
+14714	3002	_wc_review_count	0
+14715	3002	attribute_pa_gravyr-teckensnitt	aa-handwriting
+14716	3002	attribute_pa_antal-inskriptioner	1
+14717	3002	attribute_pa_farg	blank-guld
+14718	3002	_product_version	9.6.0
+15773	3002	_regular_price	390
+15774	3002	_thumbnail_id	0
+15775	3002	_price	390
+14719	3003	_variation_description	
+14720	3003	total_sales	0
+14721	3003	_tax_status	taxable
+14722	3003	_tax_class	parent
+14723	3003	_manage_stock	no
+14724	3003	_backorders	no
+14725	3003	_sold_individually	no
+14726	3003	_virtual	no
+14727	3003	_downloadable	no
+14728	3003	_download_limit	-1
+14729	3003	_download_expiry	-1
+14730	3003	_stock	NULL
+14731	3003	_stock_status	instock
+14732	3003	_wc_average_rating	0
+14733	3003	_wc_review_count	0
+14734	3003	attribute_pa_gravyr-teckensnitt	aa-old-london
+14735	3003	attribute_pa_antal-inskriptioner	1
+14736	3003	attribute_pa_farg	blank-guld
+14737	3003	_product_version	9.6.0
+15782	3003	_regular_price	390
+15783	3003	_thumbnail_id	0
+15784	3003	_price	390
+14738	3004	_variation_description	
+14739	3004	total_sales	0
+14740	3004	_tax_status	taxable
+14741	3004	_tax_class	parent
+14742	3004	_manage_stock	no
+14743	3004	_backorders	no
+14744	3004	_sold_individually	no
+14745	3004	_virtual	no
+14746	3004	_downloadable	no
+14747	3004	_download_limit	-1
+14748	3004	_download_expiry	-1
+14749	3004	_stock	NULL
+14750	3004	_stock_status	instock
+14751	3004	_wc_average_rating	0
+14752	3004	_wc_review_count	0
+14753	3004	attribute_pa_gravyr-teckensnitt	aa-standard
+14754	3004	attribute_pa_antal-inskriptioner	1
+14755	3004	attribute_pa_farg	blank-guld
+14756	3004	_product_version	9.6.0
+15791	3004	_regular_price	390
+15792	3004	_thumbnail_id	0
+15793	3004	_price	390
+14757	3005	_variation_description	
+14758	3005	total_sales	0
+14759	3005	_tax_status	taxable
+14760	3005	_tax_class	parent
+14761	3005	_manage_stock	no
+14762	3005	_backorders	no
+14763	3005	_sold_individually	no
+14764	3005	_virtual	no
+14765	3005	_downloadable	no
+14766	3005	_download_limit	-1
+14767	3005	_download_expiry	-1
+14768	3005	_stock	NULL
+14769	3005	_stock_status	instock
+14770	3005	_wc_average_rating	0
+14771	3005	_wc_review_count	0
+14772	3005	attribute_pa_gravyr-teckensnitt	aa-typewriter
+14773	3005	attribute_pa_antal-inskriptioner	1
+14774	3005	attribute_pa_farg	blank-guld
+14775	3005	_product_version	9.6.0
+15800	3005	_regular_price	390
+15801	3005	_thumbnail_id	0
+15802	3005	_price	390
+14776	3006	_variation_description	
+14777	3006	total_sales	0
+14778	3006	_tax_status	taxable
+14779	3006	_tax_class	parent
+14780	3006	_manage_stock	no
+14781	3006	_backorders	no
+14782	3006	_sold_individually	no
+14783	3006	_virtual	no
+14784	3006	_downloadable	no
+14785	3006	_download_limit	-1
+14786	3006	_download_expiry	-1
+14787	3006	_stock	NULL
+14788	3006	_stock_status	instock
+14789	3006	_wc_average_rating	0
+14790	3006	_wc_review_count	0
+14791	3006	attribute_pa_gravyr-teckensnitt	aa-handwriting
+14792	3006	attribute_pa_antal-inskriptioner	2
+14793	3006	attribute_pa_farg	blank-guld
+14794	3006	_product_version	9.6.0
+15809	3006	_regular_price	440
+15810	3006	_thumbnail_id	0
+15811	3006	_price	440
+14795	3007	_variation_description	
+14796	3007	total_sales	0
+14797	3007	_tax_status	taxable
+14798	3007	_tax_class	parent
+14799	3007	_manage_stock	no
+14800	3007	_backorders	no
+14801	3007	_sold_individually	no
+14802	3007	_virtual	no
+14803	3007	_downloadable	no
+14804	3007	_download_limit	-1
+14805	3007	_download_expiry	-1
+14806	3007	_stock	NULL
+14807	3007	_stock_status	instock
+14808	3007	_wc_average_rating	0
+14809	3007	_wc_review_count	0
+14810	3007	attribute_pa_gravyr-teckensnitt	aa-old-london
+14811	3007	attribute_pa_antal-inskriptioner	2
+14812	3007	attribute_pa_farg	blank-guld
+14813	3007	_product_version	9.6.0
+15818	3007	_regular_price	440
+15819	3007	_thumbnail_id	0
+15820	3007	_price	440
+14814	3008	_variation_description	
+14815	3008	total_sales	0
+14816	3008	_tax_status	taxable
+14817	3008	_tax_class	parent
+14818	3008	_manage_stock	no
+14819	3008	_backorders	no
+14820	3008	_sold_individually	no
+14821	3008	_virtual	no
+14822	3008	_downloadable	no
+14823	3008	_download_limit	-1
+14824	3008	_download_expiry	-1
+14825	3008	_stock	NULL
+14826	3008	_stock_status	instock
+14827	3008	_wc_average_rating	0
+14828	3008	_wc_review_count	0
+14829	3008	attribute_pa_gravyr-teckensnitt	aa-standard
+14830	3008	attribute_pa_antal-inskriptioner	2
+14831	3008	attribute_pa_farg	blank-guld
+14832	3008	_product_version	9.6.0
+15827	3008	_regular_price	440
+15828	3008	_thumbnail_id	0
+15829	3008	_price	440
+14833	3009	_variation_description	
+14834	3009	total_sales	0
+14835	3009	_tax_status	taxable
+14836	3009	_tax_class	parent
+14837	3009	_manage_stock	no
+14838	3009	_backorders	no
+14839	3009	_sold_individually	no
+14840	3009	_virtual	no
+14841	3009	_downloadable	no
+14842	3009	_download_limit	-1
+14843	3009	_download_expiry	-1
+14844	3009	_stock	NULL
+14845	3009	_stock_status	instock
+14846	3009	_wc_average_rating	0
+14847	3009	_wc_review_count	0
+14848	3009	attribute_pa_gravyr-teckensnitt	aa-typewriter
+14849	3009	attribute_pa_antal-inskriptioner	2
+14850	3009	attribute_pa_farg	blank-guld
+14851	3009	_product_version	9.6.0
+15836	3009	_regular_price	440
+15837	3009	_thumbnail_id	0
+15838	3009	_price	440
+14852	3010	_variation_description	
+14853	3010	total_sales	0
+14854	3010	_tax_status	taxable
+14855	3010	_tax_class	parent
+14856	3010	_manage_stock	no
+14857	3010	_backorders	no
+14858	3010	_sold_individually	no
+14859	3010	_virtual	no
+14860	3010	_downloadable	no
+14861	3010	_download_limit	-1
+14862	3010	_download_expiry	-1
+14863	3010	_stock	NULL
+14864	3010	_stock_status	instock
+14865	3010	_wc_average_rating	0
+14866	3010	_wc_review_count	0
+14867	3010	attribute_pa_gravyr-teckensnitt	aa-handwriting
+14868	3010	attribute_pa_antal-inskriptioner	3
+14869	3010	attribute_pa_farg	blank-guld
+14870	3010	_product_version	9.6.0
+15845	3010	_regular_price	480
+15846	3010	_thumbnail_id	0
+15847	3010	_price	480
+14871	3011	_variation_description	
+14872	3011	total_sales	0
+14873	3011	_tax_status	taxable
+14874	3011	_tax_class	parent
+14875	3011	_manage_stock	no
+14876	3011	_backorders	no
+14877	3011	_sold_individually	no
+14878	3011	_virtual	no
+14879	3011	_downloadable	no
+14880	3011	_download_limit	-1
+14881	3011	_download_expiry	-1
+14882	3011	_stock	NULL
+14883	3011	_stock_status	instock
+14884	3011	_wc_average_rating	0
+14885	3011	_wc_review_count	0
+14886	3011	attribute_pa_gravyr-teckensnitt	aa-old-london
+14887	3011	attribute_pa_antal-inskriptioner	3
+14888	3011	attribute_pa_farg	blank-guld
+14889	3011	_product_version	9.6.0
+15854	3011	_regular_price	480
+15855	3011	_thumbnail_id	0
+15856	3011	_price	480
+14890	3012	_variation_description	
+14891	3012	total_sales	0
+14892	3012	_tax_status	taxable
+14893	3012	_tax_class	parent
+14894	3012	_manage_stock	no
+14895	3012	_backorders	no
+14896	3012	_sold_individually	no
+14897	3012	_virtual	no
+14898	3012	_downloadable	no
+14899	3012	_download_limit	-1
+14900	3012	_download_expiry	-1
+14901	3012	_stock	NULL
+14902	3012	_stock_status	instock
+14903	3012	_wc_average_rating	0
+14904	3012	_wc_review_count	0
+14905	3012	attribute_pa_gravyr-teckensnitt	aa-standard
+14906	3012	attribute_pa_antal-inskriptioner	3
+14907	3012	attribute_pa_farg	blank-guld
+14908	3012	_product_version	9.6.0
+15863	3012	_regular_price	480
+15864	3012	_thumbnail_id	0
+15865	3012	_price	480
+14909	3013	_variation_description	
+14910	3013	total_sales	0
+14911	3013	_tax_status	taxable
+14912	3013	_tax_class	parent
+14913	3013	_manage_stock	no
+14914	3013	_backorders	no
+14915	3013	_sold_individually	no
+14916	3013	_virtual	no
+14917	3013	_downloadable	no
+14918	3013	_download_limit	-1
+14919	3013	_download_expiry	-1
+14920	3013	_stock	NULL
+14921	3013	_stock_status	instock
+14922	3013	_wc_average_rating	0
+14923	3013	_wc_review_count	0
+14924	3013	attribute_pa_gravyr-teckensnitt	aa-typewriter
+14925	3013	attribute_pa_antal-inskriptioner	3
+14926	3013	attribute_pa_farg	blank-guld
+14927	3013	_product_version	9.6.0
+15872	3013	_regular_price	480
+15873	3013	_thumbnail_id	0
+15874	3013	_price	480
+14928	3014	_variation_description	
+14929	3014	total_sales	0
+14930	3014	_tax_status	taxable
+14931	3014	_tax_class	parent
+14932	3014	_manage_stock	no
+14933	3014	_backorders	no
+14934	3014	_sold_individually	no
+14935	3014	_virtual	no
+14936	3014	_downloadable	no
+14937	3014	_download_limit	-1
+14938	3014	_download_expiry	-1
+14939	3014	_stock	NULL
+14940	3014	_stock_status	instock
+14941	3014	_wc_average_rating	0
+14942	3014	_wc_review_count	0
+14943	3014	attribute_pa_gravyr-teckensnitt	aa-handwriting
+14944	3014	attribute_pa_antal-inskriptioner	4
+14945	3014	attribute_pa_farg	blank-guld
+14946	3014	_product_version	9.6.0
+15881	3014	_regular_price	510
+15882	3014	_thumbnail_id	0
+15883	3014	_price	510
+14947	3015	_variation_description	
+14948	3015	total_sales	0
+14949	3015	_tax_status	taxable
+14950	3015	_tax_class	parent
+14951	3015	_manage_stock	no
+14952	3015	_backorders	no
+14953	3015	_sold_individually	no
+14954	3015	_virtual	no
+14955	3015	_downloadable	no
+14956	3015	_download_limit	-1
+14957	3015	_download_expiry	-1
+14958	3015	_stock	NULL
+14959	3015	_stock_status	instock
+14960	3015	_wc_average_rating	0
+14961	3015	_wc_review_count	0
+14962	3015	attribute_pa_gravyr-teckensnitt	aa-old-london
+14963	3015	attribute_pa_antal-inskriptioner	4
+14964	3015	attribute_pa_farg	blank-guld
+14965	3015	_product_version	9.6.0
+15890	3015	_regular_price	510
+15891	3015	_thumbnail_id	0
+15892	3015	_price	510
+14966	3016	_variation_description	
+14967	3016	total_sales	0
+14968	3016	_tax_status	taxable
+14969	3016	_tax_class	parent
+14970	3016	_manage_stock	no
+14971	3016	_backorders	no
+14972	3016	_sold_individually	no
+14973	3016	_virtual	no
+14974	3016	_downloadable	no
+14975	3016	_download_limit	-1
+14976	3016	_download_expiry	-1
+14977	3016	_stock	NULL
+14978	3016	_stock_status	instock
+14979	3016	_wc_average_rating	0
+14980	3016	_wc_review_count	0
+14981	3016	attribute_pa_gravyr-teckensnitt	aa-standard
+14982	3016	attribute_pa_antal-inskriptioner	4
+14983	3016	attribute_pa_farg	blank-guld
+14984	3016	_product_version	9.6.0
+15899	3016	_regular_price	510
+15900	3016	_thumbnail_id	0
+15901	3016	_price	510
+14985	3017	_variation_description	
+14986	3017	total_sales	0
+14987	3017	_tax_status	taxable
+14988	3017	_tax_class	parent
+14989	3017	_manage_stock	no
+14990	3017	_backorders	no
+14991	3017	_sold_individually	no
+14992	3017	_virtual	no
+14993	3017	_downloadable	no
+14994	3017	_download_limit	-1
+14995	3017	_download_expiry	-1
+14996	3017	_stock	NULL
+14997	3017	_stock_status	instock
+14998	3017	_wc_average_rating	0
+14999	3017	_wc_review_count	0
+15000	3017	attribute_pa_gravyr-teckensnitt	aa-typewriter
+15001	3017	attribute_pa_antal-inskriptioner	4
+15002	3017	attribute_pa_farg	blank-guld
+15003	3017	_product_version	9.6.0
+15616	3017	_thumbnail_id	0
+16021	3017	_regular_price	510
+16022	3017	_price	510
+15004	3018	_variation_description	
+15005	3018	total_sales	0
+15006	3018	_tax_status	taxable
+15007	3018	_tax_class	parent
+15008	3018	_manage_stock	no
+15009	3018	_backorders	no
+15010	3018	_sold_individually	no
+15011	3018	_virtual	no
+15012	3018	_downloadable	no
+15013	3018	_download_limit	-1
+15014	3018	_download_expiry	-1
+15015	3018	_stock	NULL
+15016	3018	_stock_status	instock
+15017	3018	_wc_average_rating	0
+15018	3018	_wc_review_count	0
+15019	3018	attribute_pa_gravyr-teckensnitt	aa-handwriting
+15020	3018	attribute_pa_antal-inskriptioner	1
+15021	3018	attribute_pa_farg	blank-silver
+15022	3018	_product_version	9.6.0
+15623	3018	_thumbnail_id	0
+16023	3018	_regular_price	390
+16024	3018	_price	390
+15023	3019	_variation_description	
+15024	3019	total_sales	0
+15025	3019	_tax_status	taxable
+15026	3019	_tax_class	parent
+15027	3019	_manage_stock	no
+15028	3019	_backorders	no
+15029	3019	_sold_individually	no
+15030	3019	_virtual	no
+15031	3019	_downloadable	no
+15032	3019	_download_limit	-1
+15033	3019	_download_expiry	-1
+15034	3019	_stock	NULL
+15035	3019	_stock_status	instock
+15036	3019	_wc_average_rating	0
+15037	3019	_wc_review_count	0
+15038	3019	attribute_pa_gravyr-teckensnitt	aa-old-london
+15039	3019	attribute_pa_antal-inskriptioner	1
+15040	3019	attribute_pa_farg	blank-silver
+15041	3019	_product_version	9.6.0
+15630	3019	_thumbnail_id	0
+16019	3019	_regular_price	390
+16020	3019	_price	390
+15042	3020	_variation_description	
+15043	3020	total_sales	0
+15044	3020	_tax_status	taxable
+15045	3020	_tax_class	parent
+15046	3020	_manage_stock	no
+15047	3020	_backorders	no
+15048	3020	_sold_individually	no
+15049	3020	_virtual	no
+15050	3020	_downloadable	no
+15051	3020	_download_limit	-1
+15052	3020	_download_expiry	-1
+15053	3020	_stock	NULL
+15054	3020	_stock_status	instock
+15055	3020	_wc_average_rating	0
+15056	3020	_wc_review_count	0
+15057	3020	attribute_pa_gravyr-teckensnitt	aa-standard
+15058	3020	attribute_pa_antal-inskriptioner	1
+15059	3020	attribute_pa_farg	blank-silver
+15060	3020	_product_version	9.6.0
+15637	3020	_thumbnail_id	0
+16015	3020	_regular_price	390
+16016	3020	_price	390
+15061	3021	_variation_description	
+15062	3021	total_sales	0
+15063	3021	_tax_status	taxable
+15064	3021	_tax_class	parent
+15065	3021	_manage_stock	no
+15066	3021	_backorders	no
+15067	3021	_sold_individually	no
+15068	3021	_virtual	no
+15069	3021	_downloadable	no
+15070	3021	_download_limit	-1
+15071	3021	_download_expiry	-1
+15072	3021	_stock	NULL
+15073	3021	_stock_status	instock
+15074	3021	_wc_average_rating	0
+15075	3021	_wc_review_count	0
+15076	3021	attribute_pa_gravyr-teckensnitt	aa-typewriter
+15077	3021	attribute_pa_antal-inskriptioner	1
+15078	3021	attribute_pa_farg	blank-silver
+15079	3021	_product_version	9.6.0
+15644	3021	_thumbnail_id	0
+15984	3021	_regular_price	390
+15985	3021	_price	390
+15080	3022	_variation_description	
+15081	3022	total_sales	0
+15082	3022	_tax_status	taxable
+15083	3022	_tax_class	parent
+15084	3022	_manage_stock	no
+15085	3022	_backorders	no
+15086	3022	_sold_individually	no
+15087	3022	_virtual	no
+15088	3022	_downloadable	no
+15089	3022	_download_limit	-1
+15090	3022	_download_expiry	-1
+15091	3022	_stock	NULL
+15092	3022	_stock_status	instock
+15093	3022	_wc_average_rating	0
+15094	3022	_wc_review_count	0
+15095	3022	attribute_pa_gravyr-teckensnitt	aa-handwriting
+15096	3022	attribute_pa_antal-inskriptioner	2
+15097	3022	attribute_pa_farg	blank-silver
+15098	3022	_product_version	9.6.0
+15651	3022	_thumbnail_id	0
+15986	3022	_regular_price	440
+15987	3022	_price	440
+15099	3023	_variation_description	
+15100	3023	total_sales	0
+15101	3023	_tax_status	taxable
+15102	3023	_tax_class	parent
+15103	3023	_manage_stock	no
+15104	3023	_backorders	no
+15105	3023	_sold_individually	no
+15106	3023	_virtual	no
+15107	3023	_downloadable	no
+15108	3023	_download_limit	-1
+15109	3023	_download_expiry	-1
+15110	3023	_stock	NULL
+15111	3023	_stock_status	instock
+15112	3023	_wc_average_rating	0
+15113	3023	_wc_review_count	0
+15114	3023	attribute_pa_gravyr-teckensnitt	aa-old-london
+15115	3023	attribute_pa_antal-inskriptioner	2
+15116	3023	attribute_pa_farg	blank-silver
+15117	3023	_product_version	9.6.0
+15658	3023	_thumbnail_id	0
+15988	3023	_regular_price	440
+15989	3023	_price	440
+15118	3024	_variation_description	
+15119	3024	total_sales	0
+15120	3024	_tax_status	taxable
+15121	3024	_tax_class	parent
+15122	3024	_manage_stock	no
+15123	3024	_backorders	no
+15124	3024	_sold_individually	no
+15125	3024	_virtual	no
+15126	3024	_downloadable	no
+15127	3024	_download_limit	-1
+15128	3024	_download_expiry	-1
+15129	3024	_stock	NULL
+15130	3024	_stock_status	instock
+15131	3024	_wc_average_rating	0
+15132	3024	_wc_review_count	0
+15133	3024	attribute_pa_gravyr-teckensnitt	aa-standard
+15134	3024	attribute_pa_antal-inskriptioner	2
+15135	3024	attribute_pa_farg	blank-silver
+15136	3024	_product_version	9.6.0
+15665	3024	_thumbnail_id	0
+15990	3024	_regular_price	440
+15991	3024	_price	440
+15137	3025	_variation_description	
+15138	3025	total_sales	0
+15139	3025	_tax_status	taxable
+15140	3025	_tax_class	parent
+15141	3025	_manage_stock	no
+15142	3025	_backorders	no
+15143	3025	_sold_individually	no
+15144	3025	_virtual	no
+15145	3025	_downloadable	no
+15146	3025	_download_limit	-1
+15147	3025	_download_expiry	-1
+15148	3025	_stock	NULL
+15149	3025	_stock_status	instock
+15150	3025	_wc_average_rating	0
+15151	3025	_wc_review_count	0
+15152	3025	attribute_pa_gravyr-teckensnitt	aa-typewriter
+15153	3025	attribute_pa_antal-inskriptioner	2
+15154	3025	attribute_pa_farg	blank-silver
+15155	3025	_product_version	9.6.0
+15672	3025	_thumbnail_id	0
+15992	3025	_regular_price	440
+15993	3025	_price	440
+15156	3026	_variation_description	
+15157	3026	total_sales	0
+15158	3026	_tax_status	taxable
+15159	3026	_tax_class	parent
+15160	3026	_manage_stock	no
+15161	3026	_backorders	no
+15162	3026	_sold_individually	no
+15163	3026	_virtual	no
+15164	3026	_downloadable	no
+15165	3026	_download_limit	-1
+15166	3026	_download_expiry	-1
+15167	3026	_stock	NULL
+15168	3026	_stock_status	instock
+15169	3026	_wc_average_rating	0
+15170	3026	_wc_review_count	0
+15171	3026	attribute_pa_gravyr-teckensnitt	aa-handwriting
+15172	3026	attribute_pa_antal-inskriptioner	3
+15173	3026	attribute_pa_farg	blank-silver
+15174	3026	_product_version	9.6.0
+15679	3026	_thumbnail_id	0
+15994	3026	_regular_price	480
+15995	3026	_price	480
+15175	3027	_variation_description	
+15176	3027	total_sales	0
+15177	3027	_tax_status	taxable
+15178	3027	_tax_class	parent
+15179	3027	_manage_stock	no
+15180	3027	_backorders	no
+15181	3027	_sold_individually	no
+15182	3027	_virtual	no
+15183	3027	_downloadable	no
+15184	3027	_download_limit	-1
+15185	3027	_download_expiry	-1
+15186	3027	_stock	NULL
+15187	3027	_stock_status	instock
+15188	3027	_wc_average_rating	0
+15189	3027	_wc_review_count	0
+15190	3027	attribute_pa_gravyr-teckensnitt	aa-old-london
+15191	3027	attribute_pa_antal-inskriptioner	3
+15192	3027	attribute_pa_farg	blank-silver
+15193	3027	_product_version	9.6.0
+15686	3027	_thumbnail_id	0
+16017	3027	_regular_price	480
+16018	3027	_price	480
+15194	3028	_variation_description	
+15195	3028	total_sales	0
+15196	3028	_tax_status	taxable
+15197	3028	_tax_class	parent
+15198	3028	_manage_stock	no
+15199	3028	_backorders	no
+15200	3028	_sold_individually	no
+15201	3028	_virtual	no
+15202	3028	_downloadable	no
+15203	3028	_download_limit	-1
+15204	3028	_download_expiry	-1
+15205	3028	_stock	NULL
+15206	3028	_stock_status	instock
+15207	3028	_wc_average_rating	0
+15208	3028	_wc_review_count	0
+15209	3028	attribute_pa_gravyr-teckensnitt	aa-standard
+15210	3028	attribute_pa_antal-inskriptioner	3
+15211	3028	attribute_pa_farg	blank-silver
+15212	3028	_product_version	9.6.0
+15693	3028	_thumbnail_id	0
+15996	3028	_regular_price	480
+15997	3028	_price	480
+15213	3029	_variation_description	
+15214	3029	total_sales	0
+15215	3029	_tax_status	taxable
+15216	3029	_tax_class	parent
+15217	3029	_manage_stock	no
+15218	3029	_backorders	no
+15219	3029	_sold_individually	no
+15220	3029	_virtual	no
+15221	3029	_downloadable	no
+15222	3029	_download_limit	-1
+15223	3029	_download_expiry	-1
+15224	3029	_stock	NULL
+15225	3029	_stock_status	instock
+15226	3029	_wc_average_rating	0
+15227	3029	_wc_review_count	0
+15228	3029	attribute_pa_gravyr-teckensnitt	aa-typewriter
+15229	3029	attribute_pa_antal-inskriptioner	3
+15230	3029	attribute_pa_farg	blank-silver
+15231	3029	_product_version	9.6.0
+15700	3029	_thumbnail_id	0
+15998	3029	_regular_price	480
+15999	3029	_price	480
+15232	3030	_variation_description	
+15233	3030	total_sales	0
+15234	3030	_tax_status	taxable
+15235	3030	_tax_class	parent
+15236	3030	_manage_stock	no
+15237	3030	_backorders	no
+15238	3030	_sold_individually	no
+15239	3030	_virtual	no
+15240	3030	_downloadable	no
+15241	3030	_download_limit	-1
+15242	3030	_download_expiry	-1
+15243	3030	_stock	NULL
+15244	3030	_stock_status	instock
+15245	3030	_wc_average_rating	0
+15246	3030	_wc_review_count	0
+15247	3030	attribute_pa_gravyr-teckensnitt	aa-handwriting
+15248	3030	attribute_pa_antal-inskriptioner	4
+15249	3030	attribute_pa_farg	blank-silver
+15250	3030	_product_version	9.6.0
+15707	3030	_thumbnail_id	0
+16000	3030	_regular_price	510
+16001	3030	_price	510
+15251	3031	_variation_description	
+15252	3031	total_sales	0
+15253	3031	_tax_status	taxable
+15254	3031	_tax_class	parent
+15255	3031	_manage_stock	no
+15256	3031	_backorders	no
+15257	3031	_sold_individually	no
+15258	3031	_virtual	no
+15259	3031	_downloadable	no
+15260	3031	_download_limit	-1
+15261	3031	_download_expiry	-1
+15262	3031	_stock	NULL
+15263	3031	_stock_status	instock
+15264	3031	_wc_average_rating	0
+15265	3031	_wc_review_count	0
+15266	3031	attribute_pa_gravyr-teckensnitt	aa-old-london
+15267	3031	attribute_pa_antal-inskriptioner	4
+15268	3031	attribute_pa_farg	blank-silver
+15269	3031	_product_version	9.6.0
+15714	3031	_thumbnail_id	0
+16007	3031	_regular_price	510
+16008	3031	_price	510
+15270	3032	_variation_description	
+15271	3032	total_sales	0
+15272	3032	_tax_status	taxable
+15273	3032	_tax_class	parent
+15274	3032	_manage_stock	no
+15275	3032	_backorders	no
+15276	3032	_sold_individually	no
+15277	3032	_virtual	no
+15278	3032	_downloadable	no
+15279	3032	_download_limit	-1
+15280	3032	_download_expiry	-1
+15281	3032	_stock	NULL
+15282	3032	_stock_status	instock
+15283	3032	_wc_average_rating	0
+15284	3032	_wc_review_count	0
+15285	3032	attribute_pa_gravyr-teckensnitt	aa-standard
+15286	3032	attribute_pa_antal-inskriptioner	4
+15287	3032	attribute_pa_farg	blank-silver
+15288	3032	_product_version	9.6.0
+16009	3032	_regular_price	510
+16010	3032	_thumbnail_id	0
+16011	3032	_price	510
+15289	3033	_variation_description	
+15290	3033	total_sales	0
+15291	3033	_tax_status	taxable
+15292	3033	_tax_class	parent
+15293	3033	_manage_stock	no
+15294	3033	_backorders	no
+15295	3033	_sold_individually	no
+15296	3033	_virtual	no
+15297	3033	_downloadable	no
+15298	3033	_download_limit	-1
+15299	3033	_download_expiry	-1
+15300	3033	_stock	NULL
+15301	3033	_stock_status	instock
+15302	3033	_wc_average_rating	0
+15303	3033	_wc_review_count	0
+15304	3033	attribute_pa_gravyr-teckensnitt	aa-typewriter
+15305	3033	attribute_pa_antal-inskriptioner	4
+15306	3033	attribute_pa_farg	blank-silver
+15307	3033	_product_version	9.6.0
+16012	3033	_regular_price	510
+16013	3033	_thumbnail_id	0
+16014	3033	_price	510
+15308	3034	_variation_description	
+15309	3034	total_sales	0
+15310	3034	_tax_status	taxable
+15311	3034	_tax_class	parent
+15312	3034	_manage_stock	no
+15313	3034	_backorders	no
+15314	3034	_sold_individually	no
+15315	3034	_virtual	no
+15316	3034	_downloadable	no
+15317	3034	_download_limit	-1
+15318	3034	_download_expiry	-1
+15319	3034	_stock	NULL
+15320	3034	_stock_status	instock
+15321	3034	_wc_average_rating	0
+15322	3034	_wc_review_count	0
+15323	3034	attribute_pa_gravyr-teckensnitt	aa-handwriting
+15324	3034	attribute_pa_antal-inskriptioner	1
+15325	3034	attribute_pa_farg	matt-svart
+15326	3034	_product_version	9.6.0
+15942	3034	_regular_price	390
+15943	3034	_thumbnail_id	0
+15944	3034	_price	390
+15327	3035	_variation_description	
+15328	3035	total_sales	0
+15329	3035	_tax_status	taxable
+15330	3035	_tax_class	parent
+15331	3035	_manage_stock	no
+15332	3035	_backorders	no
+15333	3035	_sold_individually	no
+15334	3035	_virtual	no
+15335	3035	_downloadable	no
+15336	3035	_download_limit	-1
+15337	3035	_download_expiry	-1
+15338	3035	_stock	NULL
+15339	3035	_stock_status	instock
+15340	3035	_wc_average_rating	0
+15341	3035	_wc_review_count	0
+15342	3035	attribute_pa_gravyr-teckensnitt	aa-old-london
+15343	3035	attribute_pa_antal-inskriptioner	1
+15344	3035	attribute_pa_farg	matt-svart
+15345	3035	_product_version	9.6.0
+15945	3035	_regular_price	390
+15946	3035	_thumbnail_id	0
+15947	3035	_price	390
+15346	3036	_variation_description	
+15347	3036	total_sales	0
+15348	3036	_tax_status	taxable
+15349	3036	_tax_class	parent
+15350	3036	_manage_stock	no
+15351	3036	_backorders	no
+15352	3036	_sold_individually	no
+15353	3036	_virtual	no
+15354	3036	_downloadable	no
+15355	3036	_download_limit	-1
+15356	3036	_download_expiry	-1
+15357	3036	_stock	NULL
+15358	3036	_stock_status	instock
+15359	3036	_wc_average_rating	0
+15360	3036	_wc_review_count	0
+15361	3036	attribute_pa_gravyr-teckensnitt	aa-standard
+15362	3036	attribute_pa_antal-inskriptioner	1
+15363	3036	attribute_pa_farg	matt-svart
+15364	3036	_product_version	9.6.0
+15948	3036	_regular_price	390
+15949	3036	_thumbnail_id	0
+15950	3036	_price	390
+15365	3037	_variation_description	
+15366	3037	total_sales	0
+15367	3037	_tax_status	taxable
+15368	3037	_tax_class	parent
+15369	3037	_manage_stock	no
+15370	3037	_backorders	no
+15371	3037	_sold_individually	no
+15372	3037	_virtual	no
+15373	3037	_downloadable	no
+15374	3037	_download_limit	-1
+15375	3037	_download_expiry	-1
+15376	3037	_stock	NULL
+15377	3037	_stock_status	instock
+15378	3037	_wc_average_rating	0
+15379	3037	_wc_review_count	0
+15380	3037	attribute_pa_gravyr-teckensnitt	aa-typewriter
+15381	3037	attribute_pa_antal-inskriptioner	1
+15382	3037	attribute_pa_farg	matt-svart
+15383	3037	_product_version	9.6.0
+15951	3037	_regular_price	390
+15952	3037	_thumbnail_id	0
+15953	3037	_price	390
+15384	3038	_variation_description	
+15385	3038	total_sales	0
+15386	3038	_tax_status	taxable
+15387	3038	_tax_class	parent
+15388	3038	_manage_stock	no
+15389	3038	_backorders	no
+15390	3038	_sold_individually	no
+15391	3038	_virtual	no
+15392	3038	_downloadable	no
+15393	3038	_download_limit	-1
+15394	3038	_download_expiry	-1
+15395	3038	_stock	NULL
+15396	3038	_stock_status	instock
+15397	3038	_wc_average_rating	0
+15398	3038	_wc_review_count	0
+15399	3038	attribute_pa_gravyr-teckensnitt	aa-handwriting
+15400	3038	attribute_pa_antal-inskriptioner	2
+15401	3038	attribute_pa_farg	matt-svart
+15402	3038	_product_version	9.6.0
+15954	3038	_regular_price	440
+15955	3038	_thumbnail_id	0
+15956	3038	_price	440
+15403	3039	_variation_description	
+15404	3039	total_sales	0
+15405	3039	_tax_status	taxable
+15406	3039	_tax_class	parent
+15407	3039	_manage_stock	no
+15408	3039	_backorders	no
+15409	3039	_sold_individually	no
+15410	3039	_virtual	no
+15411	3039	_downloadable	no
+15412	3039	_download_limit	-1
+15413	3039	_download_expiry	-1
+15414	3039	_stock	NULL
+15415	3039	_stock_status	instock
+15416	3039	_wc_average_rating	0
+15417	3039	_wc_review_count	0
+15418	3039	attribute_pa_gravyr-teckensnitt	aa-old-london
+15419	3039	attribute_pa_antal-inskriptioner	2
+15420	3039	attribute_pa_farg	matt-svart
+15421	3039	_product_version	9.6.0
+15957	3039	_regular_price	440
+15958	3039	_thumbnail_id	0
+15959	3039	_price	440
+15422	3040	_variation_description	
+15423	3040	total_sales	0
+15424	3040	_tax_status	taxable
+15425	3040	_tax_class	parent
+15426	3040	_manage_stock	no
+15427	3040	_backorders	no
+15428	3040	_sold_individually	no
+15429	3040	_virtual	no
+15430	3040	_downloadable	no
+15431	3040	_download_limit	-1
+15432	3040	_download_expiry	-1
+15433	3040	_stock	NULL
+15434	3040	_stock_status	instock
+15435	3040	_wc_average_rating	0
+15436	3040	_wc_review_count	0
+15437	3040	attribute_pa_gravyr-teckensnitt	aa-standard
+15438	3040	attribute_pa_antal-inskriptioner	2
+15439	3040	attribute_pa_farg	matt-svart
+15440	3040	_product_version	9.6.0
+15960	3040	_regular_price	440
+15961	3040	_thumbnail_id	0
+15962	3040	_price	440
+15441	3041	_variation_description	
+15442	3041	total_sales	0
+15443	3041	_tax_status	taxable
+15444	3041	_tax_class	parent
+15445	3041	_manage_stock	no
+15446	3041	_backorders	no
+15447	3041	_sold_individually	no
+15448	3041	_virtual	no
+15449	3041	_downloadable	no
+15450	3041	_download_limit	-1
+15451	3041	_download_expiry	-1
+15452	3041	_stock	NULL
+15453	3041	_stock_status	instock
+15454	3041	_wc_average_rating	0
+15455	3041	_wc_review_count	0
+15456	3041	attribute_pa_gravyr-teckensnitt	aa-typewriter
+15457	3041	attribute_pa_antal-inskriptioner	2
+15458	3041	attribute_pa_farg	matt-svart
+15459	3041	_product_version	9.6.0
+15963	3041	_regular_price	440
+15964	3041	_thumbnail_id	0
+15965	3041	_price	440
+15460	3042	_variation_description	
+15461	3042	total_sales	0
+15462	3042	_tax_status	taxable
+15463	3042	_tax_class	parent
+15464	3042	_manage_stock	no
+15465	3042	_backorders	no
+15466	3042	_sold_individually	no
+15467	3042	_virtual	no
+15468	3042	_downloadable	no
+15469	3042	_download_limit	-1
+15470	3042	_download_expiry	-1
+15471	3042	_stock	NULL
+15472	3042	_stock_status	instock
+15473	3042	_wc_average_rating	0
+15474	3042	_wc_review_count	0
+15475	3042	attribute_pa_gravyr-teckensnitt	aa-handwriting
+15476	3042	attribute_pa_antal-inskriptioner	3
+15477	3042	attribute_pa_farg	matt-svart
+15478	3042	_product_version	9.6.0
+15981	3042	_regular_price	480
+15982	3042	_thumbnail_id	0
+15983	3042	_price	480
+15479	3043	_variation_description	
+15480	3043	total_sales	0
+15481	3043	_tax_status	taxable
+15482	3043	_tax_class	parent
+15483	3043	_manage_stock	no
+15484	3043	_backorders	no
+15485	3043	_sold_individually	no
+15486	3043	_virtual	no
+15487	3043	_downloadable	no
+15488	3043	_download_limit	-1
+15489	3043	_download_expiry	-1
+15490	3043	_stock	NULL
+15491	3043	_stock_status	instock
+15492	3043	_wc_average_rating	0
+15493	3043	_wc_review_count	0
+15494	3043	attribute_pa_gravyr-teckensnitt	aa-old-london
+15495	3043	attribute_pa_antal-inskriptioner	3
+15496	3043	attribute_pa_farg	matt-svart
+15497	3043	_product_version	9.6.0
+15978	3043	_regular_price	480
+15979	3043	_thumbnail_id	0
+15980	3043	_price	480
+15498	3044	_variation_description	
+15499	3044	total_sales	0
+15500	3044	_tax_status	taxable
+15501	3044	_tax_class	parent
+15502	3044	_manage_stock	no
+15503	3044	_backorders	no
+15504	3044	_sold_individually	no
+15505	3044	_virtual	no
+15506	3044	_downloadable	no
+15507	3044	_download_limit	-1
+15508	3044	_download_expiry	-1
+15509	3044	_stock	NULL
+15510	3044	_stock_status	instock
+15511	3044	_wc_average_rating	0
+15512	3044	_wc_review_count	0
+15513	3044	attribute_pa_gravyr-teckensnitt	aa-standard
+15514	3044	attribute_pa_antal-inskriptioner	3
+15515	3044	attribute_pa_farg	matt-svart
+15516	3044	_product_version	9.6.0
+15975	3044	_regular_price	480
+15976	3044	_thumbnail_id	0
+15977	3044	_price	480
+15517	3045	_variation_description	
+15518	3045	total_sales	0
+15519	3045	_tax_status	taxable
+15520	3045	_tax_class	parent
+15521	3045	_manage_stock	no
+15522	3045	_backorders	no
+15523	3045	_sold_individually	no
+15524	3045	_virtual	no
+15525	3045	_downloadable	no
+15526	3045	_download_limit	-1
+15527	3045	_download_expiry	-1
+15528	3045	_stock	NULL
+15529	3045	_stock_status	instock
+15530	3045	_wc_average_rating	0
+15531	3045	_wc_review_count	0
+15532	3045	attribute_pa_gravyr-teckensnitt	aa-typewriter
+15533	3045	attribute_pa_antal-inskriptioner	3
+15534	3045	attribute_pa_farg	matt-svart
+15535	3045	_product_version	9.6.0
+15972	3045	_regular_price	480
+15973	3045	_thumbnail_id	0
+15974	3045	_price	480
+15536	3046	_variation_description	
+15537	3046	total_sales	0
+15538	3046	_tax_status	taxable
+15539	3046	_tax_class	parent
+15540	3046	_manage_stock	no
+15541	3046	_backorders	no
+15542	3046	_sold_individually	no
+15543	3046	_virtual	no
+15544	3046	_downloadable	no
+15545	3046	_download_limit	-1
+15546	3046	_download_expiry	-1
+15547	3046	_stock	NULL
+15548	3046	_stock_status	instock
+15549	3046	_wc_average_rating	0
+15550	3046	_wc_review_count	0
+15551	3046	attribute_pa_gravyr-teckensnitt	aa-handwriting
+15552	3046	attribute_pa_antal-inskriptioner	4
+15553	3046	attribute_pa_farg	matt-svart
+15554	3046	_product_version	9.6.0
+15969	3046	_regular_price	510
+15970	3046	_thumbnail_id	0
+15971	3046	_price	510
+15555	3047	_variation_description	
+15556	3047	total_sales	0
+15557	3047	_tax_status	taxable
+15558	3047	_tax_class	parent
+15559	3047	_manage_stock	no
+15560	3047	_backorders	no
+15561	3047	_sold_individually	no
+15562	3047	_virtual	no
+15563	3047	_downloadable	no
+15564	3047	_download_limit	-1
+15565	3047	_download_expiry	-1
+15566	3047	_stock	NULL
+15567	3047	_stock_status	instock
+15568	3047	_wc_average_rating	0
+15569	3047	_wc_review_count	0
+15570	3047	attribute_pa_gravyr-teckensnitt	aa-old-london
+15571	3047	attribute_pa_antal-inskriptioner	4
+15572	3047	attribute_pa_farg	matt-svart
+15573	3047	_product_version	9.6.0
+15966	3047	_regular_price	510
+15967	3047	_thumbnail_id	0
+15968	3047	_price	510
+15574	3048	_variation_description	
+15575	3048	total_sales	0
+15576	3048	_tax_status	taxable
+15577	3048	_tax_class	parent
+15578	3048	_manage_stock	no
+15579	3048	_backorders	no
+15580	3048	_sold_individually	no
+15581	3048	_virtual	no
+15582	3048	_downloadable	no
+15583	3048	_download_limit	-1
+15584	3048	_download_expiry	-1
+15585	3048	_stock	NULL
+15586	3048	_stock_status	instock
+15587	3048	_wc_average_rating	0
+15588	3048	_wc_review_count	0
+15589	3048	attribute_pa_gravyr-teckensnitt	aa-standard
+15590	3048	attribute_pa_antal-inskriptioner	4
+15591	3048	attribute_pa_farg	matt-svart
+15592	3048	_product_version	9.6.0
+15939	3048	_regular_price	510
+15940	3048	_thumbnail_id	0
+15941	3048	_price	510
+15593	3049	_variation_description	
+15594	3049	total_sales	0
+15595	3049	_tax_status	taxable
+15596	3049	_tax_class	parent
+15597	3049	_manage_stock	no
+15598	3049	_backorders	no
+15599	3049	_sold_individually	no
+15600	3049	_virtual	no
+15601	3049	_downloadable	no
+15602	3049	_download_limit	-1
+15603	3049	_download_expiry	-1
+15604	3049	_stock	NULL
+15605	3049	_stock_status	instock
+15606	3049	_wc_average_rating	0
+15607	3049	_wc_review_count	0
+15608	3049	attribute_pa_gravyr-teckensnitt	aa-typewriter
+15609	3049	attribute_pa_antal-inskriptioner	4
+15610	3049	attribute_pa_farg	matt-svart
+15611	3049	_product_version	9.6.0
+15936	3049	_regular_price	510
+15937	3049	_thumbnail_id	0
+15938	3049	_price	510
+25178	3217	_variation_description	
+25179	3217	total_sales	0
+25180	3217	_tax_status	taxable
+25181	3217	_tax_class	parent
+25182	3217	_manage_stock	no
+25183	3217	_backorders	no
+25184	3217	_sold_individually	no
+25185	3217	_virtual	no
+25186	3217	_downloadable	no
+25187	3217	_download_limit	-1
+25188	3217	_download_expiry	-1
+25189	3217	_stock	NULL
+25190	3217	_stock_status	instock
+25191	3217	_wc_average_rating	0
+25192	3217	_wc_review_count	0
+25193	3217	attribute_pa_storlek	liten-13-16-cm
+25194	3217	attribute_pa_farg	bla
+25195	3217	_product_version	10.2.1
+25916	3217	_thumbnail_id	0
+25917	3217	_price	350
+26128	3217	_sale_price	
+26667	3217	_regular_price	350
+25196	3218	_variation_description	
+25197	3218	total_sales	0
+25198	3218	_tax_status	taxable
+25199	3218	_tax_class	parent
+25200	3218	_manage_stock	no
+25201	3218	_backorders	no
+25202	3218	_sold_individually	no
+25203	3218	_virtual	no
+25204	3218	_downloadable	no
+25205	3218	_download_limit	-1
+25206	3218	_download_expiry	-1
+25207	3218	_stock	NULL
+25208	3218	_stock_status	instock
+25209	3218	_wc_average_rating	0
+25210	3218	_wc_review_count	0
+25211	3218	attribute_pa_storlek	mellan-17-21-cm
+25212	3218	attribute_pa_farg	bla
+25213	3218	_product_version	10.2.1
+25928	3218	_thumbnail_id	0
+25929	3218	_price	550
+26141	3218	_sale_price	
+26642	3218	_regular_price	550
+25214	3219	_variation_description	
+25215	3219	total_sales	0
+25216	3219	_tax_status	taxable
+25217	3219	_tax_class	parent
+25218	3219	_manage_stock	no
+25219	3219	_backorders	no
+25220	3219	_sold_individually	no
+25221	3219	_virtual	no
+25222	3219	_downloadable	no
+25223	3219	_download_limit	-1
+25224	3219	_download_expiry	-1
+25225	3219	_stock	NULL
+25226	3219	_stock_status	instock
+25227	3219	_wc_average_rating	0
+25228	3219	_wc_review_count	0
+25229	3219	attribute_pa_storlek	stor-22-30-cm
+25230	3219	attribute_pa_farg	bla
+25231	3219	_product_version	10.2.1
+25940	3219	_thumbnail_id	0
+25941	3219	_price	950
+26599	3219	_sale_price	
+26644	3219	_regular_price	950
+25286	3223	_variation_description	
+25287	3223	total_sales	0
+25288	3223	_tax_status	taxable
+25289	3223	_tax_class	parent
+25290	3223	_manage_stock	no
+25291	3223	_backorders	no
+25292	3223	_sold_individually	no
+25293	3223	_virtual	no
+25294	3223	_downloadable	no
+25295	3223	_download_limit	-1
+25296	3223	_download_expiry	-1
+25297	3223	_stock	NULL
+25298	3223	_stock_status	instock
+25299	3223	_wc_average_rating	0
+25300	3223	_wc_review_count	0
+25301	3223	attribute_pa_storlek	liten-13-16-cm
+25302	3223	attribute_pa_farg	guld
+25303	3223	_product_version	10.2.1
+25988	3223	_thumbnail_id	0
+25989	3223	_price	350
+26215	3223	_sale_price	
+26653	3223	_regular_price	350
+25304	3224	_variation_description	
+25305	3224	total_sales	0
+25306	3224	_tax_status	taxable
+25307	3224	_tax_class	parent
+25308	3224	_manage_stock	no
+25309	3224	_backorders	no
+25310	3224	_sold_individually	no
+25311	3224	_virtual	no
+25312	3224	_downloadable	no
+25313	3224	_download_limit	-1
+25314	3224	_download_expiry	-1
+25315	3224	_stock	NULL
+25316	3224	_stock_status	instock
+25317	3224	_wc_average_rating	0
+25318	3224	_wc_review_count	0
+25319	3224	attribute_pa_storlek	mellan-17-21-cm
+25320	3224	attribute_pa_farg	guld
+25321	3224	_product_version	10.2.1
+26000	3224	_thumbnail_id	0
+26001	3224	_price	550
+26216	3224	_sale_price	
+26655	3224	_regular_price	550
+25322	3225	_variation_description	
+25323	3225	total_sales	0
+25324	3225	_tax_status	taxable
+25325	3225	_tax_class	parent
+25326	3225	_manage_stock	no
+25327	3225	_backorders	no
+25328	3225	_sold_individually	no
+25329	3225	_virtual	no
+25330	3225	_downloadable	no
+25331	3225	_download_limit	-1
+25332	3225	_download_expiry	-1
+25333	3225	_stock	NULL
+25334	3225	_stock_status	instock
+25335	3225	_wc_average_rating	0
+25336	3225	_wc_review_count	0
+25337	3225	attribute_pa_storlek	stor-22-30-cm
+25338	3225	attribute_pa_farg	guld
+25339	3225	_product_version	10.2.1
+26012	3225	_thumbnail_id	0
+26013	3225	_price	950
+26217	3225	_sale_price	
+26657	3225	_regular_price	950
+25340	3226	_variation_description	
+25341	3226	total_sales	0
+25342	3226	_tax_status	taxable
+25343	3226	_tax_class	parent
+25344	3226	_manage_stock	no
+25345	3226	_backorders	no
+25346	3226	_sold_individually	no
+25347	3226	_virtual	no
+25348	3226	_downloadable	no
+25349	3226	_download_limit	-1
+25350	3226	_download_expiry	-1
+25351	3226	_stock	NULL
+25352	3226	_stock_status	instock
+25353	3226	_wc_average_rating	0
+25354	3226	_wc_review_count	0
+25355	3226	attribute_pa_storlek	liten-13-16-cm
+25356	3226	attribute_pa_farg	ljusrosa
+25357	3226	_product_version	10.2.1
+26024	3226	_thumbnail_id	0
+26025	3226	_price	350
+26218	3226	_sale_price	
+26660	3226	_regular_price	350
+25358	3227	_variation_description	
+25359	3227	total_sales	0
+25360	3227	_tax_status	taxable
+25361	3227	_tax_class	parent
+25362	3227	_manage_stock	no
+25363	3227	_backorders	no
+25364	3227	_sold_individually	no
+25365	3227	_virtual	no
+25366	3227	_downloadable	no
+25367	3227	_download_limit	-1
+25368	3227	_download_expiry	-1
+25369	3227	_stock	NULL
+25370	3227	_stock_status	instock
+25371	3227	_wc_average_rating	0
+25372	3227	_wc_review_count	0
+25373	3227	attribute_pa_storlek	mellan-17-21-cm
+25374	3227	attribute_pa_farg	ljusrosa
+25375	3227	_product_version	10.2.1
+26036	3227	_thumbnail_id	0
+26037	3227	_price	550
+26219	3227	_sale_price	
+26663	3227	_regular_price	550
+25376	3228	_variation_description	
+25377	3228	total_sales	0
+25378	3228	_tax_status	taxable
+25379	3228	_tax_class	parent
+25380	3228	_manage_stock	no
+25381	3228	_backorders	no
+25382	3228	_sold_individually	no
+25383	3228	_virtual	no
+25384	3228	_downloadable	no
+25385	3228	_download_limit	-1
+25386	3228	_download_expiry	-1
+25387	3228	_stock	NULL
+25388	3228	_stock_status	instock
+25389	3228	_wc_average_rating	0
+25390	3228	_wc_review_count	0
+25391	3228	attribute_pa_storlek	stor-22-30-cm
+25392	3228	attribute_pa_farg	ljusrosa
+25393	3228	_product_version	10.2.1
+26048	3228	_thumbnail_id	0
+26049	3228	_price	950
+26220	3228	_sale_price	
+26665	3228	_regular_price	950
+25448	3232	_variation_description	
+25449	3232	total_sales	0
+25450	3232	_tax_status	taxable
+25451	3232	_tax_class	parent
+25452	3232	_manage_stock	no
+25453	3232	_backorders	no
+25454	3232	_sold_individually	no
+25455	3232	_virtual	no
+25456	3232	_downloadable	no
+25457	3232	_download_limit	-1
+25458	3232	_download_expiry	-1
+25459	3232	_stock	NULL
+25460	3232	_stock_status	instock
+25461	3232	_wc_average_rating	0
+25462	3232	_wc_review_count	0
+25463	3232	attribute_pa_storlek	liten-13-16-cm
+25464	3232	attribute_pa_farg	rod
+25465	3232	_product_version	10.2.1
+25776	3232	_thumbnail_id	0
+26247	3232	_sale_price	
+26248	3232	_price	350
+26634	3232	_regular_price	350
+25466	3233	_variation_description	
+25467	3233	total_sales	0
+25468	3233	_tax_status	taxable
+25469	3233	_tax_class	parent
+25470	3233	_manage_stock	no
+25471	3233	_backorders	no
+25472	3233	_sold_individually	no
+25473	3233	_virtual	no
+25474	3233	_downloadable	no
+25475	3233	_download_limit	-1
+25476	3233	_download_expiry	-1
+25477	3233	_stock	NULL
+25478	3233	_stock_status	instock
+25479	3233	_wc_average_rating	0
+25480	3233	_wc_review_count	0
+25481	3233	attribute_pa_storlek	mellan-17-21-cm
+25482	3233	attribute_pa_farg	rod
+25483	3233	_product_version	10.2.1
+25785	3233	_thumbnail_id	0
+26251	3233	_sale_price	
+26252	3233	_price	550
+26632	3233	_regular_price	550
+25484	3234	_variation_description	
+25485	3234	total_sales	0
+25486	3234	_tax_status	taxable
+25487	3234	_tax_class	parent
+25488	3234	_manage_stock	no
+25489	3234	_backorders	no
+25490	3234	_sold_individually	no
+25491	3234	_virtual	no
+25492	3234	_downloadable	no
+25493	3234	_download_limit	-1
+25494	3234	_download_expiry	-1
+25495	3234	_stock	NULL
+25496	3234	_stock_status	instock
+25497	3234	_wc_average_rating	0
+25498	3234	_wc_review_count	0
+25499	3234	attribute_pa_storlek	stor-22-30-cm
+25500	3234	attribute_pa_farg	rod
+25501	3234	_product_version	10.2.1
+25794	3234	_thumbnail_id	0
+26255	3234	_sale_price	
+26256	3234	_price	950
+26630	3234	_regular_price	950
+25502	3235	_variation_description	
+25503	3235	total_sales	0
+25504	3235	_tax_status	taxable
+25505	3235	_tax_class	parent
+25506	3235	_manage_stock	no
+25507	3235	_backorders	no
+25508	3235	_sold_individually	no
+25509	3235	_virtual	no
+25510	3235	_downloadable	no
+25511	3235	_download_limit	-1
+25512	3235	_download_expiry	-1
+25513	3235	_stock	NULL
+25514	3235	_stock_status	instock
+25515	3235	_wc_average_rating	0
+25516	3235	_wc_review_count	0
+25517	3235	attribute_pa_storlek	liten-13-16-cm
+25518	3235	attribute_pa_farg	rosa
+25519	3235	_product_version	10.2.1
+25803	3235	_thumbnail_id	0
+26259	3235	_sale_price	
+26260	3235	_price	350
+26602	3235	_regular_price	350
+25520	3236	_variation_description	
+25521	3236	total_sales	0
+25522	3236	_tax_status	taxable
+25523	3236	_tax_class	parent
+25524	3236	_manage_stock	no
+25525	3236	_backorders	no
+25526	3236	_sold_individually	no
+25527	3236	_virtual	no
+25528	3236	_downloadable	no
+25529	3236	_download_limit	-1
+25530	3236	_download_expiry	-1
+25531	3236	_stock	NULL
+25532	3236	_stock_status	instock
+25533	3236	_wc_average_rating	0
+25534	3236	_wc_review_count	0
+25535	3236	attribute_pa_storlek	mellan-17-21-cm
+25536	3236	attribute_pa_farg	rosa
+25537	3236	_product_version	10.2.1
+25812	3236	_thumbnail_id	0
+26263	3236	_sale_price	
+26264	3236	_price	550
+26604	3236	_regular_price	550
+25538	3237	_variation_description	
+25539	3237	total_sales	0
+25540	3237	_tax_status	taxable
+25541	3237	_tax_class	parent
+25542	3237	_manage_stock	no
+25543	3237	_backorders	no
+25544	3237	_sold_individually	no
+25545	3237	_virtual	no
+25546	3237	_downloadable	no
+25547	3237	_download_limit	-1
+25548	3237	_download_expiry	-1
+25549	3237	_stock	NULL
+25550	3237	_stock_status	instock
+25551	3237	_wc_average_rating	0
+25552	3237	_wc_review_count	0
+25553	3237	attribute_pa_storlek	stor-22-30-cm
+25554	3237	attribute_pa_farg	rosa
+25555	3237	_product_version	10.2.1
+25821	3237	_thumbnail_id	0
+26267	3237	_sale_price	
+26268	3237	_price	950
+26606	3237	_regular_price	950
+25556	3238	_variation_description	
+25557	3238	total_sales	0
+25558	3238	_tax_status	taxable
+25559	3238	_tax_class	parent
+25560	3238	_manage_stock	no
+25561	3238	_backorders	no
+25562	3238	_sold_individually	no
+25563	3238	_virtual	no
+25564	3238	_downloadable	no
+25565	3238	_download_limit	-1
+25566	3238	_download_expiry	-1
+25567	3238	_stock	NULL
+25568	3238	_stock_status	instock
+25569	3238	_wc_average_rating	0
+25570	3238	_wc_review_count	0
+25571	3238	attribute_pa_storlek	liten-13-16-cm
+25572	3238	attribute_pa_farg	rost
+25573	3238	_product_version	10.2.1
+25830	3238	_thumbnail_id	0
+26271	3238	_sale_price	
+26272	3238	_price	350
+26608	3238	_regular_price	350
+25574	3239	_variation_description	
+25575	3239	total_sales	0
+25576	3239	_tax_status	taxable
+25577	3239	_tax_class	parent
+25578	3239	_manage_stock	no
+25579	3239	_backorders	no
+25580	3239	_sold_individually	no
+25581	3239	_virtual	no
+25582	3239	_downloadable	no
+25583	3239	_download_limit	-1
+25584	3239	_download_expiry	-1
+25585	3239	_stock	NULL
+25586	3239	_stock_status	instock
+25587	3239	_wc_average_rating	0
+25588	3239	_wc_review_count	0
+25589	3239	attribute_pa_storlek	mellan-17-21-cm
+25590	3239	attribute_pa_farg	rost
+25591	3239	_product_version	10.2.1
+25839	3239	_thumbnail_id	0
+26275	3239	_sale_price	
+26276	3239	_price	550
+26610	3239	_regular_price	550
+25592	3240	_variation_description	
+25593	3240	total_sales	0
+25594	3240	_tax_status	taxable
+25595	3240	_tax_class	parent
+25596	3240	_manage_stock	no
+25597	3240	_backorders	no
+25598	3240	_sold_individually	no
+25599	3240	_virtual	no
+25600	3240	_downloadable	no
+25601	3240	_download_limit	-1
+25602	3240	_download_expiry	-1
+25603	3240	_stock	NULL
+25604	3240	_stock_status	instock
+25605	3240	_wc_average_rating	0
+25606	3240	_wc_review_count	0
+25607	3240	attribute_pa_storlek	stor-22-30-cm
+25608	3240	attribute_pa_farg	rost
+25609	3240	_product_version	10.2.1
+25848	3240	_thumbnail_id	0
+26279	3240	_sale_price	
+26280	3240	_price	950
+26612	3240	_regular_price	950
+25610	3241	_variation_description	
+25611	3241	total_sales	0
+25612	3241	_tax_status	taxable
+25613	3241	_tax_class	parent
+25614	3241	_manage_stock	no
+25615	3241	_backorders	no
+25616	3241	_sold_individually	no
+25617	3241	_virtual	no
+25618	3241	_downloadable	no
+25619	3241	_download_limit	-1
+25620	3241	_download_expiry	-1
+25621	3241	_stock	NULL
+25622	3241	_stock_status	instock
+25623	3241	_wc_average_rating	0
+25624	3241	_wc_review_count	0
+25625	3241	attribute_pa_storlek	liten-13-16-cm
+25626	3241	attribute_pa_farg	silver
+25627	3241	_product_version	10.2.1
+25857	3241	_thumbnail_id	0
+26283	3241	_sale_price	
+26284	3241	_price	350
+26614	3241	_regular_price	350
+25628	3242	_variation_description	
+25629	3242	total_sales	0
+25630	3242	_tax_status	taxable
+25631	3242	_tax_class	parent
+25632	3242	_manage_stock	no
+25633	3242	_backorders	no
+25634	3242	_sold_individually	no
+25635	3242	_virtual	no
+25636	3242	_downloadable	no
+25637	3242	_download_limit	-1
+25638	3242	_download_expiry	-1
+25639	3242	_stock	NULL
+25640	3242	_stock_status	instock
+25641	3242	_wc_average_rating	0
+25642	3242	_wc_review_count	0
+25643	3242	attribute_pa_storlek	mellan-17-21-cm
+25644	3242	attribute_pa_farg	silver
+25645	3242	_product_version	10.2.1
+25866	3242	_thumbnail_id	0
+26287	3242	_sale_price	
+26288	3242	_price	550
+26616	3242	_regular_price	550
+25646	3243	_variation_description	
+25647	3243	total_sales	0
+25648	3243	_tax_status	taxable
+25649	3243	_tax_class	parent
+25650	3243	_manage_stock	no
+25651	3243	_backorders	no
+25652	3243	_sold_individually	no
+25653	3243	_virtual	no
+25654	3243	_downloadable	no
+25655	3243	_download_limit	-1
+25656	3243	_download_expiry	-1
+25657	3243	_stock	NULL
+25658	3243	_stock_status	instock
+25659	3243	_wc_average_rating	0
+25660	3243	_wc_review_count	0
+25661	3243	attribute_pa_storlek	stor-22-30-cm
+25662	3243	attribute_pa_farg	silver
+25663	3243	_product_version	10.2.1
+25875	3243	_thumbnail_id	0
+26291	3243	_sale_price	
+26292	3243	_price	950
+26618	3243	_regular_price	950
+25664	3244	_variation_description	
+25665	3244	total_sales	0
+25666	3244	_tax_status	taxable
+25667	3244	_tax_class	parent
+25668	3244	_manage_stock	no
+25669	3244	_backorders	no
+25670	3244	_sold_individually	no
+25671	3244	_virtual	no
+25672	3244	_downloadable	no
+25673	3244	_download_limit	-1
+25674	3244	_download_expiry	-1
+25675	3244	_stock	NULL
+25676	3244	_stock_status	instock
+25677	3244	_wc_average_rating	0
+25678	3244	_wc_review_count	0
+25679	3244	attribute_pa_storlek	liten-13-16-cm
+25680	3244	attribute_pa_farg	svart
+25681	3244	_product_version	10.2.1
+25884	3244	_thumbnail_id	0
+26295	3244	_sale_price	
+26296	3244	_price	350
+26620	3244	_regular_price	350
+25682	3245	_variation_description	
+25683	3245	total_sales	0
+25684	3245	_tax_status	taxable
+25685	3245	_tax_class	parent
+25686	3245	_manage_stock	no
+25687	3245	_backorders	no
+25688	3245	_sold_individually	no
+25689	3245	_virtual	no
+25690	3245	_downloadable	no
+25691	3245	_download_limit	-1
+25692	3245	_download_expiry	-1
+25693	3245	_stock	NULL
+25694	3245	_stock_status	instock
+25695	3245	_wc_average_rating	0
+25696	3245	_wc_review_count	0
+25697	3245	attribute_pa_storlek	mellan-17-21-cm
+25698	3245	attribute_pa_farg	svart
+25699	3245	_product_version	10.2.1
+25893	3245	_thumbnail_id	0
+26299	3245	_sale_price	
+26300	3245	_price	550
+26622	3245	_regular_price	550
+25700	3246	_variation_description	
+25701	3246	total_sales	0
+25702	3246	_tax_status	taxable
+25703	3246	_tax_class	parent
+25704	3246	_manage_stock	no
+25705	3246	_backorders	no
+25706	3246	_sold_individually	no
+25707	3246	_virtual	no
+25708	3246	_downloadable	no
+25709	3246	_download_limit	-1
+25710	3246	_download_expiry	-1
+25711	3246	_stock	NULL
+25712	3246	_stock_status	instock
+25713	3246	_wc_average_rating	0
+25714	3246	_wc_review_count	0
+25715	3246	attribute_pa_storlek	stor-22-30-cm
+25716	3246	attribute_pa_farg	svart
+25717	3246	_product_version	10.2.1
+25902	3246	_thumbnail_id	0
+26303	3246	_sale_price	
+26304	3246	_price	950
+26624	3246	_regular_price	950
+25718	3247	_variation_description	
+25719	3247	total_sales	0
+25720	3247	_tax_status	taxable
+25721	3247	_tax_class	parent
+25722	3247	_manage_stock	no
+25723	3247	_backorders	no
+25724	3247	_sold_individually	no
+25725	3247	_virtual	no
+25726	3247	_downloadable	no
+25727	3247	_download_limit	-1
+25728	3247	_download_expiry	-1
+25729	3247	_stock	NULL
+25730	3247	_stock_status	instock
+25731	3247	_wc_average_rating	0
+25732	3247	_wc_review_count	0
+25733	3247	attribute_pa_storlek	liten-13-16-cm
+25734	3247	attribute_pa_farg	vit
+25735	3247	_product_version	10.2.1
+26362	3247	_sale_price	
+26363	3247	_thumbnail_id	0
+26364	3247	_price	350
+26626	3247	_regular_price	350
+25736	3248	_variation_description	
+25737	3248	total_sales	0
+25738	3248	_tax_status	taxable
+25739	3248	_tax_class	parent
+25740	3248	_manage_stock	no
+25741	3248	_backorders	no
+25742	3248	_sold_individually	no
+25743	3248	_virtual	no
+25744	3248	_downloadable	no
+25745	3248	_download_limit	-1
+25746	3248	_download_expiry	-1
+25747	3248	_stock	NULL
+25748	3248	_stock_status	instock
+25749	3248	_wc_average_rating	0
+25750	3248	_wc_review_count	0
+25751	3248	attribute_pa_storlek	mellan-17-21-cm
+25752	3248	attribute_pa_farg	vit
+25753	3248	_product_version	10.2.1
+26373	3248	_sale_price	
+26374	3248	_thumbnail_id	0
+26375	3248	_price	550
+26628	3248	_regular_price	550
+25754	3249	_variation_description	
+25755	3249	total_sales	0
+25756	3249	_tax_status	taxable
+25757	3249	_tax_class	parent
+25758	3249	_manage_stock	no
+25759	3249	_backorders	no
+25760	3249	_sold_individually	no
+25761	3249	_virtual	no
+25762	3249	_downloadable	no
+25763	3249	_download_limit	-1
+25764	3249	_download_expiry	-1
+25765	3249	_stock	NULL
+25766	3249	_stock_status	instock
+25767	3249	_wc_average_rating	0
+25768	3249	_wc_review_count	0
+25769	3249	attribute_pa_storlek	stor-22-30-cm
+25770	3249	attribute_pa_farg	vit
+25771	3249	_product_version	10.2.1
+26384	3249	_sale_price	
+26385	3249	_thumbnail_id	0
+26386	3249	_price	950
+26600	3249	_regular_price	950
+29854	3508	_variation_description	
+29855	3508	total_sales	0
+29856	3508	_tax_status	taxable
+29857	3508	_tax_class	parent
+29858	3508	_manage_stock	no
+29859	3508	_backorders	no
+29860	3508	_sold_individually	no
+29861	3508	_virtual	no
+29862	3508	_downloadable	no
+29863	3508	_download_limit	-1
+29864	3508	_download_expiry	-1
+29865	3508	_stock	NULL
+29866	3508	_stock_status	instock
+29867	3508	_wc_average_rating	0
+29868	3508	_wc_review_count	0
+29869	3508	attribute_pa_farg	bla
+29870	3508	_product_version	10.2.2
+30092	3508	_thumbnail_id	0
+30258	3508	_regular_price	299
+30259	3508	_price	199
+30295	3508	_last_change_time	1759788518
+30332	3508	_sale_price	199
+29905	3511	_variation_description	
+29906	3511	total_sales	0
+29907	3511	_tax_status	taxable
+29908	3511	_tax_class	parent
+29909	3511	_manage_stock	no
+29910	3511	_backorders	no
+29911	3511	_sold_individually	no
+29912	3511	_virtual	no
+29913	3511	_downloadable	no
+29914	3511	_download_limit	-1
+29915	3511	_download_expiry	-1
+29916	3511	_stock	NULL
+29917	3511	_stock_status	instock
+29918	3511	_wc_average_rating	0
+29919	3511	_wc_review_count	0
+29920	3511	attribute_pa_farg	gul
+29921	3511	_product_version	10.2.2
+30119	3511	_thumbnail_id	0
+30240	3511	_regular_price	299
+30241	3511	_price	199
+30289	3511	_last_change_time	1759788518
+30335	3511	_sale_price	199
+29939	3513	_variation_description	
+29940	3513	total_sales	0
+29941	3513	_tax_status	taxable
+29942	3513	_tax_class	parent
+29943	3513	_manage_stock	no
+29944	3513	_backorders	no
+29945	3513	_sold_individually	no
+29946	3513	_virtual	no
+29947	3513	_downloadable	no
+29948	3513	_download_limit	-1
+29949	3513	_download_expiry	-1
+29950	3513	_stock	NULL
+29951	3513	_stock_status	instock
+29952	3513	_wc_average_rating	0
+29953	3513	_wc_review_count	0
+29954	3513	attribute_pa_farg	ljusrosa
+29955	3513	_product_version	10.2.2
+30140	3513	_thumbnail_id	0
+30218	3513	_regular_price	299
+30219	3513	_price	199
+30285	3513	_last_change_time	1759788518
+30337	3513	_sale_price	199
+29973	3515	_variation_description	
+29974	3515	total_sales	0
+29975	3515	_tax_status	taxable
+29976	3515	_tax_class	parent
+29977	3515	_manage_stock	no
+29978	3515	_backorders	no
+29979	3515	_sold_individually	no
+29980	3515	_virtual	no
+29981	3515	_downloadable	no
+29982	3515	_download_limit	-1
+29983	3515	_download_expiry	-1
+29984	3515	_stock	NULL
+29985	3515	_stock_status	instock
+29986	3515	_wc_average_rating	0
+29987	3515	_wc_review_count	0
+29988	3515	attribute_pa_farg	orange
+29989	3515	_product_version	10.2.2
+30169	3515	_thumbnail_id	0
+30196	3515	_regular_price	299
+30197	3515	_price	199
+30281	3515	_last_change_time	1759788518
+30339	3515	_sale_price	199
+29990	3516	_variation_description	
+29991	3516	total_sales	0
+29992	3516	_tax_status	taxable
+29993	3516	_tax_class	parent
+29994	3516	_manage_stock	no
+29995	3516	_backorders	no
+29996	3516	_sold_individually	no
+29997	3516	_virtual	no
+29998	3516	_downloadable	no
+29999	3516	_download_limit	-1
+30000	3516	_download_expiry	-1
+30001	3516	_stock	NULL
+30002	3516	_stock_status	instock
+30003	3516	_wc_average_rating	0
+30004	3516	_wc_review_count	0
+30005	3516	attribute_pa_farg	rod
+30006	3516	_product_version	10.2.2
+30183	3516	_thumbnail_id	0
+30185	3516	_regular_price	299
+30189	3516	_price	199
+30279	3516	_last_change_time	1759788518
+30340	3516	_sale_price	199
+30007	3517	_variation_description	
+30008	3517	total_sales	0
+30009	3517	_tax_status	taxable
+30010	3517	_tax_class	parent
+30011	3517	_manage_stock	no
+30012	3517	_backorders	no
+30013	3517	_sold_individually	no
+30014	3517	_virtual	no
+30015	3517	_downloadable	no
+30016	3517	_download_limit	-1
+30017	3517	_download_expiry	-1
+30018	3517	_stock	NULL
+30019	3517	_stock_status	instock
+30020	3517	_wc_average_rating	0
+30021	3517	_wc_review_count	0
+30022	3517	attribute_pa_farg	rosa
+30023	3517	_product_version	10.2.2
+30172	3517	_regular_price	299
+30179	3517	_thumbnail_id	0
+30182	3517	_price	199
+30277	3517	_last_change_time	1759788518
+30341	3517	_sale_price	199
+30024	3518	_variation_description	
+30025	3518	total_sales	0
+30026	3518	_tax_status	taxable
+30027	3518	_tax_class	parent
+30028	3518	_manage_stock	no
+30029	3518	_backorders	no
+30030	3518	_sold_individually	no
+30031	3518	_virtual	no
+30032	3518	_downloadable	no
+30033	3518	_download_limit	-1
+30034	3518	_download_expiry	-1
+30035	3518	_stock	NULL
+30036	3518	_stock_status	instock
+30037	3518	_wc_average_rating	0
+30038	3518	_wc_review_count	0
+30039	3518	attribute_pa_farg	rost
+30040	3518	_product_version	10.2.2
+30167	3518	_regular_price	299
+30168	3518	_thumbnail_id	0
+30170	3518	_price	199
+30275	3518	_last_change_time	1759788518
+30342	3518	_sale_price	199
+30041	3519	_variation_description	
+30042	3519	total_sales	0
+30043	3519	_tax_status	taxable
+30044	3519	_tax_class	parent
+30045	3519	_manage_stock	no
+30046	3519	_backorders	no
+30047	3519	_sold_individually	no
+30048	3519	_virtual	no
+30049	3519	_downloadable	no
+30050	3519	_download_limit	-1
+30051	3519	_download_expiry	-1
+30052	3519	_stock	NULL
+30053	3519	_stock_status	instock
+30054	3519	_wc_average_rating	0
+30055	3519	_wc_review_count	0
+30056	3519	attribute_pa_farg	silver
+30057	3519	_product_version	10.2.2
+30155	3519	_regular_price	299
+30156	3519	_thumbnail_id	0
+30157	3519	_price	199
+30273	3519	_last_change_time	1759788518
+30343	3519	_sale_price	199
+30058	3520	_variation_description	
+30059	3520	total_sales	0
+30060	3520	_tax_status	taxable
+30061	3520	_tax_class	parent
+30062	3520	_manage_stock	no
+30063	3520	_backorders	no
+30064	3520	_sold_individually	no
+30065	3520	_virtual	no
+30066	3520	_downloadable	no
+30067	3520	_download_limit	-1
+30068	3520	_download_expiry	-1
+30069	3520	_stock	NULL
+30070	3520	_stock_status	instock
+30071	3520	_wc_average_rating	0
+30072	3520	_wc_review_count	0
+30073	3520	attribute_pa_farg	svart
+30074	3520	_product_version	10.2.2
+30142	3520	_regular_price	299
+30143	3520	_thumbnail_id	0
+30144	3520	_price	199
+30271	3520	_last_change_time	1759788518
+30344	3520	_sale_price	199
+30075	3521	_variation_description	
+30076	3521	total_sales	0
+30077	3521	_tax_status	taxable
+30078	3521	_tax_class	parent
+30079	3521	_manage_stock	no
+30080	3521	_backorders	no
+30081	3521	_sold_individually	no
+30082	3521	_virtual	no
+30083	3521	_downloadable	no
+30084	3521	_download_limit	-1
+30085	3521	_download_expiry	-1
+30086	3521	_stock	NULL
+30087	3521	_stock_status	instock
+30088	3521	_wc_average_rating	0
+30089	3521	_wc_review_count	0
+30090	3521	attribute_pa_farg	vit
+30091	3521	_product_version	10.2.2
+30129	3521	_regular_price	299
+30130	3521	_thumbnail_id	0
+30132	3521	_price	199
+30269	3521	_last_change_time	1759788518
+30345	3521	_sale_price	199
+42011	4175	_variation_description	
+42012	4175	total_sales	0
+42013	4175	_tax_status	taxable
+42014	4175	_tax_class	parent
+42015	4175	_manage_stock	no
+42016	4175	_backorders	no
+42017	4175	_sold_individually	no
+42018	4175	_virtual	no
+42019	4175	_downloadable	no
+42020	4175	_download_limit	-1
+42021	4175	_download_expiry	-1
+42022	4175	_stock	NULL
+42023	4175	_stock_status	instock
+42024	4175	_wc_average_rating	0
+42025	4175	_wc_review_count	0
+42026	4175	attribute_pa_farg	gul
+42027	4175	attribute_pa_namnskylt_stor_bokstav	1-produkt
+42028	4175	_product_version	10.5.3
+42742	4175	_thumbnail_id	0
+42899	4175	_regular_price	275
+42906	4175	_price	275
+43696	4175	_last_change_time	1773181011
+42029	4176	_variation_description	
+42030	4176	total_sales	0
+42031	4176	_tax_status	taxable
+42032	4176	_tax_class	parent
+42033	4176	_manage_stock	no
+42034	4176	_backorders	no
+42035	4176	_sold_individually	no
+42036	4176	_virtual	no
+42037	4176	_downloadable	no
+42038	4176	_download_limit	-1
+42039	4176	_download_expiry	-1
+42040	4176	_stock	NULL
+42041	4176	_stock_status	instock
+42042	4176	_wc_average_rating	0
+42043	4176	_wc_review_count	0
+42044	4176	attribute_pa_farg	ljusbla
+42045	4176	attribute_pa_namnskylt_stor_bokstav	1-produkt
+42046	4176	_product_version	10.5.3
+42756	4176	_thumbnail_id	0
+42910	4176	_regular_price	275
+42911	4176	_price	275
+43697	4176	_last_change_time	1773181011
+42047	4177	_variation_description	
+42048	4177	total_sales	0
+42049	4177	_tax_status	taxable
+42050	4177	_tax_class	parent
+42051	4177	_manage_stock	no
+42052	4177	_backorders	no
+42053	4177	_sold_individually	no
+42054	4177	_virtual	no
+42055	4177	_downloadable	no
+42056	4177	_download_limit	-1
+42057	4177	_download_expiry	-1
+42058	4177	_stock	NULL
+42059	4177	_stock_status	instock
+42060	4177	_wc_average_rating	0
+42061	4177	_wc_review_count	0
+42062	4177	attribute_pa_farg	rod
+42063	4177	attribute_pa_namnskylt_stor_bokstav	1-produkt
+42064	4177	_product_version	10.5.3
+42767	4177	_thumbnail_id	0
+42912	4177	_regular_price	275
+42913	4177	_price	275
+43698	4177	_last_change_time	1773181011
+42065	4178	_variation_description	
+42066	4178	total_sales	0
+42067	4178	_tax_status	taxable
+42068	4178	_tax_class	parent
+42069	4178	_manage_stock	no
+42070	4178	_backorders	no
+42071	4178	_sold_individually	no
+42072	4178	_virtual	no
+42073	4178	_downloadable	no
+42074	4178	_download_limit	-1
+42075	4178	_download_expiry	-1
+42076	4178	_stock	NULL
+42077	4178	_stock_status	instock
+42078	4178	_wc_average_rating	0
+42079	4178	_wc_review_count	0
+42080	4178	attribute_pa_farg	rosa
+42081	4178	attribute_pa_namnskylt_stor_bokstav	1-produkt
+42082	4178	_product_version	10.5.3
+42778	4178	_thumbnail_id	0
+42914	4178	_regular_price	275
+42915	4178	_price	275
+43699	4178	_last_change_time	1773181011
+42083	4179	_variation_description	
+42084	4179	total_sales	0
+42085	4179	_tax_status	taxable
+42086	4179	_tax_class	parent
+42087	4179	_manage_stock	no
+42088	4179	_backorders	no
+42089	4179	_sold_individually	no
+42090	4179	_virtual	no
+42091	4179	_downloadable	no
+42092	4179	_download_limit	-1
+42093	4179	_download_expiry	-1
+42094	4179	_stock	NULL
+42095	4179	_stock_status	instock
+42096	4179	_wc_average_rating	0
+42097	4179	_wc_review_count	0
+42098	4179	attribute_pa_farg	silver
+42099	4179	attribute_pa_namnskylt_stor_bokstav	1-produkt
+42100	4179	_product_version	10.5.3
+42790	4179	_thumbnail_id	0
+42916	4179	_regular_price	275
+42917	4179	_price	275
+43700	4179	_last_change_time	1773181011
+42101	4180	_variation_description	
+42102	4180	total_sales	0
+42103	4180	_tax_status	taxable
+42104	4180	_tax_class	parent
+42105	4180	_manage_stock	no
+42106	4180	_backorders	no
+42107	4180	_sold_individually	no
+42108	4180	_virtual	no
+42109	4180	_downloadable	no
+42110	4180	_download_limit	-1
+42111	4180	_download_expiry	-1
+42112	4180	_stock	NULL
+42113	4180	_stock_status	instock
+42114	4180	_wc_average_rating	0
+42115	4180	_wc_review_count	0
+42116	4180	attribute_pa_farg	svart
+42117	4180	attribute_pa_namnskylt_stor_bokstav	1-produkt
+42118	4180	_product_version	10.5.3
+42803	4180	_thumbnail_id	0
+42918	4180	_regular_price	275
+42919	4180	_price	275
+43701	4180	_last_change_time	1773181011
+42119	4181	_variation_description	
+42120	4181	total_sales	0
+42121	4181	_tax_status	taxable
+42122	4181	_tax_class	parent
+42123	4181	_manage_stock	no
+42124	4181	_backorders	no
+42125	4181	_sold_individually	no
+42126	4181	_virtual	no
+42127	4181	_downloadable	no
+42128	4181	_download_limit	-1
+42129	4181	_download_expiry	-1
+42130	4181	_stock	NULL
+42131	4181	_stock_status	instock
+42132	4181	_wc_average_rating	0
+42133	4181	_wc_review_count	0
+42134	4181	attribute_pa_farg	vit
+42135	4181	attribute_pa_namnskylt_stor_bokstav	1-produkt
+42136	4181	_product_version	10.5.3
+42814	4181	_thumbnail_id	0
+42920	4181	_regular_price	275
+42921	4181	_price	275
+43702	4181	_last_change_time	1773181011
+42137	4182	_variation_description	
+42138	4182	total_sales	0
+42139	4182	_tax_status	taxable
+42140	4182	_tax_class	parent
+42141	4182	_manage_stock	no
+42142	4182	_backorders	no
+42143	4182	_sold_individually	no
+42144	4182	_virtual	no
+42145	4182	_downloadable	no
+42146	4182	_download_limit	-1
+42147	4182	_download_expiry	-1
+42148	4182	_stock	NULL
+42149	4182	_stock_status	instock
+42150	4182	_wc_average_rating	0
+42151	4182	_wc_review_count	0
+42152	4182	attribute_pa_farg	gul
+42153	4182	attribute_pa_namnskylt_stor_bokstav	2-produkter
+42154	4182	_product_version	10.5.3
+42825	4182	_thumbnail_id	0
+42922	4182	_regular_price	499
+42923	4182	_price	499
+43056	4182	_last_change_time	1773181011
+42155	4183	_variation_description	
+42156	4183	total_sales	0
+42157	4183	_tax_status	taxable
+42158	4183	_tax_class	parent
+42159	4183	_manage_stock	no
+42160	4183	_backorders	no
+42161	4183	_sold_individually	no
+42162	4183	_virtual	no
+42163	4183	_downloadable	no
+42164	4183	_download_limit	-1
+42165	4183	_download_expiry	-1
+42166	4183	_stock	NULL
+42167	4183	_stock_status	instock
+42168	4183	_wc_average_rating	0
+42169	4183	_wc_review_count	0
+42170	4183	attribute_pa_farg	ljusbla
+42171	4183	attribute_pa_namnskylt_stor_bokstav	2-produkter
+42172	4183	_product_version	10.5.3
+42836	4183	_thumbnail_id	0
+42884	4183	_regular_price	499
+42888	4183	_price	499
+43057	4183	_last_change_time	1773181011
+42173	4184	_variation_description	
+42174	4184	total_sales	0
+42175	4184	_tax_status	taxable
+42176	4184	_tax_class	parent
+42177	4184	_manage_stock	no
+42178	4184	_backorders	no
+42179	4184	_sold_individually	no
+42180	4184	_virtual	no
+42181	4184	_downloadable	no
+42182	4184	_download_limit	-1
+42183	4184	_download_expiry	-1
+42184	4184	_stock	NULL
+42185	4184	_stock_status	instock
+42186	4184	_wc_average_rating	0
+42187	4184	_wc_review_count	0
+42188	4184	attribute_pa_farg	rod
+42189	4184	attribute_pa_namnskylt_stor_bokstav	2-produkter
+42190	4184	_product_version	10.5.3
+42847	4184	_thumbnail_id	0
+42878	4184	_regular_price	499
+42879	4184	_price	499
+43058	4184	_last_change_time	1773181011
+42191	4185	_variation_description	
+42192	4185	total_sales	0
+42193	4185	_tax_status	taxable
+42194	4185	_tax_class	parent
+42195	4185	_manage_stock	no
+42196	4185	_backorders	no
+42197	4185	_sold_individually	no
+42198	4185	_virtual	no
+42199	4185	_downloadable	no
+42200	4185	_download_limit	-1
+42201	4185	_download_expiry	-1
+42202	4185	_stock	NULL
+42203	4185	_stock_status	instock
+42204	4185	_wc_average_rating	0
+42205	4185	_wc_review_count	0
+42206	4185	attribute_pa_farg	rosa
+42207	4185	attribute_pa_namnskylt_stor_bokstav	2-produkter
+42208	4185	_product_version	10.5.3
+42860	4185	_thumbnail_id	0
+42869	4185	_regular_price	499
+42870	4185	_price	499
+43059	4185	_last_change_time	1773181011
+42209	4186	_variation_description	
+42210	4186	total_sales	0
+42211	4186	_tax_status	taxable
+42212	4186	_tax_class	parent
+42213	4186	_manage_stock	no
+42214	4186	_backorders	no
+42215	4186	_sold_individually	no
+42216	4186	_virtual	no
+42217	4186	_downloadable	no
+42218	4186	_download_limit	-1
+42219	4186	_download_expiry	-1
+42220	4186	_stock	NULL
+42221	4186	_stock_status	instock
+42222	4186	_wc_average_rating	0
+42223	4186	_wc_review_count	0
+42224	4186	attribute_pa_farg	silver
+42225	4186	attribute_pa_namnskylt_stor_bokstav	2-produkter
+42226	4186	_product_version	10.5.3
+42800	4186	_regular_price	499
+42801	4186	_thumbnail_id	0
+42802	4186	_price	499
+43060	4186	_last_change_time	1773181011
+42227	4187	_variation_description	
+42228	4187	total_sales	0
+42229	4187	_tax_status	taxable
+42230	4187	_tax_class	parent
+42231	4187	_manage_stock	no
+42232	4187	_backorders	no
+42233	4187	_sold_individually	no
+42234	4187	_virtual	no
+42235	4187	_downloadable	no
+42236	4187	_download_limit	-1
+42237	4187	_download_expiry	-1
+42238	4187	_stock	NULL
+42239	4187	_stock_status	instock
+42240	4187	_wc_average_rating	0
+42241	4187	_wc_review_count	0
+42242	4187	attribute_pa_farg	svart
+42243	4187	attribute_pa_namnskylt_stor_bokstav	2-produkter
+42244	4187	_product_version	10.5.3
+42804	4187	_regular_price	499
+42805	4187	_thumbnail_id	0
+42810	4187	_price	499
+43061	4187	_last_change_time	1773181011
+42245	4188	_variation_description	
+42246	4188	total_sales	0
+42247	4188	_tax_status	taxable
+42248	4188	_tax_class	parent
+42249	4188	_manage_stock	no
+42250	4188	_backorders	no
+42251	4188	_sold_individually	no
+42252	4188	_virtual	no
+42253	4188	_downloadable	no
+42254	4188	_download_limit	-1
+42255	4188	_download_expiry	-1
+42256	4188	_stock	NULL
+42257	4188	_stock_status	instock
+42258	4188	_wc_average_rating	0
+42259	4188	_wc_review_count	0
+42260	4188	attribute_pa_farg	vit
+42261	4188	attribute_pa_namnskylt_stor_bokstav	2-produkter
+42262	4188	_product_version	10.5.3
+42815	4188	_regular_price	499
+42816	4188	_thumbnail_id	0
+42817	4188	_price	499
+43062	4188	_last_change_time	1773181011
+42263	4189	_variation_description	
+42264	4189	total_sales	0
+42265	4189	_tax_status	taxable
+42266	4189	_tax_class	parent
+42267	4189	_manage_stock	no
+42268	4189	_backorders	no
+42269	4189	_sold_individually	no
+42270	4189	_virtual	no
+42271	4189	_downloadable	no
+42272	4189	_download_limit	-1
+42273	4189	_download_expiry	-1
+42274	4189	_stock	NULL
+42275	4189	_stock_status	instock
+42276	4189	_wc_average_rating	0
+42277	4189	_wc_review_count	0
+42278	4189	attribute_pa_farg	gul
+42279	4189	attribute_pa_namnskylt_stor_bokstav	3-produkter
+42280	4189	_product_version	10.5.3
+42826	4189	_regular_price	699
+42827	4189	_thumbnail_id	0
+42828	4189	_price	699
+43063	4189	_last_change_time	1773181011
+42281	4190	_variation_description	
+42282	4190	total_sales	0
+42283	4190	_tax_status	taxable
+42284	4190	_tax_class	parent
+42285	4190	_manage_stock	no
+42286	4190	_backorders	no
+42287	4190	_sold_individually	no
+42288	4190	_virtual	no
+42289	4190	_downloadable	no
+42290	4190	_download_limit	-1
+42291	4190	_download_expiry	-1
+42292	4190	_stock	NULL
+42293	4190	_stock_status	instock
+42294	4190	_wc_average_rating	0
+42295	4190	_wc_review_count	0
+42296	4190	attribute_pa_farg	ljusbla
+42297	4190	attribute_pa_namnskylt_stor_bokstav	3-produkter
+42298	4190	_product_version	10.5.3
+42837	4190	_regular_price	699
+42838	4190	_thumbnail_id	0
+42839	4190	_price	699
+43072	4190	_last_change_time	1773181088
+42299	4191	_variation_description	
+42300	4191	total_sales	0
+42301	4191	_tax_status	taxable
+42302	4191	_tax_class	parent
+42303	4191	_manage_stock	no
+42304	4191	_backorders	no
+42305	4191	_sold_individually	no
+42306	4191	_virtual	no
+42307	4191	_downloadable	no
+42308	4191	_download_limit	-1
+42309	4191	_download_expiry	-1
+42310	4191	_stock	NULL
+42311	4191	_stock_status	instock
+42312	4191	_wc_average_rating	0
+42313	4191	_wc_review_count	0
+42314	4191	attribute_pa_farg	rod
+42315	4191	attribute_pa_namnskylt_stor_bokstav	3-produkter
+42316	4191	_product_version	10.5.3
+42889	4191	_regular_price	699
+42895	4191	_thumbnail_id	0
+42898	4191	_price	699
+43080	4191	_last_change_time	1773181088
+42317	4192	_variation_description	
+42318	4192	total_sales	0
+42319	4192	_tax_status	taxable
+42320	4192	_tax_class	parent
+42321	4192	_manage_stock	no
+42322	4192	_backorders	no
+42323	4192	_sold_individually	no
+42324	4192	_virtual	no
+42325	4192	_downloadable	no
+42326	4192	_download_limit	-1
+42327	4192	_download_expiry	-1
+42328	4192	_stock	NULL
+42329	4192	_stock_status	instock
+42330	4192	_wc_average_rating	0
+42331	4192	_wc_review_count	0
+42332	4192	attribute_pa_farg	rosa
+42333	4192	attribute_pa_namnskylt_stor_bokstav	3-produkter
+42334	4192	_product_version	10.5.3
+42848	4192	_regular_price	699
+42849	4192	_thumbnail_id	0
+42850	4192	_price	699
+43088	4192	_last_change_time	1773181088
+42335	4193	_variation_description	
+42336	4193	total_sales	0
+42337	4193	_tax_status	taxable
+42338	4193	_tax_class	parent
+42339	4193	_manage_stock	no
+42340	4193	_backorders	no
+42341	4193	_sold_individually	no
+42342	4193	_virtual	no
+42343	4193	_downloadable	no
+42344	4193	_download_limit	-1
+42345	4193	_download_expiry	-1
+42346	4193	_stock	NULL
+42347	4193	_stock_status	instock
+42348	4193	_wc_average_rating	0
+42349	4193	_wc_review_count	0
+42350	4193	attribute_pa_farg	silver
+42351	4193	attribute_pa_namnskylt_stor_bokstav	3-produkter
+42352	4193	_product_version	10.5.3
+42858	4193	_regular_price	699
+42859	4193	_thumbnail_id	0
+42861	4193	_price	699
+43096	4193	_last_change_time	1773181088
+42353	4194	_variation_description	
+42354	4194	total_sales	0
+42355	4194	_tax_status	taxable
+42356	4194	_tax_class	parent
+42357	4194	_manage_stock	no
+42358	4194	_backorders	no
+42359	4194	_sold_individually	no
+42360	4194	_virtual	no
+42361	4194	_downloadable	no
+42362	4194	_download_limit	-1
+42363	4194	_download_expiry	-1
+42364	4194	_stock	NULL
+42365	4194	_stock_status	instock
+42366	4194	_wc_average_rating	0
+42367	4194	_wc_review_count	0
+42368	4194	attribute_pa_farg	svart
+42369	4194	attribute_pa_namnskylt_stor_bokstav	3-produkter
+42370	4194	_product_version	10.5.3
+42736	4194	_regular_price	699
+42737	4194	_thumbnail_id	0
+42738	4194	_price	699
+43104	4194	_last_change_time	1773181088
+42371	4195	_variation_description	
+42372	4195	total_sales	0
+42373	4195	_tax_status	taxable
+42374	4195	_tax_class	parent
+42375	4195	_manage_stock	no
+42376	4195	_backorders	no
+42377	4195	_sold_individually	no
+42378	4195	_virtual	no
+42379	4195	_downloadable	no
+42380	4195	_download_limit	-1
+42381	4195	_download_expiry	-1
+42382	4195	_stock	NULL
+42383	4195	_stock_status	instock
+42384	4195	_wc_average_rating	0
+42385	4195	_wc_review_count	0
+42386	4195	attribute_pa_farg	vit
+42387	4195	attribute_pa_namnskylt_stor_bokstav	3-produkter
+42388	4195	_product_version	10.5.3
+42733	4195	_regular_price	699
+42734	4195	_thumbnail_id	0
+42735	4195	_price	699
+43112	4195	_last_change_time	1773181088
+42389	4196	_variation_description	
+42390	4196	total_sales	0
+42391	4196	_tax_status	taxable
+42392	4196	_tax_class	parent
+42393	4196	_manage_stock	no
+42394	4196	_backorders	no
+42395	4196	_sold_individually	no
+42396	4196	_virtual	no
+42397	4196	_downloadable	no
+42398	4196	_download_limit	-1
+42399	4196	_download_expiry	-1
+42400	4196	_stock	NULL
+42401	4196	_stock_status	instock
+42402	4196	_wc_average_rating	0
+42403	4196	_wc_review_count	0
+42404	4196	attribute_pa_farg	gul
+42405	4196	attribute_pa_namnskylt_stor_bokstav	4-produkter
+42406	4196	_product_version	10.5.3
+42730	4196	_regular_price	899
+42731	4196	_thumbnail_id	0
+42732	4196	_price	899
+43120	4196	_last_change_time	1773181088
+42407	4197	_variation_description	
+42408	4197	total_sales	0
+42409	4197	_tax_status	taxable
+42410	4197	_tax_class	parent
+42411	4197	_manage_stock	no
+42412	4197	_backorders	no
+42413	4197	_sold_individually	no
+42414	4197	_virtual	no
+42415	4197	_downloadable	no
+42416	4197	_download_limit	-1
+42417	4197	_download_expiry	-1
+42418	4197	_stock	NULL
+42419	4197	_stock_status	instock
+42420	4197	_wc_average_rating	0
+42421	4197	_wc_review_count	0
+42422	4197	attribute_pa_farg	ljusbla
+42423	4197	attribute_pa_namnskylt_stor_bokstav	4-produkter
+42424	4197	_product_version	10.5.3
+42727	4197	_regular_price	899
+42728	4197	_thumbnail_id	0
+42729	4197	_price	899
+43128	4197	_last_change_time	1773181088
+42425	4198	_variation_description	
+42426	4198	total_sales	0
+42427	4198	_tax_status	taxable
+42428	4198	_tax_class	parent
+42429	4198	_manage_stock	no
+42430	4198	_backorders	no
+42431	4198	_sold_individually	no
+42432	4198	_virtual	no
+42433	4198	_downloadable	no
+42434	4198	_download_limit	-1
+42435	4198	_download_expiry	-1
+42436	4198	_stock	NULL
+42437	4198	_stock_status	instock
+42438	4198	_wc_average_rating	0
+42439	4198	_wc_review_count	0
+42440	4198	attribute_pa_farg	rod
+42441	4198	attribute_pa_namnskylt_stor_bokstav	4-produkter
+42442	4198	_product_version	10.5.3
+42724	4198	_regular_price	899
+42725	4198	_thumbnail_id	0
+42726	4198	_price	899
+43136	4198	_last_change_time	1773181088
+42443	4199	_variation_description	
+42444	4199	total_sales	0
+42445	4199	_tax_status	taxable
+42446	4199	_tax_class	parent
+42447	4199	_manage_stock	no
+42448	4199	_backorders	no
+42449	4199	_sold_individually	no
+42450	4199	_virtual	no
+42451	4199	_downloadable	no
+42452	4199	_download_limit	-1
+42453	4199	_download_expiry	-1
+42454	4199	_stock	NULL
+42455	4199	_stock_status	instock
+42456	4199	_wc_average_rating	0
+42457	4199	_wc_review_count	0
+42458	4199	attribute_pa_farg	rosa
+42459	4199	attribute_pa_namnskylt_stor_bokstav	4-produkter
+42460	4199	_product_version	10.5.3
+42739	4199	_regular_price	899
+42740	4199	_thumbnail_id	0
+42741	4199	_price	899
+43144	4199	_last_change_time	1773181088
+42461	4200	_variation_description	
+42462	4200	total_sales	0
+42463	4200	_tax_status	taxable
+42464	4200	_tax_class	parent
+42465	4200	_manage_stock	no
+42466	4200	_backorders	no
+42467	4200	_sold_individually	no
+42468	4200	_virtual	no
+42469	4200	_downloadable	no
+42470	4200	_download_limit	-1
+42471	4200	_download_expiry	-1
+42472	4200	_stock	NULL
+42473	4200	_stock_status	instock
+42474	4200	_wc_average_rating	0
+42475	4200	_wc_review_count	0
+42476	4200	attribute_pa_farg	silver
+42477	4200	attribute_pa_namnskylt_stor_bokstav	4-produkter
+42478	4200	_product_version	10.5.3
+42743	4200	_regular_price	899
+42744	4200	_thumbnail_id	0
+42745	4200	_price	899
+43152	4200	_last_change_time	1773181088
+42479	4201	_variation_description	
+42480	4201	total_sales	0
+42481	4201	_tax_status	taxable
+42482	4201	_tax_class	parent
+42483	4201	_manage_stock	no
+42484	4201	_backorders	no
+42485	4201	_sold_individually	no
+42486	4201	_virtual	no
+42487	4201	_downloadable	no
+42488	4201	_download_limit	-1
+42489	4201	_download_expiry	-1
+42490	4201	_stock	NULL
+42491	4201	_stock_status	instock
+42492	4201	_wc_average_rating	0
+42493	4201	_wc_review_count	0
+42494	4201	attribute_pa_farg	svart
+42495	4201	attribute_pa_namnskylt_stor_bokstav	4-produkter
+42496	4201	_product_version	10.5.3
+42750	4201	_regular_price	899
+42754	4201	_thumbnail_id	0
+42755	4201	_price	899
+43160	4201	_last_change_time	1773181088
+42497	4202	_variation_description	
+42498	4202	total_sales	0
+42499	4202	_tax_status	taxable
+42500	4202	_tax_class	parent
+42501	4202	_manage_stock	no
+42502	4202	_backorders	no
+42503	4202	_sold_individually	no
+42504	4202	_virtual	no
+42505	4202	_downloadable	no
+42506	4202	_download_limit	-1
+42507	4202	_download_expiry	-1
+42508	4202	_stock	NULL
+42509	4202	_stock_status	instock
+42510	4202	_wc_average_rating	0
+42511	4202	_wc_review_count	0
+42512	4202	attribute_pa_farg	vit
+42513	4202	attribute_pa_namnskylt_stor_bokstav	4-produkter
+42514	4202	_product_version	10.5.3
+42757	4202	_regular_price	899
+42765	4202	_thumbnail_id	0
+42766	4202	_price	899
+43168	4202	_last_change_time	1773181088
+42515	4203	_variation_description	
+42516	4203	total_sales	0
+42517	4203	_tax_status	taxable
+42518	4203	_tax_class	parent
+42519	4203	_manage_stock	no
+42520	4203	_backorders	no
+42521	4203	_sold_individually	no
+42522	4203	_virtual	no
+42523	4203	_downloadable	no
+42524	4203	_download_limit	-1
+42525	4203	_download_expiry	-1
+42526	4203	_stock	NULL
+42527	4203	_stock_status	instock
+42528	4203	_wc_average_rating	0
+42529	4203	_wc_review_count	0
+42530	4203	attribute_pa_farg	gul
+42531	4203	attribute_pa_namnskylt_stor_bokstav	5-produkter
+42532	4203	_product_version	10.5.3
+42768	4203	_regular_price	999
+42769	4203	_thumbnail_id	0
+42770	4203	_price	999
+43176	4203	_last_change_time	1773181088
+42533	4204	_variation_description	
+42534	4204	total_sales	0
+42535	4204	_tax_status	taxable
+42536	4204	_tax_class	parent
+42537	4204	_manage_stock	no
+42538	4204	_backorders	no
+42539	4204	_sold_individually	no
+42540	4204	_virtual	no
+42541	4204	_downloadable	no
+42542	4204	_download_limit	-1
+42543	4204	_download_expiry	-1
+42544	4204	_stock	NULL
+42545	4204	_stock_status	instock
+42546	4204	_wc_average_rating	0
+42547	4204	_wc_review_count	0
+42548	4204	attribute_pa_farg	ljusbla
+42549	4204	attribute_pa_namnskylt_stor_bokstav	5-produkter
+42550	4204	_product_version	10.5.3
+42779	4204	_regular_price	999
+42780	4204	_thumbnail_id	0
+42781	4204	_price	999
+43184	4204	_last_change_time	1773181088
+42551	4205	_variation_description	
+42552	4205	total_sales	0
+42553	4205	_tax_status	taxable
+42554	4205	_tax_class	parent
+42555	4205	_manage_stock	no
+42556	4205	_backorders	no
+42557	4205	_sold_individually	no
+42558	4205	_virtual	no
+42559	4205	_downloadable	no
+42560	4205	_download_limit	-1
+42561	4205	_download_expiry	-1
+42562	4205	_stock	NULL
+42563	4205	_stock_status	instock
+42564	4205	_wc_average_rating	0
+42565	4205	_wc_review_count	0
+42566	4205	attribute_pa_farg	rod
+42567	4205	attribute_pa_namnskylt_stor_bokstav	5-produkter
+42568	4205	_product_version	10.5.3
+42789	4205	_regular_price	999
+42791	4205	_thumbnail_id	0
+42792	4205	_price	999
+43202	4205	_last_change_time	1773181116
+42569	4206	_variation_description	
+42570	4206	total_sales	0
+42571	4206	_tax_status	taxable
+42572	4206	_tax_class	parent
+42573	4206	_manage_stock	no
+42574	4206	_backorders	no
+42575	4206	_sold_individually	no
+42576	4206	_virtual	no
+42577	4206	_downloadable	no
+42578	4206	_download_limit	-1
+42579	4206	_download_expiry	-1
+42580	4206	_stock	NULL
+42581	4206	_stock_status	instock
+42582	4206	_wc_average_rating	0
+42583	4206	_wc_review_count	0
+42584	4206	attribute_pa_farg	rosa
+42585	4206	attribute_pa_namnskylt_stor_bokstav	5-produkter
+42586	4206	_product_version	10.5.3
+42721	4206	_regular_price	999
+42722	4206	_thumbnail_id	0
+42723	4206	_price	999
+43210	4206	_last_change_time	1773181116
+42587	4207	_variation_description	
+42588	4207	total_sales	0
+42589	4207	_tax_status	taxable
+42590	4207	_tax_class	parent
+42591	4207	_manage_stock	no
+42592	4207	_backorders	no
+42593	4207	_sold_individually	no
+42594	4207	_virtual	no
+42595	4207	_downloadable	no
+42596	4207	_download_limit	-1
+42597	4207	_download_expiry	-1
+42598	4207	_stock	NULL
+42599	4207	_stock_status	instock
+42600	4207	_wc_average_rating	0
+42601	4207	_wc_review_count	0
+42602	4207	attribute_pa_farg	silver
+42603	4207	attribute_pa_namnskylt_stor_bokstav	5-produkter
+42604	4207	_product_version	10.5.3
+42718	4207	_regular_price	999
+42719	4207	_thumbnail_id	0
+42720	4207	_price	999
+43218	4207	_last_change_time	1773181116
+42605	4208	_variation_description	
+42606	4208	total_sales	0
+42607	4208	_tax_status	taxable
+42608	4208	_tax_class	parent
+42609	4208	_manage_stock	no
+42610	4208	_backorders	no
+42611	4208	_sold_individually	no
+42612	4208	_virtual	no
+42613	4208	_downloadable	no
+42614	4208	_download_limit	-1
+42615	4208	_download_expiry	-1
+42616	4208	_stock	NULL
+42617	4208	_stock_status	instock
+42618	4208	_wc_average_rating	0
+42619	4208	_wc_review_count	0
+42620	4208	attribute_pa_farg	svart
+42621	4208	attribute_pa_namnskylt_stor_bokstav	5-produkter
+42622	4208	_product_version	10.5.3
+42715	4208	_regular_price	999
+42716	4208	_thumbnail_id	0
+42717	4208	_price	999
+43226	4208	_last_change_time	1773181116
+42623	4209	_variation_description	
+42624	4209	total_sales	0
+42625	4209	_tax_status	taxable
+42626	4209	_tax_class	parent
+42627	4209	_manage_stock	no
+42628	4209	_backorders	no
+42629	4209	_sold_individually	no
+42630	4209	_virtual	no
+42631	4209	_downloadable	no
+42632	4209	_download_limit	-1
+42633	4209	_download_expiry	-1
+42634	4209	_stock	NULL
+42635	4209	_stock_status	instock
+42636	4209	_wc_average_rating	0
+42637	4209	_wc_review_count	0
+42638	4209	attribute_pa_farg	vit
+42639	4209	attribute_pa_namnskylt_stor_bokstav	5-produkter
+42640	4209	_product_version	10.5.3
+42712	4209	_regular_price	999
+42713	4209	_thumbnail_id	0
+42714	4209	_price	999
+43234	4209	_last_change_time	1773181116
+49653	4519	_variation_description	
+49654	4519	total_sales	0
+49655	4519	_tax_status	taxable
+49656	4519	_tax_class	parent
+49657	4519	_manage_stock	no
+49658	4519	_backorders	no
+49659	4519	_sold_individually	no
+49660	4519	_virtual	no
+49661	4519	_downloadable	no
+49662	4519	_download_limit	-1
+49663	4519	_download_expiry	-1
+49664	4519	_stock	NULL
+49665	4519	_stock_status	instock
+49666	4519	_wc_average_rating	0
+49667	4519	_wc_review_count	0
+49668	4519	attribute_pa_farg	gul
+49669	4519	_product_version	10.7.0
+49756	4519	_thumbnail_id	0
+49757	4519	_price	275
+49761	4519	_sale_price	275
+49763	4519	_last_change_time	1778888585
+49880	4519	_regular_price	490
+49670	4520	_variation_description	
+49671	4520	total_sales	0
+49672	4520	_tax_status	taxable
+49673	4520	_tax_class	parent
+49674	4520	_manage_stock	no
+49675	4520	_backorders	no
+49676	4520	_sold_individually	no
+49677	4520	_virtual	no
+49678	4520	_downloadable	no
+49679	4520	_download_limit	-1
+49680	4520	_download_expiry	-1
+49681	4520	_stock	NULL
+49682	4520	_stock_status	instock
+49683	4520	_wc_average_rating	0
+49684	4520	_wc_review_count	0
+49685	4520	attribute_pa_farg	ljusbla
+49686	4520	_product_version	10.7.0
+49759	4520	_regular_price	490
+49760	4520	_thumbnail_id	0
+49762	4520	_price	275
+49853	4520	_last_change_time	1778888585
+49889	4520	_sale_price	275
+49687	4521	_variation_description	
+49688	4521	total_sales	0
+49689	4521	_tax_status	taxable
+49690	4521	_tax_class	parent
+49691	4521	_manage_stock	no
+49692	4521	_backorders	no
+49693	4521	_sold_individually	no
+49694	4521	_virtual	no
+49695	4521	_downloadable	no
+49696	4521	_download_limit	-1
+49697	4521	_download_expiry	-1
+49698	4521	_stock	NULL
+49699	4521	_stock_status	instock
+49700	4521	_wc_average_rating	0
+49701	4521	_wc_review_count	0
+49702	4521	attribute_pa_farg	ljusrosa
+49703	4521	_product_version	10.7.0
+49765	4521	_regular_price	490
+49768	4521	_thumbnail_id	0
+49769	4521	_price	275
+49856	4521	_last_change_time	1778888585
+49890	4521	_sale_price	275
+49704	4522	_variation_description	
+49705	4522	total_sales	0
+49706	4522	_tax_status	taxable
+49707	4522	_tax_class	parent
+49708	4522	_manage_stock	no
+49709	4522	_backorders	no
+49710	4522	_sold_individually	no
+49711	4522	_virtual	no
+49712	4522	_downloadable	no
+49713	4522	_download_limit	-1
+49714	4522	_download_expiry	-1
+49715	4522	_stock	NULL
+49716	4522	_stock_status	instock
+49717	4522	_wc_average_rating	0
+49718	4522	_wc_review_count	0
+49719	4522	attribute_pa_farg	rod
+49720	4522	_product_version	10.7.0
+49778	4522	_regular_price	490
+49779	4522	_thumbnail_id	0
+49780	4522	_price	275
+49858	4522	_last_change_time	1778888585
+49891	4522	_sale_price	275
+49721	4523	_variation_description	
+49722	4523	total_sales	0
+49723	4523	_tax_status	taxable
+49724	4523	_tax_class	parent
+49725	4523	_manage_stock	no
+49726	4523	_backorders	no
+49727	4523	_sold_individually	no
+49728	4523	_virtual	no
+49729	4523	_downloadable	no
+49730	4523	_download_limit	-1
+49731	4523	_download_expiry	-1
+49732	4523	_stock	NULL
+49733	4523	_stock_status	instock
+49734	4523	_wc_average_rating	0
+49735	4523	_wc_review_count	0
+49736	4523	attribute_pa_farg	svart
+49737	4523	_product_version	10.7.0
+49791	4523	_regular_price	490
+49792	4523	_thumbnail_id	0
+49793	4523	_price	275
+49860	4523	_last_change_time	1778888585
+49892	4523	_sale_price	275
+50062	4550	_variation_description	
+50063	4550	total_sales	0
+50064	4550	_tax_status	taxable
+50065	4550	_tax_class	parent
+50066	4550	_manage_stock	no
+50067	4550	_backorders	no
+50068	4550	_sold_individually	no
+50069	4550	_virtual	no
+50070	4550	_downloadable	no
+50071	4550	_download_limit	-1
+50072	4550	_download_expiry	-1
+50073	4550	_stock	NULL
+50074	4550	_stock_status	instock
+50075	4550	_wc_average_rating	0
+50076	4550	_wc_review_count	0
+50077	4550	attribute_pa_farg	bla
+50078	4550	_product_version	10.7.0
+50102	4550	_thumbnail_id	0
+50153	4550	_regular_price	490
+50154	4550	_sale_price	275
+50155	4550	_price	275
+50160	4552	_variation_description	
+50161	4552	total_sales	0
+50162	4552	_tax_status	taxable
+50163	4552	_tax_class	parent
+50164	4552	_manage_stock	no
+50165	4552	_backorders	no
+50166	4552	_sold_individually	no
+50167	4552	_virtual	no
+50168	4552	_downloadable	no
+50169	4552	_download_limit	-1
+50170	4552	_download_expiry	-1
+50171	4552	_stock	NULL
+50172	4552	_stock_status	instock
+50173	4552	_wc_average_rating	0
+50174	4552	_wc_review_count	0
+50175	4552	attribute_pa_farg	gron
+50176	4552	_product_version	10.7.0
+50181	4552	_regular_price	490
+50182	4552	_sale_price	275
+50183	4552	_thumbnail_id	0
+50184	4552	_price	275

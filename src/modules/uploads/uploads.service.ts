@@ -13,6 +13,9 @@ const PASSTHROUGH_EXTS = ['.svg', '.pdf', '.ai'];
 const MAX_DIMENSION = 2000;
 const WEBP_QUALITY = 80;
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 @Injectable()
 export class UploadsService {
   private readonly uploadDir = path.join(process.cwd(), 'uploads');
@@ -49,6 +52,34 @@ export class UploadsService {
       });
     }
 
+    return this.storeBuffer(file.buffer, ext, folder);
+  }
+
+  /**
+   * Writes a buffer under `uploads/<folder>/` exactly like `uploadFile` does
+   * (M4.5 C21): raster input (`.png/.jpg/.jpeg/.webp`) is resized and
+   * re-encoded to WebP, anything else is written through untouched. The
+   * caller has already validated the type and size. `opts.id` fixes the file
+   * name (`<id><ext>`) instead of a random uuid; it must be a uuid.
+   * `opts.animated` / `opts.limitInputPixels` override the decoder options of
+   * the raster path (customer uploads: first frame only, explicit pixel cap);
+   * without them the output is exactly what `uploadFile` always produced.
+   */
+  async storeBuffer(
+    buffer: Buffer,
+    ext: string,
+    folder: string = 'general',
+    opts: { id?: string; animated?: boolean; limitInputPixels?: number } = {},
+  ): Promise<{ url: string; file_type: string; file_size: number }> {
+    const inExt = (ext.startsWith('.') ? ext : `.${ext}`).toLowerCase();
+    const id = opts.id ?? randomUUID();
+    if (!UUID_RE.test(id)) {
+      throw new BadRequestException({
+        code: 'UPLOAD_INVALID_PATH',
+        message: 'Invalid file name',
+      });
+    }
+
     const safeFolder = this.sanitizeFolder(folder);
     const folderPath = path.join(this.uploadDir, safeFolder);
     if (!fs.existsSync(folderPath)) {
@@ -57,18 +88,18 @@ export class UploadsService {
 
     // Raster images are resized + re-encoded to WebP to shrink payloads
     // (often 70–90% smaller). Other types are written through untouched.
-    const isRaster = RASTER_EXTS.includes(ext);
-    const outExt = isRaster ? '.webp' : ext;
-    const filename = `${randomUUID()}${outExt}`;
+    const isRaster = RASTER_EXTS.includes(inExt);
+    const outExt = isRaster ? '.webp' : inExt;
+    const filename = `${id}${outExt}`;
     const filePath = path.join(folderPath, filename);
 
-    let bytesWritten = file.size;
+    let bytesWritten = buffer.length;
     if (isRaster) {
-      const buffer = await this.processImage(file.buffer, ext);
-      fs.writeFileSync(filePath, buffer);
-      bytesWritten = buffer.length;
+      const out = await this.processImage(buffer, inExt, opts);
+      fs.writeFileSync(filePath, out);
+      bytesWritten = out.length;
     } else {
-      fs.writeFileSync(filePath, file.buffer);
+      fs.writeFileSync(filePath, buffer);
     }
 
     // In production, replace with S3/R2 URL
@@ -86,9 +117,19 @@ export class UploadsService {
    * Animated WebP frames are preserved. Rejects undecodable input rather than
    * storing it under a mismatched .webp name.
    */
-  private async processImage(buffer: Buffer, ext: string): Promise<Buffer> {
+  private async processImage(
+    buffer: Buffer,
+    ext: string,
+    decode: { animated?: boolean; limitInputPixels?: number } = {},
+  ): Promise<Buffer> {
+    const input: sharp.SharpOptions = {
+      animated: decode.animated ?? ext === '.webp',
+    };
+    if (decode.limitInputPixels !== undefined) {
+      input.limitInputPixels = decode.limitInputPixels;
+    }
     try {
-      return await sharp(buffer, { animated: ext === '.webp' })
+      return await sharp(buffer, input)
         .rotate() // honour EXIF orientation before stripping metadata
         .resize(MAX_DIMENSION, MAX_DIMENSION, {
           fit: 'inside',

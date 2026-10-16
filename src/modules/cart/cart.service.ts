@@ -2,8 +2,9 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
-import { BundleOffer, CartItem } from '@prisma/client';
+import { BundleOffer, CartItem, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
@@ -28,6 +29,37 @@ import type { MarketContext } from '../markets/market-context';
 import { resolveVariantMarketPrice } from '../markets/pricing.util';
 import { B2bService } from '../b2b/b2b.service';
 import type { B2bTotals } from '../b2b/b2b.types';
+import { pickTranslation } from '../../common/personalization/pick-translation';
+import {
+  PersonalizationCoreService,
+  type LineContext,
+} from '../../common/personalization/personalization-core.service';
+import {
+  cartRowLineKey,
+  storedCustomFields,
+} from '../../common/personalization/cart-line-key';
+import {
+  lineKey,
+  type NormalizedValues,
+} from '../../common/personalization/rules';
+import { CustomerUploadsService } from '../customer-uploads/customer-uploads.service';
+import {
+  assertAmountFits,
+  assertPriceEvaluated,
+  PersonalizationService,
+  type ActiveVariantsCache,
+  type PersonalizationStore,
+} from '../personalization/personalization.service';
+import { PERSONALIZATION_PRICE_TOO_HIGH } from '../personalization/personalization.errors';
+import {
+  linesToDisplay,
+  personalizationInvalid,
+} from '../personalization/personalization-runtime';
+import type { PFieldDef, PResult } from '../../common/personalization/types';
+import {
+  DesignerCartService,
+  type CartDesignView,
+} from '../designer/designer-cart.service';
 
 // Shape of a product custom field as loaded with its translations.
 /** One cart line as GET /cart returns it (enrichCartItems output). */
@@ -56,6 +88,16 @@ export interface EnrichedCartItem {
    * otherwise, so a response without a market is unchanged.
    */
   unavailable_in_market?: true;
+  /**
+   * Personalization app only (M4.1): the stored values no longer pass the
+   * product's rules (config changed since the add). Absent otherwise.
+   */
+  personalization_invalid?: true;
+  /**
+   * Designer app only (M4.2): the line's design (text values, signed proof).
+   * Absent on every other line.
+   */
+  design?: CartDesignView;
 }
 
 /** 400 code of an add/update of a product hidden in the request's market. */
@@ -79,6 +121,12 @@ export interface CustomFieldDisplay {
   value: unknown;
   /** Translated option label when the value is one of the field's options. */
   display: string | null;
+  // Personalization app only (M4.1, contract §5): present on app lines.
+  group_key?: string;
+  group_index?: number;
+  group_label?: string;
+  hex?: string;
+  source?: 'FIELD' | 'OPTION';
 }
 
 @Injectable()
@@ -89,7 +137,158 @@ export class CartService {
     private readonly markets: MarketsContextService,
     private readonly marketPricing: MarketPricingService,
     private readonly b2b: B2bService,
+    // M4.0: required by DI (no @Optional). Typed optional only so positional
+    // test constructors stay valid; see `core`.
+    private readonly personalizationCore?: PersonalizationCoreService,
+    // M4.1 personalization app: optional and trailing. Absent = every line
+    // takes the M4.0 path.
+    @Optional() private readonly personalization?: PersonalizationService,
+    // M4.2 designer app (C28/C29): optional and trailing. Absent = no line
+    // is ever a designer line (a sent design_id is not stored).
+    @Optional() private readonly designerCart?: DesignerCartService,
   ) {}
+
+  private fallbackCore?: PersonalizationCoreService;
+
+  /** The injected core service, or one built on this Prisma (unit tests). */
+  private get core(): PersonalizationCoreService {
+    if (this.personalizationCore) return this.personalizationCore;
+    this.fallbackCore ??= new PersonalizationCoreService(
+      this.prisma,
+      new CustomerUploadsService(this.prisma),
+    );
+    return this.fallbackCore;
+  }
+
+  /**
+   * Personalization app (M4.1 C29 step 3): evaluates a cart line in app
+   * mode when the app is on for its product (D2) and the product uses an
+   * M4.1 feature; null otherwise, and the caller keeps the M4.0 rules. No
+   * query for a product without M4.1 fields.
+   */
+  private async evaluateAppLine(
+    line: {
+      product_id?: string | null;
+      variant_id?: string | null;
+      custom_product_id?: string | null;
+    },
+    ctx: LineContext,
+    raw: unknown,
+    locale?: string,
+  ): Promise<PResult | null> {
+    // M4.1: a variant-only line has its product resolved by loadContexts.
+    const productId = line.product_id || ctx.productId;
+    if (!this.personalization || line.custom_product_id || !productId) {
+      return null;
+    }
+    const defs = (ctx.allFields ?? ctx.fields) as unknown as PFieldDef[];
+    if (!this.personalization.needsEvaluator(defs)) return null;
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+      select: { id: true, creator_id: true, variant_option_config: true },
+    });
+    if (!product) return null;
+    // Fails closed (503) when the app state cannot be read.
+    const store = await this.personalization.appStoreForCreator(
+      product.creator_id,
+    );
+    if (!store) return null;
+    await this.personalization.assertVariantChosen(product.id, line.variant_id);
+    const variant = line.variant_id
+      ? await this.prisma.productVariant.findUnique({
+          where: { id: line.variant_id },
+          select: { options: true },
+        })
+      : null;
+    return this.personalization.evaluateLine({
+      product,
+      variantOptions: variant?.options ?? {},
+      defs,
+      raw,
+      locale,
+      primaryLocale: store.primary_locale,
+    });
+  }
+
+  /**
+   * Validated, normalized values of a cart write: the app evaluator (400
+   * `PERSONALIZATION_INVALID {errors}`) or the M4.0 rules (400
+   * `CUSTOM_FIELD_*`).
+   */
+  private async assertCartLine(
+    line: {
+      product_id?: string | null;
+      variant_id?: string | null;
+      custom_product_id?: string | null;
+    },
+    ctx: LineContext,
+    raw: unknown,
+    locale?: string,
+  ): Promise<Record<string, unknown>> {
+    const app = await this.evaluateAppLine(line, ctx, raw, locale);
+    if (!app) return this.core.assertLine(raw, ctx, locale);
+    assertPriceEvaluated(app);
+    if (!app.ok) throw personalizationInvalid(app.errors);
+    return app.values;
+  }
+
+  /**
+   * The row of this cart a line merges into (M4.0 §1.2): same product,
+   * variant, custom product and bundle, and the same personalization line
+   * key. A product without fields keeps the exact pre-M4.0 lookup.
+   */
+  private async findMergeTarget(
+    cartId: string,
+    line: {
+      product_id?: string | null;
+      variant_id?: string | null;
+      custom_product_id?: string | null;
+      bundle_offer_id?: string | null;
+    },
+    ctx: LineContext,
+    normalized: Record<string, unknown>,
+    excludeId?: string,
+    designId: string | null = null,
+  ): Promise<CartItem | null> {
+    const where: Prisma.CartItemWhereInput = {
+      cart_id: cartId,
+      product_id: line.product_id || null,
+      variant_id: line.variant_id || null,
+      custom_product_id: line.custom_product_id || null,
+      bundle_offer_id: line.bundle_offer_id || null,
+      ...(excludeId ? { id: { not: excludeId } } : {}),
+    };
+    // M4.2 (C11): a designer line carries no field values, so the same
+    // design is the same line. Lines without a design keep the exact
+    // pre-M4.2 query (G0) and never merge into a designed row.
+    if (designId) {
+      return this.prisma.cartItem.findFirst({
+        where: { ...where, design_id: designId },
+      });
+    }
+    const all = ctx.allFields ?? ctx.fields;
+    if (all.length === 0) {
+      const hit = await this.prisma.cartItem.findFirst({ where });
+      // Only possible once the designer was switched off for a product
+      // that still has designed rows in this cart.
+      if (hit?.design_id) {
+        return this.prisma.cartItem.findFirst({
+          where: { ...where, design_id: null },
+        });
+      }
+      return hit;
+    }
+    // Every field row (M4.1 repeaters too): app values key on them.
+    const fieldIds = new Set(all.map((f) => f.id));
+    const key = lineKey(normalized);
+    const rows = await this.prisma.cartItem.findMany({ where });
+    return (
+      rows.find(
+        (r) =>
+          !r.design_id && cartRowLineKey(r.custom_fields, fieldIds) === key,
+      ) ?? null
+    );
+  }
 
   /**
    * Market context of a cart read (?market=, markets app). The store is the
@@ -192,12 +391,7 @@ export class CartService {
     translations: T[] | undefined,
     locale?: string,
   ): T | undefined {
-    if (!translations?.length) return undefined;
-    return (
-      (locale && translations.find((t) => t.locale === locale)) ||
-      translations.find((t) => t.locale === 'en') ||
-      translations[0]
-    );
+    return pickTranslation(translations, locale);
   }
 
   /**
@@ -210,17 +404,63 @@ export class CartService {
     market: MarketContext | null = null,
   ) {
     const enriched: EnrichedCartItem[] = [];
+    // M4.1: app store per creator, resolved once per read (only for
+    // products with M4.1 fields).
+    const appStores = new Map<string, Promise<PersonalizationStore | null>>();
+    const appStoreOf = (creatorId: string) => {
+      if (!appStores.has(creatorId)) {
+        appStores.set(
+          creatorId,
+          this.personalization
+            ? this.personalization.appStoreForCreator(creatorId)
+            : Promise.resolve(null),
+        );
+      }
+      return appStores.get(creatorId)!;
+    };
+    // M4.1: active variants per product, one query per product per read.
+    const activeCache: ActiveVariantsCache = new Map();
+    // M4.1: rows stored with a variant only (no product_id) resolve their
+    // product through the variant, in one query.
+    const variantOnly = items
+      .filter((i) => !i.product_id && !i.custom_product_id && i.variant_id)
+      .map((i) => i.variant_id as string);
+    const productOfVariant = new Map<string, string>(
+      variantOnly.length
+        ? (
+            await this.prisma.productVariant.findMany({
+              where: { id: { in: [...new Set(variantOnly)] } },
+              select: { id: true, product_id: true },
+            })
+          ).map((v) => [v.id, v.product_id])
+        : [],
+    );
+    const ownProductIdOf = (item: CartItem): string | null =>
+      item.custom_product_id
+        ? null
+        : (item.product_id ??
+          (item.variant_id ? productOfVariant.get(item.variant_id) : null) ??
+          null);
     const config = await this.prisma.platformConfig.findFirst();
     const platformCurrency = config?.default_currency || 'EUR';
+    // Designer app (M4.2): the design block of designer lines, one query.
+    const designIds = items
+      .map((i) => i.design_id)
+      .filter((id): id is string => !!id);
+    const designViews =
+      this.designerCart && designIds.length
+        ? await this.designerCart.cartDesigns(designIds, locale)
+        : null;
     // Markets app: override rows of every own product in the cart, one query.
     const marketRows: MarketPriceMap | null = market
       ? await this.marketPricing.loadPrices(
           market.id,
-          items.map((i) => i.product_id).filter(Boolean) as string[],
+          items.map(ownProductIdOf).filter(Boolean) as string[],
         )
       : null;
 
     for (const item of items) {
+      const itemProductId = ownProductIdOf(item);
       let title: string | null = null;
       let price = 0;
       let imageUrl: string | null = null;
@@ -238,6 +478,14 @@ export class CartService {
       let customFieldDefs: CustomFieldDef[] = [];
       // Markets app: set when the product is hidden in the market.
       let hiddenInMarket = false;
+      // Personalization app (M4.1): the own product behind the line and the
+      // chosen variant's options, for the evaluator below.
+      let ownProduct: {
+        id: string;
+        creator_id: string | null;
+        variant_option_config: unknown;
+      } | null = null;
+      let variantOptions: unknown = null;
 
       if (item.custom_product_id) {
         // Custom product: fetch from CustomProduct with mockup images and base product
@@ -253,7 +501,13 @@ export class CartService {
               include: {
                 translations: true,
                 images: { take: 1, orderBy: { sort_order: 'asc' as const } },
-                custom_fields: { include: { translations: true } },
+                custom_fields: {
+                  include: { translations: true },
+                  orderBy: [
+                    { sort_order: 'asc' as const },
+                    { id: 'asc' as const },
+                  ],
+                },
               },
             },
           },
@@ -320,17 +574,21 @@ export class CartService {
               price = Number(cp.final_price) || Number(cp.product.base_price);
           }
         }
-      } else if (item.product_id) {
+      } else if (itemProductId) {
         const product = await this.prisma.product.findUnique({
-          where: { id: item.product_id },
+          where: { id: itemProductId },
           include: {
             translations: true,
             images: { where: { is_featured: true }, take: 1 },
-            custom_fields: { include: { translations: true } },
+            custom_fields: {
+              include: { translations: true },
+              orderBy: [{ sort_order: 'asc' as const }, { id: 'asc' as const }],
+            },
           },
         });
 
         if (product) {
+          ownProduct = product;
           customFieldDefs = product.custom_fields;
           title =
             this.pickTranslation(product.translations, locale)?.title || null;
@@ -371,6 +629,7 @@ export class CartService {
             });
             if (variantImage) imageUrl = variantImage;
           }
+          variantOptions = variant.options;
           if (variant.options && typeof variant.options === 'object') {
             const opts = variant.options as Record<string, string>;
             variantLabel = Object.entries(opts)
@@ -384,8 +643,8 @@ export class CartService {
       // (override or converted). A product hidden in the market (same rule
       // as MarketPricingService.priceLine, which checkout applies) is flagged
       // `unavailable_in_market` and getCart leaves it out of the totals.
-      if (market && marketRows && item.product_id && !item.custom_product_id) {
-        const rows = marketRows.get(item.product_id);
+      if (market && marketRows && itemProductId && !item.custom_product_id) {
+        const rows = marketRows.get(itemProductId);
         if (rows?.product && !rows.product.available) hiddenInMarket = true;
         const converted = resolveVariantMarketPrice({
           basePrice: ownBasePrice,
@@ -398,6 +657,79 @@ export class CartService {
         });
         if (converted != null) price = converted;
         else hiddenInMarket = true;
+      }
+
+      // Personalization app (M4.1 D4): soft evaluation of the stored values
+      // (never throws on a read). The per-unit delta is added after the
+      // market price and before the bundle, converted like every base
+      // amount; display lines carry the groups. Lines of products without
+      // M4.1 fields skip this entirely.
+      let appDisplay: CustomFieldDisplay[] | null = null;
+      let personalizationInvalidLine = false;
+      if (
+        this.personalization &&
+        ownProduct?.creator_id &&
+        this.personalization.needsEvaluator(
+          customFieldDefs as unknown as PFieldDef[],
+        )
+      ) {
+        // A read never throws: an app state that cannot be read (checkout
+        // answers 503), a missing variant or a price that does not fit
+        // marks the line `personalization_invalid` instead.
+        let store: PersonalizationStore | null = null;
+        try {
+          store = await appStoreOf(ownProduct.creator_id);
+        } catch {
+          personalizationInvalidLine = true;
+        }
+        if (store) {
+          const res = await this.personalization.evaluateLine({
+            product: ownProduct,
+            variantOptions: variantOptions ?? {},
+            defs: customFieldDefs as unknown as PFieldDef[],
+            raw: item.custom_fields,
+            locale,
+            primaryLocale: store.primary_locale,
+            activeCache,
+          });
+          appDisplay = linesToDisplay(res.lines);
+          personalizationInvalidLine = !res.ok;
+          if (
+            !item.variant_id &&
+            (
+              await this.personalization.activeVariants(
+                ownProduct.id,
+                activeCache,
+              )
+            ).count > 0
+          ) {
+            personalizationInvalidLine = true;
+          }
+          if (res.priceDeltaMinor > 0 && !hiddenInMarket) {
+            try {
+              price = roundMoney(
+                price +
+                  this.personalization.convertDelta(
+                    market,
+                    Number(res.priceDelta),
+                  ),
+              );
+            } catch {
+              // No rate to convert base amounts: checkout refuses the line.
+              hiddenInMarket = true;
+            }
+          }
+          if (
+            res.errors.some((e) => e.code === PERSONALIZATION_PRICE_TOO_HIGH)
+          ) {
+            personalizationInvalidLine = true;
+          }
+          try {
+            assertAmountFits(price, roundMoney(price * item.quantity));
+          } catch {
+            personalizationInvalidLine = true;
+          }
+        }
       }
 
       // Apply bundle pricing if a bundle offer is attached
@@ -450,6 +782,13 @@ export class CartService {
         }
       }
 
+      // Designer line: the signed proof replaces the product image when it
+      // exists (otherwise the storefront draws a live thumbnail).
+      const designView = item.design_id
+        ? designViews?.get(item.design_id)
+        : undefined;
+      if (designView?.proof_url) imageUrl = designView.proof_url;
+
       enriched.push({
         id: item.id,
         productId: item.product_id,
@@ -457,11 +796,13 @@ export class CartService {
         customProductId: item.custom_product_id,
         quantity: item.quantity,
         customFields: item.custom_fields,
-        customFieldDisplay: this.buildCustomFieldDisplay(
-          customFieldDefs,
-          item.custom_fields,
-          locale,
-        ),
+        customFieldDisplay:
+          appDisplay ??
+          this.buildCustomFieldDisplay(
+            customFieldDefs,
+            item.custom_fields,
+            locale,
+          ),
         title,
         price,
         imageUrl,
@@ -474,6 +815,10 @@ export class CartService {
         bundleStickerText,
         bundleCartQuantity,
         ...(hiddenInMarket ? { unavailable_in_market: true as const } : {}),
+        ...(personalizationInvalidLine
+          ? { personalization_invalid: true as const }
+          : {}),
+        ...(designView ? { design: designView } : {}),
       });
     }
 
@@ -976,7 +1321,44 @@ export class CartService {
     buyer?: string,
   ) {
     const cart = await this.getOrCreateCart(userId);
+
+    // M4.0 (K2): the product's field rules apply on every add, and lines
+    // with different personalization never merge. M4.1: a variant-only
+    // line gets its product from the variant (a mismatch is refused), so
+    // the stored row, the market check and the evaluator see the product.
+    const [ctx] = await this.core.loadContexts([dto]);
+    if (!dto.product_id && !dto.custom_product_id && ctx.productId) {
+      dto.product_id = ctx.productId;
+    }
     await this.assertAvailableInMarket(dto, locale, marketKey);
+    // M4.2 designer (C29 step 2): a line with a design, or of a product the
+    // designer is active for, is validated (and the design claimed for this
+    // customer) here; it carries no field values, so the field rules are
+    // skipped and whatever was sent is dropped.
+    const designer = this.designerCart
+      ? await this.designerCart.resolveCartLine(
+          dto,
+          dto.custom_product_id ? null : (dto.product_id ?? ctx.productId),
+          cart.customer_id,
+        )
+      : null;
+    const designId = designer?.design.id ?? null;
+    // M4.1: canonical app values when the personalization app applies, so
+    // the line key below merges identical and splits different values.
+    const normalized = designer
+      ? {}
+      : await this.assertCartLine(dto, ctx, dto.custom_fields, locale);
+
+    // The row this line merges into; looked up once and also used for the
+    // bundle multiple check (only the same personalization counts, bug 1).
+    const existing = await this.findMergeTarget(
+      cart.id,
+      dto,
+      ctx,
+      normalized,
+      undefined,
+      designId,
+    );
 
     if (dto.bundle_offer_id) {
       const offer = await this.validateBundleOffer(
@@ -985,29 +1367,9 @@ export class CartService {
         dto.custom_product_id,
         dto.variant_id,
       );
-
-      const existingSameLine = await this.prisma.cartItem.findFirst({
-        where: {
-          cart_id: cart.id,
-          product_id: dto.product_id || null,
-          variant_id: dto.variant_id || null,
-          custom_product_id: dto.custom_product_id || null,
-          bundle_offer_id: dto.bundle_offer_id,
-        },
-      });
-      const finalQuantity = (existingSameLine?.quantity ?? 0) + dto.quantity;
+      const finalQuantity = (existing?.quantity ?? 0) + dto.quantity;
       this.assertBundleQuantityValid(offer, finalQuantity);
     }
-
-    const existing = await this.prisma.cartItem.findFirst({
-      where: {
-        cart_id: cart.id,
-        product_id: dto.product_id || null,
-        variant_id: dto.variant_id || null,
-        custom_product_id: dto.custom_product_id || null,
-        bundle_offer_id: dto.bundle_offer_id || null,
-      },
-    });
 
     if (existing) {
       await this.prisma.cartItem.update({
@@ -1015,13 +1377,31 @@ export class CartService {
         data: { quantity: existing.quantity + dto.quantity },
       });
     } else {
-      await this.prisma.cartItem.create({
-        data: {
-          cart_id: cart.id,
-          ...dto,
-        },
-      });
+      // The design token is a credential: never stored on the row.
+      const { design_token: _token, design_id: _designId, ...line } = dto;
+      void _token;
+      void _designId;
+      const data = {
+        cart_id: cart.id,
+        ...line,
+      } as Prisma.CartItemUncheckedCreateInput;
+      if (designId) {
+        data.design_id = designId;
+        delete data.custom_fields;
+      } else {
+        // A product without fields stores exactly what was sent (G0).
+        const stored = storedCustomFields(
+          dto.custom_fields,
+          normalized as NormalizedValues,
+          (ctx.allFields ?? ctx.fields).length > 0,
+        );
+        if (stored !== dto.custom_fields) data.custom_fields = stored;
+      }
+      await this.prisma.cartItem.create({ data });
     }
+    // M4.2 §5.4: the design's proof is rendered in the background; the add
+    // never waits for it nor fails because of it.
+    if (designId) this.designerCart?.ensureProof(designId);
 
     // Return enriched cart
     return this.getCart(userId, locale, marketKey, buyer);
@@ -1047,7 +1427,11 @@ export class CartService {
       });
     await this.assertAvailableInMarket(item, locale, marketKey);
 
-    const data: { quantity?: number; bundle_offer_id?: string | null } = {};
+    const data: {
+      quantity?: number;
+      bundle_offer_id?: string | null;
+      custom_fields?: Prisma.InputJsonValue | typeof Prisma.DbNull;
+    } = {};
     if (typeof dto.quantity === 'number') {
       data.quantity = dto.quantity;
     }
@@ -1066,6 +1450,51 @@ export class CartService {
         data.bundle_offer_id = dto.bundle_offer_id;
         nextBundleOfferId = dto.bundle_offer_id;
       }
+    }
+
+    // M4.0: new personalization for this line (API seam for "edit
+    // personalization"). Validated like an add; when the new values equal
+    // another line's, that line takes the quantity and this one is removed.
+    // M4.2: a designer line carries no field values; edits go through the
+    // design itself, so custom_fields sent for it are ignored.
+    if (dto.custom_fields !== undefined && !item.design_id) {
+      const [ctx] = await this.core.loadContexts([item]);
+      const normalized = await this.assertCartLine(
+        item,
+        ctx,
+        dto.custom_fields,
+        locale,
+      );
+      const target = await this.findMergeTarget(
+        cart.id,
+        { ...item, bundle_offer_id: nextBundleOfferId },
+        ctx,
+        normalized,
+        item.id,
+      );
+      if (target) {
+        const mergedQty = target.quantity + (data.quantity ?? item.quantity);
+        if (nextBundleOfferId) {
+          const offer = await this.prisma.bundleOffer.findUnique({
+            where: { id: nextBundleOfferId },
+          });
+          if (offer) this.assertBundleQuantityValid(offer, mergedQty);
+        }
+        await this.prisma.$transaction([
+          this.prisma.cartItem.update({
+            where: { id: target.id },
+            data: { quantity: mergedQty },
+          }),
+          this.prisma.cartItem.delete({ where: { id: item.id } }),
+        ]);
+        return this.getCart(userId, locale, marketKey, buyer);
+      }
+      const stored = storedCustomFields(
+        dto.custom_fields,
+        normalized as NormalizedValues,
+        (ctx.allFields ?? ctx.fields).length > 0,
+      );
+      data.custom_fields = stored === undefined ? Prisma.DbNull : stored;
     }
 
     // Enforce quantity multiples if the resulting line carries a bundle offer.

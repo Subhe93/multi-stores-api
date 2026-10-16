@@ -1,0 +1,2 @@
+woocommerce db version: 11.2.1
+wordpress: 7.1.3

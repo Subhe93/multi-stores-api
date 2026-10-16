@@ -37,7 +37,8 @@ export class CustomFieldsController {
   // Public — needed by storefront to render the form
   @Get('products/:productId/custom-fields')
   findByProduct(@Param('productId') productId: string) {
-    return this.customFieldsService.findByProduct(productId);
+    // M4.1: the M4.0 rows unless the app's stored config applies.
+    return this.customFieldsService.findPublicByProduct(productId);
   }
 
   @Put('custom-fields/:id')

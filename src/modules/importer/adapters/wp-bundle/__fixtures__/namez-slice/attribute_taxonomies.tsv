@@ -1,0 +1,12 @@
+1	farg	Färg	color	menu_order	0
+2	langd	Längd	button	menu_order	0
+3	stentyp	Stentyp	image	menu_order	0
+5	ringstorlek	Ringstorlek	select	menu_order	0
+6	antal-inskriptioner	Antal inskriptioner	radio	menu_order	0
+8	gravyr-teckensnitt	Gravyr teckensnitt	image	menu_order	0
+9	storlek	Välj storlek	radio	menu_order	0
+11	rakna	Välj antal	radio	menu_order	0
+12	valj-antal	Välj antal	radio	menu_order	0
+13	valj-antal-3d-bokstav	Välj antal	radio	menu_order	0
+14	namnskylt_stor_bokstav	Namnskylt_Stor_Bokstav	radio	menu_order	0
+15	valj-detaljer-i-designen	Välj detaljer i designen	button	menu_order	0

@@ -5,7 +5,11 @@ import {
   parseTime,
   SlotConfig,
 } from './backup-scheduler.service';
-import { formatBytes, parseDatabaseUrl } from './backup-runner';
+import {
+  formatBytes,
+  isTolerableTarWarning,
+  parseDatabaseUrl,
+} from './backup-runner';
 
 /** Local-time constructor: month is 1-based to keep the cases readable. */
 const local = (y: number, m: number, d: number, h = 0, min = 0, s = 0): Date =>
@@ -191,5 +195,57 @@ describe('formatBytes', () => {
     expect(formatBytes(null)).toBe('—');
     expect(formatBytes(undefined)).toBe('—');
     expect(formatBytes(-1)).toBe('—');
+  });
+});
+
+describe('isTolerableTarWarning (private storage changing during a backup)', () => {
+  const res = (stderrTail: string, code: number | null = 1) => ({
+    code,
+    signal: null,
+    stderrTail,
+    timedOut: false,
+  });
+  const EXIT = 'tar: Exiting with failure status due to previous errors';
+
+  it('tolerates changed/removed files under the private dirs only', () => {
+    expect(
+      isTolerableTarWarning(
+        res(
+          `tar: storage/customer-uploads/2026/10/a.jpg: file changed as we read it
+` +
+            `tar: storage/customer-uploads/2026/10/b.pdf: File removed before we read it
+${EXIT}`,
+        ),
+        ['storage'],
+      ),
+    ).toBe(true);
+  });
+
+  it('refuses warnings about public uploads, other errors, other exit codes', () => {
+    expect(
+      isTolerableTarWarning(
+        res('tar: uploads/products/a.webp: file changed as we read it'),
+        ['storage'],
+      ),
+    ).toBe(false);
+    expect(
+      isTolerableTarWarning(
+        res('tar: storage: Cannot open: Permission denied'),
+        ['storage'],
+      ),
+    ).toBe(false);
+    expect(
+      isTolerableTarWarning(
+        res('tar: storage/x: file changed as we read it', 2),
+        ['storage'],
+      ),
+    ).toBe(false);
+    expect(
+      isTolerableTarWarning(
+        res('tar: storage/x: file changed as we read it'),
+        [],
+      ),
+    ).toBe(false);
+    expect(isTolerableTarWarning(res(''), ['storage'])).toBe(false);
   });
 });

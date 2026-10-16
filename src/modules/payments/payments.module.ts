@@ -12,6 +12,8 @@ import { TaxesModule } from '../taxes/taxes.module';
 import { MarketsModule } from '../markets/markets.module';
 import { B2bModule } from '../b2b/b2b.module';
 import { InvoicesModule } from '../invoices/invoices.module';
+import { DesignerRenderModule } from '../designer/designer-render.module';
+import { DesignerCoreModule } from '../designer/designer-core.module';
 
 // PrismaModule, CryptoModule and MailModule are @Global, so PrismaService,
 // CryptoService and MailService are injectable here without importing them.
@@ -24,6 +26,11 @@ import { InvoicesModule } from '../invoices/invoices.module';
 // (imports nothing) provides B2bService for the buyer type / company
 // wiring of both Kustom flows. InvoicesModule (imports only globals)
 // provides InvoiceTriggersService for the paid / refund call sites.
+// DesignerRenderModule (imports only globals + the designer assets module)
+// provides DesignerTriggersService for the paid call sites (M4.2 WP5).
+// DesignerCoreModule (cycle-free, imports only the designer asset / render
+// modules) provides DesignerCartService for the Kustom session ownership
+// check of designer lines.
 @Module({
   imports: [
     ConfigModule,
@@ -33,6 +40,8 @@ import { InvoicesModule } from '../invoices/invoices.module';
     MarketsModule,
     B2bModule,
     InvoicesModule,
+    DesignerRenderModule,
+    DesignerCoreModule,
   ],
   controllers: [PaymentsController, KustomController, KustomCheckoutController],
   providers: [PaymentsService, KustomService, KustomCheckoutService],

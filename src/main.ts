@@ -13,6 +13,14 @@ import {
   parseAllowedOrigins,
 } from './common/cors/cors-origin.matcher';
 
+/** `TRUST_PROXY`: a hop count, or a name/list Express understands ("loopback"). */
+function parseTrustProxy(raw: string | undefined): number | string | undefined {
+  const v = raw?.trim();
+  if (!v) return undefined;
+  if (/^\d+$/.test(v)) return Number(v);
+  return v;
+}
+
 async function bootstrap() {
   // rawBody keeps the unparsed request body available (req.rawBody) on every
   // route, so the Stripe webhooks (platform /payments/webhook and Connect
@@ -20,6 +28,13 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,
   });
+
+  // Reverse proxy (deploy): TRUST_PROXY makes req.ip the real client, which
+  // the per-IP throttles and the customer upload byte budget key on. A hop
+  // count ("1" behind one nginx) or "loopback"; unset keeps Express's
+  // default (no proxy trusted, req.ip = the proxy's address).
+  const trustProxy = parseTrustProxy(process.env.TRUST_PROXY);
+  if (trustProxy !== undefined) app.set('trust proxy', trustProxy);
 
   // Serve uploaded files as static. Filenames are UUIDs, so the content at any
   // given URL never changes — mark them long-lived + immutable so browsers
@@ -37,6 +52,13 @@ async function bootstrap() {
       // execute scripts).
       if (filePath.toLowerCase().endsWith('.svg')) {
         res.setHeader('Content-Disposition', 'attachment');
+      }
+      // Customer upload previews (M4.0) are purged by retention: a one-day
+      // cache (not immutable) lets a purge take effect, and they are never
+      // indexed. send() keeps a Cache-Control set here.
+      if (/[\\/]customer-previews[\\/]/.test(filePath)) {
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader('X-Robots-Tag', 'noindex');
       }
     },
   });

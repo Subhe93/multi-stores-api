@@ -6,6 +6,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -46,6 +47,18 @@ export class KustomCartLineDto {
   @IsOptional()
   @IsObject()
   custom_fields?: Record<string, unknown>;
+
+  // Designer app (M4.2 WP4): the line's customer design. Kept in the
+  // session snapshot (normalizeCartLine); the token is checked when the
+  // session is priced and never stored.
+  @IsOptional()
+  @IsUUID()
+  design_id?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  design_token?: string;
 }
 
 // Session-first checkout: guests send their cart lines; a logged-in customer

@@ -17,7 +17,7 @@ function makePrisma(products: ProductRow[]) {
     ['f1', { id: 'f1', product_id: 'p-provider' }],
     ['f2', { id: 'f2', product_id: 'p-creator' }],
   ]);
-  return {
+  const prisma = {
     product: {
       findUnique: jest.fn(({ where }: { where: { id: string } }) =>
         Promise.resolve(products.find((p) => p.id === where.id) ?? null),
@@ -32,11 +32,24 @@ function makePrisma(products: ProductRow[]) {
       updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
       delete: jest.fn((args: unknown) => Promise.resolve({ deleted: args })),
       findMany: jest.fn(() => Promise.resolve([])),
+      aggregate: jest.fn(() =>
+        Promise.resolve({ _max: { sort_order: null as number | null } }),
+      ),
     },
     customFieldTranslation: {
       deleteMany: jest.fn(() => Promise.resolve({ count: 0 })),
     },
+    // Per-product field lock (advisory lock) and the store app settings.
+    $executeRaw: jest.fn(() => Promise.resolve(0)),
+    storeApp: {
+      findUnique: jest.fn(() => Promise.resolve(null)),
+      update: jest.fn(() => Promise.resolve({})),
+    },
+    $transaction: jest.fn(
+      (fn: (tx: unknown) => Promise<unknown>): Promise<unknown> => fn(prisma),
+    ),
   };
+  return prisma;
 }
 
 const PRODUCTS: ProductRow[] = [
@@ -80,6 +93,29 @@ describe('CustomFieldsService ownership', () => {
     await expect(
       service.delete('f2', 'u-admin', UserRole.ADMIN),
     ).resolves.toBeDefined();
+  });
+
+  it('appends a field without sort_order after the last existing one', async () => {
+    prisma.productCustomField.aggregate.mockResolvedValueOnce({
+      _max: { sort_order: 4 },
+    });
+    const created = (await service.create(
+      'p-provider',
+      dto,
+      'u-admin',
+      UserRole.ADMIN,
+    )) as unknown as { created: { data: { sort_order: number } } };
+    expect(created.created.data.sort_order).toBe(5);
+  });
+
+  it('keeps an explicit sort_order as sent', async () => {
+    const created = (await service.create(
+      'p-provider',
+      { field_type: 'TEXT', is_required: false, sort_order: 2 } as never,
+      'u-admin',
+      UserRole.ADMIN,
+    )) as unknown as { created: { data: { sort_order: number } } };
+    expect(created.created.data.sort_order).toBe(2);
   });
 
   it('lets the owning creator manage a creator-owned product', async () => {

@@ -5,6 +5,7 @@ import {
   isStoreAppKey,
 } from '../../common/store-apps/store-apps.registry';
 import { b2bPublicSettings } from '../b2b/b2b-settings';
+import { personalizationPublicSettings } from '../personalization/personalization-settings';
 
 /** The StoreApp columns the storefront projection needs. */
 export interface StoreAppRowLike {
@@ -39,6 +40,8 @@ const PUBLIC_SETTINGS_PROJECTORS: Partial<
   >
 > = {
   b2b: b2bPublicSettings,
+  // M4.1 §3.9: leniently parsed, defaults filled, whitelist keys only.
+  personalization: (picked) => ({ ...personalizationPublicSettings(picked) }),
 };
 
 /** The settings object an app exposes publicly (whitelist applied). */

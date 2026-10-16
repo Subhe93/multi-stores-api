@@ -1,0 +1,22 @@
+option_name	option_value
+blogname	Shop Example
+home	https://shop.example
+permalink_structure	/%postname%/
+rank_math_modules	a:2:{i:0;s:11:"woocommerce";i:1;s:7:"sitemap";}
+siteurl	https://shop.example
+woo_variation_swatches	a:1:{s:20:"show_variation_label";s:3:"yes";}
+woocommerce_calc_taxes	yes
+woocommerce_currency	SEK
+woocommerce_default_country	SE
+woocommerce_flat_rate_3_settings	a:3:{s:5:"title";s:8:"Standard";s:10:"tax_status";s:7:"taxable";s:4:"cost";s:2:"49";}
+woocommerce_flat_rate_6_settings	a:2:{s:5:"title";s:8:"Världen";s:4:"cost";s:3:"199";}
+woocommerce_free_shipping_5_settings	a:3:{s:5:"title";s:9:"Fri frakt";s:8:"requires";s:10:"min_amount";s:10:"min_amount";s:3:"499";}
+woocommerce_local_pickup_4_settings	a:2:{s:5:"title";s:13:"Hämta själv";s:4:"cost";s:0:"";}
+woocommerce_permalinks	a:3:{s:12:"product_base";s:8:"/produkt";s:13:"category_base";s:16:"product-category";s:8:"tag_base";s:11:"product-tag";}
+woocommerce_prices_include_tax	yes
+woocommerce_specific_allowed_countries	a:0:{}
+woocommerce_tax_based_on	shipping
+woocommerce_weight_unit	kg
+WPLANG	sv_SE
+rank-math-options-general	a:5:{s:22:"wc_remove_product_base";s:3:"off";s:23:"wc_remove_category_base";s:3:"off";s:19:"strip_category_base";s:3:"off";s:23:"noindex_hidden_products";s:2:"on";s:24:"attachment_redirect_urls";s:2:"on";}
+rank-math-options-titles	a:6:{s:24:"noindex_empty_taxonomies";s:2:"on";s:16:"pt_product_title";s:24:"%title% %sep% %sitename%";s:22:"pt_product_description";s:9:"%excerpt%";s:21:"tax_product_cat_title";s:23:"%term% %sep% %sitename%";s:15:"title_separator";s:1:"-";s:12:"website_name";s:12:"Shop Example";}

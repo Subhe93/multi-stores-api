@@ -9,6 +9,7 @@ import {
   CreateCreatorCategoryDto,
   UpdateCreatorCategoryDto,
   ReorderCreatorCategoriesDto,
+  CreatorCategoryTranslationDto,
 } from './dto/creator-category.dto';
 import { CreatorCategoryMatchRule } from '@prisma/client';
 
@@ -242,11 +243,14 @@ export class CreatorCategoriesService {
     });
 
     if (translations) {
+      // Delete-and-recreate: carry the SEO fields over when the client did
+      // not send them (M4.4 X19), so imported meta survives a manual save.
+      const rows = await this.withSeoCarryOver(id, translations);
       await this.prisma.creatorCategoryTranslation.deleteMany({
         where: { creator_category_id: id },
       });
       await this.prisma.creatorCategoryTranslation.createMany({
-        data: translations.map((t) => ({
+        data: rows.map((t) => ({
           ...t,
           creator_category_id: id,
         })),
@@ -272,6 +276,45 @@ export class CreatorCategoriesService {
     }
 
     return this.findById(id, userId);
+  }
+
+  /**
+   * X19 carry-over: `meta_title`/`meta_desc` left `undefined` keep the value
+   * stored for the same locale; `null`/'' clears it. Reads only when a row
+   * omits one of them.
+   */
+  private async withSeoCarryOver(
+    categoryId: string,
+    translations: CreatorCategoryTranslationDto[],
+  ): Promise<CreatorCategoryTranslationDto[]> {
+    const omits = translations.some(
+      (t) => t.meta_title === undefined || t.meta_desc === undefined,
+    );
+    const byLocale = new Map<
+      string,
+      { meta_title: string | null; meta_desc: string | null }
+    >();
+    if (omits) {
+      const stored = await this.prisma.creatorCategoryTranslation.findMany({
+        where: { creator_category_id: categoryId },
+        select: { locale: true, meta_title: true, meta_desc: true },
+      });
+      for (const r of stored) byLocale.set(r.locale, r);
+    }
+    return translations.map((t) => {
+      const prev = byLocale.get(t.locale);
+      return {
+        ...t,
+        meta_title:
+          t.meta_title === undefined
+            ? (prev?.meta_title ?? null)
+            : t.meta_title || null,
+        meta_desc:
+          t.meta_desc === undefined
+            ? (prev?.meta_desc ?? null)
+            : t.meta_desc || null,
+      };
+    });
   }
 
   async delete(id: string, userId: string) {

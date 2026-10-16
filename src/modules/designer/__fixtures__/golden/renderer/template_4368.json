@@ -1,0 +1,657 @@
+{
+ "template": "template_4368",
+ "renderer_version": "1.0.0",
+ "cases": {
+  "sv@proof:2": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {
+      "ycsrlqwzs": "Åsa Öberg-Ängström",
+      "a8365ireo": "NA3b"
+     },
+     "photos": {
+      "92i9ycx99": {
+       "asset_id": "photo-landscape",
+       "width": 4000,
+       "height": 3000,
+       "adj": {
+        "zoom": 1.6,
+        "rot": 17,
+        "panX": 0.2,
+        "panY": 0.75
+       }
+      }
+     }
+    },
+    "mode": "proof",
+    "scale": 2,
+    "locale": "sv"
+   },
+   "canvas": {
+    "width": 1000,
+    "height": 1400
+   },
+   "report": {
+    "fitted": {
+     "ycsrlqwzs": 50,
+     "a8365ireo": 30
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 44,
+   "sha256": "48ae7a39413fa23591e0b8f2a3b4b18320ad49b5509f4f0ce72b898d69d86aaf",
+   "log": [
+    ["clearRect",0,0,1000,1400],
+    ["save"],
+    ["drawImage","pending:bg_web",0,0,1000,1400],
+    ["restore"],
+    ["save"],
+    ["translate",438,813],
+    ["rotate",0.087266],
+    ["translate",-438,-813],
+    ["save"],
+    ["beginPath"],
+    ["rect",126,442,624,742],
+    ["clip"],
+    ["translate",725.68,701.7],
+    ["rotate",0.296706],
+    ["translate",-725.68,-701.7],
+    ["drawImage","photo-landscape",-65.786667,108.1,1582.933333,1187.2],
+    ["restore"],
+    ["restore"],
+    ["save"],
+    ["translate",497,128],
+    ["rotate",0],
+    ["translate",-497,-128],
+    ["fitScan","Åsa Öberg-Ängström","700 300px \"Montserrat\"","700 300px \"Montserrat\"",1,2970],
+    ["=font","700 100px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Åsa Öberg-Ängström",497,128],
+    ["restore"],
+    ["save"],
+    ["translate",489,228],
+    ["rotate",0],
+    ["translate",-489,-228],
+    ["fitScan","NA3b","400 180px \"Montserrat\"","400 180px \"Montserrat\"",1,446.4],
+    ["=font","400 60px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","NA3b",489,228],
+    ["restore"]
+   ]
+  },
+  "sv@print:6": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {
+      "ycsrlqwzs": "Åsa Öberg-Ängström",
+      "a8365ireo": "NA3b"
+     },
+     "photos": {
+      "92i9ycx99": {
+       "asset_id": "photo-landscape",
+       "width": 4000,
+       "height": 3000,
+       "adj": {
+        "zoom": 1.6,
+        "rot": 17,
+        "panX": 0.2,
+        "panY": 0.75
+       }
+      }
+     }
+    },
+    "mode": "print",
+    "scale": 6,
+    "locale": "sv"
+   },
+   "canvas": {
+    "width": 3000,
+    "height": 4200
+   },
+   "report": {
+    "fitted": {
+     "ycsrlqwzs": 50,
+     "a8365ireo": 30
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 44,
+   "sha256": "ed68633dec5d219ea421cd8f64762838be736a5a493f777afcf325b8c368b8d2",
+   "log": [
+    ["clearRect",0,0,3000,4200],
+    ["save"],
+    ["drawImage","pending:bg_print",0,0,3000,4200],
+    ["restore"],
+    ["save"],
+    ["translate",1314,2439],
+    ["rotate",0.087266],
+    ["translate",-1314,-2439],
+    ["save"],
+    ["beginPath"],
+    ["rect",378,1326,1872,2226],
+    ["clip"],
+    ["translate",2177.04,2105.1],
+    ["rotate",0.296706],
+    ["translate",-2177.04,-2105.1],
+    ["drawImage","photo-landscape",-197.36,324.3,4748.8,3561.6],
+    ["restore"],
+    ["restore"],
+    ["save"],
+    ["translate",1491,384],
+    ["rotate",0],
+    ["translate",-1491,-384],
+    ["fitScan","Åsa Öberg-Ängström","700 300px \"Montserrat\"","700 300px \"Montserrat\"",1,2970],
+    ["=font","700 300px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Åsa Öberg-Ängström",1491,384],
+    ["restore"],
+    ["save"],
+    ["translate",1467,684],
+    ["rotate",0],
+    ["translate",-1467,-684],
+    ["fitScan","NA3b","400 180px \"Montserrat\"","400 180px \"Montserrat\"",1,446.4],
+    ["=font","400 180px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","NA3b",1467,684],
+    ["restore"]
+   ]
+  },
+  "long@proof:2": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {
+      "ycsrlqwzs": "Maximiliana Charlotta Åkesson-Lindqvist ❤️",
+      "a8365ireo": "Teknikprogrammet ❤️ Göteborgs Högre Allmänna Läroverk för Flickor 2026"
+     },
+     "photos": {
+      "92i9ycx99": {
+       "asset_id": "photo-portrait",
+       "width": 2400,
+       "height": 3600,
+       "adj": {
+        "zoom": 2.3,
+        "rot": -45,
+        "panX": 0.1,
+        "panY": 0.9
+       }
+      }
+     }
+    },
+    "mode": "proof",
+    "scale": 2,
+    "locale": "sv"
+   },
+   "canvas": {
+    "width": 1000,
+    "height": 1400
+   },
+   "report": {
+    "fitted": {
+     "ycsrlqwzs": 23.5,
+     "a8365ireo": 6
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 246,
+   "sha256": "5248f5746501d5406cd344189dbf0e9160914499a08306f118b241a35de9f7d2",
+   "log": [
+    ["clearRect",0,0,1000,1400],
+    ["save"],
+    ["drawImage","pending:bg_web",0,0,1000,1400],
+    ["restore"],
+    ["save"],
+    ["translate",438,813],
+    ["rotate",0.087266],
+    ["translate",-438,-813],
+    ["save"],
+    ["beginPath"],
+    ["rect",126,442,624,742],
+    ["clip"],
+    ["translate",762.48,248.68],
+    ["rotate",-0.785398],
+    ["translate",-762.48,-248.68],
+    ["drawImage","photo-portrait",44.88,-827.72,1435.2,2152.8],
+    ["restore"],
+    ["restore"],
+    ["save"],
+    ["translate",497,128],
+    ["rotate",0],
+    ["translate",-497,-128],
+    ["fitScan","Maximiliana Charlotta Åkesson-Lindqvist ❤️","700 300px \"Montserrat\"","700 141px \"Montserrat\"",54,2983.56],
+    ["=font","700 47px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Maximiliana Charlotta Åkesson-Lindqvist ❤️",497,128],
+    ["restore"],
+    ["save"],
+    ["translate",489,228],
+    ["rotate",0],
+    ["translate",-489,-228],
+    ["fitScan","Teknikprogrammet ❤️ Göteborgs Högre Allmänna Läroverk för Flickor 2026","400 180px \"Montserrat\"","400 36px \"Montserrat\"",49,1312.56],
+    ["=font","400 12px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Teknikprogrammet ❤️ Göteborgs Högre Allmänna Läroverk för Flickor 2026",489,228],
+    ["restore"]
+   ]
+  },
+  "long@print:6": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {
+      "ycsrlqwzs": "Maximiliana Charlotta Åkesson-Lindqvist ❤️",
+      "a8365ireo": "Teknikprogrammet ❤️ Göteborgs Högre Allmänna Läroverk för Flickor 2026"
+     },
+     "photos": {
+      "92i9ycx99": {
+       "asset_id": "photo-portrait",
+       "width": 2400,
+       "height": 3600,
+       "adj": {
+        "zoom": 2.3,
+        "rot": -45,
+        "panX": 0.1,
+        "panY": 0.9
+       }
+      }
+     }
+    },
+    "mode": "print",
+    "scale": 6,
+    "locale": "sv"
+   },
+   "canvas": {
+    "width": 3000,
+    "height": 4200
+   },
+   "report": {
+    "fitted": {
+     "ycsrlqwzs": 23.5,
+     "a8365ireo": 6
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 246,
+   "sha256": "83758451cb3073612d4d74f77638516be567d612953c2a865fba13b718a75c7f",
+   "log": [
+    ["clearRect",0,0,3000,4200],
+    ["save"],
+    ["drawImage","pending:bg_print",0,0,3000,4200],
+    ["restore"],
+    ["save"],
+    ["translate",1314,2439],
+    ["rotate",0.087266],
+    ["translate",-1314,-2439],
+    ["save"],
+    ["beginPath"],
+    ["rect",378,1326,1872,2226],
+    ["clip"],
+    ["translate",2287.44,746.04],
+    ["rotate",-0.785398],
+    ["translate",-2287.44,-746.04],
+    ["drawImage","photo-portrait",134.64,-2483.16,4305.6,6458.4],
+    ["restore"],
+    ["restore"],
+    ["save"],
+    ["translate",1491,384],
+    ["rotate",0],
+    ["translate",-1491,-384],
+    ["fitScan","Maximiliana Charlotta Åkesson-Lindqvist ❤️","700 300px \"Montserrat\"","700 141px \"Montserrat\"",54,2983.56],
+    ["=font","700 141px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Maximiliana Charlotta Åkesson-Lindqvist ❤️",1491,384],
+    ["restore"],
+    ["save"],
+    ["translate",1467,684],
+    ["rotate",0],
+    ["translate",-1467,-684],
+    ["fitScan","Teknikprogrammet ❤️ Göteborgs Högre Allmänna Läroverk för Flickor 2026","400 180px \"Montserrat\"","400 36px \"Montserrat\"",49,1312.56],
+    ["=font","400 36px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Teknikprogrammet ❤️ Göteborgs Högre Allmänna Läroverk för Flickor 2026",1467,684],
+    ["restore"]
+   ]
+  },
+  "defaults@proof:2": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {},
+     "photos": {}
+    },
+    "mode": "proof",
+    "scale": 2,
+    "locale": "sv"
+   },
+   "canvas": {
+    "width": 1000,
+    "height": 1400
+   },
+   "report": {
+    "fitted": {
+     "ycsrlqwzs": 50,
+     "a8365ireo": 30
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 39,
+   "sha256": "3dd65456f32ec88d192fb68dcd59c3845dde89eb6944e18713c2d6336171a688",
+   "log": [
+    ["clearRect",0,0,1000,1400],
+    ["save"],
+    ["drawImage","pending:bg_web",0,0,1000,1400],
+    ["restore"],
+    ["save"],
+    ["translate",438,813],
+    ["rotate",0.087266],
+    ["translate",-438,-813],
+    ["=fillStyle","#e8e8e8"],
+    ["beginPath"],
+    ["rect",126,442,624,742],
+    ["fill"],
+    ["restore"],
+    ["save"],
+    ["translate",497,128],
+    ["rotate",0],
+    ["translate",-497,-128],
+    ["fitScan","Namn","700 300px \"Montserrat\"","700 300px \"Montserrat\"",1,708],
+    ["=font","700 100px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Namn",497,128],
+    ["restore"],
+    ["save"],
+    ["translate",489,228],
+    ["rotate",0],
+    ["translate",-489,-228],
+    ["fitScan","Klass","400 180px \"Montserrat\"","400 180px \"Montserrat\"",1,478.8],
+    ["=font","400 60px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Klass",489,228],
+    ["restore"]
+   ]
+  },
+  "defaults@print:6": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {},
+     "photos": {}
+    },
+    "mode": "print",
+    "scale": 6,
+    "locale": "sv"
+   },
+   "canvas": {
+    "width": 3000,
+    "height": 4200
+   },
+   "report": {
+    "fitted": {
+     "ycsrlqwzs": 50,
+     "a8365ireo": 30
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 39,
+   "sha256": "abfbb574d0e3897ffe41b7b9376b002b3ef1c2833b8df4509d13dd4274517c91",
+   "log": [
+    ["clearRect",0,0,3000,4200],
+    ["save"],
+    ["drawImage","pending:bg_print",0,0,3000,4200],
+    ["restore"],
+    ["save"],
+    ["translate",1314,2439],
+    ["rotate",0.087266],
+    ["translate",-1314,-2439],
+    ["=fillStyle","#e8e8e8"],
+    ["beginPath"],
+    ["rect",378,1326,1872,2226],
+    ["fill"],
+    ["restore"],
+    ["save"],
+    ["translate",1491,384],
+    ["rotate",0],
+    ["translate",-1491,-384],
+    ["fitScan","Namn","700 300px \"Montserrat\"","700 300px \"Montserrat\"",1,708],
+    ["=font","700 300px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Namn",1491,384],
+    ["restore"],
+    ["save"],
+    ["translate",1467,684],
+    ["rotate",0],
+    ["translate",-1467,-684],
+    ["fitScan","Klass","400 180px \"Montserrat\"","400 180px \"Montserrat\"",1,478.8],
+    ["=font","400 180px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Klass",1467,684],
+    ["restore"]
+   ]
+  },
+  "sv@edit:2": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {
+      "ycsrlqwzs": "Åsa Öberg-Ängström",
+      "a8365ireo": "NA3b"
+     },
+     "photos": {
+      "92i9ycx99": {
+       "asset_id": "photo-landscape",
+       "width": 4000,
+       "height": 3000,
+       "adj": {
+        "zoom": 1.6,
+        "rot": 17,
+        "panX": 0.2,
+        "panY": 0.75
+       }
+      }
+     }
+    },
+    "mode": "edit",
+    "scale": 2,
+    "locale": "sv",
+    "ui": {
+     "activeSlotId": "92i9ycx99",
+     "uiFontFamily": "system-ui"
+    }
+   },
+   "canvas": {
+    "width": 1000,
+    "height": 1400
+   },
+   "report": {
+    "fitted": {
+     "ycsrlqwzs": 50,
+     "a8365ireo": 30
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 58,
+   "sha256": "e39482c680c730dfcda931ef7065b0cedf6634ba7e266d0492c7100954ed1a34",
+   "log": [
+    ["clearRect",0,0,1000,1400],
+    ["save"],
+    ["drawImage","pending:bg_web",0,0,1000,1400],
+    ["restore"],
+    ["save"],
+    ["translate",438,813],
+    ["rotate",0.087266],
+    ["translate",-438,-813],
+    ["save"],
+    ["beginPath"],
+    ["rect",126,442,624,742],
+    ["clip"],
+    ["translate",725.68,701.7],
+    ["rotate",0.296706],
+    ["translate",-725.68,-701.7],
+    ["drawImage","photo-landscape",-65.786667,108.1,1582.933333,1187.2],
+    ["restore"],
+    ["restore"],
+    ["save"],
+    ["translate",497,128],
+    ["rotate",0],
+    ["translate",-497,-128],
+    ["fitScan","Åsa Öberg-Ängström","700 300px \"Montserrat\"","700 300px \"Montserrat\"",1,2970],
+    ["=font","700 100px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Åsa Öberg-Ängström",497,128],
+    ["restore"],
+    ["save"],
+    ["translate",489,228],
+    ["rotate",0],
+    ["translate",-489,-228],
+    ["fitScan","NA3b","400 180px \"Montserrat\"","400 180px \"Montserrat\"",1,446.4],
+    ["=font","400 60px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","NA3b",489,228],
+    ["restore"],
+    ["save"],
+    ["translate",438,813],
+    ["rotate",0.087266],
+    ["translate",-438,-813],
+    ["setLineDash",[]],
+    ["=strokeStyle","#2563eb"],
+    ["=lineWidth",2],
+    ["strokeRect",126,442,624,742],
+    ["=fillStyle","#2563eb"],
+    ["fillRect",122,438,8,8],
+    ["fillRect",746,438,8,8],
+    ["fillRect",122,1180,8,8],
+    ["fillRect",746,1180,8,8],
+    ["restore"]
+   ]
+  },
+  "defaults@edit:2": {
+   "input": {
+    "state": {
+     "v": 1,
+     "texts": {},
+     "photos": {}
+    },
+    "mode": "edit",
+    "scale": 2,
+    "locale": "sv",
+    "ui": {
+     "uiFontFamily": "system-ui"
+    }
+   },
+   "canvas": {
+    "width": 1000,
+    "height": 1400
+   },
+   "report": {
+    "fitted": {
+     "ycsrlqwzs": 50,
+     "a8365ireo": 30
+    },
+    "missing": [],
+    "elements": 3
+   },
+   "calls": 49,
+   "sha256": "ff8c36d8d39b4e4a6746d452fd9004aaedc4a5d7db5c4642a72cfcb1733552c3",
+   "log": [
+    ["clearRect",0,0,1000,1400],
+    ["save"],
+    ["drawImage","pending:bg_web",0,0,1000,1400],
+    ["restore"],
+    ["save"],
+    ["translate",438,813],
+    ["rotate",0.087266],
+    ["translate",-438,-813],
+    ["=fillStyle","#e8e8e8"],
+    ["beginPath"],
+    ["rect",126,442,624,742],
+    ["fill"],
+    ["=strokeStyle","#cccccc"],
+    ["=lineWidth",4],
+    ["setLineDash",[12,8]],
+    ["strokeRect",128,444,620,738],
+    ["setLineDash",[]],
+    ["=fillStyle","#aaa"],
+    ["=font","28px \"system-ui\""],
+    ["=textAlign","center"],
+    ["=textBaseline","middle"],
+    ["fillText","Ladda upp bild",438,813],
+    ["restore"],
+    ["save"],
+    ["translate",497,128],
+    ["rotate",0],
+    ["translate",-497,-128],
+    ["fitScan","Namn","700 300px \"Montserrat\"","700 300px \"Montserrat\"",1,708],
+    ["=font","700 100px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Namn",497,128],
+    ["restore"],
+    ["save"],
+    ["translate",489,228],
+    ["rotate",0],
+    ["translate",-489,-228],
+    ["fitScan","Klass","400 180px \"Montserrat\"","400 180px \"Montserrat\"",1,478.8],
+    ["=font","400 60px \"Montserrat\""],
+    ["=fillStyle","#000000"],
+    ["=textBaseline","middle"],
+    ["=textAlign","center"],
+    ["=direction","ltr"],
+    ["fillText","Klass",489,228],
+    ["restore"]
+   ]
+  }
+ }
+}

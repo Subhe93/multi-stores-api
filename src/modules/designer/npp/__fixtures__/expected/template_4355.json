@@ -1,0 +1,225 @@
+{
+  "external_ref": "woo:namez.se:npp_template:4355",
+  "name": "Studentskylt pris",
+  "include": true,
+  "spec": {
+    "schema": "designer.template/1",
+    "unit": "mm",
+    "width": 500,
+    "height": 700,
+    "bleed_mm": 0,
+    "render": {
+      "preview_px_per_mm": 2,
+      "print_px_per_mm": 6,
+      "fit_ref_px_per_mm": 6
+    },
+    "fonts": [
+      {
+        "family": "Montserrat",
+        "weight": 400,
+        "style": "normal",
+        "asset_id": "pending:font:Montserrat:400:normal"
+      },
+      {
+        "family": "Montserrat",
+        "weight": 700,
+        "style": "normal",
+        "asset_id": "pending:font:Montserrat:700:normal"
+      }
+    ],
+    "surfaces": [
+      {
+        "key": "front",
+        "background": {
+          "color": "#ffffff",
+          "fit": "stretch",
+          "web": {
+            "asset_id": "pending:bg_web",
+            "width": 0,
+            "height": 0
+          },
+          "print": {
+            "asset_id": "pending:bg_print",
+            "width": 0,
+            "height": 0
+          }
+        },
+        "elements": [
+          {
+            "id": "xgv7p6c5g",
+            "x": 0,
+            "y": 406,
+            "w": 160,
+            "h": 200,
+            "rot": 0,
+            "z": 4,
+            "locked": false,
+            "type": "image",
+            "asset": {
+              "asset_id": "pending:deco:xgv7p6c5g",
+              "width": 0,
+              "height": 0
+            }
+          },
+          {
+            "id": "137pxk46h",
+            "x": 1,
+            "y": 1,
+            "w": 504,
+            "h": 80,
+            "rot": 0,
+            "z": 3,
+            "locked": false,
+            "type": "text",
+            "label": {
+              "sv": "Namn"
+            },
+            "placeholder": {
+              "sv": "Namn"
+            },
+            "default_text": "Namn",
+            "font": {
+              "family": "Montserrat",
+              "weight": 700,
+              "style": "normal"
+            },
+            "size": 61,
+            "color": "#ffffff",
+            "align": "center",
+            "transform": "none",
+            "fit": {
+              "mode": "shrink",
+              "step": 0.5,
+              "min": 6,
+              "pad_ref_px": 8
+            },
+            "inset": 4,
+            "editable": true,
+            "required": true,
+            "max_length": 40,
+            "direction": "ltr",
+            "source_label": "Namn"
+          },
+          {
+            "id": "6gbltbf0p",
+            "x": 97,
+            "y": 78,
+            "w": 300,
+            "h": 43,
+            "rot": 0,
+            "z": 4,
+            "locked": false,
+            "type": "text",
+            "label": {
+              "sv": "Klass"
+            },
+            "placeholder": {
+              "sv": "Klass"
+            },
+            "default_text": "Klass",
+            "font": {
+              "family": "Montserrat",
+              "weight": 400,
+              "style": "normal"
+            },
+            "size": 36,
+            "color": "#ffffff",
+            "align": "center",
+            "transform": "none",
+            "fit": {
+              "mode": "shrink",
+              "step": 0.5,
+              "min": 6,
+              "pad_ref_px": 8
+            },
+            "inset": 4,
+            "editable": true,
+            "required": true,
+            "max_length": 40,
+            "direction": "ltr",
+            "source_label": "Klass"
+          },
+          {
+            "id": "hzagncqgf",
+            "x": 329,
+            "y": 60,
+            "w": 169,
+            "h": 108,
+            "rot": 0,
+            "z": 5,
+            "locked": false,
+            "type": "image",
+            "asset": {
+              "asset_id": "pending:deco:hzagncqgf",
+              "width": 0,
+              "height": 0
+            }
+          },
+          {
+            "id": "wayaptiut",
+            "x": 90,
+            "y": 129,
+            "w": 322,
+            "h": 448,
+            "rot": 0,
+            "z": 3,
+            "locked": false,
+            "type": "image_slot",
+            "label": {
+              "sv": "Foto"
+            },
+            "placeholder": {
+              "sv": "Ladda upp bild"
+            },
+            "shape": "rect",
+            "radius": 0,
+            "border_color": "#cccccc",
+            "required": true,
+            "adj_limits": {
+              "zoom": [1, 3],
+              "rot": [-180, 180]
+            },
+            "default_adj": {
+              "zoom": 1,
+              "rot": 0,
+              "panX": 0.5,
+              "panY": 0.5
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "fetch": [
+    {
+      "key": "pending:bg_web",
+      "role": "bg_web",
+      "url": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-pris-big.jpg",
+      "fallback_url": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-pris-big-scaled.jpg"
+    },
+    {
+      "key": "pending:bg_print",
+      "role": "bg_print",
+      "url": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-pris-small.png",
+      "fallback_url": "https://namez.se/wp-content/uploads/2026/04/Studentskylt-pris-small-scaled.png"
+    },
+    {
+      "key": "pending:deco:xgv7p6c5g",
+      "role": "deco",
+      "url": "https://namez.se/wp-content/uploads/2026/04/bojon.png",
+      "element_id": "xgv7p6c5g"
+    },
+    {
+      "key": "pending:deco:hzagncqgf",
+      "role": "deco",
+      "url": "https://namez.se/wp-content/uploads/2026/04/ChatGPT-Image-Apr-16-2026-11_47_23-PM.png",
+      "element_id": "hzagncqgf"
+    },
+    {
+      "key": "pending:thumb",
+      "role": "thumb",
+      "url": "https://namez.se/wp-content/uploads/npp-thumbnails/poster-ElmnRyPotccc.jpg"
+    }
+  ],
+  "warnings": ["FONT_UNDECLARED"]
+}

@@ -1,0 +1,104 @@
+{
+  "hideGallery": "1",
+  "cartUrl": "https://namez.se/cart/",
+  "productId": "4312",
+  "templateData": {
+    "id": 4359,
+    "name": "Studentskylt med rosa design new",
+    "size_mode": "budget",
+    "elements": [
+      {
+        "id": "p43t8cnhh",
+        "type": "background",
+        "color": "#ffffff",
+        "imageData": "https://namez.se/wp-content/uploads/2026/04/Student-2026-small-namez.png",
+        "z": -10,
+        "locked": false,
+        "imageDataHiRes": "https://namez.se/wp-content/uploads/2026/04/Student-2026-big-namez01-scaled.png"
+      },
+      {
+        "id": "7qc24i6pu",
+        "type": "text",
+        "text": "Namn",
+        "placeholder": "Namn",
+        "fieldLabel": "Namn",
+        "x": 56,
+        "y": 119,
+        "w": 399,
+        "h": 80,
+        "fontSize": 50,
+        "fontFamily": "Montserrat",
+        "fontWeight": 700,
+        "color": "#f43389",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 2,
+        "locked": false,
+        "editable": true
+      },
+      {
+        "id": "jslm4rokj",
+        "type": "text",
+        "text": "Text",
+        "placeholder": "Enter text",
+        "fieldLabel": "Text",
+        "x": 101,
+        "y": 202,
+        "w": 300,
+        "h": 29,
+        "fontSize": 28,
+        "fontFamily": "Montserrat",
+        "fontWeight": 400,
+        "color": "#f956a2",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 2,
+        "locked": false,
+        "editable": true
+      },
+      {
+        "id": "us4lnkexi",
+        "type": "image-slot",
+        "placeholder": "Upload image",
+        "fieldLabel": "Photo",
+        "x": 114,
+        "y": 236,
+        "w": 300,
+        "h": 392,
+        "rot": 0,
+        "z": 1,
+        "locked": false,
+        "shape": "rect",
+        "borderRadius": 0,
+        "borderColor": "#cccccc",
+        "imageData": null
+      }
+    ],
+    "thumbnail": ""
+  },
+  "allTemplates": [],
+  "welcomeTemplates": [],
+  "basePrice": "399",
+  "regularPrice": "600",
+  "pricing": {
+    "double_extra": 149,
+    "rain_extra": 29,
+    "poster_price": 179,
+    "welcome_price": 249,
+    "welcome_regular": 349
+  },
+  "addons": {
+    "double": false,
+    "raincover": false,
+    "poster": false,
+    "welcome": false
+  },
+  "sale": {
+    "enabled": false,
+    "badge_text": "REA",
+    "badge_icon": "",
+    "discount_pct": 0
+  },
+  "fonts": [],
+  "featuredImage": "https://namez.se/wp-content/uploads/2026/04/Student-2026-11-731x1024.jpg"
+}

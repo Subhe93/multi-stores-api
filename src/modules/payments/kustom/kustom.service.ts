@@ -23,6 +23,7 @@ import { OrdersService } from '../../orders/orders.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { MailService } from '../../mail/mail.service';
 import { InvoiceTriggersService } from '../../invoices/invoice-triggers.service';
+import { DesignerTriggersService } from '../../designer/designer-triggers.service';
 import { RevalidationService } from '../../../common/revalidation/revalidation.service';
 import {
   KustomAddress,
@@ -177,8 +178,10 @@ export class KustomService implements OnModuleInit {
     private taxService: TaxService,
     private markets: MarketsContextService,
     private b2b: B2bService,
-    // Invoices app (M3 D5): optional and last; no-op without the app.
+    // Invoices app (M3 D5): optional; no-op without the app.
     @Optional() private readonly invoices?: InvoiceTriggersService,
+    // Designer app (M4.2 WP5): optional and last; no-op without the app.
+    @Optional() private readonly designerTriggers?: DesignerTriggersService,
   ) {}
 
   // OrdersService cannot inject this service (PaymentsModule imports
@@ -1061,6 +1064,14 @@ export class KustomService implements OnModuleInit {
     // issuing is idempotent and heals a failed earlier attempt.
     if (result?.order) {
       await this.invoices?.onOrderPaid({
+        id: order.id,
+        store_id: result.order.store_id,
+        payment_method: result.order.payment_method,
+        payment_status: 'paid',
+      });
+      // Designer app: queue the print renders (enqueue only, never throws;
+      // idempotent on a replayed push / confirmation).
+      await this.designerTriggers?.onOrderPaid({
         id: order.id,
         store_id: result.order.store_id,
         payment_method: result.order.payment_method,

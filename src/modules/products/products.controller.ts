@@ -14,6 +14,7 @@ import { ProductsService } from './products.service';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt.guard';
 import { UserRole, ProductStatus } from '@prisma/client';
 
 @Controller('products')
@@ -21,8 +22,14 @@ export class ProductsController {
   constructor(private productsService: ProductsService) {}
 
   // عام — تصفح المنتجات
+  // Catalogue listing. Anonymous / non-owner callers only get PUBLISHED
+  // provider products (public projection); admins and owners filtering their
+  // own catalogue get the full rows (ProductsService.listForViewer).
   @Get()
+  @UseGuards(OptionalJwtAuthGuard)
   findAll(
+    @CurrentUser('id') userId: string | undefined,
+    @CurrentUser('role') userRole: UserRole | undefined,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('category_id') category_id?: string,
@@ -34,18 +41,21 @@ export class ProductsController {
     @Query('search') search?: string,
     @Query('is_featured') is_featured?: string,
   ) {
-    return this.productsService.findAll({
-      page: page ? +page : undefined,
-      limit: limit ? +limit : undefined,
-      category_id,
-      product_type,
-      status,
-      provider_id,
-      creator_id,
-      owner_type,
-      search,
-      is_featured: is_featured === 'true' ? true : undefined,
-    });
+    return this.productsService.listForViewer(
+      {
+        page: page ? +page : undefined,
+        limit: limit ? Math.min(+limit, 200) : undefined,
+        category_id,
+        product_type,
+        status,
+        provider_id,
+        creator_id,
+        owner_type,
+        search,
+        is_featured: is_featured === 'true' ? true : undefined,
+      },
+      { userId, role: userRole },
+    );
   }
 
   // Provider/Creator — list only the authenticated user's own products

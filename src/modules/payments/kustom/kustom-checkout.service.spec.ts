@@ -105,6 +105,8 @@ function build(
     b2b?: boolean;
     session?: Record<string, unknown> | null;
     customer?: Record<string, unknown> | null;
+    /** Designer app: a DesignerCartService double (8th, optional param). */
+    designerCart?: Record<string, unknown>;
   } = {},
 ) {
   const sessions: Record<string, unknown>[] = [];
@@ -215,6 +217,8 @@ function build(
     {} as MailService,
     markets as unknown as MarketsContextService,
     b2b,
+    undefined,
+    opts.designerCart as never,
   );
   return {
     service,
@@ -788,5 +792,81 @@ describe('KustomCheckoutService.handleValidation with the b2b app', () => {
     const createDto = orders.create.mock.calls[0][1] as Record<string, unknown>;
     expect(createDto).not.toHaveProperty('buyer_type');
     expect(createDto).not.toHaveProperty('company');
+  });
+});
+
+describe('KustomCheckoutService designer ownership (M4.2 fixes)', () => {
+  const D1 = '99999999-9999-4999-8999-999999999991';
+
+  it('verifies the raw lines (with tokens) before storing; verified lines are marked', async () => {
+    const designerCart = {
+      verifySessionDesigns: jest.fn(() => Promise.resolve(new Set([D1]))),
+    };
+    const { service, prisma, orders } = build(null, { designerCart });
+    await service.createSession(null, {
+      store_slug: 'namez',
+      items: [
+        { product_id: 'p1', quantity: 1, design_id: D1, design_token: 'tok' },
+        { product_id: 'p2', quantity: 1 },
+      ],
+    } as never);
+    expect(designerCart.verifySessionDesigns).toHaveBeenCalledWith(
+      STORE_ID,
+      [
+        expect.objectContaining({ design_id: D1, design_token: 'tok' }),
+        expect.objectContaining({ product_id: 'p2', design_id: null }),
+      ],
+      null,
+      [],
+    );
+    const items = prisma.kustomCheckoutSession.create.mock.calls[0][0].data
+      .items as Record<string, unknown>[];
+    // The token is never stored; the verification is.
+    expect(items[0]).toMatchObject({ design_id: D1, design_verified: true });
+    expect(items[0]).not.toHaveProperty('design_token');
+    expect(items[1]).not.toHaveProperty('design_verified');
+    // Order-bound quote: only the verified designs are priced.
+    expect(orders.quoteLines).toHaveBeenCalledWith(
+      STORE_ID,
+      expect.any(Array),
+      expect.objectContaining({
+        designOwnership: { customerId: null, verifiedDesignIds: [D1] },
+      }),
+    );
+  });
+
+  it('an unverifiable design fails the session create (nothing stored)', async () => {
+    const designerCart = {
+      verifySessionDesigns: jest.fn(() =>
+        Promise.reject(new Error('DESIGNER_DESIGN_FORBIDDEN')),
+      ),
+    };
+    const { service, prisma } = build(null, { designerCart });
+    await expect(
+      service.createSession(null, {
+        store_slug: 'namez',
+        items: [{ product_id: 'p1', quantity: 1, design_id: D1 }],
+      } as never),
+    ).rejects.toThrow('DESIGNER_DESIGN_FORBIDDEN');
+    expect(prisma.kustomCheckoutSession.create).not.toHaveBeenCalled();
+  });
+
+  it('no design lines: no verification call, lines stored as before', async () => {
+    const designerCart = { verifySessionDesigns: jest.fn() };
+    const { service, prisma } = build(null, { designerCart });
+    await service.createSession(null, dto);
+    expect(designerCart.verifySessionDesigns).not.toHaveBeenCalled();
+    expect(
+      prisma.kustomCheckoutSession.create.mock.calls[0][0].data.items,
+    ).toEqual([
+      {
+        product_id: 'p1',
+        custom_product_id: null,
+        variant_id: null,
+        bundle_offer_id: null,
+        quantity: 1,
+        custom_fields: null,
+      },
+    ]);
   });
 });

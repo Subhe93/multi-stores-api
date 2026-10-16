@@ -8,6 +8,8 @@ import { RevalidationModule } from './common/revalidation/revalidation.module';
 import { CorsModule } from './common/cors/cors.module';
 import { StoreAppsModule } from './modules/store-apps/store-apps.module';
 import { MarketsModule } from './modules/markets/markets.module';
+import { RedirectsModule } from './modules/redirects/redirects.module';
+import { ImporterModule } from './modules/importer/importer.module';
 import { B2bModule } from './modules/b2b/b2b.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -46,6 +48,11 @@ import { MailModule } from './modules/mail/mail.module';
 import { LegalModule } from './modules/legal/legal.module';
 import { NotificationTemplatesModule } from './modules/notification-templates/notification-templates.module';
 import { BackupsModule } from './modules/backups/backups.module';
+import { PrivateStorageModule } from './common/storage/private-storage.module';
+import { RetentionModule } from './modules/retention/retention.module';
+import { CustomerUploadsModule } from './modules/customer-uploads/customer-uploads.module';
+import { ProductionModule } from './modules/production/production.module';
+import { DesignerModule } from './modules/designer/designer.module';
 
 @Module({
   imports: [
@@ -60,6 +67,7 @@ import { BackupsModule } from './modules/backups/backups.module';
     RevalidationModule,
     StoreAppsModule,
     MarketsModule,
+    RedirectsModule,
     B2bModule,
     InvoicesModule,
     CorsModule,
@@ -99,6 +107,16 @@ import { BackupsModule } from './modules/backups/backups.module';
     LegalModule,
     NotificationTemplatesModule,
     BackupsModule,
+    PrivateStorageModule,
+    RetentionModule,
+    CustomerUploadsModule,
+    // M4.3 production app: routes + status automation (the core module is
+    // imported by OrdersModule).
+    ProductionModule,
+    // M4.4 importer app (worker off with IMPORTER_WORKER=off).
+    ImporterModule,
+    // M4.2 designer app (P3: storage, template assets, fonts, signed links).
+    DesignerModule,
   ],
   providers: [
     // ThrottlerModule alone throttles nothing — only routes that explicitly

@@ -22,6 +22,16 @@ export class CreatorCategoryTranslationDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  // SEO overrides (M4.4). On update, `undefined` keeps the stored value of
+  // this locale (X19 carry-over); `null` or '' clears it.
+  @IsOptional()
+  @IsString()
+  meta_title?: string | null;
+
+  @IsOptional()
+  @IsString()
+  meta_desc?: string | null;
 }
 
 export class CreateCreatorCategoryDto {
@@ -53,6 +63,12 @@ export class CreateCreatorCategoryDto {
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;
+
+  // Leave the collection out of the sitemap and noindex it while it has no
+  // published products (M4.4).
+  @IsOptional()
+  @IsBoolean()
+  noindex_when_empty?: boolean;
 
   @IsArray()
   @ValidateNested({ each: true })
@@ -101,6 +117,12 @@ export class UpdateCreatorCategoryDto {
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;
+
+  // Leave the collection out of the sitemap and noindex it while it has no
+  // published products (M4.4).
+  @IsOptional()
+  @IsBoolean()
+  noindex_when_empty?: boolean;
 
   @IsOptional()
   @IsArray()

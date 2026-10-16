@@ -1,0 +1,110 @@
+{
+  "hideGallery": "1",
+  "cartUrl": "https://namez.se/cart/",
+  "productId": "4282",
+  "templateData": {
+    "id": 4281,
+    "name": "Rolig studentskylt med foto",
+    "size_mode": "budget",
+    "elements": [
+      {
+        "id": "t7n34xu2w",
+        "type": "background",
+        "color": "#ffffff",
+        "imageData": "https://namez.se/wp-content/uploads/2026/04/Rolig-studentskylt-med-foto-small-mall-scaled.jpg",
+        "z": -10,
+        "locked": false,
+        "imageDataHiRes": "https://namez.se/wp-content/uploads/2026/04/Rolig-studentskylt-med-foto-big-mall-scaled.png"
+      },
+      {
+        "id": "amhh6dz6m",
+        "type": "text",
+        "text": "Namn",
+        "placeholder": "Namn",
+        "fieldLabel": "Namn",
+        "x": 1,
+        "y": 29,
+        "w": 499,
+        "h": 53,
+        "fontSize": 50,
+        "fontFamily": "Montserrat",
+        "fontWeight": 700,
+        "color": "#013b81",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 3,
+        "locked": false,
+        "editable": true
+      },
+      {
+        "id": "kv0nlqycf",
+        "type": "text",
+        "text": "Klass",
+        "placeholder": "Klass",
+        "fieldLabel": "Klass",
+        "x": 170,
+        "y": 76,
+        "w": 144,
+        "h": 35,
+        "fontSize": 28,
+        "fontFamily": "Montserrat",
+        "fontWeight": 500,
+        "color": "#023a7d",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 3,
+        "locked": false,
+        "editable": true
+      },
+      {
+        "id": "92o4p321p",
+        "type": "image-slot",
+        "placeholder": "Upload image",
+        "fieldLabel": "Photo",
+        "x": 97,
+        "y": 113,
+        "w": 298,
+        "h": 402,
+        "rot": 0,
+        "z": 4,
+        "locked": false,
+        "shape": "rect",
+        "borderRadius": 0,
+        "borderColor": "#cccccc",
+        "imageData": null
+      }
+    ],
+    "thumbnail": ""
+  },
+  "allTemplates": [],
+  "welcomeTemplates": [],
+  "basePrice": "399",
+  "regularPrice": "600",
+  "pricing": {
+    "double_extra": 149,
+    "rain_extra": 29,
+    "poster_price": 179,
+    "welcome_price": 249,
+    "welcome_regular": 349
+  },
+  "addons": {
+    "double": false,
+    "raincover": false,
+    "poster": false,
+    "welcome": false
+  },
+  "sale": {
+    "enabled": false,
+    "badge_text": "REA",
+    "badge_icon": "",
+    "discount_pct": 0
+  },
+  "fonts": [
+    {
+      "family": "Montserrat",
+      "type": "google",
+      "url": ""
+    }
+  ],
+  "featuredImage": "https://namez.se/wp-content/uploads/2026/04/Rolig-studentskylt-med-foto-namez-shop-namez-731x1024.jpg"
+}

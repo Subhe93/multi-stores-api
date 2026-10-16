@@ -1141,6 +1141,35 @@ export class MailService {
     return files.length ? { files, onSent } : null;
   }
 
+  /**
+   * Item image overrides every registered extension offers (designer proof).
+   * A failing extension is logged and skipped; undefined when none, so the
+   * items block renders exactly as without extensions.
+   */
+  private async collectItemImages(
+    order: OrderForEmail,
+    event: OrderEmailEvent,
+  ): Promise<Record<string, string> | undefined> {
+    let out: Record<string, string> | undefined;
+    for (const ext of this.orderExtensions) {
+      if (!ext.itemImages) continue;
+      try {
+        const images = await ext.itemImages(order, event);
+        for (const [itemId, url] of Object.entries(images ?? {})) {
+          if (!url || (out && itemId in out)) continue;
+          out = { ...(out ?? {}), [itemId]: url };
+        }
+      } catch (err) {
+        this.logger.warn(
+          `Order email extension itemImages failed for ${order.id} (${event}): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+    return out;
+  }
+
   /** Runs the extensions' onSent callbacks once the message went out. */
   private async afterAttachedSend(
     result: { sent: boolean },
@@ -1195,11 +1224,15 @@ export class MailService {
     );
     const orderAdminUrl = `${dashboardBase.replace(/\/$/, '')}/creator/orders/${order.id}`;
 
+    // The store's primary locale is the label fallback of personalization
+    // values (also used by the template preview, which comes through here).
     const { items_html, items_text } = renderOrderItems(
       order.items as Parameters<typeof renderOrderItems>[0],
       currency,
       locale,
       publicBase,
+      order.storeCtx?.primaryLocale,
+      await this.collectItemImages(order, event),
     );
 
     const orderNumber = order.order_number;

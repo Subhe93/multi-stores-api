@@ -12,7 +12,12 @@ import { StoreAppsService } from '../../modules/store-apps/store-apps.service';
 interface AppRequest {
   params?: Record<string, string | undefined>;
   user?: RequestUser;
+  /** Set by RequireAppGuard: the store the app was checked for. */
+  appStoreId?: string;
 }
+
+/** A request that passed RequireAppGuard (the resolved store id is attached). */
+export type RequestWithAppStore = AppRequest;
 
 /**
  * Gate of routes decorated with @RequireApp(key). The store is resolved from
@@ -47,6 +52,8 @@ export class RequireAppGuard implements CanActivate {
         message: `The "${key}" app is not enabled for this store.`,
       });
     }
+    // Handlers reuse the resolved store instead of resolving it again.
+    request.appStoreId = storeId;
     return true;
   }
 

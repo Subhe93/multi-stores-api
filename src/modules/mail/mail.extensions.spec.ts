@@ -360,3 +360,68 @@ describe('InvoicesMailExtension through MailService', () => {
     });
   });
 });
+
+describe('MailService order email itemImages (M4.2 WP10)', () => {
+  const item = {
+    id: 'i1',
+    quantity: 1,
+    unit_price: 100,
+    product: {
+      translations: [{ locale: 'sv', title: 'Skylt' }],
+      images: [{ url: '/uploads/p.webp' }],
+    },
+    variant: null,
+    custom_product: null,
+    custom_field_values: [],
+  };
+
+  it('an extension image replaces the line image; a failing one is skipped', async () => {
+    const plain = build();
+    plain.prisma.order.findUnique.mockResolvedValue({
+      ...emailOrder(),
+      items: [item],
+    } as never);
+    await plain.service.dispatchOrderEmail('o1', 'order_confirmation');
+    const before = renderedVars(plain.templates).items_html;
+    expect(before).toContain('/uploads/p.webp');
+
+    const t = build();
+    t.prisma.order.findUnique.mockResolvedValue({
+      ...emailOrder(),
+      items: [item],
+    } as never);
+    t.service.registerOrderMailExtension({
+      itemImages: () => Promise.reject(new Error('images boom')),
+    } as OrderMailExtension);
+    t.service.registerOrderMailExtension({
+      itemImages: () =>
+        Promise.resolve({ i1: 'https://api.example/api/designer/files/t' }),
+    } as OrderMailExtension);
+    await t.service.dispatchOrderEmail('o1', 'order_confirmation');
+    const html = renderedVars(t.templates).items_html;
+    expect(html).toContain('https://api.example/api/designer/files/t');
+    expect(html).not.toContain('/uploads/p.webp');
+    expect(t.sendMail).toHaveBeenCalled();
+  });
+
+  it('extensions without images leave the items block unchanged', async () => {
+    const a = build();
+    a.prisma.order.findUnique.mockResolvedValue({
+      ...emailOrder(),
+      items: [item],
+    } as never);
+    await a.service.dispatchOrderEmail('o1', 'order_confirmation');
+    const b = build();
+    b.prisma.order.findUnique.mockResolvedValue({
+      ...emailOrder(),
+      items: [item],
+    } as never);
+    b.service.registerOrderMailExtension({
+      itemImages: () => Promise.resolve({}),
+    } as OrderMailExtension);
+    await b.service.dispatchOrderEmail('o1', 'order_confirmation');
+    expect(renderedVars(b.templates).items_html).toBe(
+      renderedVars(a.templates).items_html,
+    );
+  });
+});

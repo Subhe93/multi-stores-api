@@ -63,6 +63,9 @@ export class OrdersController {
     @Query('market') market?: string,
     // b2b app: 'company' | 'person' (anything else is ignored).
     @Query('buyer') buyer?: string,
+    // Production app (creators only): 'in_production' | 'ready' |
+    // 'not_started'; ignored for other values, roles and stores without it.
+    @Query('production') production?: string,
   ) {
     // Validate the optional status filter against the OrderStatus enum so an
     // unknown value gets a friendly 400 instead of a database error.
@@ -95,6 +98,7 @@ export class OrdersController {
       statusFilter,
       market || undefined,
       buyer || undefined,
+      production || undefined,
     );
   }
 

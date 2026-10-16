@@ -1,0 +1,110 @@
+{
+  "hideGallery": "1",
+  "cartUrl": "https://namez.se/cart/",
+  "productId": "4345",
+  "templateData": {
+    "id": 4350,
+    "name": "Billig studentskylt med foto",
+    "size_mode": "budget",
+    "elements": [
+      {
+        "id": "zwv42j44q",
+        "type": "background",
+        "color": "#ffffff",
+        "imageData": "https://namez.se/wp-content/uploads/2026/04/Billig-studentskylt-med-foto-small-scaled.jpg",
+        "z": -10,
+        "locked": false,
+        "imageDataHiRes": "https://namez.se/wp-content/uploads/2026/04/Billig-studentskylt-med-foto-big-scaled.png"
+      },
+      {
+        "id": "xdbizz77v",
+        "type": "image-slot",
+        "placeholder": "Upload image",
+        "fieldLabel": "Photo",
+        "x": 88,
+        "y": 129,
+        "w": 325,
+        "h": 447,
+        "rot": 0,
+        "z": 2,
+        "locked": false,
+        "shape": "rect",
+        "borderRadius": 0,
+        "borderColor": "#cccccc",
+        "imageData": null
+      },
+      {
+        "id": "yaymfva1j",
+        "type": "text",
+        "text": "Namn",
+        "placeholder": "Namn",
+        "fieldLabel": "Namn",
+        "x": 4,
+        "y": 19,
+        "w": 497,
+        "h": 82,
+        "fontSize": 66,
+        "fontFamily": "Anton",
+        "fontWeight": 500,
+        "color": "#ffffff",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 3,
+        "locked": false,
+        "editable": true
+      },
+      {
+        "id": "s4qdhdvfe",
+        "type": "text",
+        "text": "Klass",
+        "placeholder": "Klass",
+        "fieldLabel": "Klass",
+        "x": 102,
+        "y": 86,
+        "w": 300,
+        "h": 32,
+        "fontSize": 31,
+        "fontFamily": "Montserrat",
+        "fontWeight": 600,
+        "color": "#ffffff",
+        "textAlign": "center",
+        "rot": 0,
+        "z": 4,
+        "locked": false,
+        "editable": true
+      }
+    ],
+    "thumbnail": ""
+  },
+  "allTemplates": [],
+  "welcomeTemplates": [],
+  "basePrice": "399",
+  "regularPrice": "600",
+  "pricing": {
+    "double_extra": 149,
+    "rain_extra": 29,
+    "poster_price": 179,
+    "welcome_price": 249,
+    "welcome_regular": 349
+  },
+  "addons": {
+    "double": false,
+    "raincover": false,
+    "poster": false,
+    "welcome": false
+  },
+  "sale": {
+    "enabled": false,
+    "badge_text": "REA",
+    "badge_icon": "",
+    "discount_pct": 0
+  },
+  "fonts": [
+    {
+      "family": "Anton",
+      "type": "google",
+      "url": ""
+    }
+  ],
+  "featuredImage": "https://namez.se/wp-content/uploads/2026/04/Billig-studentskylt-med-foto-–-personlig-studentskylt-till-studenten-731x1024.jpg"
+}

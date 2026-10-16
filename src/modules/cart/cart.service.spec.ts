@@ -54,6 +54,8 @@ function makePrisma(priceRows: unknown[] = []) {
       findMany: jest.fn(() => Promise.resolve([product])),
     },
     productVariant: { findUnique: jest.fn(() => Promise.resolve(null)) },
+    // M4.0: add/update read the product's custom fields (none here).
+    productCustomField: { findMany: jest.fn(() => Promise.resolve([])) },
     productMarketPrice: {
       findMany: jest.fn(() => Promise.resolve(priceRows)),
     },

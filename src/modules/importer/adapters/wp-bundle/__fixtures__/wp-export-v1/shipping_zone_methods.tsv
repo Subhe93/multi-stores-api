@@ -1,0 +1,5 @@
+zone_id	instance_id	method_id	method_order	is_enabled
+0	6	flat_rate	1	0
+1	3	flat_rate	1	1
+1	4	local_pickup	2	1
+1	5	free_shipping	3	1
