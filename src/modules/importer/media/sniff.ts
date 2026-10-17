@@ -1,4 +1,8 @@
-/** Magic-byte sniffing of fetched media (M4.4 §7): jpeg, png, gif, webp only. */
+/**
+ * Magic-byte sniffing of fetched media (M4.4 §7): jpeg, png, gif, webp.
+ * AVIF is recognised separately (`isAvif`) so the importer can convert it to
+ * WebP before storing; it is never stored as AVIF.
+ */
 
 export type SniffedImage = 'jpeg' | 'png' | 'gif' | 'webp';
 
@@ -39,4 +43,12 @@ export function sniffImage(buf: Buffer): SniffedImage | null {
   )
     return 'webp';
   return null;
+}
+
+/** True for an ISO-BMFF `ftyp` box with an AVIF brand (still `avif` or sequence `avis`). */
+export function isAvif(buf: Buffer): boolean {
+  if (buf.length < 12) return false;
+  if (buf.subarray(4, 8).toString('latin1') !== 'ftyp') return false;
+  const brand = buf.subarray(8, 12).toString('latin1');
+  return brand === 'avif' || brand === 'avis';
 }

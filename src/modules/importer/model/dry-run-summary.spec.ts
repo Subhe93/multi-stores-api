@@ -108,10 +108,19 @@ describe('summarizeCatalog — real Namez slice', () => {
       templates_linked: 1,
     });
     expect(s.counts.DESIGN_TEMPLATE).toEqual({ STAGE: 2 });
+    // Imported designer links are disabled, so fallback fields are kept even
+    // when the designer is available; only the option turns them off.
     expect(
       summarizeCatalog(catalog, {
         ...NAMEZ_RUN_OPTIONS,
         designer_available: true,
+      }).designer.fallback_fields,
+    ).toBe(3);
+    expect(
+      summarizeCatalog(catalog, {
+        ...NAMEZ_RUN_OPTIONS,
+        designer_available: true,
+        designer_fallback_fields: false,
       }).designer.fallback_fields,
     ).toBe(0);
   });

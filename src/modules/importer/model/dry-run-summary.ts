@@ -758,7 +758,9 @@ export function summarizeCatalog(
     // Designer (M4.2 port) / fallback fields.
     if (designerOn) {
       designer.products_linked++;
-      if (!designerAvailable && fallbackFields) {
+      // Fallback fields are planned whether or not the designer is available
+      // (links are imported disabled; see planner D28 note).
+      if (fallbackFields) {
         designer.fallback_fields += NPP_FALLBACK_FIELDS.length;
         count('FALLBACK_FIELD', 'CREATE', NPP_FALLBACK_FIELDS.length);
       }

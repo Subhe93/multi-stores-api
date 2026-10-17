@@ -768,13 +768,13 @@ export function planImport(input: PlanInput): ImportPlan {
         message: `${b.detector}: ${b.reason}`,
       });
 
-    // NPP fallback fields (D28) while the designer port is unavailable.
+    // NPP fallback fields (D28). Written even when the designer port is
+    // available: imported designer links are created disabled, so without
+    // these fields the product would collect no personalization at all until
+    // the merchant publishes a template and enables the link (which removes
+    // the `npp_fallback` fields in the same transaction).
     let fallback: PlannedProduct['fallback'] = null;
-    if (
-      m.npp &&
-      options.designer_fallback_fields &&
-      !snapshot.designerAvailable
-    ) {
+    if (m.npp && options.designer_fallback_fields) {
       const ref = fallbackRef(m.ref);
       const fl = L('FALLBACK_FIELD', ref);
       let fa: PlanAction;

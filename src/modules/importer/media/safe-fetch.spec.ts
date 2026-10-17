@@ -325,6 +325,24 @@ describe('SafeFetcher (SSRF guard)', () => {
     ).rejects.toMatchObject({ code: 'IMPORT_MEDIA_TOO_LARGE' });
   });
 
+  it('truncate: returns only the first maxBytes when a server ignores Range', async () => {
+    const big = Buffer.alloc(100, 7);
+    const s = stubs({
+      [IMG]: {
+        status: 200,
+        headers: { 'content-length': '100' },
+        body: [big.subarray(0, 30), big.subarray(30)],
+      },
+    });
+    const res = await new SafeFetcher(policy, {
+      lookup: s.lookup,
+      transport: s.transport,
+      allowPrivate: false,
+    }).get(IMG, { maxBytes: 50, purpose: 'media', truncate: true });
+    expect(res.status).toBe(200);
+    expect(res.body.length).toBe(50);
+  });
+
   it('sends Basic auth only for REST requests', async () => {
     const url = 'https://namez.se/wp-json/wc/v3/settings/general';
     const s = stubs({ [url]: { status: 200, body: Buffer.from('{}') } });

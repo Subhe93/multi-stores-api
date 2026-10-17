@@ -7,7 +7,8 @@ import {
   type SafeFetchOptions,
   type SafeFetchResponse,
 } from './safe-fetch';
-import { SNIFFED_EXT, SNIFFED_MIME, sniffImage } from './sniff';
+import sharp from 'sharp';
+import { SNIFFED_EXT, SNIFFED_MIME, isAvif, sniffImage } from './sniff';
 
 /**
  * Media download for one run (M4.4 §7, D8, D9): candidates in D9 order
@@ -183,12 +184,14 @@ export class MediaImporter {
             accept: 'image/*',
             purpose: 'media',
             range: 'bytes=0-15',
+            // Some servers ignore Range and send the whole file; keep only a prefix.
+            truncate: true,
           });
           if (res.status !== 200 && res.status !== 206) {
             last = `HTTP ${res.status}`;
             continue;
           }
-          if (!sniffImage(res.body)) {
+          if (!sniffImage(res.body) && !isAvif(res.body)) {
             last = 'not an allowed image type';
             continue;
           }
@@ -246,13 +249,35 @@ export class MediaImporter {
       };
     }
 
+    // AVIF sources are converted to WebP (first frame, pixel cap) so the
+    // stored file is always one of the supported web formats.
+    if (isAvif(fetched.body)) {
+      try {
+        const converted = await sharp(fetched.body, {
+          animated: false,
+          limitInputPixels: MEDIA_MAX_PIXELS,
+          failOn: 'error',
+        })
+          .rotate()
+          .webp({ quality: 90 })
+          .toBuffer();
+        fetched = { body: converted, url: fetched.url };
+      } catch (e) {
+        return {
+          ok: false,
+          source_url: need.source_url,
+          code: 'IMPORT_MEDIA_TYPE',
+          message: `AVIF could not be converted: ${(e as Error).message}`,
+        };
+      }
+    }
     const kind = sniffImage(fetched.body);
     if (!kind) {
       return {
         ok: false,
         source_url: need.source_url,
         code: 'IMPORT_MEDIA_TYPE',
-        message: 'Not a JPEG, PNG, GIF or WebP image',
+        message: 'Not a JPEG, PNG, GIF, WebP or AVIF image',
       };
     }
     if (await this.overQuota(fetched.body.length)) {

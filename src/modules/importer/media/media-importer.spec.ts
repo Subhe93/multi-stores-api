@@ -118,6 +118,61 @@ describe('MediaImporter decode options', () => {
   });
 });
 
+describe('MediaImporter AVIF sources', () => {
+  // Real sharp (unmocked) to produce and convert an AVIF; inspectRaster stays mocked.
+  const realSharp = jest.requireActual<typeof import('sharp')>('sharp');
+
+  async function avif(): Promise<Buffer> {
+    return realSharp({
+      create: { width: 8, height: 8, channels: 3, background: '#c33' },
+    })
+      .avif()
+      .toBuffer();
+  }
+
+  it('converts an AVIF download to WebP before storing it', async () => {
+    const { mi, fetcher, uploads } = setup();
+    const body = await avif();
+    fetcher.get.mockImplementation((url: string) =>
+      Promise.resolve({
+        status: 200,
+        body: body as Buffer<ArrayBuffer>,
+        url,
+        headers: {},
+      }),
+    );
+    inspect.mockResolvedValue({
+      format: 'webp',
+      width: 8,
+      height: 8,
+      pages: 1,
+    });
+    const r = await mi.ensure(need(7));
+    expect(r.ok).toBe(true);
+    const stored = (
+      uploads.storeBuffer.mock.calls[0] as unknown[]
+    )[0] as Buffer;
+    expect(stored.subarray(8, 12).toString('latin1')).toBe('WEBP');
+  });
+
+  it('verify accepts an AVIF prefix', async () => {
+    const { mi, fetcher } = setup();
+    const body = await avif();
+    fetcher.get.mockImplementation((url: string) =>
+      Promise.resolve({
+        status: 200,
+        body: body.subarray(0, 16) as Buffer<ArrayBuffer>,
+        url,
+        headers: {},
+      }),
+    );
+    const [v] = await mi.verifyAll([need(8)]);
+    expect(v.ok).toBe(true);
+    const [, opts] = fetcher.get.mock.calls[0] as unknown as [string, unknown];
+    expect(opts).toMatchObject({ truncate: true });
+  });
+});
+
 describe('MediaImporter store quota', () => {
   it('reads IMPORT_MEDIA_QUOTA_BYTES (default 2 GB)', () => {
     expect(mediaQuotaBytes({})).toBe(MEDIA_QUOTA_DEFAULT_BYTES);

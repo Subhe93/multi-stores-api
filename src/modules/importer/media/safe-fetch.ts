@@ -54,6 +54,12 @@ export interface SafeFetchOptions {
   auth?: { user: string; pass: string };
   /** e.g. `bytes=0-15` (dry-run media verification). */
   range?: string;
+  /**
+   * Return only the first `maxBytes` bytes instead of failing when the body
+   * is larger (servers that ignore `range`). Used for magic-byte probes only;
+   * the body of such a response is a prefix, never a whole file.
+   */
+  truncate?: boolean;
 }
 
 export interface SafeFetchResponse {
@@ -398,7 +404,11 @@ export class SafeFetcher implements AdapterFetcher {
         continue;
       }
       const declared = Number(headerValue(res.headers['content-length']));
-      if (Number.isFinite(declared) && declared > opts.maxBytes) {
+      if (
+        !opts.truncate &&
+        Number.isFinite(declared) &&
+        declared > opts.maxBytes
+      ) {
         res.destroy();
         throw new SafeFetchError(
           'IMPORT_MEDIA_TOO_LARGE',
@@ -411,6 +421,12 @@ export class SafeFetcher implements AdapterFetcher {
         for await (const chunk of res.body) {
           const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
           total += buf.length;
+          if (total > opts.maxBytes && opts.truncate) {
+            const keep = buf.length - (total - opts.maxBytes);
+            if (keep > 0) chunks.push(buf.subarray(0, keep));
+            res.destroy();
+            break;
+          }
           if (total > opts.maxBytes) {
             res.destroy();
             throw new SafeFetchError(
