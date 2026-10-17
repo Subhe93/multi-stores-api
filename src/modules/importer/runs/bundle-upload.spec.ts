@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { PassThrough } from 'stream';
 import type { Request } from 'express';
 import {
@@ -109,6 +112,35 @@ describe('admin bundle directory name', () => {
       await expect(readBundleDirectory(process.cwd())).rejects.toMatchObject({
         response: { code: 'IMPORT_BUNDLE_MISSING_FILE' },
       });
+    } finally {
+      if (prev === undefined) delete process.env[BUNDLE_DIR_ROOT_ENV];
+      else process.env[BUNDLE_DIR_ROOT_ENV] = prev;
+    }
+  });
+
+  it('readBundleDirectory checks the size limits from lstat before reading', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'bundles-'));
+    mkdirSync(join(root, 'big'));
+    writeFileSync(join(root, 'big', 'posts.tsv'), 'p'.repeat(600));
+    writeFileSync(join(root, 'big', 'postmeta.tsv'), 'm'.repeat(600));
+    const prev = process.env[BUNDLE_DIR_ROOT_ENV];
+    process.env[BUNDLE_DIR_ROOT_ENV] = root;
+    try {
+      await expect(
+        readBundleDirectory('big', { maxFileBytes: 500 }),
+      ).rejects.toMatchObject({
+        response: { code: 'IMPORT_BUNDLE_TOO_LARGE', file: 'postmeta.tsv' },
+      });
+      await expect(
+        readBundleDirectory('big', { maxTotalBytes: 1000 }),
+      ).rejects.toMatchObject({
+        response: { code: 'IMPORT_BUNDLE_TOO_LARGE' },
+      });
+      expect(
+        (await readBundleDirectory('big', { maxTotalBytes: 1200 })).map(
+          (f) => f.size,
+        ),
+      ).toEqual([600, 600]);
     } finally {
       if (prev === undefined) delete process.env[BUNDLE_DIR_ROOT_ENV];
       else process.env[BUNDLE_DIR_ROOT_ENV] = prev;

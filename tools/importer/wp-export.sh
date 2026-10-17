@@ -35,6 +35,11 @@
 #   <host>-export-<yyyymmdd>.tgz    the same files, flat archive
 # =============================================================================
 set -euo pipefail
+# Byte-based text tools: the self-check must see every byte of every file.
+# Under a UTF-8 locale GNU grep treats a line with an invalid byte as binary
+# and stops reporting lines ("Binary file ... matches"), which would let a
+# secret pass. With LC_ALL=C grep, awk, sed, sort and tr work on bytes.
+export LC_ALL=C
 
 WPX_FORMAT_VERSION=1
 WPX_GENERATOR="multi-stores wp-export.sh 1.0.0"
@@ -145,13 +150,37 @@ WPX_CONTENT_META_KEY_RE='^_?(rank_math_(title|description|focus_keyword|facebook
 # The same e-mail shape for awk (no {n,} intervals, no backslash escapes).
 WPX_EMAIL_AWK_RE='[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+([.][A-Za-z0-9-]+)*[.][A-Za-z][A-Za-z]+'
 
-# 200 MB per file (M4.4 section 9.3).
-WPX_MAX_FILE_BYTES=$((200 * 1024 * 1024))
+# Upload limits of the importer API (BUNDLE_UPLOAD_MAX_FILE_BYTES and
+# BUNDLE_UPLOAD_MAX_BYTES in src/modules/importer/runs/bundle-store.ts):
+# 40 MB per file, 50 MB for the whole bundle. The summary warns above them.
+# (The environment overrides exist for the offline tests only.)
+WPX_MAX_FILE_BYTES=${WPX_MAX_FILE_BYTES:-$((40 * 1024 * 1024))}
+WPX_MAX_TOTAL_BYTES=${WPX_MAX_TOTAL_BYTES:-$((50 * 1024 * 1024))}
+
+# Shipping methods whose instance options (woocommerce_<method>_<n>_settings)
+# are exported by default: the WooCommerce core methods, whose settings are
+# title / cost / tax status / requirements only. Any other method (carrier
+# plugins: DHL, PostNord, UPS, ...) may keep API credentials in the same
+# option and is left out unless named with --include-method.
+WPX_SHIPPING_METHODS_DEFAULT="flat_rate free_shipping local_pickup"
+
+# Self-check hits accepted with --allow FILE:LINE (still printed, not counted).
+WPX_ALLOW=()
 
 wpx_log() { printf '%s\n' "$*" >&2; }
 wpx_die() {
   printf 'wp-export: ERROR: %s\n' "$*" >&2
   exit 1
+}
+
+# wpx_in_list NEEDLE [WORD...]: 0 when NEEDLE is one of the words.
+wpx_in_list() {
+  local needle=$1 w
+  shift
+  for w in "$@"; do
+    [ "$w" = "$needle" ] && return 0
+  done
+  return 1
 }
 
 wpx_is_bundle_file() {
@@ -166,9 +195,22 @@ wpx_is_bundle_file() {
 # Privacy self-check. Usage: wpx_scan_forbidden DIR
 # Prints one line per problem (file and line number only, never the value)
 # and returns 1 when anything was found, 0 when the directory is clean.
+# A hit listed in WPX_ALLOW (--allow FILE:LINE) is still printed, marked as
+# allowed, and not counted.
+# Every grep runs with -a (and LC_ALL=C, see the top): a data row with an
+# invalid UTF-8 byte is scanned like any other, never skipped as "binary".
 # -----------------------------------------------------------------------------
+wpx_scan_hit() { # wpx_scan_hit FILE LINE "message" (uses the caller's $problems)
+  if wpx_in_list "$1:$2" ${WPX_ALLOW[@]+"${WPX_ALLOW[@]}"}; then
+    printf 'self-check: %s line %d %s (allowed by --allow %s:%d)\n' "$1" "$2" "$3" "$1" "$2"
+  else
+    printf 'self-check: %s line %d %s\n' "$1" "$2" "$3"
+    problems=$((problems + 1))
+  fi
+}
+
 wpx_scan_forbidden() {
-  local dir=$1 problems=0 f base start lines n
+  local dir=$1 problems=0 f base start lines n kind key
   [ -d "$dir" ] || {
     printf 'self-check: %s is not a directory\n' "$dir"
     return 1
@@ -191,37 +233,37 @@ wpx_scan_forbidden() {
     start=1
     case $base in *.tsv | *.csv) start=2 ;; esac
 
-    lines=$(tail -n +"$start" "$f" | grep -niE -- "$WPX_SECRET_RE" | cut -d: -f1 | head -n 5 || true)
-    if [ -n "$lines" ]; then
+    # Secret-like names. In posts.tsv the product texts (post_content 5,
+    # post_excerpt 7, post_content_filtered 17) are blanked first: a
+    # description that says "password" or "API key" is not a secret; the
+    # title, slug, guid and the other columns are still scanned.
+    if [ "$base" = posts.tsv ]; then
+      lines=$(awk -F '\t' 'BEGIN { OFS = "\t" } NR > 1 { $5 = ""; $7 = ""; $17 = ""; print }' "$f" |
+        grep -naiE -- "$WPX_SECRET_RE" | cut -d: -f1 | head -n 5 || true)
+    else
+      lines=$(tail -n +"$start" "$f" | grep -naiE -- "$WPX_SECRET_RE" | cut -d: -f1 | head -n 5 || true)
+    fi
+    for n in $lines; do
+      wpx_scan_hit "$base" $((n + start - 1)) "contains a secret-like name"
+    done
+
+    if printf '%s\n' "$base" | grep -qaE "$WPX_EMAIL_FILES_RE"; then
+      lines=$(tail -n +"$start" "$f" | grep -naE -- "$WPX_EMAIL_RE" | cut -d: -f1 | head -n 5 || true)
       for n in $lines; do
-        printf 'self-check: %s line %d contains a secret-like name\n' "$base" $((n + start - 1))
+        if [ "$base" = options.tsv ]; then
+          wpx_scan_hit "$base" $((n + start - 1)) \
+            "(option $(sed -n "$((n + start - 1))p" "$f" | cut -f1 | tr -cd 'A-Za-z0-9_.-')) contains an e-mail address"
+        else
+          wpx_scan_hit "$base" $((n + start - 1)) "contains an e-mail address"
+        fi
       done
-      problems=$((problems + 1))
     fi
 
-    if printf '%s\n' "$base" | grep -qE "$WPX_EMAIL_FILES_RE"; then
-      lines=$(tail -n +"$start" "$f" | grep -nE -- "$WPX_EMAIL_RE" | cut -d: -f1 | head -n 5 || true)
-      if [ -n "$lines" ]; then
-        for n in $lines; do
-          if [ "$base" = options.tsv ]; then
-            printf 'self-check: %s line %d (option %s) contains an e-mail address\n' \
-              "$base" $((n + start - 1)) "$(sed -n "$((n + start - 1))p" "$f" | cut -f1 | tr -cd 'A-Za-z0-9_.-')"
-          else
-            printf 'self-check: %s line %d contains an e-mail address\n' "$base" $((n + start - 1))
-          fi
-        done
-        problems=$((problems + 1))
-      fi
-    fi
-
-    if printf '%s\n' "$base" | grep -qE "$WPX_SECRET_KEY_FILES_RE"; then
-      lines=$(tail -n +"$start" "$f" | grep -niE -- "$WPX_SECRET_KEY_RE" | cut -d: -f1 | head -n 5 || true)
-      if [ -n "$lines" ]; then
-        for n in $lines; do
-          printf 'self-check: %s line %d contains a secret-like name\n' "$base" $((n + start - 1))
-        done
-        problems=$((problems + 1))
-      fi
+    if printf '%s\n' "$base" | grep -qaE "$WPX_SECRET_KEY_FILES_RE"; then
+      lines=$(tail -n +"$start" "$f" | grep -naiE -- "$WPX_SECRET_KEY_RE" | cut -d: -f1 | head -n 5 || true)
+      for n in $lines; do
+        wpx_scan_hit "$base" $((n + start - 1)) "contains a secret-like name"
+      done
     fi
 
     # postmeta/termmeta (meta_id, object_id, meta_key, meta_value): e-mail
@@ -236,39 +278,33 @@ wpx_scan_forbidden() {
           if (key ~ secret || tolower($4) ~ secret) print NR ":secret:" $3
         }' "$f" | head -n 5 || true)
       if [ -n "$lines" ]; then
-        printf '%s\n' "$lines" | while IFS=: read -r n kind key; do
+        while IFS=: read -r n kind key; do
+          [ -n "$n" ] || continue
           key=$(printf '%s' "$key" | tr -cd 'A-Za-z0-9_.-')
           if [ "$kind" = mail ]; then
-            printf 'self-check: %s line %d (meta %s) contains an e-mail address\n' "$base" "$n" "$key"
+            wpx_scan_hit "$base" "$n" "(meta $key) contains an e-mail address"
           else
-            printf 'self-check: %s line %d (meta %s) contains a secret-like name\n' "$base" "$n" "$key"
+            wpx_scan_hit "$base" "$n" "(meta $key) contains a secret-like name"
           fi
-        done
-        problems=$((problems + 1))
+        done <<<"$lines"
       fi
     fi
 
     # attachments.tsv: image_meta (camera, credit, copyright) is stripped by
     # the export; a row that still has it was not produced by this script.
     if [ "$base" = attachments.tsv ]; then
-      lines=$(tail -n +2 "$f" | grep -nF 's:10:"image_meta"' | cut -d: -f1 | head -n 5 || true)
-      if [ -n "$lines" ]; then
-        for n in $lines; do
-          printf 'self-check: attachments.tsv line %d still has image_meta (camera/credit/copyright)\n' $((n + 1))
-        done
-        problems=$((problems + 1))
-      fi
+      lines=$(tail -n +2 "$f" | grep -naF 's:10:"image_meta"' | cut -d: -f1 | head -n 5 || true)
+      for n in $lines; do
+        wpx_scan_hit "$base" $((n + 1)) "still has image_meta (camera/credit/copyright)"
+      done
     fi
 
     # posts.tsv: only catalog post types (column 21 = post_type).
     if [ "$base" = posts.tsv ]; then
       lines=$(awk -F '\t' 'NR > 1 && $21 !~ /^(product|product_variation|npp_template|acf-field-group|acf-field)$/ { print NR }' "$f" | head -n 5 || true)
-      if [ -n "$lines" ]; then
-        for n in $lines; do
-          printf 'self-check: posts.tsv line %d has a post type outside the catalog allowlist\n' "$n"
-        done
-        problems=$((problems + 1))
-      fi
+      for n in $lines; do
+        wpx_scan_hit "$base" "$n" "has a post type outside the catalog allowlist"
+      done
     fi
   done
   [ "$problems" -eq 0 ]
@@ -309,11 +345,17 @@ wpx_assert_read_only_sql() {
 # wpx_query SQL [extra wp db query args...] -> mysql batch output on stdout.
 # Output goes to a file or a pipe, so the mysql client prints batch format:
 # TAB-separated, \t \n \\ \0 escaped, NULL as the bare word NULL.
+# `wp db query` forwards unknown --flags to the mysql client (that is how
+# --skip-column-names reaches it too): --default-character-set=utf8mb4 makes
+# the client return the bytes as stored (DB_CHARSET is usually utf8mb4, but
+# an old wp-config.php may say utf8 or nothing, which would mangle emoji
+# and 4-byte characters), --quick streams rows instead of buffering the
+# whole result in the client's memory (shared hosting memory limits).
 wpx_query() {
   local sql=$1
   shift
   wpx_assert_read_only_sql "$sql"
-  wpx_wp db query "$sql" "$@"
+  wpx_wp db query "$sql" --default-character-set=utf8mb4 --quick "$@"
 }
 
 # One value (first column of the first row), or empty.
@@ -321,14 +363,37 @@ wpx_scalar() {
   wpx_query "$1" --skip-column-names | head -n 1 | tr -d '\r'
 }
 
+# wpx_show_nonempty WHAT SQL: 0 when the SHOW statement returns a row, 1 when
+# it returns nothing. A failed query (no database, bad credentials, a typo)
+# is neither: it stops the export with the first error line, so a table is
+# never silently treated as absent.
+wpx_show_nonempty() {
+  local what=$1 sql=$2 out err="${WPX_OUT:-.}/.err"
+  out=$(wpx_query "$sql" --skip-column-names 2>"$err") || {
+    wpx_log "query failed while checking $what: $(head -n 1 "$err" 2>/dev/null)"
+    rm -f "$err"
+    wpx_die "could not check $what (the query failed); nothing was exported"
+  }
+  rm -f "$err"
+  [ -n "$(printf '%s' "$out" | tr -d '\r\n ')" ]
+}
+
 wpx_table_exists() {
   local like=${1//_/\\_}
-  [ -n "$(wpx_query "SHOW TABLES LIKE '${like}'" --skip-column-names)" ]
+  wpx_show_nonempty "table $1" "SHOW TABLES LIKE '${like}'"
 }
 
 wpx_column_exists() {
   local table=$1 column=$2
-  [ -n "$(wpx_query "SHOW COLUMNS FROM \`${table}\` LIKE '${column//_/\\_}'" --skip-column-names)" ]
+  wpx_show_nonempty "column $1.$2" "SHOW COLUMNS FROM \`${table}\` LIKE '${column//_/\\_}'"
+}
+
+# EXIT trap: the temporary files of an interrupted run never stay in the
+# bundle directory (they would fail the self-check of a later --check, and
+# .err may hold a mysql error message).
+wpx_cleanup() {
+  [ -n "$WPX_OUT" ] && [ -d "$WPX_OUT" ] || return 0
+  rm -f "$WPX_OUT"/*.part "$WPX_OUT/.err"
 }
 
 # wpx_emit_table FILE "col1 col2 ..." SQL
@@ -356,23 +421,31 @@ wpx_emit_table() {
 
 # Reads one option as JSON through WP-CLI and keeps only the given scalar
 # sub-keys, re-serialized as PHP and escaped for the TSV (\\ \t \n \0).
-# Prints nothing when the option does not exist or is not an array.
+# Prints nothing (and logs a note) when the option does not exist or is not
+# an array.
 wpx_filtered_option() {
   local name=$1 json
   shift
-  json=$(wpx_wp option get "$name" --format=json 2>/dev/null) || return 0
-  [ -n "$json" ] || return 0
+  json=$(wpx_wp option get "$name" --format=json 2>/dev/null) || {
+    wpx_log "note: option $name does not exist (or could not be read); not exported"
+    return 0
+  }
+  [ -n "$json" ] || {
+    wpx_log "note: option $name is empty; not exported"
+    return 0
+  }
   # shellcheck disable=SC2016 # PHP code, not shell expansions.
   printf '%s' "$json" | "$WPX_PHP" -r '
-    $keys = array_slice($argv, 1);
+    $name = $argv[1];
+    $keys = array_slice($argv, 2);
     $v = json_decode(stream_get_contents(STDIN), true);
-    if (!is_array($v)) { exit(0); }
+    if (!is_array($v)) { fwrite(STDERR, "note: option " . $name . " is not an array; not exported\n"); exit(0); }
     $o = array();
     foreach ($keys as $k) {
       if (array_key_exists($k, $v) && (is_string($v[$k]) || is_int($v[$k]) || is_bool($v[$k]))) { $o[$k] = $v[$k]; }
     }
     echo strtr(serialize($o), array("\\" => "\\\\", "\t" => "\\t", "\n" => "\\n", "\0" => "\\0"));
-  ' -- "$@"
+  ' -- "$name" "$@"
 }
 
 # Removes `image_meta` (camera, credit, copyright, caption, keywords) from
@@ -417,6 +490,13 @@ Options:
   --php CMD            PHP CLI used to filter two Rank Math options (default: php)
   --skip-option NAME   leave one allowlisted option out (repeatable); it can
                        only remove options, never add any
+  --include-method ID  also export the instance settings of a non-core
+                       shipping method (repeatable), e.g. --include-method
+                       dhl_express; by default only flat_rate, free_shipping
+                       and local_pickup settings are exported
+  --allow FILE:LINE    accept one self-check hit you have reviewed as a false
+                       positive (repeatable), e.g. --allow posts.tsv:12; the
+                       hit is still printed
   --no-archive         do not create the .tgz (the directory is always kept)
   --no-plugin-list     do not write plugins.csv
   --check DIR          only run the privacy self-check on an existing bundle
@@ -428,7 +508,7 @@ EOF
 # main
 # -----------------------------------------------------------------------------
 wpx_main() {
-  local out="" archive=1 plugin_list=1 check_dir="" skip_options=()
+  local out="" archive=1 plugin_list=1 check_dir="" skip_options=() include_methods=()
   while [ $# -gt 0 ]; do
     case $1 in
       --path) WPX_PATH=${2:?--path needs a directory}; shift 2 ;;
@@ -436,6 +516,16 @@ wpx_main() {
       --wp) read -r -a WPX_WP <<<"${2:?--wp needs a command}"; shift 2 ;;
       --php) WPX_PHP=${2:?--php needs a command}; shift 2 ;;
       --skip-option) skip_options+=("${2:?--skip-option needs a name}"); shift 2 ;;
+      --include-method)
+        printf '%s' "${2:?--include-method needs a method id}" | grep -qaE '^[a-z0-9_]+$' ||
+          wpx_die "--include-method: a method id is lower-case letters, digits and _ (e.g. dhl_express)"
+        include_methods+=("$2")
+        shift 2 ;;
+      --allow)
+        printf '%s' "${2:?--allow needs FILE:LINE}" | grep -qaE '^[a-z_]+\.(tsv|csv|json|txt):[0-9]+$' ||
+          wpx_die "--allow: expected FILE:LINE as printed by the self-check (e.g. posts.tsv:12)"
+        WPX_ALLOW+=("$2")
+        shift 2 ;;
       --no-archive) archive=0; shift ;;
       --no-plugin-list) plugin_list=0; shift ;;
       --check) check_dir=${2:?--check needs a directory}; shift 2 ;;
@@ -483,6 +573,7 @@ wpx_main() {
   mkdir -p "$out"
   chmod 700 "$out"
   WPX_OUT=$(cd "$out" && pwd -P)
+  trap wpx_cleanup EXIT
   case "$WPX_OUT/" in
     "$wp_root"/*)
       rmdir "$WPX_OUT" 2>/dev/null || true
@@ -491,8 +582,10 @@ wpx_main() {
   esac
   wpx_log "exporting ${host} (prefix ${P}) to ${WPX_OUT}"
 
-  local exported_posts product_tt product_terms
+  local exported_posts exported_products product_tt product_terms
   exported_posts="SELECT ep.ID FROM ${P}posts ep WHERE ( ep.post_type IN (${WPX_POST_TYPES}) ) AND ( ep.post_status NOT IN (${WPX_EXCLUDED_STATUSES}) )"
+  # Only products and variations carry _product_image_gallery.
+  exported_products="SELECT epr.ID FROM ${P}posts epr WHERE ( epr.post_type IN ('product','product_variation') ) AND ( epr.post_status NOT IN (${WPX_EXCLUDED_STATUSES}) )"
   product_tt="SELECT ptt.term_taxonomy_id FROM ${P}term_taxonomy ptt WHERE ( ptt.taxonomy IN (${WPX_TAXONOMIES}) OR ptt.taxonomy LIKE 'pa\\_%' )"
   product_terms="SELECT ptm.term_id FROM ${P}term_taxonomy ptm WHERE ( ptm.taxonomy IN (${WPX_TAXONOMIES}) OR ptm.taxonomy LIKE 'pa\\_%' )"
 
@@ -547,6 +640,10 @@ wpx_main() {
 
   # --- attachments: children of exported posts, or referenced by
   #     _thumbnail_id, _product_image_gallery, or term thumbnails / swatches.
+  #     The gallery test is a correlated EXISTS (FIND_IN_SET over a comma
+  #     list), evaluated once per candidate attachment: it is restricted to
+  #     non-empty gallery rows of exported products / variations so that the
+  #     inner scan stays small on big uploads tables.
   wpx_emit_table attachments.tsv "ID guid post_mime_type post_parent _wp_attached_file _wp_attachment_metadata _wp_attachment_image_alt" \
     "SELECT a.ID, a.guid, a.post_mime_type, a.post_parent,
        (SELECT m1.meta_value FROM ${P}postmeta m1 WHERE ( m1.post_id = a.ID ) AND ( m1.meta_key = '_wp_attached_file' ) ORDER BY m1.meta_id LIMIT 1) AS _wp_attached_file,
@@ -558,7 +655,7 @@ wpx_main() {
        AND (
             ( a.post_parent IN (${exported_posts}) )
          OR ( a.ID IN (SELECT CAST(th.meta_value AS UNSIGNED) FROM ${P}postmeta th WHERE ( th.meta_key = '_thumbnail_id' ) AND ( th.post_id IN (${exported_posts}) )) )
-         OR ( EXISTS (SELECT 1 FROM ${P}postmeta g WHERE ( g.meta_key = '_product_image_gallery' ) AND ( g.post_id IN (${exported_posts}) ) AND ( FIND_IN_SET(a.ID, g.meta_value) > 0 )) )
+         OR ( EXISTS (SELECT 1 FROM ${P}postmeta g WHERE ( g.meta_key = '_product_image_gallery' ) AND ( g.meta_value <> '' ) AND ( g.post_id IN (${exported_products}) ) AND ( FIND_IN_SET(a.ID, g.meta_value) > 0 )) )
          OR ( a.ID IN (SELECT CAST(ti.meta_value AS UNSIGNED) FROM ${P}termmeta ti WHERE ( ti.meta_key IN ('thumbnail_id','product_attribute_image') ) AND ( ti.term_id IN (${product_terms}) )) )
        )
      ORDER BY a.ID"
@@ -580,7 +677,22 @@ wpx_main() {
     # Option names of the method instances, built from the methods table
     # itself (never by a LIKE pattern), validated before use.
     instance_options=$(wpx_query "SELECT CONCAT('woocommerce_', zm.method_id, '_', zm.instance_id, '_settings') FROM ${P}woocommerce_shipping_zone_methods zm" --skip-column-names |
-      tr -d '\r' | grep -E '^woocommerce_[a-z0-9_]+_[0-9]+_settings$' | sort -u || true)
+      tr -d '\r' | grep -aE '^woocommerce_[a-z0-9_]+_[0-9]+_settings$' | sort -u || true)
+    # Core methods only, unless a method is named with --include-method: a
+    # carrier plugin keeps its API credentials in the same instance option.
+    local kept="" opt method
+    for opt in $instance_options; do
+      method=$(printf '%s' "$opt" | sed -E 's/^woocommerce_//; s/_[0-9]+_settings$//')
+      if wpx_in_list "$method" $WPX_SHIPPING_METHODS_DEFAULT; then
+        kept="${kept:+$kept }$opt"
+      elif wpx_in_list "$method" ${include_methods[@]+"${include_methods[@]}"}; then
+        wpx_log "WARNING: --include-method $method: exporting $opt, the settings of a non-core shipping method. The self-check scans it for secret-like names, but check the row yourself (grep '^$opt' options.tsv) for carrier credentials before you hand the bundle over."
+        kept="${kept:+$kept }$opt"
+      else
+        wpx_log "WARNING: shipping method '$method' is not a WooCommerce core method; its instance settings ($opt) are NOT exported because carrier plugins keep API credentials there. The zone and method rows are exported; the method will need its settings re-entered after the import. To export the settings anyway, run again with --include-method $method."
+      fi
+    done
+    instance_options=$kept
   else
     wpx_log "note: no WooCommerce shipping zone tables; shipping is not exported"
   fi
@@ -686,19 +798,23 @@ wpx_main() {
   fi
   wpx_log "self-check: OK"
 
-  # --- summary.
-  local size rows
+  # --- summary (and the upload limits of the importer: 40 MB per file,
+  #     50 MB in total; see the README).
+  local size rows total=0 max_file_mb=$((WPX_MAX_FILE_BYTES / 1024 / 1024)) max_total_mb=$((WPX_MAX_TOTAL_BYTES / 1024 / 1024))
   printf '\n%-30s %10s %12s\n' "file" "rows" "bytes"
   for f in "${WPX_BUNDLE_FILES[@]}"; do
     [ -f "$WPX_OUT/$f" ] || continue
     size=$(wc -c <"$WPX_OUT/$f" | tr -d ' ')
+    total=$((total + size))
     case $f in
       *.tsv | *.csv) rows=$(($(wc -l <"$WPX_OUT/$f") - 1)) ;;
       *) rows="-" ;;
     esac
     printf '%-30s %10s %12s\n' "$f" "$rows" "$size"
-    [ "$size" -le "$WPX_MAX_FILE_BYTES" ] || wpx_log "warning: $f is larger than 200 MB; the importer will reject it"
+    [ "$size" -le "$WPX_MAX_FILE_BYTES" ] || wpx_log "warning: $f is larger than ${max_file_mb} MB; the importer upload rejects files above that size (contact the developers for a server-side import)"
   done
+  printf '%-30s %10s %12s\n' "total" "" "$total"
+  [ "$total" -le "$WPX_MAX_TOTAL_BYTES" ] || wpx_log "warning: the bundle is larger than ${max_total_mb} MB in total; the importer upload rejects it (contact the developers for a server-side import)"
 
   # --- package (flat archive) next to the directory.
   if [ "$archive" -eq 1 ]; then

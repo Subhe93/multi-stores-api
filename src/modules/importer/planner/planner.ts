@@ -2,8 +2,11 @@ import { ImportEntityStatus } from '@prisma/client';
 import { normalizeRedirectPath } from '../../redirects/redirect-path.util';
 import { capRedirectCreates } from '../../redirects/redirects.service';
 import {
+  planRedirectDeactivations,
   planRedirectUpserts,
+  withoutDeactivated,
   type IncomingRedirect,
+  type RedirectDeactivation,
   type RedirectUpsertPlan,
 } from '../../redirects/redirect-plan';
 import {
@@ -98,7 +101,7 @@ export interface PlannedPreset {
 export interface PlannedProduct extends Planned {
   mapped: MappedProduct;
   final_slug: string;
-  /** SKU cleared because it is taken elsewhere (D25), per variant ref. */
+  /** Planned variants (a SKU taken elsewhere is already cleared, D25). */
   variants: PlannedVariant[];
   /** Variants that disappeared from the source: deactivated, never deleted (D6). */
   deactivate: { id: string; external_ref: string }[];
@@ -176,6 +179,10 @@ export interface PlanWork {
     incoming_refs: string[];
     plan: RedirectUpsertPlan;
     live_conflicts: { from_path: string; to_path: string }[];
+    /** Active IMPORT rows that would shadow a live page: switched off. */
+    deactivate: RedirectDeactivation[];
+    /** Normalised live product/collection paths (apply recomputes `deactivate` from them). */
+    live_paths: string[];
   } | null;
 }
 
@@ -215,6 +222,27 @@ export interface PlanInput {
 
 const NPP_FALLBACK_SUFFIX = '#npp_fallback';
 
+/**
+ * Paths the storefront proxy (`multi-stores-web/src/proxy.ts`) hands to
+ * Next.js before any redirect lookup: a redirect from one of them is written
+ * but can never fire (W_REDIRECT_UNREACHABLE).
+ */
+const PROXY_RESERVED_PREFIXES = ['/_next/', '/api/', '/builder-preview/'];
+const PROXY_RESERVED_PATHS = new Set([
+  '/_next',
+  '/api',
+  '/builder-preview',
+  '/sitemap.xml',
+  '/robots.txt',
+]);
+
+export function isProxyReservedPath(normalizedFrom: string): boolean {
+  return (
+    PROXY_RESERVED_PATHS.has(normalizedFrom) ||
+    PROXY_RESERVED_PREFIXES.some((p) => normalizedFrom.startsWith(p))
+  );
+}
+
 export function fallbackRef(productRef: string): string {
   return `${productRef}${NPP_FALLBACK_SUFFIX}`;
 }
@@ -239,6 +267,7 @@ export function planFingerprint(
         categories: work.categories.map((c) => [c.mapped.ref, c.source_hash]),
         redirects:
           work.redirects?.plan.items.map((r) => [r.from_path, r.to_path]) ?? [],
+        redirects_off: work.redirects?.deactivate.map((r) => r.id) ?? [],
       }
     : null;
   return hashOf({ catalogHash, options, tuples, written });
@@ -1166,6 +1195,12 @@ export function planImport(input: PlanInput): ImportPlan {
     const normalizedLive = new Set(
       [...livePaths].map((p) => normalizeRedirectPath(p) ?? p),
     );
+    // An earlier run's redirect whose from-path is live again (a rename that
+    // was reverted) would shadow the page: switched off, restored on rollback.
+    const deactivations = planRedirectDeactivations(
+      snapshot.redirects,
+      normalizedLive,
+    );
     const incoming: IncomingRedirect[] = [];
     const incomingRefs: string[] = [];
     const liveConflicts: { from_path: string; to_path: string }[] = [];
@@ -1184,7 +1219,10 @@ export function planImport(input: PlanInput): ImportPlan {
     }
     // Same per-store cap as RedirectsService.bulkUpsertFromImport (PLAN == APPLY).
     const rplan = capRedirectCreates(
-      planRedirectUpserts(snapshot.redirects, incoming),
+      planRedirectUpserts(
+        withoutDeactivated(snapshot.redirects, deactivations),
+        incoming,
+      ),
       snapshot.redirects.length,
     );
     redirectWork = {
@@ -1192,14 +1230,33 @@ export function planImport(input: PlanInput): ImportPlan {
       incoming_refs: incomingRefs,
       plan: rplan,
       live_conflicts: liveConflicts,
+      deactivate: deactivations,
+      live_paths: [...normalizedLive],
     };
-    for (const it of rplan.items)
+    for (const it of rplan.items) {
       push({
         entity_type: 'REDIRECT',
         external_ref: it.from_path.slice(0, 255),
         action: it.action,
         target_id: it.id,
         title: it.to_path,
+      });
+      if (isProxyReservedPath(it.from_path))
+        warn({
+          code: 'W_REDIRECT_UNREACHABLE',
+          external_ref: it.from_path,
+          title: it.to_path,
+          message: 'the storefront never routes this path to redirects',
+        });
+    }
+    for (const d of deactivations)
+      push({
+        entity_type: 'REDIRECT',
+        external_ref: d.from_path.slice(0, 255),
+        action: 'UPDATE',
+        target_id: d.id,
+        message: 'deactivated (live path)',
+        title: d.to_path,
       });
     // Existing IMPORT rows re-pointed at the new final targets (fix 5).
     for (const r of rplan.repoints)

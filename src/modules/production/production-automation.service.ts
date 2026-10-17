@@ -52,6 +52,13 @@ export interface ProductionAutomationResult {
 }
 
 /**
+ * What an automation step did: `advanced` (updateStatus ran), `skipped`
+ * (nothing to do: the order or a line is already at / past the target),
+ * `failed` (updateStatus threw; retried on the next request of the order).
+ */
+type AdvanceOutcome = 'advanced' | 'skipped' | 'failed';
+
+/**
  * Status automation after checklist writes (M4.3 §3.6). Every status change
  * goes through OrdersService.updateStatus as the creator, so timeline,
  * commission, invoices and emails behave exactly like a manual change; the
@@ -96,6 +103,9 @@ export class ProductionAutomationService {
   /**
    * Run after setDone / bulkSet. `started` and `completed` are true only for
    * the single write that caused the transition (guarded in the summary).
+   * The on-complete auto-advance also runs when an earlier attempt is still
+   * owed (`auto_advance_pending`: it failed, or the completion came from a
+   * sync), so a READY order is never stuck behind one failed updateStatus.
    */
   async afterWrite(
     ctx: { storeId: string; creatorId: string; actor: ProductionActor },
@@ -110,29 +120,21 @@ export class ProductionAutomationService {
     let autoTo: OrderStatus | undefined;
 
     if (result.started && settings.start_on_first_check) {
-      if (
-        await this.advance(ctx, orderId, OrderStatus.MANUFACTURING, [
-          OrderStatus.CONFIRMED,
-          OrderStatus.PROCESSING,
-        ])
-      ) {
-        autoTo = OrderStatus.MANUFACTURING;
-      }
+      const outcome = await this.advance(
+        ctx,
+        orderId,
+        OrderStatus.MANUFACTURING,
+        [OrderStatus.CONFIRMED, OrderStatus.PROCESSING],
+      );
+      if (outcome === 'advanced') autoTo = OrderStatus.MANUFACTURING;
     }
     if (
-      result.completed &&
-      settings.on_complete === 'auto' &&
-      settings.complete_target === 'QUALITY_CHECK'
+      autoQualityCheck(settings) &&
+      result.summary.state === 'READY' &&
+      (result.completed || (await this.pending(orderId)))
     ) {
-      if (
-        await this.advance(ctx, orderId, OrderStatus.QUALITY_CHECK, [
-          OrderStatus.CONFIRMED,
-          OrderStatus.PROCESSING,
-          OrderStatus.MANUFACTURING,
-        ])
-      ) {
-        autoTo = OrderStatus.QUALITY_CHECK;
-      }
+      const to = await this.autoAdvance(ctx, orderId);
+      if (to) autoTo = to;
     }
 
     const order = await this.prisma.order.findUnique({
@@ -149,6 +151,64 @@ export class ProductionAutomationService {
   }
 
   /**
+   * Retry an owed on-complete auto-advance (workspace read, after the lazy
+   * sync). Returns the status the order moved to, if it did.
+   */
+  async retryPending(
+    ctx: { storeId: string; creatorId: string; actor: ProductionActor },
+    orderId: string,
+  ): Promise<OrderStatus | undefined> {
+    if (!(await this.pending(orderId))) return undefined;
+    const settings = await this.settingsOf(ctx.storeId);
+    if (!autoQualityCheck(settings)) {
+      // The setting was switched off meanwhile: nothing is owed any more.
+      await this.setPending(orderId, false);
+      return undefined;
+    }
+    return this.autoAdvance(ctx, orderId);
+  }
+
+  /** The QUALITY_CHECK auto-advance; records a failure for the next retry. */
+  private async autoAdvance(
+    ctx: { creatorId: string; actor: ProductionActor },
+    orderId: string,
+  ): Promise<OrderStatus | undefined> {
+    const outcome = await this.advance(
+      ctx,
+      orderId,
+      OrderStatus.QUALITY_CHECK,
+      [
+        OrderStatus.CONFIRMED,
+        OrderStatus.PROCESSING,
+        OrderStatus.MANUFACTURING,
+      ],
+    );
+    await this.setPending(orderId, outcome === 'failed');
+    return outcome === 'advanced' ? OrderStatus.QUALITY_CHECK : undefined;
+  }
+
+  private async pending(orderId: string): Promise<boolean> {
+    try {
+      return await this.checklist.isAutoAdvancePending(orderId);
+    } catch (err) {
+      this.logger.warn(
+        `Production pending-advance read failed for ${orderId}: ${errText(err)}`,
+      );
+      return false;
+    }
+  }
+
+  private async setPending(orderId: string, pending: boolean): Promise<void> {
+    try {
+      await this.checklist.setAutoAdvancePending(orderId, pending);
+    } catch (err) {
+      this.logger.warn(
+        `Production pending-advance write failed for ${orderId}: ${errText(err)}`,
+      );
+    }
+  }
+
+  /**
    * Move the creator's lines to `to` when the order is in one of `from` and
    * none of those lines is already at or past `to` (never regress a line).
    */
@@ -157,7 +217,7 @@ export class ProductionAutomationService {
     orderId: string,
     to: OrderStatus,
     from: OrderStatus[],
-  ): Promise<boolean> {
+  ): Promise<AdvanceOutcome> {
     try {
       const order = await this.prisma.order.findUnique({
         where: { id: orderId },
@@ -172,13 +232,13 @@ export class ProductionAutomationService {
           },
         },
       });
-      if (!order || !from.includes(order.status)) return false;
+      if (!order || !from.includes(order.status)) return 'skipped';
       const toRank = ITEM_RANK[to as FulfillmentStatus];
       if (
         order.items.length === 0 ||
         order.items.some((i) => ITEM_RANK[i.fulfillment_status] >= toRank)
       ) {
-        return false;
+        return 'skipped';
       }
       await this.orders.updateStatus(
         orderId,
@@ -196,14 +256,24 @@ export class ProductionAutomationService {
         from: order.status,
         to,
       });
-      return true;
+      return 'advanced';
     } catch (err) {
       this.logger.warn(
-        `Production auto-advance to ${to} failed for ${orderId}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        `Production auto-advance to ${to} failed for ${orderId}: ${errText(err)}`,
       );
-      return false;
+      return 'failed';
     }
   }
+}
+
+/** Whether the settings ask for the automatic QUALITY_CHECK step. */
+function autoQualityCheck(settings: ProductionSettings): boolean {
+  return (
+    settings.on_complete === 'auto' &&
+    settings.complete_target === 'QUALITY_CHECK'
+  );
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

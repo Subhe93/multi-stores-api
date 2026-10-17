@@ -5,8 +5,14 @@
  *   (`DesignerAssetsService.readAssetBytes`), fonts from the store's font
  *   assets (`DesignerFontsService.fontFiles`). Nothing is fetched.
  * - Print (`renderPrint`): print background (falling back to web),
- *   decorations and customer photo ORIGINALS, each photo pre-scaled with
- *   sharp to the size it is drawn at (never upscaled; bounds memory). The
+ *   decorations and customer photo ORIGINALS, each photo pre-cut to the
+ *   region its slot shows (the slot clip rotated into the photo's frame,
+ *   intersected with the drawn image: `photoVisibleCrop`) and pre-scaled
+ *   with sharp to the size that region is drawn at (never upscaled). A
+ *   zoomed photo therefore costs the slot's pixels, not zoom² of them,
+ *   which bounds the bitmap Chromium decodes (see DESIGNER_RENDER_CONCURRENCY
+ *   in .env.example for the per-job RAM). The render page remaps the
+ *   cropped bitmap to its sub-rect, so the shared renderer is unchanged. The
  *   canvas runs at 6 px/mm (3000×4200 for 500×700), then sharp embeds the
  *   sRGB profile and 25.4×px/mm DPI (152.4) and the PNG is stored under
  *   `designer/<store>/<yyyy>/print/<oidId>-front.png`.
@@ -16,11 +22,12 @@
  *   first 16 hex digits of the proof sha as letters a–p), so every state has
  *   its own key and two renders never overwrite each other's file;
  *   re-rendered only when `sha256(canonical(state) + version_id)` changed.
- *   The row is updated with a compare-and-set on (state_version,
- *   proof_key, proof_state_sha); the winner deletes the superseded file, a
- *   loser deletes its own (never a key an order snapshot still uses).
- *   Identical requests share one render; at most one proof renders per store
- *   at a time (a few wait, the rest get 503 DESIGNER_RENDER_UNAVAILABLE).
+ *   The row is updated through `replaceDesignProofKey` (fenced by
+ *   `state_version`); the winner releases the superseded file, a loser
+ *   releases its own (`releaseProofKey` never deletes a key another design
+ *   or an unpurged order snapshot still uses). Identical requests share one
+ *   render; at most one proof renders per store at a time (a few wait, the
+ *   rest get 503 DESIGNER_RENDER_UNAVAILABLE).
  * - Canvas clamps: a proof is at most PROOF_MAX_PIXELS (~4 MP) and a print
  *   at most PRINT_MAX_PIXELS / DESIGNER_MAX_CANVAS_SIDE per side, whatever
  *   `preview_px_per_mm` or the trim size in the spec say.
@@ -55,13 +62,16 @@ import { DesignerAssetsService } from './designer-assets.service';
 import { designerStorageKey } from './designer-assets.keys';
 import { designerErrorCode, designerErrors } from './designer-errors';
 import { DesignerFontsService } from './designer-fonts.service';
+import { releaseProofKey, replaceDesignProofKey } from './designer-proof-keys';
 import { DESIGNER_LINK_TTL, DesignerUrlsService } from './designer-urls';
 import { designProofSha } from './designs.util';
 import {
   canvasSize,
   coverLayout,
   DEFAULT_ADJ,
+  type DesignPhoto,
   type DesignStateV1,
+  type ElementBase,
   type Mode,
   type RenderReport,
   type TemplateSpecV1,
@@ -70,7 +80,9 @@ import {
   DESIGNER_BROWSER,
   DESIGNER_MAX_CANVAS_SIDE,
   DesignerRenderUnavailableError,
+  type CanvasAsset,
   type CanvasJob,
+  type CropFraction,
   type DesignerBrowserRenderer,
   type RenderFile,
 } from './render/designer-chromium.host';
@@ -161,18 +173,102 @@ function frontSurface(spec: TemplateSpecV1) {
   return (spec.surfaces ?? []).find((s) => s.key === 'front') ?? null;
 }
 
+/** A region of an ORIGINAL photo in its own pixels (integers). */
+export interface PhotoCrop {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
 /** One image the canvas needs, with how to prepare it. */
 export interface ImageNeed {
   asset_id: string;
   variant: 'original' | 'preview';
-  /** Max drawn size in px (photos only); larger originals are downscaled. */
+  /** Drawn size of the WHOLE image in px (photos only); larger originals are downscaled. */
   fit?: { width: number; height: number };
+  /** The part of the original the slot shows (print photos); unset = all of it. */
+  crop?: PhotoCrop;
+}
+
+const DEG = Math.PI / 180;
+
+/**
+ * The region of a photo's original its slot shows at `scale` (pure): the
+ * slot's box rotated into the photo's frame (the photo turns by `adj.rot`
+ * around its centre, the element rotation applies to both alike), its
+ * bounding box intersected with the drawn image, mapped back to original
+ * pixels and widened to whole pixels. Null when the whole image is visible
+ * (nothing to cut). Also returns the drawn size of the whole image.
+ */
+export function photoVisibleCrop(
+  slot: Pick<ElementBase, 'x' | 'y' | 'w' | 'h'>,
+  photo: Pick<DesignPhoto, 'width' | 'height' | 'adj'>,
+  scale: number,
+): { crop: PhotoCrop | null; fit: { width: number; height: number } } {
+  const l = coverLayout(slot, photo.width, photo.height, photo.adj, scale);
+  const fit = {
+    width: Math.max(1, Math.ceil(l.dw)),
+    height: Math.max(1, Math.ceil(l.dh)),
+  };
+  const empty = { crop: null, fit };
+  if (!(l.dw > 0 && l.dh > 0 && photo.width > 0 && photo.height > 0))
+    return empty;
+  const sx0 = slot.x * scale;
+  const sy0 = slot.y * scale;
+  const sx1 = (slot.x + slot.w) * scale;
+  const sy1 = (slot.y + slot.h) * scale;
+  const a = -l.rot * DEG;
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  let bx0 = Infinity;
+  let by0 = Infinity;
+  let bx1 = -Infinity;
+  let by1 = -Infinity;
+  for (const [px, py] of [
+    [sx0, sy0],
+    [sx1, sy0],
+    [sx0, sy1],
+    [sx1, sy1],
+  ]) {
+    const rx = l.cx + (px - l.cx) * cos - (py - l.cy) * sin;
+    const ry = l.cy + (px - l.cx) * sin + (py - l.cy) * cos;
+    bx0 = Math.min(bx0, rx);
+    by0 = Math.min(by0, ry);
+    bx1 = Math.max(bx1, rx);
+    by1 = Math.max(by1, ry);
+  }
+  // Intersect with the drawn image, then back to original pixels.
+  const kx = photo.width / l.dw;
+  const ky = photo.height / l.dh;
+  const left = Math.max(0, Math.floor((Math.max(bx0, l.dx) - l.dx) * kx));
+  const top = Math.max(0, Math.floor((Math.max(by0, l.dy) - l.dy) * ky));
+  const right = Math.min(
+    photo.width,
+    Math.ceil((Math.min(bx1, l.dx + l.dw) - l.dx) * kx),
+  );
+  const bottom = Math.min(
+    photo.height,
+    Math.ceil((Math.min(by1, l.dy + l.dh) - l.dy) * ky),
+  );
+  if (!(right > left && bottom > top)) return empty;
+  if (
+    left === 0 &&
+    top === 0 &&
+    right === photo.width &&
+    bottom === photo.height
+  )
+    return empty;
+  return {
+    crop: { left, top, width: right - left, height: bottom - top },
+    fit,
+  };
 }
 
 /**
  * Images of a render (pure). Print: print background (else web),
- * decorations, photo originals fitted to their drawn size. Proof: web
- * background, decorations, photo previews.
+ * decorations, photo originals cut to their visible region and fitted to
+ * their drawn size. Proof: web background, decorations, photo previews.
  */
 export function imageNeeds(
   spec: TemplateSpecV1,
@@ -189,7 +285,9 @@ export function imageNeeds(
       needs.set(n.asset_id, n);
       return;
     }
-    // Same asset used twice: keep the larger fit (or no fit at all).
+    // Same asset used twice: keep the larger fit (or no fit at all) and
+    // never a crop (each use shows a different part).
+    prev.crop = undefined;
     if (!prev.fit || !n.fit) prev.fit = undefined;
     else
       prev.fit = {
@@ -210,20 +308,16 @@ export function imageNeeds(
         add({ asset_id: photo.asset_id, variant: 'preview' });
         continue;
       }
-      const l = coverLayout(
+      const v = photoVisibleCrop(
         el,
-        photo.width,
-        photo.height,
-        photo.adj ?? DEFAULT_ADJ,
+        { ...photo, adj: photo.adj ?? DEFAULT_ADJ },
         scale,
       );
       add({
         asset_id: photo.asset_id,
         variant: 'original',
-        fit: {
-          width: Math.max(1, Math.ceil(l.dw)),
-          height: Math.max(1, Math.ceil(l.dh)),
-        },
+        fit: v.fit,
+        ...(v.crop ? { crop: v.crop } : {}),
       });
     }
   }
@@ -270,6 +364,14 @@ export class DesignerRenderService implements OnModuleDestroy {
   /** False when DESIGNER_RENDER_ENGINE=off. */
   get engineEnabled(): boolean {
     return this.browser.enabled;
+  }
+
+  /**
+   * Makes sure the engine can render (print worker, before its first
+   * claim). Throws DesignerRenderUnavailableError when it cannot.
+   */
+  probeEngine(): Promise<void> {
+    return this.browser.probe();
   }
 
   // ── Print ────────────────────────────────────────────────────────────────
@@ -479,58 +581,33 @@ export class DesignerRenderService implements OnModuleDestroy {
     }
     const key = designProofKey(design.store_id, design.id, sha, now);
     await this.storage.write(key, canvas.data);
-    // Compare-and-set: only record the proof while the row still holds the
-    // state and the proof this render started from.
-    const res = await this.prisma.design.updateMany({
-      where: {
-        id: design.id,
-        state_version: design.state_version,
-        proof_key: design.proof_key,
-        proof_state_sha: design.proof_state_sha,
-      },
-      data: { proof_key: key, proof_state_sha: sha },
+    // Record the key while the row still holds the rendered state; the
+    // superseded file is released, or ours when the state moved on. The
+    // previous key is read right before the update (not from the row
+    // loaded before the store's proof slot was taken), so a proof recorded
+    // by a render that ran meanwhile is the one released.
+    const recorded = await replaceDesignProofKey(this.prisma, this.storage, {
+      designId: design.id,
+      stateVersion: design.state_version,
+      newKey: key,
+      stateSha: sha,
+      logger: this.logger,
     });
-    if (res.count === 1) {
-      if (design.proof_key && design.proof_key !== key) {
-        await this.deleteDesignProofFile(design.proof_key);
-      }
-      return key;
-    }
-    // Lost the race: keep whatever the row now points at, drop our file.
+    if (recorded) return key;
     const current = await this.prisma.design.findUnique({
       where: { id: design.id },
       select: { proof_key: true },
     });
-    if (current?.proof_key !== key) await this.deleteDesignProofFile(key);
     return current?.proof_key ?? key;
   }
 
   // ── Proof files (retention helpers) ──────────────────────────────────────
 
   /**
-   * Deletes a design proof file unless an order snapshot still uses it
-   * (`OrderItemDesign.proof_key` is copied from the design when the state
-   * matched, §5.4). Errors are logged, never thrown. Returns true when the
-   * file was deleted.
-   */
-  async deleteDesignProofFile(key: string): Promise<boolean> {
-    try {
-      const shared = await this.prisma.orderItemDesign.count({
-        where: { proof_key: key },
-      });
-      if (shared > 0) return false;
-      await this.storage.delete(key);
-      return true;
-    } catch (err) {
-      this.logger.warn(`Design proof ${key} not deleted: ${String(err)}`);
-      return false;
-    }
-  }
-
-  /**
    * Retention helper: clears a design's proof (compare-and-set on the key)
-   * and deletes the file through `deleteDesignProofFile`. Safe to call for
-   * a design without a proof or one that was removed meanwhile.
+   * and releases the file (`releaseProofKey`: kept while another design or
+   * an unpurged order snapshot uses it). Safe to call for a design without
+   * a proof or one that was removed meanwhile.
    */
   async purgeDesignProof(designId: string): Promise<{ deleted: boolean }> {
     const d = await this.prisma.design.findUnique({
@@ -543,7 +620,11 @@ export class DesignerRenderService implements OnModuleDestroy {
       data: { proof_key: null, proof_state_sha: null },
     });
     if (res.count === 0) return { deleted: false };
-    return { deleted: await this.deleteDesignProofFile(d.proof_key) };
+    return {
+      deleted: await releaseProofKey(this.prisma, this.storage, d.proof_key, {
+        logger: this.logger,
+      }),
+    };
   }
 
   // ── Locale ───────────────────────────────────────────────────────────────
@@ -556,7 +637,10 @@ export class DesignerRenderService implements OnModuleDestroy {
         select: { primary_locale: true },
       });
       return cfg?.primary_locale || undefined;
-    } catch {
+    } catch (e) {
+      this.logger.debug(
+        `store ${storeId}: locale lookup failed, placeholders use the first value: ${String(e)}`,
+      );
       return undefined;
     }
   }
@@ -573,8 +657,10 @@ export class DesignerRenderService implements OnModuleDestroy {
           select: { locale: true },
         });
         if (o?.locale) return o.locale;
-      } catch {
-        // Fall back to the store's locale.
+      } catch (e) {
+        this.logger.debug(
+          `order ${orderId}: locale lookup failed, falling back to the store locale: ${String(e)}`,
+        );
       }
     }
     return this.storeLocale(storeId);
@@ -626,6 +712,7 @@ export class DesignerRenderService implements OnModuleDestroy {
       storeId,
       needs.map((n) => n.asset_id),
     );
+    const jobAssets: CanvasAsset[] = [];
     for (const n of needs) {
       const asset = rows.get(n.asset_id);
       if (!asset) {
@@ -636,7 +723,11 @@ export class DesignerRenderService implements OnModuleDestroy {
         );
       }
       const prepared = await this.prepareImage(asset, n);
-      files.set(`a/${n.asset_id}`, prepared);
+      files.set(`a/${n.asset_id}`, prepared.file);
+      jobAssets.push({
+        id: n.asset_id,
+        ...(prepared.crop ? { crop: prepared.crop } : {}),
+      });
     }
     const fontRefs = (spec.fonts ?? []).filter(
       (f) => typeof f?.asset_id === 'string',
@@ -671,7 +762,7 @@ export class DesignerRenderService implements OnModuleDestroy {
         type: o.type,
         quality: o.quality,
         fonts,
-        assets: needs.map((n) => n.asset_id),
+        assets: jobAssets,
       },
       files,
       o.timeoutMs,
@@ -697,11 +788,15 @@ export class DesignerRenderService implements OnModuleDestroy {
     return new Map(rows.map((r) => [r.id, r]));
   }
 
-  /** Reads the bytes; downscales photo originals to their drawn size. */
+  /**
+   * Reads the bytes; cuts photo originals to their visible region and
+   * downscales them to their drawn size. An original already small enough
+   * is served whole (no crop, nothing to gain).
+   */
   private async prepareImage(
     asset: DesignAsset,
     need: ImageNeed,
-  ): Promise<RenderFile> {
+  ): Promise<{ file: RenderFile; crop?: CropFraction }> {
     const usePreview =
       need.variant === 'preview' &&
       asset.kind === DesignAssetKind.CUSTOMER_PHOTO &&
@@ -712,26 +807,57 @@ export class DesignerRenderService implements OnModuleDestroy {
     );
     const mime = usePreview ? 'image/webp' : asset.mime;
     const fit = need.fit;
-    if (!fit || usePreview) return { body: data, contentType: mime };
+    if (!fit || usePreview) return { file: { body: data, contentType: mime } };
     if (asset.width <= fit.width && asset.height <= fit.height) {
-      return { body: data, contentType: mime };
+      return { file: { body: data, contentType: mime } };
     }
-    const resized = sharp(data, { limitInputPixels: 200_000_000 }).resize(
-      fit.width,
-      fit.height,
-      { fit: 'inside', withoutEnlargement: true },
-    );
+    let pipeline = sharp(data, { limitInputPixels: 200_000_000 });
+    let box = fit;
+    let crop: CropFraction | undefined;
+    const c = need.crop;
+    if (
+      c &&
+      c.left >= 0 &&
+      c.top >= 0 &&
+      c.width > 0 &&
+      c.height > 0 &&
+      c.left + c.width <= asset.width &&
+      c.top + c.height <= asset.height
+    ) {
+      pipeline = pipeline.extract(c);
+      // The crop is drawn at the same px-per-original-px as the whole image.
+      box = {
+        width: Math.max(1, Math.ceil((c.width * fit.width) / asset.width)),
+        height: Math.max(1, Math.ceil((c.height * fit.height) / asset.height)),
+      };
+      crop = {
+        fx: c.left / asset.width,
+        fy: c.top / asset.height,
+        fw: c.width / asset.width,
+        fh: c.height / asset.height,
+      };
+    }
+    const resized = pipeline.resize(box.width, box.height, {
+      fit: 'inside',
+      withoutEnlargement: true,
+    });
     if (mime === 'image/png') {
       return {
-        body: await resized.png({ compressionLevel: 1 }).toBuffer(),
-        contentType: 'image/png',
+        file: {
+          body: await resized.png({ compressionLevel: 1 }).toBuffer(),
+          contentType: 'image/png',
+        },
+        crop,
       };
     }
     return {
-      body: await resized
-        .jpeg({ quality: 95, chromaSubsampling: '4:4:4' })
-        .toBuffer(),
-      contentType: 'image/jpeg',
+      file: {
+        body: await resized
+          .jpeg({ quality: 95, chromaSubsampling: '4:4:4' })
+          .toBuffer(),
+        contentType: 'image/jpeg',
+      },
+      crop,
     };
   }
 }

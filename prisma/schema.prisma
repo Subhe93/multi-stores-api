@@ -757,35 +757,39 @@ enum OrderStatus {
 }
 
 model OrderItem {
-  id                     String            @id @default(uuid())
-  order_id               String
-  product_id             String?
-  variant_id             String?
-  custom_product_id      String?
-  bundle_offer_id        String?
-  quantity               Int
-  unit_price             Decimal           @db.Decimal(10, 2)
-  original_unit_price    Decimal?          @db.Decimal(10, 2)
-  total_price            Decimal           @db.Decimal(10, 2)
+  id                       String            @id @default(uuid())
+  order_id                 String
+  product_id               String?
+  variant_id               String?
+  custom_product_id        String?
+  bundle_offer_id          String?
+  quantity                 Int
+  unit_price               Decimal           @db.Decimal(10, 2)
+  original_unit_price      Decimal?          @db.Decimal(10, 2)
+  total_price              Decimal           @db.Decimal(10, 2)
   // Unscaled base price owed to this item's provider (0 for creator-only items).
   // Used to split Connect payout transfers per provider after payment succeeds.
-  provider_base_amount   Decimal           @default(0) @db.Decimal(10, 2)
-  customer_design_url    String?
-  design_notes           String?
-  fulfiller_type         FulfillerType
-  fulfiller_id           String
-  fulfillment_status     FulfillmentStatus @default(PENDING)
-  tracking_number        String?
-  tracking_url           String?
+  provider_base_amount     Decimal           @default(0) @db.Decimal(10, 2)
+  customer_design_url      String?
+  design_notes             String?
+  fulfiller_type           FulfillerType
+  fulfiller_id             String
+  fulfillment_status       FulfillmentStatus @default(PENDING)
+  tracking_number          String?
+  tracking_url             String?
   // Tax snapshot of the line: class key at the time, effective rate (basis
   // points) and the tax amount after the order discount was allocated.
-  tax_class_key          String?
-  tax_rate_bp            Int               @default(0)
-  tax_amount             Decimal           @default(0) @db.Decimal(10, 2)
+  tax_class_key            String?
+  tax_rate_bp              Int               @default(0)
+  tax_amount               Decimal           @default(0) @db.Decimal(10, 2)
   // Personalization app (M4.1): per-unit price delta of the line's
   // personalization in the order currency; null = none (always null without
   // the app).
-  personalization_amount Decimal?          @db.Decimal(10, 2)
+  personalization_amount   Decimal?          @db.Decimal(10, 2)
+  // Production app (M4.3): the variant's option map as sold (`{name: value}`),
+  // so the checklist never follows a later edit / deletion of the variant.
+  // Null on orders placed before the column existed (no backfill).
+  variant_options_snapshot Json?
 
   order               Order                   @relation(fields: [order_id], references: [id], onDelete: Cascade)
   product             Product?                @relation(fields: [product_id], references: [id])
@@ -2036,14 +2040,17 @@ model OrderProductionCheck {
 
 // Denormalised per-order progress so the orders list can filter server-side.
 model OrderProductionSummary {
-  order_id     String          @id
-  store_id     String
-  total        Int             @default(0) // non-stale checks
-  done         Int             @default(0)
-  state        ProductionState @default(NONE)
-  completed_at DateTime?
-  synced_at    DateTime        @default(now())
-  updated_at   DateTime        @updatedAt
+  order_id             String          @id
+  store_id             String
+  total                Int             @default(0) // non-stale checks
+  done                 Int             @default(0)
+  state                ProductionState @default(NONE)
+  completed_at         DateTime?
+  // Set when the on-complete auto-advance (QUALITY_CHECK) could not run or
+  // failed; the next write / workspace read of the order retries it.
+  auto_advance_pending Boolean         @default(false)
+  synced_at            DateTime        @default(now())
+  updated_at           DateTime        @updatedAt
 
   order Order @relation(fields: [order_id], references: [id], onDelete: Cascade)
 

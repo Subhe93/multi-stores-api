@@ -18,12 +18,20 @@
  *   browser is touched (the render service clamps scales below that).
  * - Determinism: software raster (`--disable-gpu`) and a fixed sRGB output
  *   profile, so the same input gives the same pixels.
+ * - A hung job never wedges a lane: the page work is bounded by the job
+ *   timeout, and the context close by CONTEXT_CLOSE_TIMEOUT_MS; when the
+ *   close itself hangs the whole browser is closed (and relaunched by the
+ *   next job).
+ * - Photo crops (print memory, M4.2 §5.2): an asset may carry a `crop` (the
+ *   visible fraction of the original the server pre-cut and pre-scaled);
+ *   the page remaps `drawImage` of that bitmap to the matching sub-rect, so
+ *   the shared renderer still thinks in whole images.
  *
  * Environment: DESIGNER_RENDER_ENGINE (chromium | off), DESIGNER_CHROMIUM_PATH,
  * DESIGNER_BROWSER_CHANNEL; the last two fall back to INVOICE_PDF_CHROMIUM_PATH
  * / INVOICE_PDF_BROWSER_CHANNEL.
  */
-import { ServiceUnavailableException } from '@nestjs/common';
+import { Logger, ServiceUnavailableException } from '@nestjs/common';
 import type { BrowserContext, Route } from 'playwright-core';
 import {
   BrowserHost,
@@ -55,6 +63,21 @@ export interface RenderFile {
   contentType: string;
 }
 
+/** Visible fraction of an original the served bytes were cut to (0..1). */
+export interface CropFraction {
+  fx: number;
+  fy: number;
+  fw: number;
+  fh: number;
+}
+
+/** One image of a canvas job; its bytes are in `files` under `a/<id>`. */
+export interface CanvasAsset {
+  id: string;
+  /** Set when the served bytes are a crop of the original. */
+  crop?: CropFraction;
+}
+
 export interface CanvasJob {
   spec: TemplateSpecV1;
   state: DesignStateV1;
@@ -66,8 +89,8 @@ export interface CanvasJob {
   type: 'image/png' | 'image/webp';
   quality?: number;
   fonts: { family: string; weight: number; style: string; asset_id: string }[];
-  /** Image asset ids; their bytes are in `files` under `a/<id>`. */
-  assets: string[];
+  /** Image assets; their bytes are in `files` under `a/<id>`. */
+  assets: CanvasAsset[];
 }
 
 export interface CanvasResult {
@@ -90,8 +113,17 @@ export interface DesignerBrowserRenderer {
     files: Map<string, RenderFile>,
     timeoutMs: number,
   ): Promise<CanvasResult>;
+  /**
+   * Makes sure the engine can render (launches the browser when needed)
+   * without rendering anything.
+   * @throws DesignerRenderUnavailableError when the engine is off / cannot start
+   */
+  probe(): Promise<void>;
   close(): Promise<void>;
 }
+
+/** Upper bound of one `context.close()` (ms) before the browser is closed. */
+export const CONTEXT_CLOSE_TIMEOUT_MS = 5_000;
 
 /** The engine is disabled or the browser could not start (503 upstream). */
 export class DesignerRenderUnavailableError extends ServiceUnavailableException {
@@ -149,6 +181,7 @@ export const DESIGNER_CHROMIUM_ARGS = [
 export class DesignerChromiumHost implements DesignerBrowserRenderer {
   readonly enabled = true;
   readonly host: BrowserHost;
+  private readonly logger = new Logger(DesignerChromiumHost.name);
 
   constructor(options: DesignerChromiumOptions = {}) {
     const { printConcurrency, proofLane, printLane, ...hostOptions } = options;
@@ -182,6 +215,10 @@ export class DesignerChromiumHost implements DesignerBrowserRenderer {
 
   get launchCount(): number {
     return this.host.launchCount;
+  }
+
+  probe(): Promise<void> {
+    return this.host.ensureBrowser();
   }
 
   renderCanvas(
@@ -229,9 +266,10 @@ export class DesignerChromiumHost implements DesignerBrowserRenderer {
         style: f.style,
         url: `${RENDER_ORIGIN}/f/${f.asset_id}`,
       })),
-      assets: job.assets.map((id) => ({
-        id,
-        url: `${RENDER_ORIGIN}/a/${id}`,
+      assets: job.assets.map((a) => ({
+        id: a.id,
+        url: `${RENDER_ORIGIN}/a/${a.id}`,
+        ...(a.crop ? { crop: a.crop } : {}),
       })),
     };
 
@@ -273,9 +311,29 @@ export class DesignerChromiumHost implements DesignerBrowserRenderer {
         })();
         return await withTimeout(work, timeoutMs, 'Designer render');
       } finally {
-        await context.close().catch(() => undefined);
+        await this.closeContext(context);
       }
     }, lane);
+  }
+
+  /**
+   * Closes a job's context within CONTEXT_CLOSE_TIMEOUT_MS. A close that
+   * hangs (renderer stuck after a timed-out job) takes the whole browser
+   * down instead, so the lane is freed and the next job relaunches.
+   */
+  private async closeContext(context: Pick<BrowserContext, 'close'>) {
+    try {
+      await withTimeout(
+        context.close(),
+        CONTEXT_CLOSE_TIMEOUT_MS,
+        'Designer context close',
+      );
+    } catch (e) {
+      this.logger.warn(
+        `Designer render context did not close, closing the browser: ${String((e as Error)?.message ?? e)}`,
+      );
+      await this.host.close();
+    }
   }
 
   close(): Promise<void> {
@@ -314,6 +372,14 @@ export class DisabledDesignerRenderer implements DesignerBrowserRenderer {
   readonly enabled = false;
 
   renderCanvas(): Promise<CanvasResult> {
+    return Promise.reject(
+      new DesignerRenderUnavailableError(
+        'Design rendering is disabled (DESIGNER_RENDER_ENGINE=off)',
+      ),
+    );
+  }
+
+  probe(): Promise<void> {
     return Promise.reject(
       new DesignerRenderUnavailableError(
         'Design rendering is disabled (DESIGNER_RENDER_ENGINE=off)',

@@ -16,6 +16,10 @@ import {
   type RedirectTuple,
 } from './redirects.service';
 import { RedirectsCreatorController } from './redirects-creator.controller';
+import {
+  RedirectsPublicController,
+  etagMatches,
+} from './redirects-public.controller';
 import type { PrismaService } from '../../prisma/prisma.service';
 
 // M4.4 fixer B: proxy-key throttle bypass, map byte cap, per-store row cap,
@@ -196,5 +200,96 @@ describe('RedirectsCreatorController :id routes', () => {
     ) as Record<string, { data?: string; pipes?: unknown[] }>;
     const idArg = Object.values(args).find((a) => a.data === 'id');
     expect(idArg?.pipes).toContain(ParseUUIDPipe);
+  });
+});
+
+describe('public redirect map: fail-open answer and HTTP caching', () => {
+  function publicWith(
+    rows: { from_path: string; to_path: string }[],
+    fail = false,
+  ) {
+    const storeRedirect = {
+      aggregate: jest.fn(() =>
+        fail
+          ? Promise.reject(new Error('db down'))
+          : Promise.resolve({
+              _count: { _all: rows.length },
+              _max: { updated_at: new Date(1000) },
+            }),
+      ),
+      findMany: jest.fn(() =>
+        Promise.resolve(rows.map((r) => ({ ...r, status_code: 301 }))),
+      ),
+    };
+    const prisma = {
+      storeRedirect,
+      store: {
+        findUnique: jest.fn(() =>
+          Promise.resolve({ id: 's1', is_active: true }),
+        ),
+      },
+    };
+    const svc = new RedirectsService(prisma as unknown as PrismaService);
+    return { svc, ctrl: new RedirectsPublicController(svc), storeRedirect };
+  }
+  const res = () => {
+    const r = { setHeader: jest.fn(), status: jest.fn() };
+    r.status.mockReturnValue(r);
+    return r;
+  };
+
+  it('a DB error is 503 REDIRECTS_UNAVAILABLE, not an empty map', async () => {
+    const { svc } = publicWith([], true);
+    await expect(svc.mapFor('s1')).rejects.toMatchObject({
+      response: { code: 'REDIRECTS_UNAVAILABLE' },
+    });
+    // No rows is still the definitive empty answer.
+    expect(await publicWith([]).svc.mapFor('s1')).toEqual({
+      version: null,
+      mode: 'map',
+      items: [],
+    });
+  });
+
+  it('ETag is the version, If-None-Match answers 304, Cache-Control 60 s', async () => {
+    const { ctrl } = publicWith([{ from_path: '/a', to_path: '/b' }]);
+    const first = res();
+    const body = await ctrl.map('namez', undefined, first as never);
+    expect(body).toMatchObject({ version: '1-rs', mode: 'map' });
+    expect(first.setHeader).toHaveBeenCalledWith('ETag', '"1-rs"');
+    expect(first.setHeader).toHaveBeenCalledWith(
+      'Cache-Control',
+      'public, max-age=60',
+    );
+    expect(first.status).not.toHaveBeenCalled();
+
+    const second = res();
+    expect(await ctrl.map('namez', '"1-rs"', second as never)).toBeUndefined();
+    expect(second.status).toHaveBeenCalledWith(304);
+    expect(second.setHeader).toHaveBeenCalledWith('ETag', '"1-rs"');
+
+    const stale = res();
+    expect(await ctrl.map('namez', '"0-old"', stale as never)).toMatchObject({
+      version: '1-rs',
+    });
+    expect(stale.status).not.toHaveBeenCalled();
+
+    // A store without redirects has no version: no ETag, never 304.
+    const none = res();
+    expect(await publicWith([]).ctrl.map('namez', '*', none as never)).toEqual({
+      version: null,
+      mode: 'map',
+      items: [],
+    });
+    expect(none.setHeader).not.toHaveBeenCalledWith('ETag', expect.anything());
+    expect(none.status).not.toHaveBeenCalled();
+  });
+
+  it('etagMatches handles lists, weak tags and *', () => {
+    expect(etagMatches('"a"', '"a"')).toBe(true);
+    expect(etagMatches('W/"a"', '"a"')).toBe(true);
+    expect(etagMatches('"x", "a"', '"a"')).toBe(true);
+    expect(etagMatches('*', '"a"')).toBe(true);
+    expect(etagMatches('"b"', '"a"')).toBe(false);
   });
 });

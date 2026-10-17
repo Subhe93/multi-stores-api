@@ -337,10 +337,15 @@ export function isRelativeBundleDirName(directory: unknown): boolean {
 /**
  * Allowlisted files of an extracted bundle directory on the server. The
  * directory must resolve inside `IMPORTER_BUNDLE_DIR_ROOT`; unset = refused.
+ * The same limits as the upload (40 MB per file, 50 MB in total) are checked
+ * from `lstat` sizes BEFORE any file is read into memory.
  */
 export async function readBundleDirectory(
   directory: string,
+  limits: { maxFileBytes?: number; maxTotalBytes?: number } = {},
 ): Promise<UploadedBundleFile[]> {
+  const maxFileBytes = limits.maxFileBytes ?? BUNDLE_UPLOAD_MAX_FILE_BYTES;
+  const maxTotalBytes = limits.maxTotalBytes ?? BUNDLE_UPLOAD_MAX_BYTES;
   if (!isRelativeBundleDirName(directory)) {
     throw importError(
       'IMPORT_BUNDLE_MISSING_FILE',
@@ -366,9 +371,28 @@ export async function readBundleDirectory(
     );
   }
   const reader = new DirectoryBundleReader(dir);
+  const names = await reader.list();
+  let total = 0;
+  for (const name of names) {
+    const st = await fs.lstat(path.join(dir, name));
+    if (st.size > maxFileBytes) {
+      throw importError(
+        'IMPORT_BUNDLE_TOO_LARGE',
+        `Bundle file larger than ${Math.round(maxFileBytes / (1024 * 1024))} MB: ${name}`,
+        { file: name },
+      );
+    }
+    total += st.size;
+    if (total > maxTotalBytes) {
+      throw importError(
+        'IMPORT_BUNDLE_TOO_LARGE',
+        `The bundle is larger than ${Math.round(maxTotalBytes / (1024 * 1024))} MB`,
+      );
+    }
+  }
   const out: UploadedBundleFile[] = [];
-  for (const name of await reader.list()) {
-    const text = await reader.readText(name);
+  for (const name of names) {
+    const text = await reader.readText(name, { maxBytes: maxFileBytes });
     const buffer = Buffer.from(text, 'utf8');
     out.push({ originalname: name, buffer, size: buffer.length });
   }

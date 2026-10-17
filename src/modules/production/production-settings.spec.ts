@@ -126,4 +126,16 @@ describe('production settings (M4.3 §3.3)', () => {
     expect(nameKey('pa_rakna')).toBe(nameKey('Räkna'));
     expect(nameKey('Välj antal')).toBe(nameKey('valj-antal'));
   });
+
+  it('strict validation reports unknown keys instead of dropping them', () => {
+    const r = validateProductionSettings({
+      include_variant_options: true,
+      inclde_variant_options: false,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.errors).toEqual(['Unknown setting "inclde_variant_options".']);
+    expect(
+      validateProductionSettings({ include_variant_options: true }).ok,
+    ).toBe(true);
+  });
 });

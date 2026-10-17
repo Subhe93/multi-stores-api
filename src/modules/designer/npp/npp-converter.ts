@@ -150,6 +150,16 @@ export const KNOWN_GOOGLE_WEIGHTS: Record<string, number[]> = {
 const TEXT_FIT = { mode: 'shrink' as const, step: 0.5, min: 6, pad_ref_px: 8 };
 const TEXT_INSET = 4;
 const IMPORTED_MAX_LENGTH = 40;
+/**
+ * Character class of an imported text (M4.2 launch fix, §6.4): Latin
+ * letters incl. Latin-1 Supplement and Latin Extended-A (Nordic / Western
+ * European names), digits, space, the punctuation that occurs in names and
+ * class labels (`.,'’&-!?:/()`) and the heart NPP customers used (drawn by
+ * the host's emoji fallback font; U+FE0F is stripped before the check).
+ * Compiled as data by `compileDesignAllowedChars` (never regex source).
+ */
+export const IMPORTED_ALLOWED_CHARS =
+  "A-Za-z0-9 \\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u017F.,'\u2019&\\-!\\?:/\\(\\)\u2764";
 
 const PENDING_BG_WEB = 'pending:bg_web';
 const PENDING_BG_PRINT = 'pending:bg_print';
@@ -551,6 +561,7 @@ function convertTemplate(
         editable,
         required: editable,
         max_length: IMPORTED_MAX_LENGTH,
+        allowed_chars: IMPORTED_ALLOWED_CHARS,
         direction: 'ltr',
       };
       if (fieldLabel) t.source_label = fieldLabel;

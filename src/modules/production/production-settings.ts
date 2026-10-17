@@ -197,10 +197,15 @@ function checkStringList(
   }
 }
 
+const KNOWN_KEYS: ReadonlySet<string> = new Set(
+  Object.keys(DEFAULT_PRODUCTION_SETTINGS),
+);
+
 /**
- * Strict write validation. Every key is optional (defaults apply) and
- * unknown keys are ignored, but a present known key must be valid, and the
- * resulting combination must make sense.
+ * Strict write validation. Every key is optional (defaults apply), a present
+ * known key must be valid, an unknown key is an error (a typo would
+ * otherwise be dropped silently), and the resulting combination must make
+ * sense.
  */
 export function validateProductionSettings(raw: unknown): {
   ok: boolean;
@@ -210,6 +215,9 @@ export function validateProductionSettings(raw: unknown): {
     return { ok: false, errors: ['settings must be an object.'] };
   }
   const errors: string[] = [];
+  for (const key of Object.keys(raw)) {
+    if (!KNOWN_KEYS.has(key)) errors.push(`Unknown setting "${key}".`);
+  }
   for (const key of [
     'include_variant_options',
     'start_on_first_check',

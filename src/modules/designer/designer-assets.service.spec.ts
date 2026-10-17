@@ -13,9 +13,10 @@ import type { StoreAppsService } from '../store-apps/store-apps.service';
 import {
   DesignerAssetsService,
   rasterError,
-  Semaphore,
   templateAssetChecks,
+  withSharpSlot,
 } from './designer-assets.service';
+import { Semaphore } from '../../common/chromium/browser-host';
 import { designerErrorCode } from './designer-errors';
 import {
   fakeDesignerPrisma,
@@ -307,7 +308,9 @@ describe('DesignerAssetsService', () => {
       expect(prev.format).toBe('webp');
       expect(Math.max(prev.width, prev.height)).toBe(1600);
       const view = svc.assetView(row);
-      expect(view.url!.startsWith(DESIGNER_FILES_PATH)).toBe(true);
+      // A customer photo never exposes its original through the view: only
+      // the preview is linked (the creator's originals route is separate).
+      expect(view.url).toBeNull();
       expect(view.preview_url!.startsWith(DESIGNER_FILES_PATH)).toBe(true);
     });
 
@@ -358,14 +361,14 @@ describe('DesignerAssetsService', () => {
     });
 
     it('a saturated image pipeline fails fast with 503 DESIGNER_UPLOAD_BUSY', async () => {
-      const sem = new Semaphore(1, 1);
+      const sem = new Semaphore(1);
       let release!: () => void;
       const gate = new Promise<void>((r) => (release = r));
-      const a = sem.run(() => gate);
-      const b = sem.run(() => Promise.resolve(2));
-      expect(await codeOf(sem.run(() => Promise.resolve(3)))).toBe(
-        'DESIGNER_UPLOAD_BUSY',
-      );
+      const a = withSharpSlot(sem, () => gate, 1);
+      const b = withSharpSlot(sem, () => Promise.resolve(2), 1);
+      expect(
+        await codeOf(withSharpSlot(sem, () => Promise.resolve(3), 1)),
+      ).toBe('DESIGNER_UPLOAD_BUSY');
       release();
       await a;
       await expect(b).resolves.toBe(2);

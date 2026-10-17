@@ -6,22 +6,29 @@
  *   - template_4273: photo slot with pan / zoom / rotate;
  *   - template_4355: "swapped" backgrounds (web and print differ; print wins)
  *     with two decoration images;
- *   - template_4359: text-heavy (long names hit the shrink loop).
+ *   - template_4359: text-heavy (long names hit the shrink loop);
+ *   - template_4364: the Anton and Righteous faces.
  *
  * Inputs are generated locally: gradient / checkerboard placeholder images
- * (sharp) and Noto Sans (@fontsource, in node_modules) loaded under the
- * template family names. No network.
+ * (sharp) and the REAL template faces from the OFL @fontsource packages
+ * (montserrat, anton, righteous: dev dependencies). No network.
  *
  * Asserts 3000×4200, the fitted sizes (exact), a 16×16 average hash
- * (Hamming ≤ HASH_TOLERANCE) and per-region / per-element mean colours
+ * (Hamming ≤ HASH_TOLERANCE), per-region / per-element mean colours
  * (|Δ| ≤ MEAN_TOLERANCE per channel) against small JSON goldens in
- * `__fixtures__/golden/chromium/`, plus byte-identical output across two runs.
+ * `__fixtures__/golden/chromium/`, a per-pixel diff of the decoded output
+ * (downscaled 1:5 to 600×840) against the reference PNG next to them (at
+ * most PIXEL_DIFF_MAX_RATIO of the pixels may differ by more than
+ * PIXEL_DIFF_DELTA in any channel), plus byte-identical output across two
+ * runs.
  *
- * Skipped when no browser can be launched or with DESIGNER_RENDER_REAL=0.
- * UPDATE_GOLDEN=1 rewrites the goldens; DESIGNER_RENDER_DUMP=<dir> keeps the PNGs.
+ * Skipped when no browser can be launched, when a fontsource face is not
+ * installed, or with DESIGNER_RENDER_REAL=0. UPDATE_GOLDEN=1 rewrites the
+ * goldens (JSON + reference PNGs); DESIGNER_RENDER_DUMP=<dir> keeps the
+ * full PNGs.
  */
 import { createHash } from 'crypto';
-import { readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import * as path from 'path';
 import sharp from 'sharp';
 import type { DesignAsset } from '@prisma/client';
@@ -30,13 +37,12 @@ import {
   DesignerChromiumHost,
   DesignerRenderUnavailableError,
 } from './render/designer-chromium.host';
-import type {
-  DesignStateV1,
-  TemplateSpecV1,
-} from './render/design-renderer';
+import type { DesignStateV1, TemplateSpecV1 } from './render/design-renderer';
 import {
+  GOLDEN_DIR,
   golden,
   loadTemplate,
+  UPDATE_GOLDEN,
 } from './__fixtures__/golden/golden-kit.mockspec';
 
 jest.setTimeout(240_000);
@@ -46,17 +52,40 @@ const OID = '22222222-2222-4222-8222-222222222222';
 const MEAN_TOLERANCE = 6;
 const HASH_TOLERANCE = 16;
 const GRID = { cols: 5, rows: 7 }; // 600×600 px cells at 3000×4200
+/** Per-pixel diff: a pixel "differs" past this channel delta ... */
+const PIXEL_DIFF_DELTA = 16;
+/** ... and at most this share of the reference pixels may differ. */
+const PIXEL_DIFF_MAX_RATIO = 0.001;
+/** Reference PNG size (1:5 of the print). */
+const REF = { width: 600, height: 840 };
 
 type RGB = [number, number, number];
 
-const fontFile = (w: number) =>
-  readFileSync(
-    path.join(
-      path.dirname(require.resolve('@fontsource/noto-sans/package.json')),
-      'files',
-      `noto-sans-latin-${w}-normal.woff2`,
-    ),
+/** `Montserrat` → `@fontsource/montserrat/files/montserrat-latin-<w>-normal.woff2`. */
+function fontsourcePath(family: string, weight: number, style: string): string {
+  const slug = family.toLowerCase().replace(/\s+/g, '-');
+  return path.join(
+    path.dirname(require.resolve(`@fontsource/${slug}/package.json`)),
+    'files',
+    `${slug}-latin-${weight}-${style === 'italic' ? 'italic' : 'normal'}.woff2`,
   );
+}
+
+const fontFile = (family: string, weight: number, style: string) =>
+  readFileSync(fontsourcePath(family, weight, style));
+
+/** The faces of a spec that are not installed (empty = all available). */
+function missingFaces(spec: TemplateSpecV1): string[] {
+  const out: string[] = [];
+  for (const f of spec.fonts) {
+    try {
+      readFileSync(fontsourcePath(f.family, f.weight, f.style));
+    } catch {
+      out.push(`${f.family} ${f.weight} ${f.style}`);
+    }
+  }
+  return out;
+}
 
 /** `pending:deco:abc` → `g-pending-deco-abc` (stable, URL-safe ids). */
 function materialize(spec: TemplateSpecV1): TemplateSpecV1 {
@@ -210,7 +239,8 @@ function serviceFor(
     },
   };
   const assets = {
-    readAssetBytes: (a: DesignAsset) => Promise.resolve(fx.images.get(a.id)![0]),
+    readAssetBytes: (a: DesignAsset) =>
+      Promise.resolve(fx.images.get(a.id)![0]),
   };
   const fonts = {
     fontFiles: (_s: string, ids: string[]) =>
@@ -224,7 +254,7 @@ function serviceFor(
             style: f.style,
             format: 'woff2',
             mime: 'font/woff2',
-            data: fontFile(f.weight),
+            data: fontFile(f.family, f.weight, f.style),
           })),
       ),
   };
@@ -296,7 +326,12 @@ async function fingerprint(
   }
   const elements: Record<string, RGB> = {};
   for (const el of spec.surfaces[0].elements) {
-    elements[el.id] = mean(el.x * 6, el.y * 6, (el.x + el.w) * 6, (el.y + el.h) * 6);
+    elements[el.id] = mean(
+      el.x * 6,
+      el.y * 6,
+      (el.x + el.w) * 6,
+      (el.y + el.h) * 6,
+    );
   }
   // Average hash over a 16×16 greyscale thumbnail.
   const small = await sharp(png)
@@ -334,11 +369,62 @@ function maxDelta(a: RGB[], b: RGB[]): number {
   return d;
 }
 
+/** The print downscaled 1:5 as raw RGB (the per-pixel comparison unit). */
+async function referenceRaw(png: Buffer): Promise<Buffer> {
+  return sharp(png)
+    .removeAlpha()
+    .resize(REF.width, REF.height, { fit: 'fill', kernel: 'lanczos3' })
+    .raw()
+    .toBuffer();
+}
+
+/**
+ * Loads (or with UPDATE_GOLDEN=1 writes) the reference PNG of a case and
+ * returns its raw RGB. A missing reference without UPDATE_GOLDEN=1 throws.
+ */
+async function referenceGolden(stem: string, actual: Buffer): Promise<Buffer> {
+  const file = path.join(GOLDEN_DIR, 'chromium', `${stem}.png`);
+  if (UPDATE_GOLDEN) {
+    await sharp(actual, { raw: { ...REF, channels: 3 } })
+      .png({ compressionLevel: 9 })
+      .toFile(file);
+    return actual;
+  }
+  if (!existsSync(file)) {
+    throw new Error(
+      `Missing golden chromium/${stem}.png; run the spec with UPDATE_GOLDEN=1 to create it.`,
+    );
+  }
+  return sharp(readFileSync(file)).removeAlpha().raw().toBuffer();
+}
+
+/** Share of pixels whose any channel differs by more than PIXEL_DIFF_DELTA. */
+function pixelDiffRatio(a: Buffer, b: Buffer): number {
+  expect(a.length).toBe(b.length);
+  let differing = 0;
+  for (let i = 0; i < a.length; i += 3) {
+    if (
+      Math.abs(a[i] - b[i]) > PIXEL_DIFF_DELTA ||
+      Math.abs(a[i + 1] - b[i + 1]) > PIXEL_DIFF_DELTA ||
+      Math.abs(a[i + 2] - b[i + 2]) > PIXEL_DIFF_DELTA
+    ) {
+      differing++;
+    }
+  }
+  return differing / (a.length / 3);
+}
+
 /* ------------------------------------------------------------------ */
 /* Spec                                                                */
 /* ------------------------------------------------------------------ */
 
 const disabled = process.env.DESIGNER_RENDER_REAL === '0';
+const CASE_STEMS = [
+  'template_4273',
+  'template_4355',
+  'template_4359',
+  'template_4364',
+];
 
 describe('designer print golden (REAL Chromium, 6 px/mm)', () => {
   const host = new DesignerChromiumHost({
@@ -355,6 +441,16 @@ describe('designer print golden (REAL Chromium, 6 px/mm)', () => {
 
   beforeAll(async () => {
     if (!available) return;
+    const missing = CASE_STEMS.flatMap((stem) =>
+      missingFaces(loadTemplate(stem)),
+    );
+    if (missing.length) {
+      available = false;
+      console.warn(
+        `Skipping the Chromium golden spec: fontsource face(s) not installed: ${[...new Set(missing)].join(', ')}`,
+      );
+      return;
+    }
     try {
       await host.host.withBrowser(() => Promise.resolve());
     } catch (e) {
@@ -398,6 +494,16 @@ describe('designer print golden (REAL Chromium, 6 px/mm)', () => {
           ],
           { zoom: 1, rot: 0, panX: 0.5, panY: 0.5 },
         ),
+    ],
+    [
+      'template_4364 (Anton + Righteous faces)',
+      () =>
+        buildFixture('template_4364', ['Vilma Lindqvist', 'EK3c'], {
+          zoom: 1.2,
+          rot: 5,
+          panX: 0.4,
+          panY: 0.3,
+        }),
     ],
   ];
 
@@ -458,6 +564,11 @@ describe('designer print golden (REAL Chromium, 6 px/mm)', () => {
         ids.map((k) => expected.elements[k]),
       ),
     ).toBeLessThanOrEqual(MEAN_TOLERANCE);
+
+    // Per-pixel diff of the decoded output against the reference PNG.
+    const raw = await referenceRaw(png1);
+    const ref = await referenceGolden(fx.stem, raw);
+    expect(pixelDiffRatio(raw, ref)).toBeLessThanOrEqual(PIXEL_DIFF_MAX_RATIO);
 
     // Print uses the print background (bottom-left cell = print gradient end,
     // never the web gradient) — the 4355 "swapped" case in particular.

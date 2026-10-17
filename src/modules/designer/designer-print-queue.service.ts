@@ -28,6 +28,13 @@
  * cancelled meanwhile fail at once. On shutdown the rows this instance is
  * rendering are handed back (PENDING, attempt not counted).
  *
+ * An instance without a browser never burns attempts: every pass probes the
+ * render host before its first claim, and a job that fails with
+ * DESIGNER_RENDER_UNAVAILABLE (engine off, browser cannot start, lane
+ * saturated) hands its row back exactly like a shutdown does (PENDING,
+ * attempt not counted, due again in PRINT_RENDER_PAUSE_MS) and pauses this
+ * instance's claims for the same window, so another instance can take it.
+ *
  * Environment:
  *   DESIGNER_RENDER_QUEUE=off   no worker on this instance (tests, web-only
  *                               instances); enqueue still records requests
@@ -76,6 +83,12 @@ export const PRINT_JOB_TIMEOUT_MS = 3 * 60_000;
 export const PRINT_JOBS_PER_TICK = 20;
 /** The backfill of never-requested paid / COD rows runs at most this often. */
 export const PRINT_BACKFILL_INTERVAL_MS = 10 * 60_000;
+/**
+ * Browser-less instance: how long a handed-back row waits before it is due
+ * again and how long this instance stops claiming (the browser host's own
+ * launch-retry window is shorter, so the next probe gets a fresh launch).
+ */
+export const PRINT_RENDER_PAUSE_MS = 60_000;
 /** Order statuses whose design rows are never requested by the backfill. */
 const BACKFILL_SKIP_STATUSES = Prisma.raw(
   `('CANCELLED', 'REFUNDED', 'RETURNED')`,
@@ -139,6 +152,8 @@ export class DesignerPrintQueueService
   private lanes = 0;
   private stopped = false;
   private lastBackfill = 0;
+  /** No claims before this time (ms): the render engine was unavailable. */
+  private pauseUntil = 0;
   /** Rows this instance is rendering: id → lock timestamp (shutdown release). */
   private readonly inflight = new Map<string, Date | null>();
 
@@ -151,6 +166,21 @@ export class DesignerPrintQueueService
   /** Whether this instance runs the worker. */
   get workerEnabled(): boolean {
     return this.config.enabled && !this.stopped;
+  }
+
+  /** Until when (ms epoch) this instance claims nothing; 0 = not paused. */
+  get pausedUntil(): number {
+    return this.pauseUntil;
+  }
+
+  /** Stops claiming for PRINT_RENDER_PAUSE_MS (the engine is unavailable). */
+  pause(reason: string, now: number = Date.now()): void {
+    const until = now + PRINT_RENDER_PAUSE_MS;
+    if (until <= this.pauseUntil) return;
+    this.pauseUntil = until;
+    this.logger.warn(
+      `Designer print worker paused for ${PRINT_RENDER_PAUSE_MS / 1000} s: ${reason}`,
+    );
   }
 
   onModuleInit(): void {
@@ -182,19 +212,7 @@ export class DesignerPrintQueueService
     let released = 0;
     for (const [id, lockedAt] of [...this.inflight]) {
       try {
-        const res = await this.prisma.orderItemDesign.updateMany({
-          where: {
-            id,
-            print_status: DesignPrintStatus.RENDERING,
-            print_locked_at: lockedAt,
-          },
-          data: {
-            print_status: DesignPrintStatus.PENDING,
-            print_locked_at: null,
-            print_attempts: { decrement: 1 },
-          },
-        });
-        released += res.count;
+        released += await this.handBack(id, lockedAt, null);
       } catch (e) {
         this.logger.warn(
           `Designer print ${id}: lock not released on shutdown: ${e instanceof Error ? e.message : String(e)}`,
@@ -206,6 +224,32 @@ export class DesignerPrintQueueService
       this.logger.log(`Designer print worker released ${released} row(s)`);
     }
     return released;
+  }
+
+  /**
+   * Returns a RENDERING row this instance holds to PENDING without counting
+   * the attempt, fenced by its lock timestamp. `nextAttemptAt` delays the
+   * next claim (browser-less instance); null makes it due at once.
+   */
+  private async handBack(
+    id: string,
+    lockedAt: Date | null,
+    nextAttemptAt: Date | null,
+  ): Promise<number> {
+    const res = await this.prisma.orderItemDesign.updateMany({
+      where: {
+        id,
+        print_status: DesignPrintStatus.RENDERING,
+        print_locked_at: lockedAt,
+      },
+      data: {
+        print_status: DesignPrintStatus.PENDING,
+        print_locked_at: null,
+        print_attempts: { decrement: 1 },
+        ...(nextAttemptAt ? { print_next_attempt_at: nextAttemptAt } : {}),
+      },
+    });
+    return res.count;
   }
 
   /** Runs a tick soon (after an enqueue / regenerate); no-op when disabled. */
@@ -612,6 +656,7 @@ export class DesignerPrintQueueService
   /** One worker pass (public for specs): fills up to `concurrency` lanes. */
   async tick(): Promise<void> {
     if (!this.workerEnabled) return;
+    if (Date.now() < this.pauseUntil) return;
     const lanes: Promise<void>[] = [];
     while (this.lanes < this.config.concurrency) {
       this.lanes++;
@@ -628,7 +673,25 @@ export class DesignerPrintQueueService
     try {
       await this.failAbandoned();
       await this.backfillDue();
-      for (let i = 0; i < PRINT_JOBS_PER_TICK && this.workerEnabled; i++) {
+      // Never claim with a browser that cannot start: probe first (a cheap
+      // no-op while the browser is up; a launch otherwise).
+      try {
+        await this.render.probeEngine();
+      } catch (e) {
+        const err = classifyRenderError(e);
+        if (err.code === 'DESIGNER_RENDER_UNAVAILABLE') {
+          this.pause(err.message);
+          return;
+        }
+        throw e;
+      }
+      for (
+        let i = 0;
+        i < PRINT_JOBS_PER_TICK &&
+        this.workerEnabled &&
+        Date.now() >= this.pauseUntil;
+        i++
+      ) {
         const row = await this.claimNext();
         if (!row) return;
         await this.process(row);
@@ -657,7 +720,9 @@ export class DesignerPrintQueueService
             AND o.files_purged_at IS NULL
             AND o.terminal_at IS NULL
             AND (
-                 o.print_status = 'PENDING'
+                 (o.print_status = 'PENDING'
+                  AND (o.print_next_attempt_at IS NULL
+                       OR o.print_next_attempt_at <= now()))
               OR (o.print_status = 'FAILED'
                   AND o.print_attempts < ${PRINT_MAX_ATTEMPTS}
                   AND o.print_next_attempt_at <= now())
@@ -777,6 +842,20 @@ export class DesignerPrintQueueService
     } catch (e) {
       const err = classifyRenderError(e);
       const at = now();
+      if (err.code === 'DESIGNER_RENDER_UNAVAILABLE') {
+        // No browser on this instance: not an attempt of the row. Hand it
+        // back (due again after the pause) and stop claiming for a while.
+        const back = await this.handBack(
+          row.id,
+          row.print_locked_at ?? null,
+          new Date(at.getTime() + PRINT_RENDER_PAUSE_MS),
+        );
+        this.pause(err.message, at.getTime());
+        this.logger.warn(
+          `Designer print ${row.id} (order ${row.order_id}) handed back (${back} row): ${err.message}`,
+        );
+        return;
+      }
       // An order cancelled while rendering: final, never retried.
       const cancelled = await this.prisma.orderItemDesign.updateMany({
         where: { ...fence, terminal_at: { not: null } },

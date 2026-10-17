@@ -83,6 +83,47 @@ describe('DesignerTriggersService', () => {
     expect(b.queue.enqueueOrder).not.toHaveBeenCalled();
   });
 
+  it('un-cancel: CANCELLED/REFUNDED → live status revives the rows and re-requests a paid / COD order', async () => {
+    const b = build(true);
+    await b.triggers.onStatusChanged(
+      { ...order, payment_status: 'paid' },
+      'CANCELLED',
+      'PROCESSING',
+    );
+    await b.triggers.onStatusChanged(
+      { ...order, payment_method: 'COD' },
+      'REFUNDED',
+      'CONFIRMED',
+    );
+    expect(b.queue.reviveOrder).toHaveBeenCalledTimes(2);
+    expect(b.queue.enqueueOrder).toHaveBeenCalledTimes(2);
+    expect(b.queue.enqueueOrder).toHaveBeenCalledWith('o1');
+    expect(b.queue.cancelOrder).not.toHaveBeenCalled();
+    // Un-cancelled straight to SHIPPED: revived and shipped_at set.
+    await b.triggers.onStatusChanged(
+      { ...order, payment_status: 'paid' },
+      'CANCELLED',
+      'SHIPPED',
+    );
+    expect(b.queue.reviveOrder).toHaveBeenCalledTimes(3);
+    expect(b.queue.markShipped).toHaveBeenCalledTimes(1);
+  });
+
+  it('un-cancel of an unpaid (non-COD) order revives but does not request a print; CANCELLED → REFUNDED/RETURNED is not an un-cancel', async () => {
+    const b = build(true);
+    await b.triggers.onStatusChanged(
+      { ...order, payment_status: 'pending', payment_method: 'STRIPE' },
+      'CANCELLED',
+      'PENDING',
+    );
+    expect(b.queue.reviveOrder).toHaveBeenCalledTimes(1);
+    expect(b.queue.enqueueOrder).not.toHaveBeenCalled();
+    await b.triggers.onStatusChanged(order, 'CANCELLED', 'REFUNDED');
+    await b.triggers.onStatusChanged(order, 'REFUNDED', 'RETURNED');
+    expect(b.queue.reviveOrder).toHaveBeenCalledTimes(1);
+    expect(b.queue.cancelOrder).toHaveBeenCalledTimes(1);
+  });
+
   it('never throws', async () => {
     const b = build(true);
     b.queue.enqueueOrder.mockRejectedValue(new Error('db down'));

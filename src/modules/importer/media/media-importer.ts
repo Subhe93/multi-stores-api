@@ -131,6 +131,8 @@ export class MediaImporter {
   private totalBytes = 0;
   /** Bytes the store downloaded in the last 24 h before this importer started. */
   private quotaBaseline: Promise<number> | null = null;
+  /** Last `ensure` per source URL, so same-URL needs never run concurrently. */
+  private readonly inflight = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: MediaImporterDeps) {}
 
@@ -204,7 +206,25 @@ export class MediaImporter {
     });
   }
 
-  async ensure(need: MediaNeed): Promise<MediaResult> {
+  /**
+   * Needs of one source URL run one after the other (the ledger is unique on
+   * `(store_id, source_url)`): the same file wanted as `public` for a product
+   * and as `private` for a template would otherwise race two creates.
+   */
+  ensure(need: MediaNeed): Promise<MediaResult> {
+    const prev = this.inflight.get(need.source_url) ?? Promise.resolve();
+    const run = prev.then(() => this.ensureOne(need));
+    this.inflight.set(
+      need.source_url,
+      run.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return run;
+  }
+
+  private async ensureOne(need: MediaNeed): Promise<MediaResult> {
     const { db, storeId } = this.deps;
     const existing = await db.importMedia.findUnique({
       where: {

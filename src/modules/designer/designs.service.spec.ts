@@ -375,6 +375,65 @@ describe('DesignsService (M4.2 WP4)', () => {
     ).toBe('DESIGNER_ASSET_NOT_FOUND');
   });
 
+  it('a text with code points its face cannot draw is refused at save: DESIGNER_STATE_INVALID rule chars', async () => {
+    const b = build();
+    const fonts = {
+      uncoveredTexts: jest.fn(
+        (_s: string, _spec: unknown, texts: Record<string, string>) =>
+          Promise.resolve(
+            /[؀-ۿ]/.test(texts.namn ?? '')
+              ? [{ element_id: 'namn', asset_id: 'f', code_points: [0x633] }]
+              : [],
+          ),
+      ),
+    };
+    const service = new DesignsService(
+      b.prisma as unknown as PrismaService,
+      b.storeApps,
+      b.assets,
+      b.urls,
+      undefined,
+      fonts as never,
+    );
+    const { id, token } = await service.create(
+      STORE,
+      { product_id: PRODUCT, template_version_id: V1 },
+      null,
+    );
+    const access = { customerId: null, token };
+    let err: unknown;
+    try {
+      await service.update(
+        STORE,
+        id,
+        {
+          state: { v: 1, texts: { namn: 'سارة' }, photos: {} },
+          state_version: 1,
+        },
+        access,
+      );
+    } catch (e) {
+      err = e;
+    }
+    expect(designerErrorCode(err)).toBe('DESIGNER_STATE_INVALID');
+    expect(
+      (err as { response: { details: unknown } }).response.details,
+    ).toEqual([{ element_id: 'namn', rule: 'chars' }]);
+    expect(fonts.uncoveredTexts).toHaveBeenCalledWith(
+      STORE,
+      expect.objectContaining({ schema: 'designer.template/1' }),
+      { namn: 'سارة' },
+    );
+    // Covered text saves.
+    const ok = await service.update(
+      STORE,
+      id,
+      { state: { v: 1, texts: { namn: 'Åsa' }, photos: {} }, state_version: 1 },
+      access,
+    );
+    expect(ok.state_version).toBe(2);
+  });
+
   it('token comparison is exact and length-safe', () => {
     const h = hashDesignToken('abc');
     expect(designTokenMatches(h, 'abc')).toBe(true);

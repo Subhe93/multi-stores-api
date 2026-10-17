@@ -30,6 +30,10 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'crypto';
+import {
+  Semaphore,
+  SemaphoreBusyError,
+} from '../../common/chromium/browser-host';
 import { DesignAssetKind, Prisma, type DesignAsset } from '@prisma/client';
 import sharp from 'sharp';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -44,6 +48,7 @@ import {
   type RasterInfo,
 } from '../../common/uploads/raster-inspect';
 import { designerErrors } from './designer-errors';
+import { UUID_RE } from './designs.util';
 import {
   ASSET_KIND_DIR,
   designerStorageKey,
@@ -169,9 +174,6 @@ export interface DesignerFileBody {
   mime: string;
   sha256?: string;
 }
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function sha256(buf: Buffer): string {
   return createHash('sha256').update(buf).digest('hex');
@@ -315,30 +317,51 @@ export function designerUploadBusy(): ServiceUnavailableException {
 }
 
 /**
- * Small counting semaphore (2 concurrent sharp jobs, §6.2). The queue is
- * bounded: past `maxQueue` waiting jobs a new one fails fast with 503
- * DESIGNER_UPLOAD_BUSY instead of holding its (up to 40 MB) buffer in memory.
+ * Runs `fn` in a slot of `sem` (2 concurrent sharp jobs, §6.2). The queue
+ * is bounded: past `maxQueue` waiting jobs a new one fails fast with 503
+ * DESIGNER_UPLOAD_BUSY instead of holding its (up to 40 MB) buffer in
+ * memory. The semaphore is the shared `Semaphore` of the browser host.
  */
-export class Semaphore {
-  private active = 0;
-  private readonly queue: (() => void)[] = [];
-  constructor(
-    private readonly max: number,
-    private readonly maxQueue: number = Infinity,
-  ) {}
-  async run<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.active >= this.max) {
-      if (this.queue.length >= this.maxQueue) throw designerUploadBusy();
-      await new Promise<void>((resolve) => this.queue.push(resolve));
-    }
-    this.active++;
-    try {
-      return await fn();
-    } finally {
-      this.active--;
-      this.queue.shift()?.();
-    }
+export async function withSharpSlot<T>(
+  sem: Semaphore,
+  fn: () => Promise<T>,
+  maxQueue: number = SHARP_MAX_QUEUE,
+): Promise<T> {
+  try {
+    await sem.acquire({ maxQueue });
+  } catch (e) {
+    if (e instanceof SemaphoreBusyError) throw designerUploadBusy();
+    throw e;
   }
+  try {
+    return await fn();
+  } finally {
+    sem.release();
+  }
+}
+
+/**
+ * `<col> @> …` fragments matching every place a TemplateSpecV1 can
+ * reference `assetId` (a jsonb_path_ops GIN index on the column serves
+ * each). Built with jsonb literals, never string interpolation of the id
+ * into the JSON path.
+ */
+export function specContainmentSql(
+  assetId: string,
+): (column: 'v.spec' | 'o.template_spec') => Prisma.Sql {
+  const shapes = [
+    { fonts: [{ asset_id: assetId }] },
+    { surfaces: [{ background: { web: { asset_id: assetId } } }] },
+    { surfaces: [{ background: { print: { asset_id: assetId } } }] },
+    { surfaces: [{ elements: [{ asset: { asset_id: assetId } }] }] },
+  ].map((s) => JSON.stringify(s));
+  return (column) => {
+    const col = Prisma.raw(column);
+    return Prisma.sql`(${Prisma.join(
+      shapes.map((j) => Prisma.sql`${col} @> ${j}::jsonb`),
+      ' OR ',
+    )})`;
+  };
 }
 
 /** True when the image carries EXIF, XMP, IPTC or PNG text metadata. */
@@ -422,7 +445,7 @@ interface PreparedRaster {
 @Injectable()
 export class DesignerAssetsService {
   private readonly logger = new Logger(DesignerAssetsService.name);
-  private readonly sharpJobs = new Semaphore(2, SHARP_MAX_QUEUE);
+  private readonly sharpJobs = new Semaphore(2);
   /** Public template asset / font responses (the routes are unthrottled). */
   readonly publicCache = new PublicAssetCache<
     DesignerFileBody & { asset: DesignAsset }
@@ -452,7 +475,9 @@ export class DesignerAssetsService {
           a.kind === DesignAssetKind.FONT
             ? designerFontPath(a.id, ext)
             : designerAssetPath(a.id, ext);
-      } else if (a.private_key) {
+      } else if (a.private_key && a.kind !== DesignAssetKind.CUSTOMER_PHOTO) {
+        // Private template assets get a signed link; a customer photo's
+        // original is never linked (only its preview, below).
         url = this.urls.signedPath('asset', a.id, a.store_id, {
           ttlSec: opts.ttlSec ?? DESIGNER_LINK_TTL.creator,
         });
@@ -720,7 +745,7 @@ export class DesignerAssetsService {
     buf: Buffer,
     info: RasterInfo,
   ): Promise<PreparedRaster> {
-    return this.sharpJobs.run(async () => {
+    return withSharpSlot(this.sharpJobs, async () => {
       let meta: sharp.Metadata;
       try {
         const input = sharp(buf, {
@@ -890,7 +915,8 @@ export class DesignerAssetsService {
       });
     }
     const info = await this.inspect(buffer, PHOTO_RASTER_LIMITS);
-    const { original, preview, width, height, ext } = await this.sharpJobs.run(
+    const { original, preview, width, height, ext } = await withSharpSlot(
+      this.sharpJobs,
       async () => {
         try {
           const base = () =>
@@ -1098,13 +1124,17 @@ export class DesignerAssetsService {
 
   /**
    * Where an asset id is still used: template versions of the store and
-   * frozen order snapshots (spec + assets JSON). Ids are uuids, so a text
-   * search over the JSON is exact enough and needs no JSON-path walk.
+   * frozen order snapshots. The spec is matched by jsonb containment (`@>`)
+   * on the four places a TemplateSpecV1 references an asset (fonts,
+   * web / print background, image elements) and the snapshot's `assets`
+   * list by `[{asset_id}]`, which the GIN indexes serve; the thumbnail is a
+   * URL column and keeps its text match.
    */
   async assetReferences(
     storeId: string,
     assetId: string,
   ): Promise<{ template_versions: number; order_items: number }> {
+    const specRefs = specContainmentSql(assetId);
     const needle = `%${assetId}%`;
     const [tv, oi] = await Promise.all([
       this.prisma.$queryRaw<{ n: bigint }[]>`
@@ -1112,13 +1142,14 @@ export class DesignerAssetsService {
         FROM "DesignTemplateVersion" v
         JOIN "DesignTemplate" t ON t.id = v.template_id
         WHERE t.store_id = ${storeId}
-          AND (v.spec::text LIKE ${needle}
+          AND (${specRefs('v.spec')}
                OR COALESCE(v.thumbnail_url, '') LIKE ${needle})`,
       this.prisma.$queryRaw<{ n: bigint }[]>`
         SELECT COUNT(*)::bigint AS n
         FROM "OrderItemDesign" o
         WHERE o.store_id = ${storeId}
-          AND (o.template_spec::text LIKE ${needle} OR o.assets::text LIKE ${needle})`,
+          AND (${specRefs('o.template_spec')}
+               OR o.assets @> ${JSON.stringify([{ asset_id: assetId }])}::jsonb)`,
     ]);
     return {
       template_versions: Number(tv[0]?.n ?? 0),

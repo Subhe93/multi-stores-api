@@ -1,5 +1,6 @@
 import * as vm from 'vm';
 import {
+  CONTEXT_CLOSE_TIMEOUT_MS,
   createDesignerRenderer,
   DesignerChromiumHost,
   DesignerRenderUnavailableError,
@@ -125,6 +126,105 @@ describe('DesignerChromiumHost admission', () => {
     release();
     await first;
     await host.close();
+  });
+});
+
+describe('DesignerChromiumHost context close', () => {
+  afterEach(() => jest.useRealTimers());
+
+  /** A fake browser whose page renders at once but whose context never closes. */
+  function hungBrowser(closeCalls: { n: number }) {
+    return {
+      isConnected: () => true,
+      newContext: () =>
+        Promise.resolve({
+          route: () => Promise.resolve(),
+          newPage: () =>
+            Promise.resolve({
+              setDefaultTimeout: () => undefined,
+              goto: () => Promise.resolve(),
+              evaluate: () =>
+                Promise.resolve({
+                  data: Buffer.from('png').toString('base64'),
+                  width: 1,
+                  height: 1,
+                  report: { fitted: {}, missing: [], elements: 0 },
+                }),
+            }),
+          close: () => {
+            closeCalls.n++;
+            return new Promise<void>(() => undefined); // never settles
+          },
+        }),
+    } as never;
+  }
+
+  it('a context.close() that never settles is abandoned after CONTEXT_CLOSE_TIMEOUT_MS and the browser is closed, so the lane frees', async () => {
+    jest.useFakeTimers();
+    const host = new DesignerChromiumHost();
+    const closeCalls = { n: 0 };
+    const browser = hungBrowser(closeCalls);
+    Object.assign(host.host, {
+      browser,
+      getBrowser: () => Promise.resolve(browser),
+    });
+    const browserClose = jest
+      .spyOn(host.host, 'close')
+      .mockImplementation(() => Promise.resolve());
+    const job = host.renderCanvas(
+      { spec: null, mode: 'print', fonts: [], assets: [] } as never,
+      new Map(),
+      60_000,
+    );
+    let settled = false;
+    void job.then(() => (settled = true));
+    await jest.advanceTimersByTimeAsync(CONTEXT_CLOSE_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+    expect(closeCalls.n).toBe(1);
+    await jest.advanceTimersByTimeAsync(2);
+    await job;
+    expect(browserClose).toHaveBeenCalledTimes(1);
+    // The print lane slot was released: a second job runs at once.
+    expect(host.host.laneBusy('print')).toBe(0);
+  });
+
+  it('a page that hangs past the job timeout fails the job and still closes the context', async () => {
+    jest.useFakeTimers();
+    const host = new DesignerChromiumHost();
+    let closed = 0;
+    const browser = {
+      isConnected: () => true,
+      newContext: () =>
+        Promise.resolve({
+          route: () => Promise.resolve(),
+          newPage: () =>
+            Promise.resolve({
+              setDefaultTimeout: () => undefined,
+              goto: () => Promise.resolve(),
+              evaluate: () => new Promise(() => undefined), // hangs
+            }),
+          close: () => {
+            closed++;
+            return Promise.resolve();
+          },
+        }),
+    } as never;
+    Object.assign(host.host, {
+      browser,
+      getBrowser: () => Promise.resolve(browser),
+    });
+    const job = host
+      .renderCanvas(
+        { spec: null, mode: 'print', fonts: [], assets: [] } as never,
+        new Map(),
+        1_000,
+      )
+      .catch((e: Error) => e);
+    await jest.advanceTimersByTimeAsync(1_001);
+    const err = await job;
+    expect(String((err as Error).message)).toMatch(/timed out after 1000 ms/);
+    expect(closed).toBe(1);
+    expect(host.host.laneBusy('print')).toBe(0);
   });
 });
 

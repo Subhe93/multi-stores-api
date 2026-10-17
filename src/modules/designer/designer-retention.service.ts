@@ -15,6 +15,9 @@
  *                           the print is READY, the order is terminal, or a
  *                           further 7-day grace has passed (otherwise a print
  *                           render is requested first: `retention_waiting_print`).
+ *                           Whatever the order status (U12): a READY print is
+ *                           all production needs, so originals of an order
+ *                           still in production go on schedule.
  *   designer.files      R4  print files + order proof (and originals, if R3
  *                           has not run) `print_keep_days_after_shipped` after
  *                           shipping, 14 days after cancel/refund, or 365 days
@@ -24,12 +27,13 @@
  * and reports what it had to keep (photos another live order still uses).
  *
  * Rules shared by the tasks:
- * - Files of OPEN orders are not purged: R3/R4 require the order to be
+ * - Print files of OPEN orders are not purged: R4 requires the order to be
  *   SHIPPED, DELIVERED, CANCELLED, REFUNDED or RETURNED, or the row to be
  *   terminal (`terminal_at`: cancelled / refunded / payment failed, whatever
  *   the order status says); other rows are only counted
  *   (`skippedOpenOrders`). The 365-day hard cap of R4 applies whatever the
- *   status. A row whose print is RENDERING is always skipped.
+ *   status. R3 has no such gate (see above). A row whose print is RENDERING
+ *   is always skipped.
  * - A photo shared with another order design of the same design is kept
  *   while that one is live (not terminal, originals not purged, its order
  *   not failed).
@@ -110,8 +114,37 @@ export const DESIGNER_CLOSED_ORDER_STATUSES = [
   'RETURNED',
 ] as const;
 /** Order statuses that count as terminal for R3 (with `terminal_at`). */
-const TERMINAL_ORDER_STATUSES = new Set(['CANCELLED', 'REFUNDED']);
+export const DESIGNER_TERMINAL_ORDER_STATUSES = [
+  'CANCELLED',
+  'REFUNDED',
+] as const;
+const TERMINAL_ORDER_STATUSES = new Set<string>(
+  DESIGNER_TERMINAL_ORDER_STATUSES,
+);
 const CLOSED = new Set<string>(DESIGNER_CLOSED_ORDER_STATUSES);
+
+/**
+ * R3 eligibility of an order design's originals (pure, shared with the
+ * creator order view): purgeable `retention_days` after the order when the
+ * print is READY or the order is terminal, else `retention_days` + the
+ * print grace. Returns the date the originals are (or were) due.
+ */
+export function originalsPurgeAt(
+  orderCreatedAt: Date,
+  retentionDays: number,
+  row: {
+    print_status: string;
+    terminal_at: Date | null;
+    order_status: string;
+  },
+): Date {
+  const eligible =
+    row.print_status === DesignPrintStatus.READY ||
+    row.terminal_at !== null ||
+    TERMINAL_ORDER_STATUSES.has(row.order_status);
+  const days = retentionDays + (eligible ? 0 : DESIGNER_PRINT_GRACE_DAYS);
+  return new Date(orderCreatedAt.getTime() + days * DAY_MS);
+}
 /** The state an ordered design keeps once its personal data is gone. */
 const STRIPPED_STATE = { v: 1, texts: {}, photos: {} };
 
@@ -502,29 +535,25 @@ export class DesignerRetentionService implements OnModuleInit {
         cursor = page[page.length - 1].id;
         for (const row of page) {
           if (result.purged >= run.limit || run.outOfTime()) break;
-          if (!CLOSED.has(row.order_status) && !row.terminal_at) {
-            result.skipped++;
-            bump(result, 'skippedOpenOrders');
-            continue;
-          }
           if (row.print_status === DesignPrintStatus.RENDERING) {
             result.skipped++;
             bump(result, 'skippedRendering');
             continue;
           }
-          const createdBeforeGrace =
-            row.order_created_at.getTime() <= grace.getTime();
+          // No open-order gate here (unlike R4): a READY print is all
+          // production needs, and the 7-day grace bounds the wait.
           const eligible =
-            row.print_status === DesignPrintStatus.READY ||
-            row.terminal_at !== null ||
-            TERMINAL_ORDER_STATUSES.has(row.order_status) ||
-            createdBeforeGrace;
+            originalsPurgeAt(
+              row.order_created_at,
+              s.retention_days,
+              row,
+            ).getTime() <= now.getTime();
           if (!eligible) {
             result.skipped++;
             bump(result, 'waitingPrint');
             if (!run.dryRun && !waitingOrders.has(row.order_id)) {
               waitingOrders.add(row.order_id);
-              this.logger.log(
+              this.logger.debug(
                 `retention_waiting_print: order ${row.order_id} (design ${row.id})`,
               );
               await this.printQueue
@@ -589,12 +618,11 @@ export class DesignerRetentionService implements OnModuleInit {
         AND d."originals_purged_at" IS NULL
         AND d."files_purged_at" IS NULL
         AND d."print_status"::text <> 'RENDERING'
-        AND (${this.closedSql()} OR d."terminal_at" IS NOT NULL)
         AND o."created_at" <= ${iso(cutoff)}
         AND (
           d."print_status"::text = 'READY'
           OR d."terminal_at" IS NOT NULL
-          OR o."status"::text IN ('CANCELLED', 'REFUNDED')
+          OR o."status"::text IN (${Prisma.join([...DESIGNER_TERMINAL_ORDER_STATUSES])})
           OR o."created_at" <= ${iso(grace)}
         )`;
     if (claimed === 0) return 'raced';

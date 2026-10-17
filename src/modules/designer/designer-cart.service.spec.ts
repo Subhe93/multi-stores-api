@@ -6,6 +6,7 @@ import {
   type DesignerLineMode,
 } from './designer-cart.service';
 import { designerErrorCode } from './designer-errors';
+import { RENDERER_VERSION } from './render/design-renderer';
 import { DesignsService } from './designs.service';
 import { designProofSha } from './designs.util';
 import type { DesignerRenderService } from './designer-render.service';
@@ -526,7 +527,7 @@ describe('DesignerCartService (M4.2 WP4)', () => {
         design_id: d.id,
         template_id: TEMPLATE,
         template_version_id: V1,
-        renderer_version: '1.0.0',
+        renderer_version: RENDERER_VERSION,
         proof_key: 'designer/x/proof.webp',
         print_status: 'PENDING',
         print_requested_at: null,
@@ -834,6 +835,14 @@ describe('DesignerCartService (M4.2 WP4)', () => {
         original_available: true,
       });
       expect(JSON.stringify(res)).not.toContain('secret-key');
+      // Retention R3 rule: without a READY print (order not terminal) the
+      // originals wait up to the 7-day print grace.
+      const pendingRow = b.db.orderItemDesign[b.db.orderItemDesign.length - 1];
+      Object.assign(pendingRow, { print_status: 'PENDING', print_files: null });
+      const again = await b.cart.orderDesigns(STORE, orderId);
+      expect(again.items[0].originals_purge_at).toEqual(
+        new Date('2026-12-07T00:00:00Z'),
+      );
       await expect(
         b.cart.orderDesigns(OTHER_STORE, orderId),
       ).rejects.toMatchObject({

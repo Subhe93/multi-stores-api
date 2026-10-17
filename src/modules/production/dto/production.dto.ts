@@ -1,12 +1,15 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsInt,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 
@@ -35,6 +38,22 @@ export class AddCustomCheckDto {
   @MinLength(1)
   @MaxLength(80)
   label!: string;
+}
+
+/** GET production/my/orders/:orderId/events?page=1&limit=50 (limit ≤ 200). */
+export class EventsQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  limit?: number;
 }
 
 /** GET production/my/summaries?order_ids=a,b,c (≤ 50 UUIDs). */

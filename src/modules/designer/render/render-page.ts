@@ -29,7 +29,11 @@ export const RENDER_PAGE_HTML =
 /**
  * In-page entry point. Plain ES2020 (it runs in Chromium, not Node).
  * Job: {spec, state, mode, scale, locale?, type, quality?,
- *       fonts:[{family,weight,style,url}], assets:[{id,url}]}.
+ *       fonts:[{family,weight,style,url}], assets:[{id,url,crop?}]}.
+ * `crop` = {fx,fy,fw,fh}: the served bytes are that fraction of the
+ * original (print photos are pre-cut to their visible region, §5.2); the
+ * context's drawImage is remapped to the matching sub-rect so the shared
+ * renderer keeps drawing whole images.
  * Returns {data: base64, width, height, report}; throws
  * `FONT_LOAD_FAILED:` / `ASSET_LOAD_FAILED:` / `RENDER_MISSING:` errors.
  */
@@ -64,11 +68,13 @@ export const RENDER_PAGE_SCRIPT = String.raw`
         var res = await fetch(a.url);
         if (!res.ok) throw new Error('ASSET_LOAD_FAILED:' + a.id);
         var blob = await res.blob();
+        var bitmap;
         try {
-          images.set(a.id, await createImageBitmap(blob));
+          bitmap = await createImageBitmap(blob);
         } catch (e) {
           throw new Error('ASSET_LOAD_FAILED:' + a.id);
         }
+        images.set(a.id, a.crop ? { __bitmap: bitmap, __crop: a.crop } : bitmap);
       }
       var size = R.canvasSize(job.spec, job.scale);
       var canvas = document.createElement('canvas');
@@ -77,6 +83,16 @@ export const RENDER_PAGE_SCRIPT = String.raw`
       var ctx = canvas.getContext('2d', { alpha: true });
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
+      // A cropped bitmap is drawn into the sub-rect its crop covers.
+      var rawDrawImage = ctx.drawImage;
+      ctx.drawImage = function (img, dx, dy, dw, dh) {
+        if (img && img.__crop) {
+          var c = img.__crop;
+          return rawDrawImage.call(
+            ctx, img.__bitmap, dx + c.fx * dw, dy + c.fy * dh, c.fw * dw, c.fh * dh);
+        }
+        return rawDrawImage.call(ctx, img, dx, dy, dw, dh);
+      };
       var report = R.renderDesign(ctx, {
         spec: job.spec,
         surface: 'front',
@@ -107,7 +123,7 @@ export const RENDER_PAGE_SCRIPT = String.raw`
         report: report,
       };
     } finally {
-      images.forEach(function (b) { try { b.close(); } catch (e) {} });
+      images.forEach(function (b) { try { (b.__bitmap || b).close(); } catch (e) {} });
     }
   };
 })();

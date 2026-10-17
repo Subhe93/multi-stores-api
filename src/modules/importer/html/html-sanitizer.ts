@@ -4,15 +4,22 @@ import { decodeHtmlEntities, type HtmlSanitizer } from '../model/clean';
 /**
  * HTML sanitizer seam of the importer (M4.4 D11, §4.3 step 4).
  *
- * The design uses `sanitize-html` with the allowlist in `model/clean.ts`
- * (`HTML_ALLOWED_TAGS` / `HTML_ALLOWED_ATTRIBUTES`). That dependency is not
- * approved yet (M4-INTEGRATION B2), and an allowlist sanitizer is never
- * hand-rolled. Until then the token is bound to `PlainTextHtmlSanitizer`,
- * which keeps NO source markup at all: it converts the HTML to escaped plain
- * text, wrapped in `<p>` / `<br>` that it generates itself, and every run
- * that uses it records `W_HTML_SANITIZER_FALLBACK`.
+ * STATUS: the `sanitize-html` dependency the design calls for (allowlist in
+ * `model/clean.ts`: `HTML_ALLOWED_TAGS` / `HTML_ALLOWED_ATTRIBUTES`) is
+ * PENDING APPROVAL (M4-INTEGRATION B2) and is not installed. No allowlist
+ * sanitizer is written by hand in its place.
  *
- * Switching to the real sanitizer is one place: implement
+ * WHAT RUNS TODAY: the token is bound to `PlainTextHtmlSanitizer`
+ * (`mode: 'plain_text_fallback'`). It keeps no source markup: the HTML is
+ * tokenized only to find paragraph / line boundaries and to drop the content
+ * of script, style, iframe, form and similar elements; every tag and
+ * attribute is discarded, the remaining text is HTML-escaped, and the output
+ * is rebuilt as `<p>` / `<br>` that the sanitizer itself generates
+ * (`htmlToSafeParagraphs`). Descriptions therefore lose their formatting and
+ * inline images, and every plan / run that used it records
+ * `W_HTML_SANITIZER_FALLBACK`.
+ *
+ * Switching to the real sanitizer once approved is one place: implement
  * `ImporterHtmlSanitizer` with `mode: 'allowlist'` over `sanitize-html`
  * (allowedTags = HTML_ALLOWED_TAGS, allowedAttributes =
  * HTML_ALLOWED_ATTRIBUTES, allowedSchemes http/https/mailto) and change

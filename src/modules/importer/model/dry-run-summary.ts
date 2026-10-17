@@ -234,108 +234,6 @@ function isImportedPublished(
   return (map[p.status] ?? 'DRAFT') === 'PUBLISHED';
 }
 
-/** §6.1 redirect generation over the imported/skipped product sets. */
-export function buildRedirectCandidates(
-  catalog: NormalizedCatalog,
-  imported: NProduct[],
-  skipped: NProduct[],
-  opts: {
-    redirect_skipped?: boolean;
-    status_map?: Record<string, string>;
-  } = {},
-): {
-  candidates: RedirectCandidate[];
-  excludedOldSlugs: { external_ref: string; slug: string; reason: string }[];
-} {
-  const statusMap = { ...DEFAULT_STATUS_MAP, ...(opts.status_map ?? {}) };
-  const { bases } = catalog.meta;
-  const out: RedirectCandidate[] = [];
-  const seen = new Set<string>();
-  const add = (c: RedirectCandidate) => {
-    if (seen.has(c.from)) return;
-    seen.add(c.from);
-    out.push(c);
-  };
-  const excludedOldSlugs: {
-    external_ref: string;
-    slug: string;
-    reason: string;
-  }[] = [];
-  const published = imported.filter((p) => isImportedPublished(p, statusMap));
-  const liveSlugs = new Set(published.map((p) => p.slug));
-
-  for (const p of published) {
-    add({
-      from: redirectPath(bases.product, p.slug),
-      to: `/products/${p.slug}`,
-      rule: 'product',
-      external_ref: p.ext_id,
-    });
-  }
-  for (const p of imported) {
-    for (const old of p.old_slugs) {
-      let reason: string | null = null;
-      if (/__trashed$/.test(old)) reason = 'trashed';
-      else if (!isImportedPublished(p, statusMap)) reason = 'draft';
-      else if (liveSlugs.has(old)) reason = 'equals_live_slug';
-      else if (old === p.slug) reason = 'equals_current_slug';
-      if (reason) {
-        excludedOldSlugs.push({ external_ref: p.ext_id, slug: old, reason });
-        continue;
-      }
-      add({
-        from: redirectPath(bases.product, old),
-        to: `/products/${p.slug}`,
-        rule: 'old_slug',
-        external_ref: p.ext_id,
-      });
-    }
-  }
-  if (opts.redirect_skipped !== false) {
-    const catBySlug = new Map(catalog.categories.map((c) => [c.ext_id, c]));
-    for (const p of skipped) {
-      if (p.status !== 'publish') continue;
-      const first = p.category_ext_ids
-        .map((e) => catBySlug.get(e))
-        .find(Boolean);
-      add({
-        from: redirectPath(bases.product, p.slug),
-        to: first ? `/collections/${first.slug}` : '/',
-        rule: 'skipped_product',
-        external_ref: p.ext_id,
-      });
-    }
-  }
-  for (const c of catalog.categories) {
-    add({
-      from: redirectPath(bases.category, ...c.path),
-      to: `/collections/${c.slug}`,
-      rule: 'category_path',
-      external_ref: c.ext_id,
-    });
-  }
-  for (const c of catalog.categories) {
-    if (c.depth > 0) {
-      add({
-        from: redirectPath(bases.category, c.slug),
-        to: `/collections/${c.slug}`,
-        rule: 'category_leaf',
-        external_ref: c.ext_id,
-      });
-    }
-  }
-  for (const t of catalog.tags) {
-    const on = imported.filter((p) => p.tag_ext_ids.includes(t.ext_id));
-    add({
-      from: redirectPath(bases.tag, t.slug),
-      to: on.length === 1 ? `/products/${on[0].slug}` : '/',
-      rule: 'tag',
-      external_ref: t.ext_id,
-    });
-  }
-  return { candidates: out, excludedOldSlugs };
-}
-
 function unmappedPrefix(key: string): string {
   const m = /^(_*[A-Za-z0-9]+)/.exec(key);
   return m ? `${m[1]}*` : key;
@@ -923,16 +821,10 @@ export function summarizeCatalog(
     imported.filter((p) => isImportedPublished(p, statusMap)),
   );
 
-  // Redirects.
-  const { candidates, excludedOldSlugs } = buildRedirectCandidates(
-    catalog,
-    imported,
-    skippedProducts,
-    options,
-  );
-  const byRule: Record<string, number> = {};
-  for (const c of candidates) inc(byRule, c.rule);
-  count('REDIRECT', 'CREATE', candidates.length);
+  // Redirects are built over the planner's final slugs (mapping/map-redirects
+  // + the redirects module); the planner fills `redirects`, `old_slugs.redirected`
+  // / `excluded` and the REDIRECT count, so this catalog-only summary leaves
+  // them empty.
 
   return {
     source: {
@@ -967,15 +859,11 @@ export function summarizeCatalog(
       missing_in_bundle: missingMedia,
     },
     shipping: shippingSummary,
-    redirects: {
-      total: candidates.length,
-      by_rule: byRule,
-      preview: candidates.slice(0, 50),
-    },
+    redirects: { total: 0, by_rule: {}, preview: [] },
     old_slugs: {
       total: imported.reduce((n, p) => n + p.old_slugs.length, 0),
-      redirected: byRule.old_slug ?? 0,
-      excluded: excludedOldSlugs,
+      redirected: 0,
+      excluded: [],
     },
     term_cleanup,
     warnings,

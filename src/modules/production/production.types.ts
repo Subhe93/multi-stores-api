@@ -11,6 +11,13 @@ export interface SourceCheck {
   group_index: number | null;
   file_url: string | null;
   sort_order: number;
+  /**
+   * The source has no order-time snapshot to compare against (variant
+   * options of an order placed before `variant_options_snapshot` existed):
+   * the check is inserted when missing and otherwise left exactly as it is
+   * (never reset, never stale).
+   */
+  insert_only?: boolean;
 }
 
 /** The order data the source providers receive (read-only). */

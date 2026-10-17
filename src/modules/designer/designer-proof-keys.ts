@@ -68,8 +68,10 @@ export async function releaseProofKey(
  * nothing else references it. When the state moved on meanwhile, the new
  * file is released instead. Returns whether the key was recorded.
  *
- * Render service hand-off (fixer B): `renderDesignProof` should call this
- * instead of its own `design.updateMany({proof_key, proof_state_sha})`.
+ * Used by `DesignerRenderService.renderAndRecordProof` (the only writer of
+ * a design's proof key). Without `previousKey` the current key is read
+ * right before the update, so the file a concurrent render recorded
+ * meanwhile is the one released.
  */
 export async function replaceDesignProofKey(
   prisma: Db,

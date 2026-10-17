@@ -1,5 +1,5 @@
 /*
- * Designer renderer (M4.2 WP1) — RENDERER_VERSION 1.0.0.
+ * Designer renderer (M4.2 WP1) — RENDERER_VERSION 1.1.0.
  *
  * SOURCE OF TRUTH: multi-stores-shared/src/designer/design-renderer.ts
  * Mirrors (byte-identical, never edit them by hand):
@@ -17,9 +17,28 @@
  *   - units are millimetres (template space); `scale` is px per mm;
  *   - the drawing algorithm follows NPP 1.9.1 (product.js:117-195,
  *     order-viewer.js:56-171). Deliberate deviations are marked [dev].
+ *
+ * Intended deviations from the NPP print export (order-viewer.js:56-171),
+ * verified by the api spec `design-renderer.npp-parity.spec.ts`, which
+ * replays a verbatim port of the NPP renderer over the same templates and
+ * states and compares the draw-call logs (M4.2-DESIGN §3.4):
+ *   1. Image smoothing: the server render page sets
+ *      `imageSmoothingQuality = 'high'` before drawing (NPP left the
+ *      canvas default, 'low'). Not visible in the draw log; it only changes
+ *      the resampling filter of downscaled photos.
+ *   2. Background `fit: 'cover'`: a background whose spec says `cover` is
+ *      drawn through the cover layout clipped to the canvas (NPP always
+ *      stretched `drawImage(img, 0, 0, W, H)`). Imported NPP templates
+ *      keep `fit: 'stretch'`, so their logs are identical to NPP's.
+ *   3. Empty optional slot: in `print` mode nothing is drawn for a slot
+ *      without a photo (NPP filled it `#e8e8e8`). `edit` and `proof` keep
+ *      the shaped `#e8e8e8` fill so the customer sees where the photo goes.
+ *      A required slot never reaches print empty (§5.3).
+ * Not a drawing deviation: `ctx.direction` is set before the fit loop (NPP
+ * never set it; imported templates use `ltr`, the canvas default).
  */
 
-export const RENDERER_VERSION = '1.0.0';
+export const RENDERER_VERSION = '1.1.0';
 
 /* ------------------------------------------------------------------ */
 /* Types: TemplateSpecV1 / DesignStateV1                               */
@@ -548,6 +567,9 @@ function drawText(
     6,
   );
   const fs = (size: number, scale: number) => fontString(el.font, size, scale);
+  // Direction before measuring: bidi shaping changes the measured width.
+  ctx.direction =
+    el.direction === 'rtl' ? 'rtl' : el.direction === 'ltr' ? 'ltr' : 'inherit';
   // [dev] D5: fit at the reference scale, draw at the output scale.
   const size = fitTextSize(ctx, text, el, fs, ref);
   report.fitted[el.id] = size;
@@ -555,8 +577,6 @@ function drawText(
   ctx.fillStyle = el.color || '#000';
   ctx.textBaseline = 'middle';
   ctx.textAlign = el.align || 'center';
-  ctx.direction =
-    el.direction === 'rtl' ? 'rtl' : el.direction === 'ltr' ? 'ltr' : 'inherit';
   const inset = finiteOr(el.inset, 4);
   const tx =
     el.align === 'left'
@@ -603,11 +623,13 @@ function drawSlot(
     ctx.restore();
     return true;
   }
-  // Empty slot.
+  // Empty slot. [dev] 3: print draws nothing (an optional slot left empty
+  // must not print a grey box; NPP order-viewer.js:154-157 filled it).
+  if (input.mode === 'print') return false;
   ctx.fillStyle = EMPTY_SLOT_FILL;
   slotPath(ctx, el, s);
   ctx.fill();
-  if (input.mode !== 'edit') return true; // proof/print: fill only (order-viewer.js:154-157)
+  if (input.mode !== 'edit') return true; // proof: fill only (order-viewer.js:154-157)
   // Edit mode: NPP storefront look (product.js:176-186).
   const cx = (el.x + el.w / 2) * s;
   const cy = (el.y + el.h / 2) * s;

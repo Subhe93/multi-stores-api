@@ -3,6 +3,7 @@ import { join } from 'path';
 import { DirectoryBundleReader } from '../bundle-reader';
 import { WpBundleAdapter } from './wp-bundle.adapter';
 import {
+  catalogRedirects,
   NAMEZ_EXPORT_DIR,
   NAMEZ_RUN_OPTIONS,
   NAMEZ_SOURCE,
@@ -331,15 +332,19 @@ describeIfExport(
         '4414',
       ]);
       expect(withOld.reduce((n, p) => n + p.old_slugs.length, 0)).toBe(8);
-      expect(s.old_slugs.redirected).toBe(5);
-      expect(
-        s.old_slugs.excluded.map((e) => [e.external_ref, e.reason]),
-      ).toEqual([
-        ['woo:namez.se:product:2229', 'trashed'],
-        ['woo:namez.se:product:3443', 'draft'],
-        ['woo:namez.se:product:3484', 'draft'],
-      ]);
-      expect(s.redirects.by_rule).toEqual({
+      expect(s.old_slugs.total).toBe(8);
+      // Redirects are the planner's (map-redirects over the final slugs).
+      const r = catalogRedirects(catalog, NAMEZ_RUN_OPTIONS);
+      const byRule: Record<string, number> = {};
+      for (const c of r.candidates) byRule[c.rule] = (byRule[c.rule] ?? 0) + 1;
+      expect(r.excludedOldSlugs.map((e) => [e.external_ref, e.reason])).toEqual(
+        [
+          ['woo:namez.se:product:2229', 'trashed'],
+          ['woo:namez.se:product:3443', 'draft'],
+          ['woo:namez.se:product:3484', 'draft'],
+        ],
+      );
+      expect(byRule).toEqual({
         product: 33,
         old_slug: 5,
         skipped_product: 1,
@@ -347,7 +352,7 @@ describeIfExport(
         category_leaf: 66,
         tag: 11,
       });
-      expect(s.redirects.total).toBe(194);
+      expect(r.candidates).toHaveLength(194);
     });
 
     it('nothing is left unmapped; ignore list holds', () => {

@@ -6,7 +6,9 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['eslint.config.mjs'],
+    // Designer NPP parity oracle: a verbatim JS port kept as a test fixture
+    // (not part of the TypeScript project, never built or shipped).
+    ignores: ['eslint.config.mjs', 'src/modules/designer/npp/__fixtures__/*.js'],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,

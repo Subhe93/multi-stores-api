@@ -43,10 +43,27 @@ import {
   type DesignerFileBody,
 } from './designer-assets.service';
 import { extForMime } from './designer-assets.keys';
+import {
+  CodePointSet,
+  fontCodePoints,
+  uncoveredCodePoints,
+} from './designer-fonts.cmap';
 import { designerFontPath } from './designer-urls';
+import { resolveText, type TemplateSpecV1 } from './render/design-renderer';
 
 export const FONT_MAX_BYTES = 10 * 1024 * 1024;
 export const FONT_MIN_BYTES = 256;
+/** Parsed cmap coverages kept in memory (a FONT asset never changes). */
+export const FONT_COVERAGE_CACHE_MAX = 64;
+
+/** A text whose face lacks some of its code points (rule `chars`). */
+export interface UncoveredText {
+  element_id: string;
+  /** The face that was checked. */
+  asset_id: string;
+  /** Code points the face cannot draw (first few). */
+  code_points: number[];
+}
 
 export type FontFormat = 'woff2' | 'ttf' | 'otf';
 export type FontStyle = 'normal' | 'italic';
@@ -248,10 +265,93 @@ function faceOf(a: DesignAsset): (FontFace & { format: FontFormat }) | null {
 
 @Injectable()
 export class DesignerFontsService {
+  /** asset id → parsed coverage (null = unreadable: the check is skipped). */
+  private readonly coverageCache = new Map<string, CodePointSet | null>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly assets: DesignerAssetsService,
   ) {}
+
+  /**
+   * Glyph coverage of a FONT asset of the store, parsed once and cached
+   * (LRU by insertion, FONT_COVERAGE_CACHE_MAX entries). Null when the
+   * asset is missing, purged or its cmap cannot be read.
+   */
+  async coverage(
+    storeId: string,
+    assetId: string,
+  ): Promise<CodePointSet | null> {
+    const hit = this.coverageCache.get(assetId);
+    if (hit !== undefined) {
+      // Refresh the insertion order (LRU).
+      this.coverageCache.delete(assetId);
+      this.coverageCache.set(assetId, hit);
+      return hit;
+    }
+    const rows = await this.assets.findOwnedAssets(
+      storeId,
+      [assetId],
+      [DesignAssetKind.FONT],
+    );
+    const a = rows.get(assetId);
+    if (!a) return null;
+    const set = fontCodePoints(await this.assets.readAssetBytes(a));
+    if (this.coverageCache.size >= FONT_COVERAGE_CACHE_MAX) {
+      const oldest = this.coverageCache.keys().next().value as
+        | string
+        | undefined;
+      if (oldest !== undefined) this.coverageCache.delete(oldest);
+    }
+    this.coverageCache.set(assetId, set);
+    return set;
+  }
+
+  /**
+   * Save / cart check (§6.4): every code point of each customer text (as
+   * drawn: the element's transform applied) must be in the cmap of the
+   * face's uploaded file. Emoji / pictographs are exempt (host fallback
+   * font). Faces whose file is missing or unreadable are skipped (the
+   * render fails those loudly as RENDER_MISSING / FONT_LOAD_FAILED).
+   */
+  async uncoveredTexts(
+    storeId: string,
+    spec: TemplateSpecV1,
+    texts: Record<string, string>,
+  ): Promise<UncoveredText[]> {
+    const out: UncoveredText[] = [];
+    const surface = (spec?.surfaces ?? []).find((s) => s.key === 'front');
+    if (!surface) return out;
+    const faces = spec.fonts ?? [];
+    for (const el of surface.elements ?? []) {
+      if (el.type !== 'text' || !el.editable) continue;
+      const raw = texts[el.id];
+      if (typeof raw !== 'string' || raw === '') continue;
+      const face = faces.find(
+        (f) =>
+          f.family === el.font.family &&
+          f.weight === el.font.weight &&
+          (f.style || 'normal') === (el.font.style || 'normal'),
+      );
+      if (!face?.asset_id) continue;
+      const set = await this.coverage(storeId, face.asset_id);
+      if (!set) continue;
+      const drawn = resolveText(el, {
+        v: 1,
+        texts: { [el.id]: raw },
+        photos: {},
+      });
+      const missing = uncoveredCodePoints(drawn, set);
+      if (missing.length) {
+        out.push({
+          element_id: el.id,
+          asset_id: face.asset_id,
+          code_points: missing.slice(0, 8),
+        });
+      }
+    }
+    return out;
+  }
 
   /**
    * Registers one face from an uploaded file. The same bytes for the same

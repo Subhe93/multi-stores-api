@@ -14,6 +14,7 @@ import {
   buildLineSources,
   isOwnLine,
   sourceHash,
+  variantOptionsOf,
   type ProductionSourceLine,
 } from './production-sources';
 import { summarize } from './production-state';
@@ -37,9 +38,18 @@ const CLOSED_STATUSES: OrderStatus[] = [
 
 export const MAX_CHECKS_PER_LINE = 200;
 const SUMMARY_ORDER_LIMIT = 50;
-const BACKFILL_LIMIT = 1000;
-const BACKFILL_BATCH = 50;
-const EVENTS_LIMIT = 200;
+/** Orders one backfill request syncs at most (newest open ones first). */
+export const BACKFILL_LIMIT = 500;
+/** Orders synced between two yields to the event loop. */
+export const BACKFILL_BATCH = 50;
+export const EVENTS_LIMIT_MAX = 200;
+const EVENTS_LIMIT_DEFAULT = 50;
+
+/** Paging of the audit log (`page` from 1, `limit` <= EVENTS_LIMIT_MAX). */
+export interface EventsPage {
+  page?: number;
+  limit?: number;
+}
 
 /** Result of a write that can change the order's progress. */
 export interface ProductionWriteResult {
@@ -66,6 +76,8 @@ const lineSelect = {
   order_id: true,
   fulfiller_type: true,
   fulfiller_id: true,
+  variant_options_snapshot: true,
+  // Live options: only the insert-only seed of pre-snapshot lines.
   variant: { select: { options: true } },
   custom_field_values: {
     orderBy: { id: 'asc' as const },
@@ -194,10 +206,13 @@ export class ProductionChecklistService {
   /**
    * Idempotent sync of an order's checks with its current sources: new
    * sources are inserted (skipDuplicates on the unique key, so concurrent
-   * syncs cannot double them), a changed source resets its check
-   * (VALUE_CHANGED), a vanished one goes stale (STALE; custom items never
-   * do). A second run without changes writes nothing. Closed orders are
-   * read-only.
+   * syncs cannot double them), a changed value resets its check
+   * (VALUE_CHANGED), a changed label only relabels it, a vanished source
+   * goes stale (STALE; custom and insert-only items never do). A second run
+   * without changes writes nothing. Closed orders are read-only. When the
+   * sync itself completes the checklist (stale flips) it takes the same
+   * completion path as a write: one COMPLETED event + timeline row, and the
+   * auto-advance is left pending for the next request on the order.
    */
   async syncOrder(orderId: string, storeId: string): Promise<void> {
     const order = await this.prisma.order.findUnique({
@@ -229,8 +244,12 @@ export class ProductionChecklistService {
     const creatorId = store?.creator_id ?? null;
 
     const sources: SourceCheck[] = [];
+    // Lines without a variant snapshot: their VARIANT_OPTION rows are kept
+    // as inserted (never reset, never stale), see SourceCheck.insert_only.
+    const insertOnlyLines = new Set<string>();
     for (const item of order.items) {
       if (!isOwnLine(item, creatorId)) continue;
+      if (!variantOptionsOf(item).snapshot) insertOnlyLines.add(item.id);
       sources.push(
         ...buildLineSources(item as ProductionSourceLine, settings, primary),
       );
@@ -253,7 +272,7 @@ export class ProductionChecklistService {
         const id = `${s.order_item_id}\u0000${s.source_key}`;
         if (wanted.has(id)) continue;
         wanted.add(id);
-        const hash = sourceHash(s.label, s.value, s.file_url);
+        const hash = sourceHash(s.value, s.file_url);
         const row = byKey.get(id);
         if (!row) {
           inserts.push({
@@ -281,6 +300,8 @@ export class ProductionChecklistService {
           }
           continue;
         }
+        // Nothing to compare against: the row stays exactly as it is.
+        if (s.insert_only) continue;
         if (row.source_hash !== hash) {
           await tx.orderProductionCheck.update({
             where: { id: row.id },
@@ -307,16 +328,33 @@ export class ProductionChecklistService {
               to: { label: s.label, value: s.value },
             },
           });
-        } else if (row.stale) {
+        } else if (
+          row.stale ||
+          row.label !== s.label ||
+          row.group_index !== s.group_index ||
+          row.sort_order !== s.sort_order
+        ) {
+          // Same thing to produce: relabel / reorder without touching done.
           await tx.orderProductionCheck.update({
             where: { id: row.id },
-            data: { stale: false },
+            data: {
+              stale: false,
+              label: s.label,
+              group_index: s.group_index,
+              sort_order: s.sort_order,
+            },
           });
         }
       }
 
       for (const row of existing) {
         if (row.stale || row.source === ProductionCheckSource.CUSTOM) continue;
+        if (
+          row.source === ProductionCheckSource.VARIANT_OPTION &&
+          insertOnlyLines.has(row.order_item_id)
+        ) {
+          continue;
+        }
         if (wanted.has(`${row.order_item_id}\u0000${row.source_key}`)) continue;
         await tx.orderProductionCheck.update({
           where: { id: row.id },
@@ -339,7 +377,23 @@ export class ProductionChecklistService {
       if (events.length) {
         await tx.orderProductionEvent.createMany({ data: events });
       }
-      await this.writeSummary(tx, orderId, storeId, { onlyIfChanged: true });
+      const s = await this.writeSummary(tx, orderId, storeId, {
+        onlyIfChanged: true,
+      });
+      if (s.completed) {
+        await this.logCompleted(tx, orderId, null);
+        // No OrdersService here (cycle-free core): the automation runs on
+        // the next write / workspace read of the order.
+        if (
+          settings.on_complete === 'auto' &&
+          settings.complete_target === 'QUALITY_CHECK'
+        ) {
+          await tx.orderProductionSummary.updateMany({
+            where: { order_id: orderId },
+            data: { auto_advance_pending: true },
+          });
+        }
+      }
     });
   }
 
@@ -436,6 +490,8 @@ export class ProductionChecklistService {
             completed_at: state === 'READY' ? now : null,
           },
         });
+        // A first summary that is already READY is a completion too.
+        completed = state === 'READY';
       } else if (!same || !opts.onlyIfChanged) {
         row = await db.orderProductionSummary.update({
           where: { order_id: orderId },
@@ -476,7 +532,9 @@ export class ProductionChecklistService {
   /**
    * Set one check (set semantics, not a toggle): a request for the state the
    * check already has is a no-op without an event, so double taps and
-   * retries are harmless.
+   * retries are harmless. A stale check is refused the same way bulkSet
+   * skips it (`changed: false`, nothing written): it is not counted, so
+   * checking it could never complete anything.
    */
   async setDone(
     storeId: string,
@@ -492,7 +550,7 @@ export class ProductionChecklistService {
       await lockOrder(tx, check.order_id);
       const now = new Date();
       const r = await tx.orderProductionCheck.updateMany({
-        where: { id: checkId, done: !done },
+        where: { id: checkId, done: !done, stale: false },
         data: done
           ? {
               done: true,
@@ -684,17 +742,22 @@ export class ProductionChecklistService {
     return item;
   }
 
+  /**
+   * The single completion path (one COMPLETED event + timeline row per
+   * completion cycle; `actor` null for a sync-driven completion). Callers
+   * only reach it through writeSummary's guarded not-READY -> READY flip.
+   */
   private async logCompleted(
     tx: Db,
     orderId: string,
-    actor: ProductionActor,
+    actor: ProductionActor | null,
   ): Promise<void> {
     await tx.orderProductionEvent.create({
       data: {
         order_id: orderId,
         action: 'COMPLETED',
-        actor_id: actor.id,
-        actor_name: actor.name,
+        actor_id: actor?.id ?? null,
+        actor_name: actor?.name ?? null,
       },
     });
     // Internal timeline entry (the customer page reads only STATUS_STEPS).
@@ -703,8 +766,28 @@ export class ProductionChecklistService {
         order_id: orderId,
         status: 'PRODUCTION_COMPLETED',
         note: 'Production checklist completed',
-        actor: actor.id,
+        actor: actor?.id ?? null,
       },
+    });
+  }
+
+  /** Whether the on-complete auto-advance of the order is still owed. */
+  async isAutoAdvancePending(orderId: string): Promise<boolean> {
+    const row = await this.prisma.orderProductionSummary.findUnique({
+      where: { order_id: orderId },
+      select: { auto_advance_pending: true, state: true },
+    });
+    return !!row && row.auto_advance_pending && row.state === 'READY';
+  }
+
+  /** Record (or clear) an owed auto-advance so the next request retries it. */
+  async setAutoAdvancePending(
+    orderId: string,
+    pending: boolean,
+  ): Promise<void> {
+    await this.prisma.orderProductionSummary.updateMany({
+      where: { order_id: orderId, auto_advance_pending: !pending },
+      data: { auto_advance_pending: pending },
     });
   }
 
@@ -727,12 +810,19 @@ export class ProductionChecklistService {
 
   // ── Reads ────────────────────────────────────────────────────────────────
 
-  async events(storeId: string, orderId: string) {
+  /** The audit log, newest first, one page at a time. */
+  async events(storeId: string, orderId: string, paging: EventsPage = {}) {
     await this.orderOfStore(orderId, storeId);
+    const limit = Math.min(
+      Math.max(Math.trunc(paging.limit ?? EVENTS_LIMIT_DEFAULT), 1),
+      EVENTS_LIMIT_MAX,
+    );
+    const page = Math.max(Math.trunc(paging.page ?? 1), 1);
     return this.prisma.orderProductionEvent.findMany({
       where: { order_id: orderId },
       orderBy: { created_at: 'desc' },
-      take: EVENTS_LIMIT,
+      skip: (page - 1) * limit,
+      take: limit,
     });
   }
 
@@ -783,28 +873,50 @@ export class ProductionChecklistService {
     return out;
   }
 
-  /** Sync the newest open orders of the store (dashboard "generate" button). */
-  async backfill(storeId: string): Promise<{ synced: number }> {
-    const orders = await this.prisma.order.findMany({
-      where: { store_id: storeId, status: { in: PRODUCTION_ACTIVE_STATUSES } },
-      select: { id: true },
-      orderBy: { created_at: 'desc' },
-      take: BACKFILL_LIMIT,
-    });
+  /**
+   * Sync the newest open orders of the store (dashboard "generate" button):
+   * at most BACKFILL_LIMIT per request, in batches of BACKFILL_BATCH with a
+   * yield to the event loop between batches so one big store cannot hog
+   * the process. `remaining` > 0 tells the caller to press again.
+   */
+  async backfill(
+    storeId: string,
+  ): Promise<{ synced: number; failed: number; remaining: number }> {
+    const where = {
+      store_id: storeId,
+      status: { in: PRODUCTION_ACTIVE_STATUSES },
+    } satisfies Prisma.OrderWhereInput;
+    const [orders, total] = await Promise.all([
+      this.prisma.order.findMany({
+        where,
+        select: { id: true },
+        orderBy: { created_at: 'desc' },
+        take: BACKFILL_LIMIT,
+      }),
+      this.prisma.order.count({ where }),
+    ]);
     let synced = 0;
+    let failed = 0;
     for (let i = 0; i < orders.length; i += BACKFILL_BATCH) {
+      if (i > 0) await this.yieldBetweenBatches();
       for (const o of orders.slice(i, i + BACKFILL_BATCH)) {
         try {
           await this.syncOrder(o.id, storeId);
           synced++;
         } catch (err) {
+          failed++;
           this.logger.warn(
             `Production backfill failed for ${o.id}: ${errText(err)}`,
           );
         }
       }
     }
-    return { synced };
+    return { synced, failed, remaining: Math.max(total - orders.length, 0) };
+  }
+
+  /** Let other requests run between two backfill batches. */
+  protected yieldBetweenBatches(): Promise<void> {
+    return new Promise((resolve) => setImmediate(resolve));
   }
 }
 

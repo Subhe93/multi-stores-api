@@ -32,6 +32,17 @@ export interface DesignerTriggerOrder extends PortOrder {
   payment_status?: string | null;
 }
 
+/** Order statuses that are not "live" (nothing is printed for them). */
+const TERMINAL_STATUSES = new Set(['CANCELLED', 'REFUNDED', 'RETURNED']);
+
+/** Paid, or cash on delivery (payable now). */
+function isPayable(order: DesignerTriggerOrder): boolean {
+  return (
+    order.payment_status === 'paid' ||
+    String(order.payment_method ?? '').toUpperCase() === 'COD'
+  );
+}
+
 /** "Has designs" probe cache: a yes is kept long, a no briefly. */
 const PRESENCE_YES_TTL_MS = 60 * 60 * 1000;
 const PRESENCE_NO_TTL_MS = 5 * 60 * 1000;
@@ -69,7 +80,10 @@ export class DesignerTriggersService implements DesignerTriggersPort {
   /**
    * The order status changed. CANCELLED / REFUNDED: terminal, pending
    * renders withdrawn. SHIPPED / DELIVERED: `shipped_at` set when missing
-   * (retention counts from it).
+   * (retention counts from it). Un-cancel (from CANCELLED / REFUNDED to a
+   * live status): the rows are revived and, when the order is paid or COD,
+   * requested again; an un-cancelled order whose payment state is unknown
+   * here is picked up by the worker's backfill.
    */
   async onStatusChanged(
     order: DesignerTriggerOrder,
@@ -80,7 +94,16 @@ export class DesignerTriggersService implements DesignerTriggersPort {
     await this.run(order, 'onStatusChanged', async () => {
       if (to === 'CANCELLED' || to === 'REFUNDED') {
         await this.queue.cancelOrder(order.id);
-      } else if (to === 'SHIPPED' || to === 'DELIVERED') {
+        return;
+      }
+      if (
+        (from === 'CANCELLED' || from === 'REFUNDED') &&
+        !TERMINAL_STATUSES.has(to)
+      ) {
+        await this.queue.reviveOrder(order.id);
+        if (isPayable(order)) await this.queue.enqueueOrder(order.id);
+      }
+      if (to === 'SHIPPED' || to === 'DELIVERED') {
         await this.queue.markShipped(order.id);
       }
     });

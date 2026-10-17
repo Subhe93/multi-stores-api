@@ -163,6 +163,11 @@ interface OrderItemImageSource {
  */
 type PendingOrderItem = Prisma.OrderItemUncheckedCreateWithoutOrderInput;
 
+/** A variant `options` value worth snapshotting (`{name: value}`). */
+function isOptionMap(v: Prisma.JsonValue | null): v is Prisma.JsonObject {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
 /** The store columns order pricing depends on. */
 interface OrderStoreContext extends TaxStoreFields {
   id: string;
@@ -206,6 +211,12 @@ interface PricedLine {
   personalization: PResult | null;
   /** Per-unit personalization delta in the order currency (0 = none). */
   personalizationAmount: number;
+  /**
+   * Production app (M4.3): the variant's option map as sold, stored on the
+   * line as `variant_options_snapshot` so the checklist never follows a
+   * later edit of the ProductVariant row. Null for lines without a variant.
+   */
+  variantOptions: Prisma.JsonValue | null;
 }
 
 /** What priceLine() needs to evaluate a line's personalization (M4.1). */
@@ -871,6 +882,7 @@ export class OrdersService {
       variant_option_config: unknown;
     } | null = null;
     let appVariantOptions: unknown = {};
+    let variantOptions: Prisma.JsonValue | null = null;
 
     if (item.custom_product_id) {
       // Custom product (with or without a selected variant)
@@ -901,7 +913,7 @@ export class OrdersService {
       if (item.variant_id) {
         const variantRow = await this.prisma.productVariant.findUnique({
           where: { id: item.variant_id },
-          select: { price_adjustment: true, product_id: true },
+          select: { price_adjustment: true, product_id: true, options: true },
         });
         if (!variantRow)
           throw new NotFoundException(`Variant ${item.variant_id} not found`);
@@ -909,6 +921,7 @@ export class OrdersService {
         // otherwise its price adjustment would be borrowed from elsewhere.
         if (variantRow.product_id !== cp.product_id) this.rejectForeignItem();
         variant = variantRow;
+        variantOptions = variantRow.options;
       }
       const variantAdjustment = variant
         ? Number(variant.price_adjustment || 0)
@@ -980,6 +993,7 @@ export class OrdersService {
         Number(variant.product.base_price) + Number(variant.price_adjustment);
       appProduct = variant.product;
       appVariantOptions = variant.options;
+      variantOptions = variant.options;
       marketInput = {
         product_id: variant.product_id,
         variant_id: variant.id,
@@ -1207,6 +1221,7 @@ export class OrdersService {
       taxExempt,
       personalization,
       personalizationAmount,
+      variantOptions,
     };
   }
 
@@ -2172,6 +2187,11 @@ export class OrdersService {
         ...(priced.personalizationAmount > 0
           ? { personalization_amount: priced.personalizationAmount }
           : {}),
+        // M4.3: the option map as sold (production `opt:` checks read it,
+        // never the live variant). Absent (null) for lines without one.
+        ...(isOptionMap(priced.variantOptions)
+          ? { variant_options_snapshot: priced.variantOptions }
+          : {}),
       });
     }
 
@@ -3002,7 +3022,12 @@ export class OrdersService {
       this.production &&
       (await this.production.isEnabled(creator.store.id))
     ) {
-      where.AND = [productionWhere(production)];
+      // Merge: never overwrite an AND another filter may have set.
+      const and = where.AND;
+      where.AND = [
+        ...(Array.isArray(and) ? and : and ? [and] : []),
+        productionWhere(production),
+      ];
     }
 
     const [data, total] = await Promise.all([

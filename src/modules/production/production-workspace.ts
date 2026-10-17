@@ -42,6 +42,8 @@ export interface WorkspaceOrderSource {
     fulfiller_id: string | null;
     fulfillment_status: string;
     image_url?: string | null;
+    /** Order-time option map (M4.3); the live variant is only a fallback. */
+    variant_options_snapshot?: unknown;
     product?: TitledTranslations | null;
     custom_product?: TitledTranslations | null;
     variant?: {
@@ -77,11 +79,18 @@ export interface WorkspaceCheckView {
   stale: boolean;
   /** Added by hand or from default_custom_items (removable: source CUSTOM). */
   custom: boolean;
+  /**
+   * Units of the line (one check per line, design Q14): the sheet shows
+   * "×qty" next to the check. Null on write responses, where the client
+   * already holds the line.
+   */
+  quantity: number | null;
 }
 
 export function toCheckView(
   c: OrderProductionCheck,
   uploads?: Map<string, { id: string; purged: boolean }>,
+  quantity: number | null = null,
 ): WorkspaceCheckView {
   const up = c.source_key.startsWith('fv:')
     ? uploads?.get(c.source_key.slice(3))
@@ -104,6 +113,7 @@ export function toCheckView(
     done_by_name: c.done_by_name,
     stale: c.stale,
     custom: c.source === 'CUSTOM',
+    quantity,
   };
 }
 
@@ -151,10 +161,11 @@ export function buildWorkspace(input: {
       if (id) uploads.set(v.id, { id, purged: !!v.upload?.purged_at });
     }
   }
+  const quantities = new Map(order.items.map((i) => [i.id, i.quantity]));
   const byLine = new Map<string, WorkspaceCheckView[]>();
   for (const c of input.checks) {
     const list = byLine.get(c.order_item_id) ?? [];
-    list.push(toCheckView(c, uploads));
+    list.push(toCheckView(c, uploads, quantities.get(c.order_item_id) ?? null));
     byLine.set(c.order_item_id, list);
   }
   const customerName = [order.customer?.first_name, order.customer?.last_name]
@@ -193,7 +204,9 @@ export function buildWorkspace(input: {
         title: titleOf(item, locale),
         image_url: item.image_url ?? null,
         quantity: item.quantity,
-        variant_label: variantLabel(item.variant?.options),
+        variant_label: variantLabel(
+          item.variant_options_snapshot ?? item.variant?.options,
+        ),
         fulfillment_status: item.fulfillment_status,
         fulfiller_type: item.fulfiller_type,
         /** False for provider lines: no checks, read-only. */

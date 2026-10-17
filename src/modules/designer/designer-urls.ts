@@ -20,6 +20,7 @@
  */
 import { createHmac, timingSafeEqual } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
+import { UUID_RE } from './designs.util';
 
 /** Environment variable holding the HMAC secret (≥ 32 chars recommended). */
 export const DESIGNER_URL_SECRET_ENV = 'DESIGNER_URL_SECRET';
@@ -98,8 +99,6 @@ export function designerMailLinkExpiry(
 /** API path prefix of the signed-file route (global prefix included). */
 export const DESIGNER_FILES_PATH = '/api/designer/files/';
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_TOKEN_LENGTH = 512;
 
 function b64url(buf: Buffer): string {

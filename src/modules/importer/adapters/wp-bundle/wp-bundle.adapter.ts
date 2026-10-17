@@ -555,17 +555,23 @@ function buildVariations(
           val === undefined || val === null || val === '' ? null : val;
       }
       const thumb = int(meta.first('_thumbnail_id'));
+      const price: NVariation['price'] = {
+        regular: num(meta.first('_regular_price')),
+        sale: num(meta.first('_sale_price')),
+        current: num(meta.first('_price')),
+      };
+      // Sale window of the variation (same keys as on a simple product).
+      const saleFrom = unixToIso(meta.first('_sale_price_dates_from'));
+      const saleTo = unixToIso(meta.first('_sale_price_dates_to'));
+      if (saleFrom) price.sale_from = saleFrom;
+      if (saleTo) price.sale_to = saleTo;
       const v: NVariation = {
         ext_id: ext,
         source_id: String(p.id),
         status: p.status,
         menu_order: p.menu_order,
         attrs: vattrs,
-        price: {
-          regular: num(meta.first('_regular_price')),
-          sale: num(meta.first('_sale_price')),
-          current: num(meta.first('_price')),
-        },
+        price,
         sku: meta.str('_sku'),
         stock: stockOf(meta),
       };

@@ -33,6 +33,7 @@ import {
 import {
   AddCustomCheckDto,
   BulkCheckDto,
+  EventsQueryDto,
   SetCheckDto,
   SummariesQueryDto,
 } from './dto/production.dto';
@@ -89,6 +90,9 @@ export class ProductionController {
   ) {
     const ctx = await this.checklist.contextOf(userId);
     await this.checklist.syncOrder(orderId, ctx.storeId);
+    // An owed auto-advance (sync-driven READY, or a failed updateStatus)
+    // runs here before the order is read.
+    await this.automation.retryPending(ctx, orderId);
     const order = (await this.orders.findById(
       orderId,
       userId,
@@ -115,13 +119,18 @@ export class ProductionController {
     });
   }
 
+  /** Audit log page (`?page=1&limit=50`, limit at most 200), newest first. */
   @Get('orders/:orderId/events')
   async events(
     @CurrentUser('id') userId: string,
     @Param('orderId') orderId: string,
+    @Query() query: EventsQueryDto,
   ) {
     const ctx = await this.checklist.contextOf(userId);
-    return this.checklist.events(ctx.storeId, orderId);
+    return this.checklist.events(ctx.storeId, orderId, {
+      page: query.page,
+      limit: query.limit,
+    });
   }
 
   @Put('checks/:checkId')

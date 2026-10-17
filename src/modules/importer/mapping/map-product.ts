@@ -13,7 +13,9 @@ import type {
   NAttribute,
   NMediaRef,
   NormalizedCatalog,
+  NPrice,
   NProduct,
+  NSaleWindow,
   NVariation,
 } from '../model/normalized';
 import {
@@ -197,6 +199,38 @@ function splitInlineImages(
   return { html: out, local, removed };
 }
 
+/**
+ * D19 sale state of a price with its Woo sale window: the sale counts only
+ * when it is lower than the regular price and `now` is inside
+ * `sale_from..sale_to`. `window` tells whether the dates (not the amounts)
+ * switched the sale off: scheduled (not started) or expired.
+ */
+function saleState(
+  price: NPrice & NSaleWindow,
+  now: Date,
+  warn: (msg: string) => void,
+): { saleActive: boolean; window: 'scheduled' | 'expired' | null } {
+  const { regular, sale } = price;
+  let saleActive = sale !== null && (regular === null || sale < regular);
+  let window: 'scheduled' | 'expired' | null = null;
+  if (saleActive && price.sale_from) {
+    const from = Date.parse(price.sale_from);
+    if (Number.isFinite(from) && from > now.getTime()) {
+      saleActive = false;
+      window = 'scheduled';
+      warn(`scheduled sale from ${price.sale_from} ignored`);
+    }
+  }
+  if (saleActive && price.sale_to) {
+    const to = Date.parse(price.sale_to);
+    if (Number.isFinite(to) && to < now.getTime()) {
+      saleActive = false;
+      window = 'expired';
+    }
+  }
+  return { saleActive, window };
+}
+
 /** D19 effective price of a simple product (sale schedule respected). */
 function simplePrice(
   p: NProduct,
@@ -204,34 +238,32 @@ function simplePrice(
   warn: (msg: string) => void,
 ): { effective: number; compare: number | null } {
   const { regular, sale, current } = p.price;
-  let saleActive = sale !== null && (regular === null || sale < regular);
-  if (saleActive && p.price.sale_from) {
-    const from = Date.parse(p.price.sale_from);
-    if (Number.isFinite(from) && from > now.getTime()) {
-      saleActive = false;
-      warn(`scheduled sale from ${p.price.sale_from} ignored`);
-    }
-  }
-  if (saleActive && p.price.sale_to) {
-    const to = Date.parse(p.price.sale_to);
-    if (Number.isFinite(to) && to < now.getTime()) saleActive = false;
-  }
+  const { saleActive } = saleState(p.price, now, warn);
   const effective = saleActive ? sale! : (regular ?? current ?? sale ?? 0);
   const compare =
     saleActive && regular !== null && regular > effective ? regular : null;
   return { effective, compare };
 }
 
-/** D19 effective price of a variation (`_price` is maintained by WooCommerce). */
-function variationPrice(v: NVariation): {
+/**
+ * D19 effective price of a variation. `_price` is maintained by WooCommerce
+ * (cron) and is trusted while the sale window does not contradict it; a
+ * scheduled or expired variation sale falls back to the regular price like
+ * a simple product does.
+ */
+function variationPrice(
+  v: NVariation,
+  now: Date,
+  warn: (msg: string) => void,
+): {
   effective: number;
   compare: number | null;
 } {
   const { regular, sale, current } = v.price;
-  const effective =
-    current ??
-    (sale !== null && (regular === null || sale < regular) ? sale : regular) ??
-    0;
+  const { saleActive, window } = saleState(v.price, now, warn);
+  const effective = window
+    ? (regular ?? current ?? sale ?? 0)
+    : (current ?? (saleActive ? sale : regular) ?? 0);
   const compare = regular !== null && regular > effective ? regular : null;
   return { effective, compare };
 }
@@ -450,7 +482,9 @@ export function mapProduct(p: NProduct, ctx: ProductMapContext): MappedProduct {
     const kept = [...res.concrete, ...res.expanded];
     const priced = kept.map((v) => ({
       v,
-      ...variationPrice(v),
+      ...variationPrice(v, ctx.now, (m) =>
+        warn('W_SALE_SCHEDULE_IGNORED', `${v.ext_id}: ${m}`),
+      ),
       active: variationActive(v),
     }));
     const pool = priced.filter((x) => x.active).length
@@ -515,6 +549,19 @@ export function mapProduct(p: NProduct, ctx: ProductMapContext): MappedProduct {
       candidates: img.candidates.length ? img.candidates : [img.url],
       alt: nullIfEmpty(cleanText(img.alt ?? '')),
     });
+  }
+  // A designer product without images showed its template's poster on the
+  // source site: that thumbnail becomes the single product image, through
+  // the normal public media pipeline (one fetch for every product using it).
+  if (!images.length) {
+    const tpl = templateThumbnail(p, catalog);
+    if (tpl) {
+      images.push({ ...mediaRefOf(tpl.thumbnail), alt: null });
+      warn(
+        'W_IMAGE_FROM_TEMPLATE',
+        `no product image; thumbnail of template ${tpl.ext_id} used`,
+      );
+    }
   }
 
   // HTML: shortcodes → inline images → sanitizer (§4.3).
@@ -661,6 +708,19 @@ export function mapProduct(p: NProduct, ctx: ProductMapContext): MappedProduct {
     swatch_media,
     help_images,
   };
+}
+
+/** Thumbnail of the designer template linked to `p` (enabled link only), when it has a URL. */
+function templateThumbnail(
+  p: NProduct,
+  catalog: NormalizedCatalog,
+): { ext_id: string; thumbnail: NMediaRef } | null {
+  const ref = p.designer?.enabled ? p.designer.template_ext_id : null;
+  if (!ref) return null;
+  const tpl = catalog.templates.find((t) => t.ext_id === ref);
+  const thumb = tpl?.thumbnail;
+  if (!thumb || thumb.missing || !thumb.url) return null;
+  return { ext_id: tpl.ext_id, thumbnail: thumb };
 }
 
 /** Absolute https URL on the source host (aliases rewritten), else null. */

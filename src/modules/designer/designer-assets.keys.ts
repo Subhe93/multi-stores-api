@@ -9,6 +9,7 @@
  * directory, so the year is informational and keeps directories small).
  */
 import type { DesignAssetKind } from '@prisma/client';
+import { UUID_RE } from './designs.util';
 
 export const DESIGNER_FILE_DIRS = [
   'photo',
@@ -73,9 +74,6 @@ export function extOfKey(key: string): DesignerFileExt | null {
     ? (m[1] as DesignerFileExt)
     : null;
 }
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
  * Builds a key. `id` and `storeId` must be lowercase uuids, `suffix`

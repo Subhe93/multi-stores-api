@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ProductionChecklistService } from './production-checklist.service';
+import { DesignProductionProvider } from './production-design.provider';
 import { ProductionTriggersService } from './production-triggers.service';
 
 // Production app (M4.3), cycle-free core (invoices D5 pattern): imports
@@ -7,7 +8,15 @@ import { ProductionTriggersService } from './production-triggers.service';
 // for the optional ProductionTriggersService. The controller and the status
 // automation (which needs OrdersService) live in ProductionModule.
 @Module({
-  providers: [ProductionChecklistService, ProductionTriggersService],
-  exports: [ProductionChecklistService, ProductionTriggersService],
+  providers: [
+    ProductionChecklistService,
+    ProductionTriggersService,
+    DesignProductionProvider,
+  ],
+  exports: [
+    ProductionChecklistService,
+    ProductionTriggersService,
+    DesignProductionProvider,
+  ],
 })
 export class ProductionCoreModule {}

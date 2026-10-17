@@ -279,6 +279,15 @@ export class BrowserHost {
     }
   }
 
+  /**
+   * Makes sure a browser is connected (launching one if needed) without
+   * taking a slot. Throws `unavailable(...)` when it cannot start, so a
+   * worker can check the engine before claiming work.
+   */
+  async ensureBrowser(): Promise<void> {
+    await this.getBrowser();
+  }
+
   private async getBrowser(): Promise<Browser> {
     if (this.browser?.isConnected()) return this.browser;
     if (this.launching) return this.launching;
@@ -410,15 +419,33 @@ export class BrowserHost {
     this.idleTimer.unref?.();
   }
 
-  /** Closes the browser (idle timeout / shutdown). Safe to call repeatedly. */
+  /**
+   * Closes the browser (idle timeout / shutdown). Safe to call repeatedly;
+   * bounded by BROWSER_CLOSE_TIMEOUT_MS so a wedged browser never blocks a
+   * shutdown or a lane (Playwright kills the process when close fails).
+   */
   async close(): Promise<void> {
     this.clearIdleTimer();
     const b = this.browser;
     this.browser = null;
     this.jobsOnBrowser = 0;
-    if (b) await b.close().catch(() => undefined);
+    if (!b) return;
+    try {
+      await withTimeout(
+        b.close(),
+        BROWSER_CLOSE_TIMEOUT_MS,
+        `${this.id.label} browser close`,
+      );
+    } catch (e) {
+      this.logger.warn(
+        `${this.id.label} browser did not close cleanly: ${String((e as Error)?.message ?? e)}`,
+      );
+    }
   }
 }
+
+/** Upper bound of one `browser.close()` (ms). */
+export const BROWSER_CLOSE_TIMEOUT_MS = 5_000;
 
 function stripUndefined<T extends object>(o: T): Partial<T> {
   return Object.fromEntries(

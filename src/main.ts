@@ -116,6 +116,10 @@ async function bootstrap() {
     exposedHeaders: ['Content-Disposition'],
   });
 
+  // SIGTERM/SIGINT run onModuleDestroy hooks (the designer print worker
+  // hands its RENDERING rows back, browsers close) before the process exits.
+  app.enableShutdownHooks();
+
   const port = process.env.PORT || 3001;
   await app.listen(port);
   console.log(`API running on http://localhost:${port}/api`);

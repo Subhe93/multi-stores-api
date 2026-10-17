@@ -1,9 +1,12 @@
+import { readFileSync } from 'fs';
+import * as path from 'path';
 import { DesignPrintStatus } from '@prisma/client';
 import {
   backoffMs,
   DesignerPrintQueueService,
   PRINT_JOB_TIMEOUT_MS,
   PRINT_MAX_ATTEMPTS,
+  PRINT_RENDER_PAUSE_MS,
   printQueueConfig,
   type ClaimedRow,
 } from './designer-print-queue.service';
@@ -87,6 +90,7 @@ function build(env: NodeJS.ProcessEnv = {}) {
       }),
     ),
     orderProofPath: jest.fn(() => '/api/designer/files/t'),
+    probeEngine: jest.fn(() => Promise.resolve()),
   };
   const storage = {
     read: jest.fn(() => Promise.resolve(Buffer.from('png'))),
@@ -264,7 +268,10 @@ describe('DesignerPrintQueueService — job lifecycle', () => {
   it('a retryable failure → FAILED with backoff 1 min, then 10 min', async () => {
     const b = build();
     b.render.renderPrint.mockRejectedValue(
-      new DesignerRenderUnavailableError(),
+      new DesignerRenderJobError(
+        'Designer render timed out after 60000 ms',
+        true,
+      ),
     );
     await b.queue.process(row({ print_attempts: 1 }), () => NOW);
     await b.queue.process(row({ print_attempts: 2 }), () => NOW);
@@ -274,9 +281,7 @@ describe('DesignerPrintQueueService — job lifecycle', () => {
       print_locked_at: null,
       print_next_attempt_at: new Date(NOW.getTime() + 60_000),
     });
-    expect(String(data(0).print_error)).toMatch(
-      /^DESIGNER_RENDER_UNAVAILABLE: /,
-    );
+    expect(String(data(0).print_error)).toMatch(/^DESIGNER_RENDER_FAILED: /);
     expect(data(1).print_next_attempt_at).toEqual(
       new Date(NOW.getTime() + 10 * 60_000),
     );
@@ -324,6 +329,64 @@ describe('DesignerPrintQueueService — job lifecycle', () => {
     expect(String(call[0].data.print_error)).toMatch(/timed out/);
     expect(call[0].data.print_next_attempt_at).toEqual(
       new Date(NOW.getTime() + 60_000),
+    );
+  });
+
+  it('DESIGNER_RENDER_UNAVAILABLE hands the row back (attempt not counted, due after the pause) and pauses this instance', async () => {
+    jest.useFakeTimers({ now: NOW.getTime() });
+    const b = build();
+    b.render.renderPrint.mockRejectedValue(
+      new DesignerRenderUnavailableError('Designer engine could not start'),
+    );
+    await b.queue.process(row({ print_attempts: 1 }), () => NOW);
+    const calls = b.prisma.orderItemDesign.updateMany.mock.calls as unknown as [
+      { where: Record<string, unknown>; data: Record<string, unknown> },
+    ][];
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0].where).toEqual({
+      id: 'oid1',
+      print_status: DesignPrintStatus.RENDERING,
+      print_locked_at: LOCK,
+    });
+    expect(calls[0][0].data).toEqual({
+      print_status: DesignPrintStatus.PENDING,
+      print_locked_at: null,
+      print_attempts: { decrement: 1 },
+      print_next_attempt_at: new Date(NOW.getTime() + PRINT_RENDER_PAUSE_MS),
+    });
+    // Never FAILED, never an error recorded on the row.
+    expect(calls[0][0].data).not.toHaveProperty('print_error');
+    expect(b.queue.pausedUntil).toBe(NOW.getTime() + PRINT_RENDER_PAUSE_MS);
+    // While paused nothing is claimed; after the window claims resume.
+    await b.queue.tick();
+    expect(b.prisma.$queryRaw).not.toHaveBeenCalled();
+    jest.setSystemTime(NOW.getTime() + PRINT_RENDER_PAUSE_MS);
+    await b.queue.tick();
+    expect(b.prisma.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('a pass probes the engine before its first claim; an engine that cannot start pauses without claiming', async () => {
+    jest.useFakeTimers({ now: NOW.getTime() });
+    const b = build();
+    b.render.probeEngine.mockRejectedValueOnce(
+      new DesignerRenderUnavailableError('Designer engine could not start'),
+    );
+    await b.queue.tick();
+    expect(b.render.probeEngine).toHaveBeenCalledTimes(1);
+    expect(b.prisma.$queryRaw).not.toHaveBeenCalled();
+    expect(b.queue.pausedUntil).toBe(NOW.getTime() + PRINT_RENDER_PAUSE_MS);
+    // The sweep / backfill still ran (they need no browser).
+    expect(b.prisma.$executeRaw).toHaveBeenCalledTimes(2);
+  });
+
+  it('the claim honours print_next_attempt_at of a handed-back PENDING row', async () => {
+    const b = build();
+    await b.queue.claimNext();
+    const sql = (b.prisma.$queryRaw.mock.calls[0] as unknown[])[0] as {
+      strings: string[];
+    };
+    expect(sql.strings.join('?').replace(/\s+/g, ' ')).toContain(
+      "(o.print_status = 'PENDING' AND (o.print_next_attempt_at IS NULL OR o.print_next_attempt_at <= now()))",
     );
   });
 
@@ -523,7 +586,18 @@ describe('DesignerPrintQueueService — lifecycle fixes (M4.2)', () => {
     }
   });
 
-  it('shutdown hands the rows it renders back (PENDING, attempt not counted)', async () => {
+  it('main.ts enables the shutdown hooks before listen, so onModuleDestroy runs on SIGTERM', () => {
+    const main = readFileSync(
+      path.join(__dirname, '..', '..', 'main.ts'),
+      'utf8',
+    );
+    const hooks = main.indexOf('app.enableShutdownHooks()');
+    const listen = main.indexOf('app.listen(');
+    expect(hooks).toBeGreaterThan(-1);
+    expect(listen).toBeGreaterThan(hooks);
+  });
+
+  it('onModuleDestroy hands the RENDERING rows it holds back, fenced by print_locked_at (attempt not counted)', async () => {
     const b = build();
     let release!: () => void;
     b.render.renderPrint.mockReturnValue(

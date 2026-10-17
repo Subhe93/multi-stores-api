@@ -46,7 +46,15 @@ function build(
       return Promise.resolve({});
     }),
   };
-  const checklist = { logAutoAdvance: jest.fn(() => Promise.resolve()) };
+  const pending = { value: false };
+  const checklist = {
+    logAutoAdvance: jest.fn(() => Promise.resolve()),
+    isAutoAdvancePending: jest.fn(() => Promise.resolve(pending.value)),
+    setAutoAdvancePending: jest.fn((_id: string, v: boolean) => {
+      pending.value = v;
+      return Promise.resolve();
+    }),
+  };
   const storeApps = { getSettings: jest.fn(() => Promise.resolve(settings)) };
   const service = new ProductionAutomationService(
     prisma as unknown as PrismaService,
@@ -54,7 +62,7 @@ function build(
     orders as unknown as OrdersService,
     checklist as unknown as ProductionChecklistService,
   );
-  return { service, orders, checklist, state };
+  return { service, orders, checklist, state, pending };
 }
 
 const done = (summary = READY) => ({
@@ -205,5 +213,67 @@ describe('ProductionAutomationService (M4.3 §3.6)', () => {
     const r = await service.afterWrite(CTX, 'o1', done());
     expect(r.auto_advanced_to).toBeUndefined();
     expect(r.suggestion).toEqual({ next_status: 'QUALITY_CHECK' });
+  });
+
+  it('a failed auto-advance is recorded and retried by the next write of the order', async () => {
+    const { service, orders, checklist, pending } = build(
+      { on_complete: 'auto', complete_target: 'QUALITY_CHECK' },
+      OrderStatus.MANUFACTURING,
+    );
+    orders.updateStatus.mockRejectedValueOnce(new Error('db down'));
+    await service.afterWrite(CTX, 'o1', done());
+    expect(checklist.setAutoAdvancePending).toHaveBeenLastCalledWith(
+      'o1',
+      true,
+    );
+    expect(pending.value).toBe(true);
+
+    // The next (non-completing) write of the READY order retries and clears.
+    const r = await service.afterWrite(CTX, 'o1', {
+      started: false,
+      completed: false,
+      summary: READY,
+    });
+    expect(orders.updateStatus).toHaveBeenCalledTimes(2);
+    expect(r.auto_advanced_to).toBe(OrderStatus.QUALITY_CHECK);
+    expect(checklist.setAutoAdvancePending).toHaveBeenLastCalledWith(
+      'o1',
+      false,
+    );
+    expect(pending.value).toBe(false);
+
+    // Nothing owed any more: a further write does not touch the order.
+    orders.updateStatus.mockClear();
+    await service.afterWrite(CTX, 'o1', {
+      started: false,
+      completed: false,
+      summary: READY,
+    });
+    expect(orders.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('retryPending (workspace read) runs an owed advance, e.g. after a sync-driven READY', async () => {
+    const { service, orders, pending } = build(
+      { on_complete: 'auto', complete_target: 'QUALITY_CHECK' },
+      OrderStatus.MANUFACTURING,
+    );
+    expect(await service.retryPending(CTX, 'o1')).toBeUndefined();
+    expect(orders.updateStatus).not.toHaveBeenCalled();
+    pending.value = true;
+    expect(await service.retryPending(CTX, 'o1')).toBe(
+      OrderStatus.QUALITY_CHECK,
+    );
+    expect(orders.updateStatus).toHaveBeenCalledTimes(1);
+    expect(pending.value).toBe(false);
+
+    // Order already past the target: the owed advance is dropped, not stuck.
+    const shipped = build(
+      { on_complete: 'auto', complete_target: 'QUALITY_CHECK' },
+      OrderStatus.SHIPPED,
+    );
+    shipped.pending.value = true;
+    expect(await shipped.service.retryPending(CTX, 'o1')).toBeUndefined();
+    expect(shipped.pending.value).toBe(false);
+    expect(shipped.orders.updateStatus).not.toHaveBeenCalled();
   });
 });

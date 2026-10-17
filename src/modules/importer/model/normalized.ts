@@ -135,6 +135,12 @@ export interface NPrice {
   current: number | null;
 }
 
+/** Woo sale window (`_sale_price_dates_from/to`, ISO strings) on a product or variation. */
+export interface NSaleWindow {
+  sale_from?: string;
+  sale_to?: string;
+}
+
 export interface NStock {
   manage: boolean;
   qty: number | null;
@@ -161,7 +167,7 @@ export interface NVariation {
   menu_order: number;
   /** attribute key → term slug / local value, `null` = "any value". */
   attrs: Record<string, string | null>;
-  price: NPrice;
+  price: NPrice & NSaleWindow;
   sku: string | null;
   stock: NStock;
   /** (WP-B addition) variation image (`_thumbnail_id` > 0). */
@@ -227,7 +233,7 @@ export interface NProduct {
   content_html: string;
   excerpt_html: string;
   sku: string | null;
-  price: NPrice & { sale_from?: string; sale_to?: string };
+  price: NPrice & NSaleWindow;
   tax: { status: 'taxable' | 'shipping' | 'none'; class: string };
   stock: NStock;
   weight: number | null;

@@ -5,8 +5,10 @@ import type { RetentionService } from '../retention/retention.service';
 import type { DesignerAssetsService } from './designer-assets.service';
 import type { DesignerPrintQueueService } from './designer-print-queue.service';
 import {
+  DESIGNER_CLOSED_ORDER_STATUSES,
   DESIGNER_RETENTION_TASKS,
   DesignerRetentionService,
+  originalsPurgeAt,
   snapshotPhotoIds,
   type OrderDesignRetentionRow,
 } from './designer-retention.service';
@@ -264,15 +266,71 @@ describe('DesignerRetentionService', () => {
   });
 
   describe('R3 originals', () => {
-    it('never purges for an open order', async () => {
+    it('purges an OPEN order (PROCESSING) once its print is READY: no closed-order gate in R3 (U12)', async () => {
       const t = build();
       t.prisma.$queryRaw.mockResolvedValueOnce([
         oid({ order_status: 'PROCESSING' }),
       ]);
+      t.prisma.designAsset.findMany.mockResolvedValueOnce([photo('p1')]);
       const r = await t.service.runOriginals(NOW, { dryRun: false });
-      expect(r).toMatchObject({ purged: 0, skipped: 1 });
-      expect(r.details).toMatchObject({ skippedOpenOrders: 1 });
-      expect(t.prisma.$executeRaw).not.toHaveBeenCalled();
+      expect(r).toMatchObject({ purged: 1, skipped: 0 });
+      expect(r.details).not.toHaveProperty('skippedOpenOrders');
+      const claim = sqlText(t.prisma.$executeRaw.mock.calls[0]);
+      // The claim re-checks the eligibility, never the closed statuses.
+      expect(claim).toContain(`d."print_status"::text = 'READY'`);
+      for (const st of DESIGNER_CLOSED_ORDER_STATUSES) {
+        if (st === 'CANCELLED' || st === 'REFUNDED') continue;
+        expect(claim).not.toContain(`'${st}'`);
+      }
+    });
+
+    it('an OPEN order without a READY print waits for the print (inside the grace), then goes after it', async () => {
+      const t = build();
+      t.prisma.$queryRaw.mockResolvedValueOnce([
+        oid({
+          print_status: 'PENDING',
+          order_status: 'PROCESSING',
+          order_created_at: new Date(NOW.getTime() - 62 * DAY),
+        }),
+      ]);
+      const r = await t.service.runOriginals(NOW, { dryRun: false });
+      expect(r.details).toMatchObject({ waitingPrint: 1 });
+      expect(t.queue.enqueueOrder).toHaveBeenCalledWith('o1', NOW);
+      const late = build();
+      late.prisma.$queryRaw.mockResolvedValueOnce([
+        oid({
+          print_status: 'PENDING',
+          order_status: 'PROCESSING',
+          order_created_at: new Date(NOW.getTime() - 68 * DAY),
+        }),
+      ]);
+      late.prisma.designAsset.findMany.mockResolvedValueOnce([photo('p1')]);
+      expect(
+        (await late.service.runOriginals(NOW, { dryRun: false })).purged,
+      ).toBe(1);
+    });
+
+    it('originalsPurgeAt: retention_days when READY / terminal, + 7 days grace otherwise (same rule as the creator order view)', () => {
+      const created = new Date('2026-10-01T00:00:00Z');
+      const base = { terminal_at: null, order_status: 'PROCESSING' };
+      const at = (over: Partial<Parameters<typeof originalsPurgeAt>[2]>) =>
+        originalsPurgeAt(created, 60, {
+          ...base,
+          print_status: 'FAILED',
+          ...over,
+        });
+      expect(at({ print_status: 'READY' })).toEqual(
+        new Date('2026-11-30T00:00:00Z'),
+      );
+      expect(at({ print_status: 'PENDING' })).toEqual(
+        new Date('2026-12-07T00:00:00Z'),
+      );
+      expect(at({ terminal_at: NOW })).toEqual(
+        new Date('2026-11-30T00:00:00Z'),
+      );
+      expect(at({ order_status: 'CANCELLED' })).toEqual(
+        new Date('2026-11-30T00:00:00Z'),
+      );
     });
 
     it('requests a print first when none is ready (inside the grace)', async () => {

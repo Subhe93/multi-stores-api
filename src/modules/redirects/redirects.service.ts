@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma, RedirectSource, StoreRedirect } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -16,8 +17,11 @@ import {
 import { resolveRedirectChain, rowsPointingAt } from './redirect-chain';
 import {
   IncomingRedirect,
+  RedirectDeactivation,
   RedirectUpsertPlan,
+  planRedirectDeactivations,
   planRedirectUpserts,
+  withoutDeactivated,
 } from './redirect-plan';
 import type {
   CreateRedirectDto,
@@ -115,6 +119,8 @@ export interface BulkImportResult extends RedirectUpsertPlan {
   updated: number;
   unchanged: number;
   repointed: number;
+  /** IMPORT rows switched off because their `from_path` is a live page now. */
+  deactivated: RedirectDeactivation[];
   /**
    * Row id → what an UPDATE / repoint replaced, so the importer can store it
    * in the run item and its rollback can restore it (M4.4 fix 5).
@@ -212,9 +218,20 @@ export class RedirectsService {
     return store.id;
   }
 
+  /**
+   * Map for the proxy. A DB error is reported as 503 REDIRECTS_UNAVAILABLE
+   * (the proxy then retries after its short failure TTL) instead of an empty
+   * map, which it would cache as "no redirects" for its full map TTL.
+   */
   async mapFor(storeId: string): Promise<RedirectMapResponse> {
     const entry = await this.versionEntry(storeId);
-    if (!entry?.version) return { version: null, mode: 'map', items: [] };
+    if (!entry) {
+      throw new ServiceUnavailableException({
+        code: 'REDIRECTS_UNAVAILABLE',
+        message: 'Redirects are temporarily unavailable',
+      });
+    }
+    if (!entry.version) return { version: null, mode: 'map', items: [] };
     if (entry.count > REDIRECT_MAP_MAX_ENTRIES) {
       return { version: entry.version, mode: 'lookup' };
     }
@@ -494,18 +511,23 @@ export class RedirectsService {
   /**
    * Idempotent upsert of importer redirects (source=IMPORT) inside the
    * importer's transaction: MANUAL rows are never overwritten, chains are
-   * flattened, loops dropped (see planRedirectUpserts). The caller must call
-   * `invalidate(storeId)` after its transaction commits.
+   * flattened, loops dropped (see planRedirectUpserts). Active IMPORT rows
+   * whose `from_path` is in `livePaths` (normalised live product/collection
+   * paths of the store) are deactivated first so no live page is shadowed
+   * (planRedirectDeactivations). The caller must call `invalidate(storeId)`
+   * after its transaction commits.
    */
   async bulkUpsertFromImport(
     tx: Prisma.TransactionClient,
     storeId: string,
     runId: string,
     rows: readonly IncomingRedirect[],
+    livePaths: readonly string[] = [],
   ): Promise<BulkImportResult> {
     const existing = await this.existingForPlan(storeId, tx);
+    const deactivated = planRedirectDeactivations(existing, new Set(livePaths));
     const plan = capRedirectCreates(
-      planRedirectUpserts(existing, rows),
+      planRedirectUpserts(withoutDeactivated(existing, deactivated), rows),
       existing.length,
     );
     const byId = new Map(existing.map((r) => [r.id, r]));
@@ -519,6 +541,13 @@ export class RedirectsService {
           is_active: r.is_active,
         };
     };
+    for (const d of deactivated) {
+      keep(d.id);
+      await tx.storeRedirect.update({
+        where: { id: d.id },
+        data: { is_active: false },
+      });
+    }
     const creates = plan.items.filter((i) => i.action === 'CREATE');
     if (creates.length) {
       await tx.storeRedirect.createMany({
@@ -562,6 +591,7 @@ export class RedirectsService {
       updated,
       unchanged: plan.items.filter((i) => i.action === 'UNCHANGED').length,
       repointed: plan.repoints.length,
+      deactivated,
       before,
     };
   }

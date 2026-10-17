@@ -8,6 +8,7 @@ import {
   DesignerRenderService,
   designProofKey,
   imageNeeds,
+  photoVisibleCrop,
   printScale,
   proofScale,
 } from './designer-render.service';
@@ -18,7 +19,13 @@ import {
   type DesignerBrowserRenderer,
   type RenderFile,
 } from './render/designer-chromium.host';
-import type { DesignStateV1, TemplateSpecV1 } from './render/design-renderer';
+import {
+  DEFAULT_ADJ,
+  type DesignStateV1,
+  type ImageSlotElement,
+  type PhotoAdj,
+  type TemplateSpecV1,
+} from './render/design-renderer';
 import { designerErrors } from './designer-errors';
 
 const STORE = '11111111-1111-4111-8111-111111111111';
@@ -141,6 +148,7 @@ function build(opts: { browser?: DesignerBrowserRenderer } = {}) {
     design: {
       findUnique: jest.fn(),
       updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
+      count: jest.fn(() => Promise.resolve(0)),
     },
     orderItemDesign: { count: jest.fn(() => Promise.resolve(0)) },
     storeLanguageConfig: {
@@ -201,6 +209,7 @@ function build(opts: { browser?: DesignerBrowserRenderer } = {}) {
   const browser: DesignerBrowserRenderer = opts.browser ?? {
     enabled: true,
     close: jest.fn(() => Promise.resolve()),
+    probe: jest.fn(() => Promise.resolve()),
     renderCanvas: jest.fn(async (job: CanvasJob, files, t) => {
       calls.push({ job, files, t });
       const w = Math.round(500 * job.scale);
@@ -250,8 +259,73 @@ describe('imageNeeds', () => {
       [PHOTO, 'original'],
       [DECO, 'original'],
     ]);
-    // 4:3 photo in a 300×300 mm slot at 6 px/mm: drawn 2400×1800.
+    // 4:3 photo in a 300×300 mm slot at 6 px/mm: drawn 2400×1800, of which
+    // the slot shows the centre 1800 px = original columns 500..3500.
     expect(needs[1].fit).toEqual({ width: 2400, height: 1800 });
+    expect(needs[1].crop).toEqual({
+      left: 500,
+      top: 0,
+      width: 3000,
+      height: 3000,
+    });
+  });
+
+  it('photoVisibleCrop: the rotated slot clip intersected with the drawn image, whole pixels; null when all is visible', () => {
+    const slot = { x: 100, y: 100, w: 300, h: 300 };
+    const photo = { width: 4000, height: 3000 };
+    const adj = (over: Partial<PhotoAdj>) => ({ ...DEFAULT_ADJ, ...over });
+    // Portrait slot fully covered by a landscape photo: whole height visible.
+    expect(photoVisibleCrop(slot, { ...photo, adj: adj({}) }, 6).crop).toEqual({
+      left: 500,
+      top: 0,
+      width: 3000,
+      height: 3000,
+    });
+    // Zoom 2, pan to the top-left corner: a quarter of the image.
+    const z = photoVisibleCrop(
+      slot,
+      { ...photo, adj: adj({ zoom: 2, panX: 0, panY: 0 }) },
+      6,
+    );
+    expect(z.fit).toEqual({ width: 4800, height: 3600 });
+    expect(z.crop).toEqual({ left: 0, top: 0, width: 1500, height: 1500 });
+    // Rotation widens the visible box (the clip corners turn into the photo's frame).
+    const r = photoVisibleCrop(
+      slot,
+      { ...photo, adj: adj({ rot: 15 }) },
+      6,
+    ).crop!;
+    expect(r.width).toBeGreaterThan(3000);
+    expect(r.left + r.width).toBeLessThanOrEqual(4000);
+    expect(r.top).toBe(0);
+    expect(r.height).toBe(3000);
+    // At 45° the clip's diagonal exceeds the drawn width: everything is visible.
+    expect(
+      photoVisibleCrop(slot, { ...photo, adj: adj({ rot: 45 }) }, 6).crop,
+    ).toBeNull();
+    // A square photo in a square slot shows everything: nothing to cut.
+    expect(
+      photoVisibleCrop(slot, { width: 2000, height: 2000, adj: adj({}) }, 6)
+        .crop,
+    ).toBeNull();
+    // Two slots sharing one asset never get a crop (each shows a different part).
+    const s = spec();
+    const front = s.surfaces[0];
+    const second = {
+      ...(front.elements.find(
+        (e) => e.type === 'image_slot',
+      ) as ImageSlotElement),
+      id: 'foto2',
+      x: 10,
+    };
+    front.elements.push(second);
+    const st = state();
+    st.photos.foto2 = { ...st.photos[Object.keys(st.photos)[0]] };
+    const shared = imageNeeds(s, st, 'print', 6).find(
+      (n) => n.asset_id === PHOTO,
+    )!;
+    expect(shared.crop).toBeUndefined();
+    expect(shared.fit).toEqual({ width: 2400, height: 1800 });
   });
 
   it('proof: web background and the photo preview', () => {
@@ -289,8 +363,15 @@ describe('DesignerRenderService.renderPrint (mock browser)', () => {
     expect([...files.keys()].sort()).toEqual(
       [`a/${BG_PRINT}`, `a/${PHOTO}`, `a/${DECO}`, `f/${FONT}`].sort(),
     );
+    // The served photo is the visible crop (original 500..3500 × 0..3000)
+    // scaled to its drawn size, and the job tells the page where it goes.
     const photo = await sharp(files.get(`a/${PHOTO}`)!.body).metadata();
-    expect([photo.width, photo.height]).toEqual([2400, 1800]);
+    expect([photo.width, photo.height]).toEqual([1800, 1800]);
+    expect(job.assets).toEqual([
+      { id: BG_PRINT },
+      { id: PHOTO, crop: { fx: 0.125, fy: 0, fw: 0.75, fh: 1 } },
+      { id: DECO },
+    ]);
 
     expect(res.files).toEqual([
       expect.objectContaining({
@@ -347,6 +428,7 @@ describe('DesignerRenderService.renderPrint (mock browser)', () => {
     const browser: DesignerBrowserRenderer = {
       enabled: true,
       close: () => Promise.resolve(),
+      probe: () => Promise.resolve(),
       renderCanvas: () =>
         Promise.resolve({
           data: Buffer.alloc(0),
@@ -408,13 +490,9 @@ describe('DesignerRenderService.renderDesignProof', () => {
     expect(b.calls[0].t).toBe(10_000);
     expect(b.calls[0].files.get(`a/${PHOTO}`)!.contentType).toBe('image/webp');
     expect(b.calls[0].job.locale).toBe('sv'); // store primary locale
+    // Recorded through replaceDesignProofKey: fenced by state_version only.
     expect(b.prisma.design.updateMany).toHaveBeenCalledWith({
-      where: {
-        id: DESIGN,
-        state_version: 4,
-        proof_key: null,
-        proof_state_sha: null,
-      },
+      where: { id: DESIGN, state_version: 4 },
       data: {
         proof_key: res.proof_key,
         proof_state_sha: sha,
@@ -447,7 +525,7 @@ describe('DesignerRenderService.renderDesignProof', () => {
     );
   });
 
-  it('CAS win deletes the superseded proof file unless an order uses it', async () => {
+  it('a recorded proof releases the superseded file unless an order uses it', async () => {
     const b = build();
     b.written.set('designer/old.webp', Buffer.from('x'));
     b.prisma.design.findUnique.mockResolvedValue(
@@ -459,10 +537,7 @@ describe('DesignerRenderService.renderDesignProof', () => {
         { where: Record<string, unknown> },
       ]
     )[0];
-    expect(casCall.where).toMatchObject({
-      proof_key: 'designer/old.webp',
-      proof_state_sha: 'stale',
-    });
+    expect(casCall.where).toEqual({ id: DESIGN, state_version: 4 });
     expect(b.storage.delete).toHaveBeenCalledWith('designer/old.webp');
     expect(b.written.has(res.proof_key)).toBe(true);
 
@@ -475,12 +550,12 @@ describe('DesignerRenderService.renderDesignProof', () => {
     expect(shared.storage.delete).not.toHaveBeenCalled();
   });
 
-  it('CAS loss keeps the winner and deletes its own file', async () => {
+  it('a lost race keeps the winner and releases its own file', async () => {
     const b = build();
     b.prisma.design.updateMany.mockResolvedValueOnce({ count: 0 });
     b.prisma.design.findUnique
       .mockResolvedValueOnce(design())
-      .mockResolvedValueOnce({ proof_key: 'designer/winner.webp' });
+      .mockResolvedValue({ proof_key: 'designer/winner.webp' });
     const res = await b.service.renderDesignProof(DESIGN);
     expect(res.proof_key).toBe('designer/winner.webp');
     expect(b.storage.delete).toHaveBeenCalledTimes(1);
@@ -509,6 +584,7 @@ describe('DesignerRenderService.renderDesignProof', () => {
     const slow: DesignerBrowserRenderer = {
       enabled: true,
       close: () => Promise.resolve(),
+      probe: () => Promise.resolve(),
       renderCanvas: async (job, files, t) => {
         running++;
         peak = Math.max(peak, running);

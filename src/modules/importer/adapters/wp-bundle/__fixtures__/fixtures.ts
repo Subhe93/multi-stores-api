@@ -2,6 +2,9 @@ import { join } from 'path';
 import { MemoryBundleReader } from '../../bundle-reader';
 import type { ImportSourceView } from '../../source-adapter';
 import type { DryRunOptions } from '../../../model/dry-run-summary';
+import type { NormalizedCatalog } from '../../../model/normalized';
+import { buildImportRedirects } from '../../../mapping/map-redirects';
+import { platformSlug } from '../../../mapping/slug';
 
 /** Shared test fixtures for the WordPress bundle adapter (not a spec file). */
 
@@ -291,5 +294,38 @@ export function v1Sample(): MemoryBundleReader {
       [0, 5, 'free_shipping', 1, 1],
     ]),
     'evil.sh': 'rm -rf /',
+  });
+}
+
+/**
+ * §6.1 redirect candidates straight from a catalog, the way the planner
+ * builds them (skip list, drafts, status map, platform slugs, every category
+ * written): for catalog-level specs that have no planner run.
+ */
+export function catalogRedirects(
+  catalog: NormalizedCatalog,
+  opts: Pick<
+    DryRunOptions,
+    'skip_ext_ids' | 'include_drafts' | 'status_map' | 'redirect_skipped'
+  >,
+): ReturnType<typeof buildImportRedirects> {
+  const skip = new Set(opts.skip_ext_ids ?? []);
+  const target = (status: string) =>
+    opts.status_map?.[status] ?? (status === 'publish' ? 'PUBLISHED' : 'DRAFT');
+  const imported = catalog.products.filter(
+    (p) =>
+      !skip.has(p.ext_id) && (opts.include_drafts || p.status === 'publish'),
+  );
+  const importedRefs = new Set(imported.map((p) => p.ext_id));
+  return buildImportRedirects({
+    catalog,
+    imported: imported.map((p) => ({
+      product: p,
+      final_slug: platformSlug(p.slug),
+      published: target(p.status) === 'PUBLISHED',
+    })),
+    skipped: catalog.products.filter((p) => !importedRefs.has(p.ext_id)),
+    categorySlug: new Map(catalog.categories.map((c) => [c.ext_id, c.slug])),
+    redirectSkipped: opts.redirect_skipped !== false,
   });
 }

@@ -12,9 +12,13 @@ import type { SourceCheck } from './production.types';
 
 // Pure check generation (M4.3 §3.2, C24): one check per order value row
 // (`fv:<id>`), variant attributes as `opt:<name>` (minus excluded and
-// OPTION-row-covered ones), and the store's default custom items. Reads only
-// the order-time snapshot, so a field deleted after the order still yields
-// its check.
+// OPTION-row-covered ones), and the store's default custom items. Values
+// and variant options come from the order-time snapshot columns
+// (OrderCustomFieldValue rows, OrderItem.variant_options_snapshot), so a
+// field or variant edited / deleted after the order never changes a check.
+// The one exception is a line placed before the variant snapshot existed:
+// its live `variant.options` seed the `opt:` checks once (insert-only, see
+// `SourceCheck.insert_only`) and are never compared again.
 
 /** A value row as loaded for generation (snapshot columns + live fallback). */
 export interface ProductionValueRow extends SnapshotValueRow {
@@ -32,6 +36,9 @@ export interface ProductionSourceLine {
   /** FulfillerType (CREATOR | PROVIDER). */
   fulfiller_type: string;
   fulfiller_id: string | null;
+  /** Order-time copy of the variant options (`{name: value}`); null before the column existed. */
+  variant_options_snapshot?: unknown;
+  /** Live variant, read only when the line has no snapshot (insert-only seed). */
   variant?: { options?: unknown } | null;
   custom_field_values?: ProductionValueRow[] | null;
 }
@@ -53,15 +60,33 @@ function clampKey(key: string): string {
   return key.length > KEY_MAX ? key.slice(0, KEY_MAX) : key;
 }
 
-/** sha256(label|value|file_url): detects an in-place edit of a source. */
+/**
+ * sha256(value|file_url): detects an in-place edit of what is produced. The
+ * label is deliberately not part of it: a renamed field or a store-locale
+ * switch relabels the check without resetting `done`.
+ */
 export function sourceHash(
-  label: string,
   value: string | null,
   fileUrl: string | null,
 ): string {
   return createHash('sha256')
-    .update(`${label}\u0000${value ?? ''}\u0000${fileUrl ?? ''}`)
+    .update(`${value ?? ''}\u0000${fileUrl ?? ''}`)
     .digest('hex');
+}
+
+/** The option map of a line: the snapshot, else (pre-snapshot lines) the live variant. */
+export function variantOptionsOf(
+  line: Pick<ProductionSourceLine, 'variant_options_snapshot' | 'variant'>,
+): { options: Record<string, unknown> | null; snapshot: boolean } {
+  const snap = line.variant_options_snapshot;
+  if (snap && typeof snap === 'object' && !Array.isArray(snap)) {
+    return { options: snap as Record<string, unknown>, snapshot: true };
+  }
+  const live = line.variant?.options;
+  if (live && typeof live === 'object' && !Array.isArray(live)) {
+    return { options: live as Record<string, unknown>, snapshot: false };
+  }
+  return { options: null, snapshot: snap !== null && snap !== undefined };
 }
 
 /** URL-safe slug of a default item label (key `custom:default:<slug>`). */
@@ -166,12 +191,10 @@ export function buildLineSources(
   });
 
   if (settings.include_variant_options) {
-    const options = line.variant?.options;
-    if (options && typeof options === 'object' && !Array.isArray(options)) {
+    const { options, snapshot } = variantOptionsOf(line);
+    if (options) {
       let i = 0;
-      for (const [name, raw] of Object.entries(
-        options as Record<string, unknown>,
-      )) {
+      for (const [name, raw] of Object.entries(options)) {
         if (raw === null || raw === undefined || typeof raw === 'object') {
           continue;
         }
@@ -188,6 +211,8 @@ export function buildLineSources(
           group_index: null,
           file_url: null,
           sort_order: SORT_BASE.option + i++,
+          // No snapshot (older order): seed once, never compare again.
+          ...(snapshot ? {} : { insert_only: true }),
         });
       }
     }

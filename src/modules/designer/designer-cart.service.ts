@@ -39,6 +39,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { DesignerAssetsService } from './designer-assets.service';
 import { designerErrors, type DesignerErrorCode } from './designer-errors';
+import { originalsPurgeAt } from './designer-retention.service';
 import { normalizeDesignerSettings } from './designer-settings';
 import { DESIGNER_LINK_TTL, DesignerUrlsService } from './designer-urls';
 import {
@@ -1042,9 +1043,15 @@ export class DesignerCartService {
           terminal_at: r.terminal_at,
           originals_purged_at: r.originals_purged_at,
           files_purged_at: r.files_purged_at,
+          // Same rule as retention R3: READY print or terminal order →
+          // retention_days; otherwise the 7-day print grace is added.
           originals_purge_at: r.originals_purged_at
             ? null
-            : plus(order.created_at, settings.retention_days),
+            : originalsPurgeAt(order.created_at, settings.retention_days, {
+                print_status: r.print_status,
+                terminal_at: r.terminal_at,
+                order_status: order.status,
+              }),
           files_purge_at: r.files_purged_at ? null : (filesPurgeAt ?? null),
         };
       }),

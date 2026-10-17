@@ -50,6 +50,44 @@ function fakeWoff2(seed = 0): Buffer {
   return buf;
 }
 
+/** A minimal editable text element for the coverage checks. */
+function text(
+  id: string,
+  font: { family: string; weight: number; style: string },
+  transform: 'none' | 'uppercase',
+) {
+  return {
+    id,
+    type: 'text',
+    x: 0,
+    y: 0,
+    w: 100,
+    h: 20,
+    rot: 0,
+    z: 1,
+    locked: false,
+    label: { sv: id },
+    placeholder: { sv: '' },
+    default_text: '',
+    font,
+    size: 20,
+    color: '#000',
+    align: 'center',
+    transform,
+    fit: { mode: 'shrink', step: 0.5, min: 6, pad_ref_px: 8 },
+    inset: 4,
+    editable: true,
+    required: false,
+    max_length: 40,
+    direction: 'ltr',
+  };
+}
+
+/** The assets service a fonts service was built with (spy target). */
+function assetsOf(f: DesignerFontsService): DesignerAssetsService {
+  return (f as unknown as { assets: DesignerAssetsService }).assets;
+}
+
 async function codeOf(p: Promise<unknown>): Promise<string | undefined> {
   try {
     await p;
@@ -171,6 +209,98 @@ describe('DesignerFontsService', () => {
   afterEach(async () => {
     delete process.env.DESIGNER_URL_SECRET;
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('uncoveredTexts: checks each text against the cmap of its face (parsed once, cached), emoji exempt', async () => {
+    const latin = await fs.readFile(
+      path.join(
+        path.dirname(require.resolve('@fontsource/noto-sans/package.json')),
+        'files',
+        'noto-sans-latin-600-normal.woff2',
+      ),
+    );
+    const r = await fonts.registerFont(STORE, latin, {
+      family: 'Montserrat',
+      weight: 600,
+      style: 'normal',
+    });
+    const spec = {
+      schema: 'designer.template/1',
+      unit: 'mm',
+      width: 500,
+      height: 700,
+      bleed_mm: 0,
+      render: {
+        preview_px_per_mm: 2,
+        print_px_per_mm: 6,
+        fit_ref_px_per_mm: 6,
+      },
+      fonts: [
+        {
+          family: 'Montserrat',
+          weight: 600,
+          style: 'normal',
+          asset_id: r.font.id,
+        },
+        {
+          family: 'Anton',
+          weight: 400,
+          style: 'normal',
+          asset_id: 'missing-face',
+        },
+      ],
+      surfaces: [
+        {
+          key: 'front',
+          background: { color: '#fff', fit: 'stretch' },
+          elements: [
+            text(
+              'namn',
+              { family: 'Montserrat', weight: 600, style: 'normal' },
+              'uppercase',
+            ),
+            text(
+              'klass',
+              { family: 'Anton', weight: 400, style: 'normal' },
+              'none',
+            ),
+            {
+              ...text(
+                'fixed',
+                { family: 'Montserrat', weight: 600, style: 'normal' },
+                'none',
+              ),
+              editable: false,
+            },
+          ],
+        },
+      ],
+    } as never;
+    const read = jest.spyOn(assetsOf(fonts), 'readAssetBytes');
+    await expect(
+      fonts.uncoveredTexts(STORE, spec, {
+        namn: 'Åsa Öberg ❤️',
+        klass: 'سارة', // its face is not uploaded: skipped, not refused
+        fixed: 'سارة', // not editable: never checked
+      }),
+    ).resolves.toEqual([]);
+    const bad = await fonts.uncoveredTexts(STORE, spec, {
+      namn: 'ß Sara سارة',
+    });
+    expect(bad).toEqual([
+      {
+        element_id: 'namn',
+        asset_id: r.font.id,
+        // Drawn uppercase: "ß" becomes "SS" (covered); the Arabic letters are not.
+        code_points: [...'سارة']
+          .map((c) => c.codePointAt(0)!)
+          .filter((c, i, a) => a.indexOf(c) === i),
+      },
+    ]);
+    // The font file was read once; later checks use the cached coverage.
+    expect(read).toHaveBeenCalledTimes(1);
+    await fonts.uncoveredTexts(STORE, spec, { namn: 'x' });
+    expect(read).toHaveBeenCalledTimes(1);
   });
 
   it('registers a face from explicit fields and stores it under designer/…/font/', async () => {

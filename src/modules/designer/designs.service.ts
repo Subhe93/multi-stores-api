@@ -18,7 +18,7 @@
  *   photo files, which is how a customer re-orders or edits an ordered one.
  */
 import { BadRequestException, Injectable, Optional } from '@nestjs/common';
-import { randomBytes, timingSafeEqual } from 'crypto';
+import { randomBytes } from 'crypto';
 import {
   DesignAssetKind,
   DesignStatus,
@@ -34,6 +34,7 @@ import { DesignerAssetsService } from './designer-assets.service';
 import { designerErrors } from './designer-errors';
 import { normalizeDesignerSettings } from './designer-settings';
 import { DESIGNER_LINK_TTL, DesignerUrlsService } from './designer-urls';
+import { DesignerFontsService } from './designer-fonts.service';
 import { DesignerRenderService } from './designer-render.service';
 import { DesignerRenderUnavailableError } from './render/designer-chromium.host';
 import {
@@ -44,8 +45,8 @@ import {
   type StateRule,
   type TemplateSpecV1,
 } from './render/design-renderer';
-import { isUuid, sha256Hex } from './designs.util';
-import { canAccessDesign } from './designer-access';
+import { isUuid } from './designs.util';
+import { canAccessDesign, hashDesignToken } from './designer-access';
 
 /** Hard cap of any customer text (code units), whatever the template says. */
 export const DESIGN_TEXT_HARD_MAX = 1000;
@@ -113,22 +114,8 @@ export function stateInvalid(
   });
 }
 
-/** sha256 of a guest token (hex). */
-export function hashDesignToken(token: string): string {
-  return sha256Hex(token);
-}
-
-/** Constant-time comparison of a presented token with the stored hash. */
-export function designTokenMatches(
-  storedHash: string | null | undefined,
-  token: string | null | undefined,
-): boolean {
-  if (!storedHash || typeof token !== 'string' || !token) return false;
-  if (token.length > 256) return false;
-  const a = Buffer.from(hashDesignToken(token), 'hex');
-  const b = Buffer.from(storedHash, 'hex');
-  return a.length === b.length && timingSafeEqual(a, b);
-}
+// The token helpers live in designer-access.ts; re-exported for callers.
+export { designTokenMatches, hashDesignToken } from './designer-access';
 
 /** The version row a design is bound to, with its spec. */
 export interface DesignVersionRow {
@@ -147,6 +134,8 @@ export class DesignsService {
     private readonly urls: DesignerUrlsService,
     // WP5 render service (proofs); optional for tests / builds without it.
     @Optional() private readonly render?: DesignerRenderService,
+    // Glyph coverage check (§6.4); optional for tests / builds without fonts.
+    @Optional() private readonly fonts?: DesignerFontsService,
   ) {}
 
   /**
@@ -256,6 +245,19 @@ export class DesignsService {
     for (const [elId, text] of Object.entries(res.normalized.texts)) {
       if (text.length > DESIGN_TEXT_HARD_MAX) {
         issues.push({ element_id: elId, rule: 'max_length' });
+      }
+    }
+    // Every code point must be drawable by the face's uploaded font file
+    // (rule `chars`, like an allowed_chars miss); only texts that passed
+    // the renderer rules are checked.
+    if (this.fonts && issues.length === 0) {
+      const uncovered = await this.fonts.uncoveredTexts(
+        storeId,
+        spec,
+        res.normalized.texts,
+      );
+      for (const u of uncovered) {
+        issues.push({ element_id: u.element_id, rule: 'chars' });
       }
     }
     const photoIds = Object.values(res.normalized.photos).map(

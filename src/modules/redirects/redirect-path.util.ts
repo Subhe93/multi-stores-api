@@ -91,9 +91,12 @@ export function isRedirectStatusCode(
 }
 
 /**
- * Look a request path up in a `from → [to, status]` map: exact key first,
- * then the fallback key once. Shared by the API `resolve` and the specs; the
- * web mirror implements the same steps.
+ * Reference lookup of a request path in a `from → value` map: exact key
+ * first, then the fallback key once. Production code does not call it: the
+ * API's `RedirectsService.findMatch` runs the same two keys as one SQL query
+ * and the web mirror (`matchRedirectMap` in `multi-stores-web/src/lib/
+ * redirects.ts`) implements the same steps over its cached map. The spec
+ * vectors of redirect-path.util.spec.ts pin this order for all three.
  */
 export function matchRedirect<T>(
   map: ReadonlyMap<string, T>,

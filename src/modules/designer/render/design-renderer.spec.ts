@@ -848,9 +848,11 @@ describe('design-renderer', () => {
         expect(c.ops('fillText').map((x) => x.args[0])).not.toContain(
           'Ladda upp bild',
         );
+        // Proof keeps the shaped #e8e8e8 fill; print draws nothing for an
+        // empty (optional) slot (deviation 3 from NPP).
         expect(
           c.calls.some((x) => x.op === 'fill' && x.fillStyle === '#e8e8e8'),
-        ).toBe(true);
+        ).toBe(mode === 'proof');
       }
     });
     it('missing photo / decoration images are skipped and reported', () => {

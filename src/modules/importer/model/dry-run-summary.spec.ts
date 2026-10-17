@@ -1,6 +1,7 @@
 import { DirectoryBundleReader } from '../adapters/bundle-reader';
 import { WpBundleAdapter } from '../adapters/wp-bundle/wp-bundle.adapter';
 import {
+  catalogRedirects,
   NAMEZ_RUN_OPTIONS,
   NAMEZ_SOURCE,
   SLICE_DIR,
@@ -161,44 +162,50 @@ describe('summarizeCatalog — real Namez slice', () => {
     expect(s.term_cleanup.some((t) => t.taxonomy === 'pa_rakna')).toBe(false);
   });
 
+  // The catalog summary leaves redirects to the planner (map-redirects over
+  // the final slugs); the §6.1 rules are checked on the same catalog here.
   it('redirects follow §6.1 (old slugs: trashed and drafts excluded)', () => {
-    expect(s.redirects.by_rule).toMatchObject({
+    expect(s.redirects).toEqual({ total: 0, by_rule: {}, preview: [] });
+    expect(s.old_slugs).toMatchObject({ redirected: 0, excluded: [] });
+    const r = catalogRedirects(catalog, NAMEZ_RUN_OPTIONS);
+    const byRule: Record<string, number> = {};
+    for (const c of r.candidates) byRule[c.rule] = (byRule[c.rule] ?? 0) + 1;
+    expect(byRule).toMatchObject({
       product: 6,
       old_slug: 4,
       skipped_product: 1,
       tag: 2,
     });
-    expect(s.old_slugs.excluded.map((e) => e.reason).sort()).toEqual([
+    expect(r.excludedOldSlugs.map((e) => e.reason).sort()).toEqual([
       'draft',
       'trashed',
     ]);
-    const skippedRedirect = s.redirects.preview.find(
-      (r) => r.rule === 'skipped_product',
+    const skippedRedirect = r.candidates.find(
+      (c) => c.rule === 'skipped_product',
     );
     expect(skippedRedirect).toEqual({
       from: '/produkt/studentskylt-med-gulddetaljer',
       to: '/collections/3d_presenter',
       rule: 'skipped_product',
       external_ref: 'woo:namez.se:product:4326',
+      status_code: 301,
     });
-    expect(s.redirects.preview).toContainEqual({
+    expect(r.candidates).toContainEqual({
       from: '/produkt/personlig-3d-namnpresent-gor-dina-ord-till-en-present',
       to: '/products/personlig-3d-namnpresent',
       rule: 'old_slug',
       external_ref: 'woo:namez.se:product:2229',
+      status_code: 301,
     });
-    const cat = s.redirects.preview.find(
-      (r) =>
-        r.rule === 'category_path' &&
-        r.to === '/collections/studentpresent-till-kille',
+    const cat = r.candidates.find(
+      (c) =>
+        c.rule === 'category_path' &&
+        c.to === '/collections/studentpresent-till-kille',
     );
-    expect(
-      cat?.from ??
-        '/product-category/presenter-till-vem/studentpresent/studentpresent-till-kille',
-    ).toBe(
+    expect(cat?.from).toBe(
       '/product-category/presenter-till-vem/studentpresent/studentpresent-till-kille',
     );
-    expect(s.redirects.total).toBe(
+    expect(r.candidates).toHaveLength(
       6 +
         4 +
         1 +

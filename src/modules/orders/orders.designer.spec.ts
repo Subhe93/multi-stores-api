@@ -190,7 +190,7 @@ const SNAPSHOT_CREATE = {
   assets: [],
   text_values: [{ element_id: 'namn', label: 'Namn', value: 'Anna' }],
   price_breakdown: { designer_delta: 0, addons: [] },
-  renderer_version: '1.0.0',
+  renderer_version: '1.1.0',
   proof_key: null,
   print_status: 'PENDING',
   print_requested_at: null,

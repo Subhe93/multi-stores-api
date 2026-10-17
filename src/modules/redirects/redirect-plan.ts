@@ -60,6 +60,46 @@ export interface RedirectUpsertPlan {
   repoints: RedirectRepoint[];
 }
 
+export interface RedirectDeactivation {
+  id: string;
+  from_path: string;
+  to_path: string;
+  status_code: number;
+}
+
+/**
+ * Active IMPORT rows whose `from_path` is a live page of the store (a
+ * product or collection path that exists now): left active they would
+ * shadow the page — typically a rename that was reverted (a→b, then b→a).
+ * MANUAL rows are the merchant's and are left alone. `livePaths` holds
+ * normalised paths. Pure: the dry run and `bulkUpsertFromImport` both use it.
+ */
+export function planRedirectDeactivations(
+  existing: readonly ExistingRedirectRow[],
+  livePaths: ReadonlySet<string>,
+): RedirectDeactivation[] {
+  return existing
+    .filter(
+      (r) => r.is_active && r.source === 'IMPORT' && livePaths.has(r.from_path),
+    )
+    .map((r) => ({
+      id: r.id,
+      from_path: r.from_path,
+      to_path: r.to_path,
+      status_code: r.status_code,
+    }));
+}
+
+/** `existing` with the rows to deactivate already inactive, for `planRedirectUpserts`. */
+export function withoutDeactivated(
+  existing: readonly ExistingRedirectRow[],
+  deactivations: readonly RedirectDeactivation[],
+): ExistingRedirectRow[] {
+  if (!deactivations.length) return [...existing];
+  const ids = new Set(deactivations.map((d) => d.id));
+  return existing.map((r) => (ids.has(r.id) ? { ...r, is_active: false } : r));
+}
+
 export function planRedirectUpserts(
   existing: readonly ExistingRedirectRow[],
   incoming: readonly IncomingRedirect[],

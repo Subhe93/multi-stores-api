@@ -18,6 +18,7 @@ import {
 } from '../../common/storage/private-file-storage';
 import { freeBytes } from '../customer-uploads/customer-upload-admission';
 import type { RequestWithAppStore } from '../../common/guards/require-app.guard';
+import { UUID_RE } from './designs.util';
 
 /**
  * Admission of storefront designer photo uploads
@@ -59,8 +60,6 @@ export const DESIGNER_UPLOAD_MIN_FREE_MB_DEFAULT = 1024;
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Tracked keys before old windows are swept (memory bound). */
 const MAX_TRACKED_KEYS = 50_000;
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function envInt(
   env: NodeJS.ProcessEnv,

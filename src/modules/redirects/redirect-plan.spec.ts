@@ -1,5 +1,10 @@
 import { resolveRedirectChain, rowsPointingAt } from './redirect-chain';
-import { ExistingRedirectRow, planRedirectUpserts } from './redirect-plan';
+import {
+  ExistingRedirectRow,
+  planRedirectDeactivations,
+  planRedirectUpserts,
+  withoutDeactivated,
+} from './redirect-plan';
 
 // M4.4 §6.1: chains are flattened when written (A→B + B→C ⇒ A→C), loops
 // are rejected, MANUAL rows are never overwritten, re-runs are idempotent.
@@ -200,6 +205,56 @@ describe('planRedirectUpserts', () => {
     );
     expect(plan.repoints).toEqual([
       { id: 'r1', from_path: '/x', to_path: '/products/a-2' },
+    ]);
+  });
+});
+
+describe('planRedirectDeactivations (live path shadowing)', () => {
+  const rows = [
+    row('1', '/products/a', '/products/b'),
+    row('2', '/products/m', '/x', { source: 'MANUAL' }),
+    row('3', '/products/c', '/y', { is_active: false }),
+    row('4', '/produkt/a', '/products/b'),
+  ];
+  const live = new Set(['/products/a', '/products/m', '/products/c']);
+
+  it('switches off active IMPORT rows whose from_path is live; MANUAL and inactive rows stay', () => {
+    expect(planRedirectDeactivations(rows, live)).toEqual([
+      {
+        id: '1',
+        from_path: '/products/a',
+        to_path: '/products/b',
+        status_code: 301,
+      },
+    ]);
+    expect(planRedirectDeactivations(rows, new Set())).toEqual([]);
+  });
+
+  it('a reverted rename (a→b, then b→a) is no loop once the old row is off', () => {
+    const incoming = [{ from_path: '/products/b', to_path: '/products/a' }];
+    // Without the deactivation the reverse redirect loops through row 1.
+    expect(planRedirectUpserts(rows, incoming).conflicts).toEqual([
+      {
+        from_path: '/products/b',
+        to_path: '/products/a',
+        code: 'REDIRECT_LOOP',
+      },
+    ]);
+    const off = planRedirectDeactivations(rows, live);
+    const plan = planRedirectUpserts(withoutDeactivated(rows, off), incoming);
+    expect(plan.conflicts).toEqual([]);
+    expect(plan.items).toEqual([
+      {
+        action: 'CREATE',
+        id: null,
+        from_path: '/products/b',
+        to_path: '/products/a',
+        status_code: 301,
+      },
+    ]);
+    // Row 4 pointed at /products/b, a source now: re-pointed to the live page.
+    expect(plan.repoints).toEqual([
+      { id: '4', from_path: '/produkt/a', to_path: '/products/a' },
     ]);
   });
 });

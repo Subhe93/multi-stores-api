@@ -160,6 +160,7 @@
             "editable": true,
             "required": true,
             "max_length": 40,
+            "allowed_chars": "A-Za-z0-9 \\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u017F.,'’&\\-!\\?:/\\(\\)❤",
             "direction": "ltr",
             "source_label": "Namn"
           },
@@ -199,6 +200,7 @@
             "editable": true,
             "required": true,
             "max_length": 40,
+            "allowed_chars": "A-Za-z0-9 \\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u017F.,'’&\\-!\\?:/\\(\\)❤",
             "direction": "ltr",
             "source_label": "Klass"
           }

@@ -12,6 +12,7 @@ export interface RedirectApplyResult {
   updated: number;
   unchanged: number;
   repointed: number;
+  deactivated: number;
   conflicts: number;
   /** Product redirects dropped because the product failed in this run (fix 13). */
   dropped: number;
@@ -23,8 +24,9 @@ export interface RedirectApplyResult {
  * `planRedirectUpserts` the dry run used (PLAN == APPLY). MANUAL rows are
  * never overwritten; live-path conflicts were filtered by the planner.
  * Redirects to products whose apply ended in ERROR are dropped (their page
- * may not exist). UPDATE and re-pointed rows keep the replaced values in the
- * item's `before` (fix 5). The redirect cache is invalidated after the commit.
+ * may not exist). UPDATE, re-pointed and deactivated rows keep the replaced
+ * values in the item's `before` (fix 5), so a rollback restores them. The
+ * redirect cache is invalidated after the commit.
  */
 export async function applyRedirects(
   ctx: ApplyContext,
@@ -36,6 +38,7 @@ export async function applyRedirects(
     updated: 0,
     unchanged: 0,
     repointed: 0,
+    deactivated: 0,
     conflicts: 0,
     dropped: 0,
   };
@@ -74,6 +77,7 @@ export async function applyRedirects(
         ctx.storeId,
         ctx.runId,
         incoming,
+        work.live_paths ?? [],
       );
       const before = res.before ?? {};
       const items: ApplyItem[] = [
@@ -99,6 +103,19 @@ export async function applyRedirects(
             ? {
                 before: before[r.id],
                 diff: { title: r.to_path, to_path: r.to_path },
+              }
+            : {}),
+        })),
+        ...res.deactivated.map((d) => ({
+          entity_type: 'REDIRECT',
+          external_ref: d.from_path,
+          action: 'UPDATE' as const,
+          target_id: d.id,
+          message: 'deactivated (live path)',
+          ...(before[d.id]
+            ? {
+                before: before[d.id],
+                diff: { title: d.to_path, to_path: d.to_path },
               }
             : {}),
         })),
@@ -135,6 +152,7 @@ export async function applyRedirects(
     updated: result.updated,
     unchanged: result.unchanged,
     repointed: result.repointed,
+    deactivated: result.deactivated.length,
     conflicts: result.conflicts.length + work.live_conflicts.length,
     dropped: droppedRows.length,
   };

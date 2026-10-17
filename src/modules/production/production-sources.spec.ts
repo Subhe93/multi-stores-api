@@ -149,7 +149,7 @@ describe('production sources (M4.3 §3.2, C24)', () => {
 
   it('variant attributes are checks; the quantity attribute is excluded (namez preset)', () => {
     const l = line({
-      variant: { options: { Färg: 'Röd', 'Välj antal': 'tre' } },
+      variant_options_snapshot: { Färg: 'Röd', 'Välj antal': 'tre' },
     });
     const all = buildLineSources(l, settings(), 'sv');
     expect(all.map((s) => s.source_key).sort()).toEqual([
@@ -172,7 +172,7 @@ describe('production sources (M4.3 §3.2, C24)', () => {
   it('an M4.1 OPTION value row suppresses the matching opt: check', () => {
     const out = buildLineSources(
       line({
-        variant: { options: { Färg: 'Röd' } },
+        variant_options_snapshot: { Färg: 'Röd' },
         custom_field_values: [
           row('v1', {
             source: 'OPTION',
@@ -223,14 +223,80 @@ describe('production sources (M4.3 §3.2, C24)', () => {
 
   it('builds are deterministic (stable keys and hashes)', () => {
     const l = line({
-      variant: { options: { Färg: 'Röd' } },
+      variant_options_snapshot: { Färg: 'Röd' },
       custom_field_values: [row('v1', { value: 'ANNA' })],
     });
     const a = buildLineSources(l, settings(), 'sv');
     const b = buildLineSources(l, settings(), 'sv');
     expect(a).toEqual(b);
-    expect(sourceHash('a', 'b', null)).toBe(sourceHash('a', 'b', null));
-    expect(sourceHash('a', 'b', null)).not.toBe(sourceHash('a', 'c', null));
-    expect(sourceHash('a', 'b', null)).toHaveLength(64);
+    expect(sourceHash('b', null)).toBe(sourceHash('b', null));
+    expect(sourceHash('b', null)).not.toBe(sourceHash('c', null));
+    expect(sourceHash('b', null)).not.toBe(sourceHash('b', '/f.png'));
+    expect(sourceHash('b', null)).toHaveLength(64);
+  });
+
+  it('the hash covers value and file only: a relabel never changes it', () => {
+    const a = buildLineSources(
+      line({
+        custom_field_values: [
+          row('v1', { value: 'ANNA', field_label: { sv: 'Namn' } }),
+        ],
+      }),
+      settings(),
+      'sv',
+    )[0];
+    const b = buildLineSources(
+      line({
+        custom_field_values: [
+          row('v1', { value: 'ANNA', field_label: { sv: 'Förnamn' } }),
+        ],
+      }),
+      settings(),
+      'sv',
+    )[0];
+    expect(a.label).not.toBe(b.label);
+    expect(sourceHash(a.value, a.file_url)).toBe(
+      sourceHash(b.value, b.file_url),
+    );
+  });
+
+  it('opt: checks come from the order-time snapshot, never the live variant', () => {
+    const out = buildLineSources(
+      line({
+        variant_options_snapshot: { Färg: 'Röd' },
+        // The variant was edited after the order.
+        variant: { options: { Färg: 'Blå', Storlek: 'L' } },
+      }),
+      settings(),
+      'sv',
+    );
+    expect(out.map((s) => [s.source_key, s.value, s.insert_only])).toEqual([
+      ['opt:Färg', 'Röd', undefined],
+    ]);
+    // Variant deleted: the snapshot still yields the check.
+    expect(
+      buildLineSources(
+        line({ variant_options_snapshot: { Färg: 'Röd' }, variant: null }),
+        settings(),
+        'sv',
+      ).map((s) => s.source_key),
+    ).toEqual(['opt:Färg']);
+  });
+
+  it('a pre-snapshot line seeds opt: checks from the live variant as insert-only', () => {
+    const out = buildLineSources(
+      line({
+        variant_options_snapshot: null,
+        variant: { options: { Färg: 'Röd' } },
+      }),
+      settings(),
+      'sv',
+    );
+    expect(out).toEqual([
+      expect.objectContaining({ source_key: 'opt:Färg', insert_only: true }),
+    ]);
+    expect(buildLineSources(line({ variant: null }), settings(), 'sv')).toEqual(
+      [],
+    );
   });
 });

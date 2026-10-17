@@ -123,4 +123,63 @@ describe('ProductionController (M4.3 §3.7)', () => {
       order_status: 'MANUFACTURING',
     });
   });
+
+  it('events are paged (page, limit) and the workspace read retries an owed auto-advance', async () => {
+    const ctx = {
+      storeId: 's1',
+      creatorId: 'cr1',
+      primaryLocale: 'sv',
+      actor: { id: 'u1', name: 'Anna' },
+    };
+    const calls: string[] = [];
+    const checklist = {
+      contextOf: jest.fn(() => Promise.resolve(ctx)),
+      events: jest.fn(() => Promise.resolve([])),
+      syncOrder: jest.fn(() => {
+        calls.push('sync');
+        return Promise.resolve();
+      }),
+      orderState: jest.fn(() =>
+        Promise.resolve({
+          checks: [],
+          summary: { total: 0, done: 0, state: 'NONE', completed_at: null },
+        }),
+      ),
+      printFiles: jest.fn(() => Promise.resolve([])),
+    };
+    const automation = {
+      retryPending: jest.fn(() => {
+        calls.push('retry');
+        return Promise.resolve(undefined);
+      }),
+      settingsOf: jest.fn(() => Promise.resolve({ on_complete: 'none' })),
+      suggestionFor: jest.fn(() => null),
+    };
+    const orders = {
+      findById: jest.fn(() => {
+        calls.push('read');
+        return Promise.resolve({
+          id: 'o1',
+          order_number: '1001',
+          status: 'MANUFACTURING',
+          created_at: new Date(),
+          items: [],
+        });
+      }),
+    };
+    const controller = new ProductionController(
+      checklist as unknown as ProductionChecklistService,
+      automation as unknown as ProductionAutomationService,
+      orders as unknown as OrdersService,
+    );
+    await controller.events('u1', 'o1', { page: 3, limit: 20 });
+    expect(checklist.events).toHaveBeenCalledWith('s1', 'o1', {
+      page: 3,
+      limit: 20,
+    });
+    await controller.workspace('u1', 'o1');
+    expect(automation.retryPending).toHaveBeenCalledWith(ctx, 'o1');
+    // Sync, then the owed advance, then the order is read (fresh status).
+    expect(calls).toEqual(['sync', 'retry', 'read']);
+  });
 });

@@ -137,6 +137,48 @@ clean_copy "$TMP/image-meta"
 printf '599\thttps://shop.example/x.jpg\timage/jpeg\t0\tx.jpg\ta:1:{s:10:"image_meta";a:1:{s:6:"credit";s:4:"Anna";}}\tNULL\n' >>"$TMP/image-meta/attachments.tsv"
 check_not "scan: attachment image_meta is refused" wpx_scan_forbidden "$TMP/image-meta"
 
+# A row with an invalid UTF-8 byte (\xe9, Latin-1 "é") must be scanned like any
+# other: under a UTF-8 locale grep would call the file binary and report no
+# line, so a secret on that line would pass.
+clean_copy "$TMP/latin1"
+printf 'woocommerce_flat_rate_9_settings\ta:1:{s:15:"consumer_secret";s:4:"caf\xe9";}\n' >>"$TMP/latin1/options.tsv"
+latin1_line=$(wc -l <"$TMP/latin1/options.tsv" | tr -d ' ')
+out=$(LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 bash "$SCRIPT" --check "$TMP/latin1" 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ]; then ok "scan: a secret on a line with an invalid UTF-8 byte is refused"; else bad "scan: a secret on a line with an invalid UTF-8 byte is refused"; fi
+case $out in
+  *"Binary file"*) bad "scan: never reports 'Binary file' (the line must be scanned)" ;;
+  *"options.tsv line $latin1_line contains a secret-like name"*) ok "scan: the invalid-byte line is reported with its line number" ;;
+  *) bad "scan: the invalid-byte line is reported with its line number ($out)" ;;
+esac
+check "scan: LC_ALL is forced to C inside the script" grep -q '^export LC_ALL=C$' "$SCRIPT"
+check_not "scan: every grep in the self-check is byte-safe (-a)" \
+  bash -c 'sed -n "/^wpx_scan_forbidden()/,/^}/p" "$1" | grep -E "grep -[a-zA-Z]*" | grep -vE "grep -[a-zA-Z]*a"' _ "$SCRIPT"
+
+# posts.tsv: product texts are not scanned for secret-like names, the other
+# columns are.
+clean_copy "$TMP/content-password"
+awk -F '\t' 'BEGIN { OFS = "\t" } NR == 2 { $5 = "<p>Reset your password; the API key and consumer_secret are in your account.</p>"; $7 = "user_email reminder" } { print }' "$FIXTURE/posts.tsv" >"$TMP/content-password/posts.tsv"
+check "scan: secret-like words in post_content / post_excerpt are allowed" wpx_scan_forbidden "$TMP/content-password"
+
+clean_copy "$TMP/title-secret"
+awk -F '\t' 'BEGIN { OFS = "\t" } NR == 3 { $6 = "consumer_secret" } { print }' "$FIXTURE/posts.tsv" >"$TMP/title-secret/posts.tsv"
+check_not "scan: a secret-like name in post_title is refused" wpx_scan_forbidden "$TMP/title-secret"
+out=$(wpx_scan_forbidden "$TMP/title-secret")
+case $out in *"posts.tsv line 3 contains a secret-like name"*) ok "scan: reports the posts.tsv line of the hit" ;; *) bad "scan: reports the posts.tsv line of the hit ($out)" ;; esac
+
+# --allow FILE:LINE accepts one reviewed hit, still prints it, and nothing else.
+out=$(bash "$SCRIPT" --check "$TMP/title-secret" --allow posts.tsv:3 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ]; then ok "scan: --allow FILE:LINE accepts the reviewed hit"; else bad "scan: --allow FILE:LINE accepts the reviewed hit ($out)"; fi
+case $out in *"posts.tsv line 3 contains a secret-like name (allowed by --allow posts.tsv:3)"*) ok "scan: an allowed hit is still printed" ;; *) bad "scan: an allowed hit is still printed ($out)" ;; esac
+check_not "scan: --allow with another line does not help" bash "$SCRIPT" --check "$TMP/title-secret" --allow posts.tsv:2
+check_not "scan: --allow needs FILE:LINE" bash "$SCRIPT" --check "$TMP/clean" --allow posts.tsv
+clean_copy "$TMP/two-hits"
+awk -F '\t' 'BEGIN { OFS = "\t" } NR == 3 { $6 = "consumer_secret" } NR == 4 { $12 = "api_key" } { print }' "$FIXTURE/posts.tsv" >"$TMP/two-hits/posts.tsv"
+check_not "scan: --allow covers one hit, the other still fails" bash "$SCRIPT" --check "$TMP/two-hits" --allow posts.tsv:3
+check "scan: --allow is repeatable" bash "$SCRIPT" --check "$TMP/two-hits" --allow posts.tsv:3 --allow posts.tsv:4
+
 check_not "scan: --check fails on a dirty bundle" bash "$SCRIPT" --check "$TMP/secret"
 check "scan: --check passes on the clean fixture" bash "$SCRIPT" --check "$TMP/clean"
 
@@ -165,39 +207,56 @@ else
 set -euo pipefail
 args=()
 skip_cols=0
+charset=none
+quick=0
 for a in "$@"; do
   case $a in
     --skip-plugins | --skip-themes | --path=*) ;;
     --skip-column-names) skip_cols=1 ;;
+    --default-character-set=*) charset=${a#*=} ;;
+    --quick) quick=1 ;;
     *) args+=("$a") ;;
   esac
 done
 serve() { if [ "$skip_cols" -eq 1 ]; then tail -n +2 "$FX/$1"; else cat "$FX/$1"; fi; }
+# A fourth, non-core shipping method instance (FAKE_EXTRA_METHOD=1).
+methods() { cat "$FX/shipping_zone_methods.tsv"; [ "${FAKE_EXTRA_METHOD:-0}" = 1 ] && printf '1\t7\tdhl_express\t4\t1\n'; return 0; }
 case "${args[0]} ${args[1]:-}" in
   "db prefix") echo wp_ ;;
   "core version") echo 7.1.3 ;;
   "plugin list") cat "$FX/plugins.csv" ;;
   "option get")
     case ${args[2]} in
-      rank-math-options-general) echo '{"console_email_send_to":"owner@shop.example","console_email_reports":"on","wc_remove_product_base":"off","wc_remove_category_base":"off","strip_category_base":"off","noindex_hidden_products":"on","attachment_redirect_urls":"on","breadcrumbs":"on"}' ;;
-      rank-math-options-titles) echo '{"knowledgegraph_type":"company","knowledgegraph_name":"Shop Example AB","email":"info@shop.example","phone":"+46 70 000 00 00","local_address":{"streetAddress":"Gatan 1"},"noindex_empty_taxonomies":"on","pt_product_title":"%title% %sep% %sitename%","pt_product_description":"%excerpt%","tax_product_cat_title":"%term% %sep% %sitename%","title_separator":"-","website_name":"Shop Example"}' ;;
+      rank-math-options-general)
+        [ "${FAKE_NO_RANK_MATH:-0}" = 1 ] && exit 1
+        echo '{"console_email_send_to":"owner@shop.example","console_email_reports":"on","wc_remove_product_base":"off","wc_remove_category_base":"off","strip_category_base":"off","noindex_hidden_products":"on","attachment_redirect_urls":"on","breadcrumbs":"on"}' ;;
+      rank-math-options-titles)
+        [ "${FAKE_NO_RANK_MATH:-0}" = 1 ] && { echo '"not an array"'; exit 0; }
+        echo '{"knowledgegraph_type":"company","knowledgegraph_name":"Shop Example AB","email":"info@shop.example","phone":"+46 70 000 00 00","local_address":{"streetAddress":"Gatan 1"},"noindex_empty_taxonomies":"on","pt_product_title":"%title% %sep% %sitename%","pt_product_description":"%excerpt%","tax_product_cat_title":"%term% %sep% %sitename%","title_separator":"-","website_name":"Shop Example"}' ;;
       *) exit 1 ;;
     esac ;;
   "db query")
     sql=${args[2]}
     printf '%s\n----\n' "$sql" >>"$SQL_LOG"
+    printf 'db query charset=%s quick=%s\n' "$charset" "$quick" >>"$ARGS_LOG"
     flat=$(printf '%s' "$sql" | tr '\n' ' ' | sed -E 's/^ +//; s/ +/ /g')
     case $flat in
-      "SHOW TABLES LIKE "*)
+      "SHOW TABLES LIKE "* | "SHOW COLUMNS FROM "*)
+        if [ "${FAKE_FAIL_SHOW:-0}" = 1 ]; then
+          # Simulates a mysql client error; leaves a stray temp file behind
+          # that the script's EXIT trap must remove.
+          printf 'x\n' >"$FAKE_OUT/stray.part"
+          echo "ERROR 2002 (HY000): Can't connect to local MySQL server" >&2
+          exit 1
+        fi
         name=$(printf '%s' "$flat" | sed -E "s/.*LIKE '([^']*)'.*/\\1/" | sed 's/\\_/_/g')
-        [ "${FAKE_NO_PPOM:-0}" = 1 ] && [ "$name" = wp_nm_personalized ] && exit 0
+        case $flat in "SHOW TABLES"*) [ "${FAKE_NO_PPOM:-0}" = 1 ] && [ "$name" = wp_nm_personalized ] && exit 0 ;; esac
         echo "$name" ;;
-      "SHOW COLUMNS FROM "*) printf '%s' "$flat" | sed -E "s/.*LIKE '([^']*)'.*/\\1/" | sed 's/\\_/_/g' ;;
       *"option_name = 'siteurl'"* | *"option_name = 'home'"*) echo https://shop.example ;;
       *"option_name = 'woocommerce_version'"*) echo 11.2.1 ;;
-      *"option_name = 'WPLANG'"*) echo sv_SE ;;
+      *"option_name = 'WPLANG'"*) [ "${FAKE_NO_WPLANG:-0}" = 1 ] || echo sv_SE ;;
       "SELECT COUNT(*)"*) echo 0 ;;
-      "SELECT CONCAT('woocommerce_'"*) tail -n +2 "$FX/shipping_zone_methods.tsv" | awk -F '\t' '{ print "woocommerce_" $3 "_" $2 "_settings" }' ;;
+      "SELECT CONCAT('woocommerce_'"*) methods | tail -n +2 | awk -F '\t' '{ print "woocommerce_" $3 "_" $2 "_settings" }' ;;
       "SELECT p.ID, 0 AS post_author"*) serve posts.tsv ;;
       "SELECT pm.meta_id"*) serve postmeta.tsv ;;
       "SELECT t.term_id"*) serve terms.tsv ;;
@@ -215,13 +274,15 @@ case "${args[0]} ${args[1]:-}" in
         fi ;;
       "SELECT z."*) serve shipping_zones.tsv ;;
       "SELECT zl."*) serve shipping_zone_locations.tsv ;;
-      "SELECT zm.zone_id"*) serve shipping_zone_methods.tsv ;;
+      "SELECT zm.zone_id"*) methods ;;
       "SELECT r."*) serve tax_rates.tsv ;;
       "SELECT rl."*) : ;; # empty result: mysql prints nothing, not even the header
       "SELECT pp."*) serve ppom_meta.tsv ;;
       "SELECT op."*)
         grep -v '^rank-math-options-' "$FX/options.tsv"
         [ "${FAKE_LEAK:-0}" = 1 ] && printf 'blogname\tMail us: owner@shop.example\n'
+        # Only served when the script asked for it by name.
+        case $flat in *"'woocommerce_dhl_express_7_settings'"*) printf 'woocommerce_dhl_express_7_settings\ta:2:{s:5:"title";s:3:"DHL";s:7:"account";s:6:"123456";}\n' ;; esac
         exit 0 ;;
       *) echo "fake wp: unexpected SQL: $flat" >&2; exit 2 ;;
     esac ;;
@@ -229,7 +290,8 @@ case "${args[0]} ${args[1]:-}" in
 esac
 FAKE_EOF
   chmod +x "$FAKE"
-  export FX="$FIXTURE" SQL_LOG
+  ARGS_LOG="$TMP/args.log"
+  export FX="$FIXTURE" SQL_LOG ARGS_LOG
 
   run_out="$TMP/run/shop.example-export"
   mkdir -p "$TMP/run"
@@ -258,7 +320,22 @@ FAKE_EOF
   check "e2e: archive is flat and holds exactly the bundle files" \
     bash -c 'diff <(tar -tzf "$1" | sort) <(ls -A "$2" | sort)' _ "$run_out.tgz" "$run_out"
   check "e2e: summary prints row counts" grep -qE '^posts\.tsv +6 ' "$TMP/run.log"
+  check "e2e: summary prints the total size" grep -qE '^total +[0-9]+$' "$TMP/run.log"
+  check_not "e2e: no size warning for a small bundle" grep -q 'is larger than' "$TMP/run.log"
   check_not "e2e: no leftover temp files" bash -c 'ls -A "$1" | grep -qE "\.part$|^\.err$"' _ "$run_out"
+
+  # Every `wp db query` asks the mysql client for utf8mb4 and streaming rows.
+  check "e2e: db query calls are logged" grep -q 'db query' "$ARGS_LOG"
+  check_not "e2e: every db query passes --default-character-set=utf8mb4 --quick" \
+    grep -qv 'charset=utf8mb4 quick=1' "$ARGS_LOG"
+
+  # Gallery attachments: the EXISTS is pre-filtered to non-empty galleries of
+  # exported products / variations.
+  check "e2e: gallery EXISTS skips empty gallery rows" grep -qF "( g.meta_value <> '' )" "$SQL_LOG"
+  check "e2e: gallery EXISTS is restricted to products and variations" \
+    bash -c 'grep -F "_product_image_gallery" "$1" | grep -qF "g.post_id IN (SELECT epr.ID FROM wp_posts epr WHERE ( epr.post_type IN ('"'"'product'"'"','"'"'product_variation'"'"') )"' _ "$SQL_LOG"
+  check "e2e: attachments still come from parent, thumbnail, gallery and term meta" \
+    bash -c 'grep -F "SELECT a.ID" -A 20 "$1" | grep -qF "_thumbnail_id" && grep -F "SELECT a.ID" -A 20 "$1" | grep -qF "a.post_parent IN" && grep -F "SELECT a.ID" -A 20 "$1" | grep -qF "product_attribute_image"' _ "$SQL_LOG"
 
   check_not "e2e: SQL never touches users, orders, sessions or API keys" \
     grep -qiE 'wp_users|usermeta|shop_order|wc_orders|woocommerce_order|woocommerce_sessions|woocommerce_api_keys|wc_customer|comments' "$SQL_LOG"
@@ -303,6 +380,64 @@ FAKE_EOF
   check_not "e2e: --skip-option drops the option" grep -q '^rank-math-options-titles' "$skip_out/options.tsv"
   check_not "e2e: no ppom_meta.tsv when the table is absent" test -f "$skip_out/ppom_meta.tsv"
   check_not "e2e: --no-archive writes no archive" test -f "$skip_out.tgz"
+
+  # A failed SHOW TABLES / SHOW COLUMNS is an error, never "table absent"; the
+  # EXIT trap removes stray temp files.
+  fail_out="$TMP/fail/shop.example-export"
+  mkdir -p "$TMP/fail"
+  FAKE_FAIL_SHOW=1 FAKE_OUT="$fail_out" bash "$SCRIPT" --wp "$FAKE" --out "$fail_out" --no-archive >"$TMP/fail.log" 2>&1
+  rc=$?
+  if [ "$rc" -ne 0 ]; then ok "e2e: a failed SHOW query stops the export"; else bad "e2e: a failed SHOW query stops the export"; fi
+  check "e2e: the failure names what was being checked" grep -q 'could not check column wp_terms.term_order' "$TMP/fail.log"
+  check "e2e: the failure shows the first mysql error line" grep -q "ERROR 2002" "$TMP/fail.log"
+  check_not "e2e: nothing after the failed check was written" test -f "$fail_out/terms.tsv"
+  check_not "e2e: the EXIT trap removes .part and .err files" bash -c 'ls -A "$1" | grep -qE "\.part$|^\.err$"' _ "$fail_out"
+
+  # Non-core shipping methods: settings left out by default, loud warning,
+  # exported only with --include-method.
+  dhl_out="$TMP/dhl/shop.example-export"
+  mkdir -p "$TMP/dhl"
+  FAKE_EXTRA_METHOD=1 SQL_LOG="$TMP/sql-dhl.log" bash "$SCRIPT" --wp "$FAKE" --out "$dhl_out" --no-archive >"$TMP/dhl.log" 2>&1
+  rc=$?
+  if [ "$rc" -eq 0 ]; then ok "e2e: export with a non-core shipping method succeeds"; else bad "e2e: export with a non-core shipping method succeeds (rc=$rc)"; sed 's/^/    /' "$TMP/dhl.log"; fi
+  check "e2e: the method row itself is exported" grep -qF $'1\t7\tdhl_express\t4\t1' "$dhl_out/shipping_zone_methods.tsv"
+  check_not "e2e: non-core instance settings are not exported by default" grep -q '^woocommerce_dhl_express_7_settings' "$dhl_out/options.tsv"
+  check_not "e2e: non-core instance settings are not even queried" grep -qF "woocommerce_dhl_express_7_settings" "$TMP/sql-dhl.log"
+  check "e2e: core method settings are still exported" grep -q '^woocommerce_flat_rate_3_settings' "$dhl_out/options.tsv"
+  check "e2e: a loud warning names the dropped method and the flag" \
+    grep -q "WARNING: shipping method 'dhl_express' is not a WooCommerce core method.*--include-method dhl_express" "$TMP/dhl.log"
+
+  inc_out="$TMP/inc/shop.example-export"
+  mkdir -p "$TMP/inc"
+  FAKE_EXTRA_METHOD=1 SQL_LOG="$TMP/sql-inc.log" bash "$SCRIPT" --wp "$FAKE" --out "$inc_out" --no-archive --include-method dhl_express >"$TMP/inc.log" 2>&1
+  rc=$?
+  if [ "$rc" -eq 0 ]; then ok "e2e: --include-method run succeeds"; else bad "e2e: --include-method run succeeds (rc=$rc)"; sed 's/^/    /' "$TMP/inc.log"; fi
+  check "e2e: --include-method exports the instance settings" grep -q '^woocommerce_dhl_express_7_settings' "$inc_out/options.tsv"
+  check "e2e: --include-method prints a loud warning" grep -q 'WARNING: --include-method dhl_express: exporting woocommerce_dhl_express_7_settings' "$TMP/inc.log"
+  check_not "e2e: --include-method validates the method id" bash "$SCRIPT" --wp "$FAKE" --out "$TMP/inc/x" --include-method 'DHL Express'
+
+  # Size warnings at the importer limits (limits lowered for the test).
+  size_out="$TMP/size/shop.example-export"
+  mkdir -p "$TMP/size"
+  WPX_MAX_FILE_BYTES=1000 WPX_MAX_TOTAL_BYTES=5000 bash "$SCRIPT" --wp "$FAKE" --out "$size_out" --no-archive >"$TMP/size.log" 2>&1
+  rc=$?
+  if [ "$rc" -eq 0 ]; then ok "e2e: size warnings do not block the export"; else bad "e2e: size warnings do not block the export (rc=$rc)"; fi
+  check "e2e: warns per file above the per-file limit" grep -q 'warning: posts.tsv is larger than' "$TMP/size.log"
+  check_not "e2e: no per-file warning for a small file" grep -q 'warning: shipping_zones.tsv is larger than' "$TMP/size.log"
+  check "e2e: warns when the bundle total is above the limit" grep -q 'warning: the bundle is larger than' "$TMP/size.log"
+  check "e2e: the default limits are 40 MB per file and 50 MB in total" \
+    bash -c 'grep -q "WPX_MAX_FILE_BYTES:-\$((40 \* 1024 \* 1024))" "$1" && grep -q "WPX_MAX_TOTAL_BYTES:-\$((50 \* 1024 \* 1024))" "$1"' _ "$SCRIPT"
+
+  # Dropped filtered options are logged; an empty WPLANG leaves manifest.locale out.
+  note_out="$TMP/note/shop.example-export"
+  mkdir -p "$TMP/note"
+  FAKE_NO_RANK_MATH=1 FAKE_NO_WPLANG=1 bash "$SCRIPT" --wp "$FAKE" --out "$note_out" --no-archive >"$TMP/note.log" 2>&1
+  rc=$?
+  if [ "$rc" -eq 0 ]; then ok "e2e: export without Rank Math options and WPLANG succeeds"; else bad "e2e: export without Rank Math options and WPLANG succeeds (rc=$rc)"; sed 's/^/    /' "$TMP/note.log"; fi
+  check "e2e: note when a filtered option does not exist" grep -q 'note: option rank-math-options-general does not exist' "$TMP/note.log"
+  check "e2e: note when a filtered option is not an array" grep -q 'note: option rank-math-options-titles is not an array' "$TMP/note.log"
+  check_not "e2e: dropped options are not written" grep -q '^rank-math-options-' "$note_out/options.tsv"
+  check_not "e2e: manifest.locale is absent when WPLANG is empty" grep -q '"locale"' "$note_out/manifest.json"
 fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

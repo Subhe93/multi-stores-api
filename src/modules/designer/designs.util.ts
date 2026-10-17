@@ -13,7 +13,8 @@ import {
   type TextElement,
 } from './render/design-renderer';
 
-const UUID_RE =
+/** Lowercase RFC 4122 uuid (the one definition of the designer module). */
+export const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export function isUuid(v: unknown): v is string {

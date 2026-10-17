@@ -27,7 +27,7 @@ export function designAccessGrant(
       ? 'customer'
       : null;
   }
-  return guestTokenMatches(design.access_token_hash, access.token)
+  return designTokenMatches(design.access_token_hash, access.token)
     ? 'token'
     : null;
 }
@@ -40,18 +40,23 @@ export function canAccessDesign(
   return designAccessGrant(design, access) !== null;
 }
 
+/** sha256 of a guest token (hex), the stored form (`access_token_hash`). */
+export function hashDesignToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
 /**
  * Constant-time check of a presented guest token against the stored sha256
- * hex hash (same semantics as `designTokenMatches` in designs.service;
- * duplicated to keep this module free of service imports).
+ * hex hash. The one token comparison of the designer module (designs,
+ * cart and access checks all use it).
  */
-function guestTokenMatches(
+export function designTokenMatches(
   storedHash: string | null | undefined,
   token: string | null | undefined,
 ): boolean {
   if (!storedHash || typeof token !== 'string' || !token) return false;
   if (token.length > 256) return false;
-  const a = createHash('sha256').update(token).digest();
+  const a = Buffer.from(hashDesignToken(token), 'hex');
   const b = Buffer.from(storedHash, 'hex');
   return a.length === b.length && timingSafeEqual(a, b);
 }

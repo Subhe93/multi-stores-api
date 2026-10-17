@@ -13,9 +13,13 @@ import type {
   ImageSlotElement,
   TextElement,
 } from '../render/design-renderer';
-import { sortElements } from '../render/design-renderer';
+import {
+  compileDesignAllowedChars,
+  sortElements,
+} from '../render/design-renderer';
 import {
   convertNpp,
+  IMPORTED_ALLOWED_CHARS,
   finalizeTemplateAssets,
   nearestWeight,
   NppConversionResult,
@@ -76,6 +80,39 @@ const fontPairs = (t: NppConvertedTemplate) =>
   t.spec.fonts.map((f) => `${f.family} ${f.weight}`);
 
 describe('npp-converter', () => {
+  describe('imported allowed_chars', () => {
+    it('compiles as data and accepts Latin / Latin-1 / Latin Ext-A names, digits, punctuation and the heart', () => {
+      const re = compileDesignAllowedChars(IMPORTED_ALLOWED_CHARS)!;
+      expect(re).not.toBeNull();
+      for (const ok of [
+        'Åsa Öberg-Ängström',
+        'NA3b',
+        "Zoë O'Neil & Søren",
+        'Teknik \u2764 2026',
+        'Łukasz Ðorđe Şeyma', // Latin Extended-A
+        'Klass 3B (2026) / Nr. 7, ja!?',
+        'Mäkelä \u2019',
+      ]) {
+        expect([ok, re.test(ok)]).toEqual([ok, true]);
+      }
+      for (const bad of [
+        'سارة',
+        '日本',
+        '<script>',
+        'a\tb',
+        'x;y',
+        'Ωmega',
+        '\u{1F600}',
+      ]) {
+        expect([bad, re.test(bad)]).toEqual([bad, false]);
+      }
+      // The heart with VS16 passes the state validation (VS16 stripped first).
+      expect(re.test('Anna \u2764\ufe0f'.replace(/[\ufe0e\ufe0f]/g, ''))).toBe(
+        true,
+      );
+    });
+  });
+
   describe('fixtures', () => {
     it('contain no nonce / endpoint fields', () => {
       for (const f of productFiles) {
@@ -195,6 +232,7 @@ describe('npp-converter', () => {
             editable: true,
             required: true,
             max_length: 40,
+            allowed_chars: IMPORTED_ALLOWED_CHARS,
             direction: 'ltr',
             transform: 'none',
           });
