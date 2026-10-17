@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { StoreType } from '@prisma/client';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { personalizationCoreArgs } from '../personalization/__fixtures__/personalization-service.factory';
 import { PromotionsService } from '../promotions/promotions.service';
 import { ShippingService } from '../shipping/shipping.service';
 import { MailService } from '../mail/mail.service';
@@ -79,6 +80,7 @@ function positional(prisma: unknown, storeApps: unknown, mail?: unknown) {
     new MarketPricingService(prisma as PrismaService),
     { get: () => undefined } as unknown as ConfigService,
     new B2bService(storeApps as StoreAppsService),
+    ...personalizationCoreArgs(prisma),
   ] as const;
 }
 
@@ -235,8 +237,6 @@ function build(opts: {
   };
   const service = new OrdersService(
     ...positional(prisma, storeApps, opts.mail),
-    undefined,
-    undefined,
     undefined,
     undefined,
     undefined,

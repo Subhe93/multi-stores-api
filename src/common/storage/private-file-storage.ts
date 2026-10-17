@@ -13,8 +13,9 @@
  * is frozen).
  */
 import { randomBytes } from 'crypto';
-import { promises as fs } from 'fs';
+import { createReadStream, promises as fs } from 'fs';
 import * as path from 'path';
+import type { Readable } from 'stream';
 
 /** Nest injection token for the `PrivateStorage` implementation. */
 export const PRIVATE_STORAGE = Symbol('PRIVATE_STORAGE');
@@ -25,6 +26,12 @@ export const PRIVATE_STORAGE_DIR_ENV = 'PRIVATE_STORAGE_DIR';
 export interface PrivateFileStat {
   bytes: number;
   modified_at: Date;
+}
+
+/** A file opened for streaming: its size and a readable of its bytes. */
+export interface PrivateFileRead {
+  bytes: number;
+  stream: Readable;
 }
 
 export interface PrivateStorage {
@@ -40,6 +47,12 @@ export interface PrivateStorage {
   delete(key: string): Promise<boolean>;
   /** Size and mtime, or null when the file does not exist. */
   stat(key: string): Promise<PrivateFileStat | null>;
+  /**
+   * The file as a stream (size from `stat`), or null when it does not
+   * exist; large originals are served without buffering them (M5 A5).
+   * Optional so test doubles and other backends may implement `read` only.
+   */
+  openRead?(key: string): Promise<PrivateFileRead | null>;
 }
 
 export class InvalidPrivateStorageKeyError extends Error {
@@ -187,5 +200,11 @@ export class PrivateFileStorage implements PrivateStorage {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw e;
     }
+  }
+
+  async openRead(key: string): Promise<PrivateFileRead | null> {
+    const st = await this.stat(key);
+    if (!st) return null;
+    return { bytes: st.bytes, stream: createReadStream(this.resolve(key)) };
   }
 }

@@ -7,6 +7,7 @@ import {
 } from '@prisma/client';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { personalizationCoreArgs } from '../personalization/__fixtures__/personalization-service.factory';
 import { PromotionsService } from '../promotions/promotions.service';
 import { ShippingService } from '../shipping/shipping.service';
 import { MailService } from '../mail/mail.service';
@@ -96,6 +97,7 @@ function build(status: OrderStatus, items: Item[]) {
     {} as MarketPricingService,
     { get: () => undefined } as unknown as ConfigService,
     {} as B2bService,
+    ...personalizationCoreArgs(prisma),
   );
   const internals = service as unknown as {
     resolveFulfillerId: (userId: string, role: UserRole) => Promise<string>;

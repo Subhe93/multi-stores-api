@@ -27,12 +27,20 @@ export class CreateRedirectDto {
   to_path: string;
 
   @IsOptional()
-  @IsIn(REDIRECT_STATUS_CODES as unknown as number[])
+  @IsIn([...REDIRECT_STATUS_CODES])
   status_code?: number;
 
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;
+}
+
+/** `POST redirects/my/bulk`: the CSV text (`from_path,to_path[,status]` per line). */
+export class BulkRedirectDto {
+  // 5000 lines of two 4096-char paths plus separators.
+  @IsString()
+  @MaxLength(5000 * (2 * RAW_PATH_MAX + 8))
+  csv: string;
 }
 
 export class UpdateRedirectDto {
@@ -47,7 +55,7 @@ export class UpdateRedirectDto {
   to_path?: string;
 
   @IsOptional()
-  @IsIn(REDIRECT_STATUS_CODES as unknown as number[])
+  @IsIn([...REDIRECT_STATUS_CODES])
   status_code?: number;
 
   @IsOptional()

@@ -8,12 +8,14 @@ import {
 // with A→B and B→C, A is stored as →C; a chain that comes back to its own
 // source is a loop and is rejected. Pure, operates on an in-memory map.
 
-/** Longest chain followed before giving up (treated as a loop). */
+/** Longest chain followed before giving up (REDIRECT_CHAIN_TOO_LONG, M5 B22). */
 export const REDIRECT_MAX_HOPS = 20;
+
+export type ChainFailureCode = 'REDIRECT_LOOP' | 'REDIRECT_CHAIN_TOO_LONG';
 
 export type ChainResult =
   | { ok: true; to: string }
-  | { ok: false; code: 'REDIRECT_LOOP' };
+  | { ok: false; code: ChainFailureCode };
 
 /**
  * Final target of `from → to` given the other active redirects
@@ -52,7 +54,9 @@ export function resolveRedirectChain(
     if (exact === undefined && fallback !== null) seen.add(fallback);
     current = next;
   }
-  return { ok: false, code: 'REDIRECT_LOOP' };
+  // More than `maxHops` rows without coming back to the source: not a loop,
+  // but a chain the browser would give up on as well.
+  return { ok: false, code: 'REDIRECT_CHAIN_TOO_LONG' };
 }
 
 /**

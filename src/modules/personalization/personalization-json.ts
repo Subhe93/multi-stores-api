@@ -80,9 +80,11 @@ export interface FieldRefRow {
 
 /**
  * Names of the fields that reference `target` by name (or a legacy link by
- * id): sibling `linked_validation.target`, and for a top-level target the
- * field-source conditions and `repeat.lead.fields` of the other top-level
- * fields. The target's own children are ignored (deleted with it).
+ * id, or a legacy `target_field_id` that holds the name — the pre-K3
+ * dashboard wrote names there, M5 A4): sibling `linked_validation.target`,
+ * and for a top-level target the field-source conditions and
+ * `repeat.lead.fields` of the other top-level fields. The target's own
+ * children are ignored (deleted with it).
  */
 export function fieldReferencesTo(
   target: { id: string; name: string; parent_id: string | null },
@@ -96,8 +98,15 @@ export function fieldReferencesTo(
     if (sameSet && isPlainObject(link)) {
       const t = typeof link.target === 'string' ? link.target.trim() : '';
       const legacy =
-        typeof link.target_field_id === 'string' ? link.target_field_id : '';
-      if (t === target.name || t === target.id || legacy === target.id) {
+        typeof link.target_field_id === 'string'
+          ? link.target_field_id.trim()
+          : '';
+      if (
+        t === target.name ||
+        t === target.id ||
+        legacy === target.id ||
+        legacy === target.name
+      ) {
         out.add(r.name);
       }
     }

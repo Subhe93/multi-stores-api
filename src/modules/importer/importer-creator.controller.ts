@@ -215,12 +215,13 @@ export class ImporterCreatorController {
     @Param('id', ParseUUIDPipe) id: string,
     @Query() q: RunReportQueryDto,
   ) {
-    const csv = await this.runs.reportCsv(
+    // Streamed page by page (M5 B14); the BOM is the first chunk.
+    const csv = await this.runs.reportCsvStream(
       await this.runs.storeIdForCreator(userId),
       id,
       q.phase,
     );
-    return new StreamableFile(Buffer.from('\uFEFF' + csv), {
+    return new StreamableFile(csv, {
       type: 'text/csv; charset=utf-8',
       disposition: `attachment; filename="import-${id}.csv"`,
     });

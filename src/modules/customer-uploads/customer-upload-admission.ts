@@ -5,12 +5,15 @@ import {
 } from '@nestjs/common';
 import { promises as fs } from 'fs';
 import * as path from 'path';
+import type { UploadQuotaStore } from '../ops/upload-quota-store';
 
 /**
  * Disk-exhaustion guards of `POST /uploads/customer` (M4.0, public endpoint):
  *
- * - a per-IP daily byte budget, in memory (one API process; a restart resets
- *   it). `CUSTOMER_UPLOAD_DAILY_BYTES_PER_IP` (default 500 MB, 0 = off).
+ * - a per-IP daily byte budget shared by every API instance (Postgres table
+ *   `UploadQuotaWindow`, UTC day; M5 W1-C) with an in-memory fallback for
+ *   the instance when the DB is unreachable (warned, never blocks uploads).
+ *   `CUSTOMER_UPLOAD_DAILY_BYTES_PER_IP` (default 500 MB, 0 = off).
  *   Exceeding it → 429 `CUSTOMER_UPLOAD_QUOTA`. The client IP is `req.ip`,
  *   which is only the real client behind a proxy when `TRUST_PROXY` is set.
  * - a free-space floor on the disks that receive the original and the
@@ -53,11 +56,19 @@ export function storageFull(): ServiceUnavailableException {
   });
 }
 
-/** Per-IP bytes in a rolling 24 h window that starts at the first upload. */
+/**
+ * Per-IP daily bytes. With a `store` (Postgres `UploadQuotaWindow`, shared
+ * by all instances) the check is one indexed read and the charge one atomic
+ * upsert; the in-memory rolling 24 h window (from the first upload) is kept
+ * in step and used alone when the store is unavailable.
+ */
 export class CustomerUploadByteBudget {
   private readonly used = new Map<string, { since: number; bytes: number }>();
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly store?: UploadQuotaStore,
+    private readonly now: () => number = Date.now,
+  ) {}
 
   limit(): number {
     return envInt(
@@ -76,16 +87,27 @@ export class CustomerUploadByteBudget {
   }
 
   /** Throws 429 when `ip` cannot upload `bytes` more today (0 = any byte). */
-  assertAllowed(ip: string | undefined, bytes = 0): void {
+  async assertAllowed(ip: string | undefined, bytes = 0): Promise<void> {
     const limit = this.limit();
     if (!limit || !ip) return;
-    const used = this.entry(ip)?.bytes ?? 0;
+    let used: number | null = null;
+    if (this.store?.available()) {
+      used = await this.store.used('customer.ip', ip, this.now());
+    }
+    if (used === null) used = this.entry(ip)?.bytes ?? 0;
     if (used >= limit || used + bytes > limit) throw quotaExceeded(limit);
   }
 
-  /** Records a stored upload. */
-  consume(ip: string | undefined, bytes: number): void {
+  /** Records a stored upload (shared store first, local window always). */
+  async consume(ip: string | undefined, bytes: number): Promise<void> {
     if (!this.limit() || !ip) return;
+    this.consumeLocal(ip, bytes);
+    if (this.store?.available()) {
+      await this.store.add('customer.ip', ip, bytes, this.now());
+    }
+  }
+
+  private consumeLocal(ip: string, bytes: number): void {
     const e = this.entry(ip);
     if (e) {
       e.bytes += bytes;

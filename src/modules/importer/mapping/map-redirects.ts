@@ -1,5 +1,5 @@
 import { redirectPath, type RedirectCandidate } from '../model/dry-run-summary';
-import type { NormalizedCatalog, NProduct } from '../model/normalized';
+import type { NormalizedCatalog, NPage, NProduct } from '../model/normalized';
 
 /**
  * Redirect generation (M4.4 §6.1) over the planner's final slugs:
@@ -10,7 +10,11 @@ import type { NormalizedCatalog, NProduct } from '../model/normalized';
  *    (`redirect_skipped`);
  *  - `/<category_base>/<full/path>` and, for nested categories, the leaf
  *    alias → `/collections/<slug>`;
- *  - `/<tag_base>/<slug>` → the single product carrying the tag, else `/`.
+ *  - `/<tag_base>/<slug>` → the single product carrying the tag, else `/`;
+ *  - (M5 B17, `redirect_shortlinks`) the WordPress shortlink `/?p=<post id>`
+ *    of every published product → the same target as its slug;
+ *  - (M5 B17 hook) WordPress pages (`catalog.pages`, none exported yet):
+ *    `/<page path>` and `/?p=<id>` → whatever `pageTarget` resolves.
  * The from-path is normalised by the redirects module when it is planned.
  */
 
@@ -26,6 +30,18 @@ export interface RedirectBuildInput {
   skipped: NProduct[];
   categorySlug: Map<string, string>;
   redirectSkipped: boolean;
+  /** `/?p=<id>` rows for published products (and pages). Default false. */
+  shortlinks?: boolean;
+  /**
+   * Target path of a WordPress page on the platform (`/pages/<slug>`, a
+   * collection, …), or null to skip it. Without it pages get no redirects.
+   */
+  pageTarget?: (page: NPage) => string | null;
+}
+
+/** The WordPress shortlink of a post, as the redirects module keys it. */
+export function shortlinkPath(sourceId: string): string | null {
+  return /^\d{1,12}$/.test(sourceId) ? `/?p=${Number(sourceId)}` : null;
 }
 
 export interface ImportRedirectCandidate extends RedirectCandidate {
@@ -64,6 +80,32 @@ export function buildImportRedirects(input: RedirectBuildInput): {
       external_ref: p.product.ext_id,
     });
   }
+  if (input.shortlinks)
+    for (const p of published) {
+      const from = shortlinkPath(p.product.source_id);
+      if (from)
+        add({
+          from,
+          to: `/products/${p.final_slug}`,
+          rule: 'shortlink',
+          external_ref: p.product.ext_id,
+        });
+    }
+  // Pages (hook): nothing exports them yet, see NPage.
+  if (input.pageTarget)
+    for (const page of catalog.pages ?? []) {
+      if (page.status !== 'publish') continue;
+      const to = input.pageTarget(page);
+      if (!to) continue;
+      add({
+        from: redirectPath(...page.path),
+        to,
+        rule: 'page',
+        external_ref: page.ext_id,
+      });
+      const from = input.shortlinks ? shortlinkPath(page.source_id) : null;
+      if (from) add({ from, to, rule: 'shortlink', external_ref: page.ext_id });
+    }
   for (const p of input.imported) {
     for (const old of p.product.old_slugs) {
       let reason: string | null = null;

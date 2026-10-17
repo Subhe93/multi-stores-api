@@ -1,10 +1,8 @@
 import {
-  hasExtraValue,
   linesToDisplay,
   personalizationInvalid,
   shapeFieldsForStorefront,
   shapeOptionConfigForStorefront,
-  stripEmptyExtraColumns,
   usesAdvancedFields,
   usesAdvancedOptionConfig,
 } from './personalization-runtime';
@@ -37,21 +35,6 @@ describe('personalization runtime helpers', () => {
     expect(JSON.stringify(shapeFieldsForStorefront(plainFields(), false))).toBe(
       JSON.stringify(plainFieldsM40()),
     );
-    expect(
-      JSON.stringify(plainFields().map((r) => stripEmptyExtraColumns(r))),
-    ).toBe(JSON.stringify(plainFieldsM40()));
-  });
-
-  it('public rows keep stored M4.1 values (never lost when the app is off)', () => {
-    const [name] = appFields();
-    const row = stripEmptyExtraColumns(name) as Record<string, unknown>;
-    expect(row.ui).toEqual({ placement: 'after_variants' });
-    expect(row).not.toHaveProperty('conditions');
-    expect(
-      (row.translations as Record<string, unknown>[])[0].display_label,
-    ).toBe('Namn');
-    expect(hasExtraValue(name)).toBe(true);
-    expect(plainFields().some((r) => hasExtraValue(r))).toBe(false);
   });
 
   it('option config: untouched without card config; stripped when off', () => {

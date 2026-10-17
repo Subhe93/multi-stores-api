@@ -31,6 +31,7 @@ export type RedirectConflictCode =
   | 'REDIRECT_CONFLICT' // a MANUAL row owns the from_path
   | 'REDIRECT_DUPLICATE' // the same from_path twice in one batch
   | 'REDIRECT_LOOP'
+  | 'REDIRECT_CHAIN_TOO_LONG' // more than REDIRECT_MAX_HOPS rows deep
   | 'REDIRECT_LIMIT'; // past REDIRECT_MAX_ROWS_PER_STORE (importer batches)
 
 export interface PlannedRedirect {
@@ -146,12 +147,12 @@ export function planRedirectUpserts(
     if (r.is_active) working.set(r.from_path, r.to_path);
   for (const [from, v] of accepted) working.set(from, v.to);
 
-  // 3. Drop rows that loop, in batch order (removing one row can break the
-  //    cycle for the rows after it, which are then kept).
+  // 3. Drop rows that loop or chain too deep, in batch order (removing one
+  //    row can break the cycle for the rows after it, which are then kept).
   for (const [from, v] of [...accepted]) {
     const res = resolveRedirectChain(working, from, v.to);
     if (!res.ok) {
-      conflicts.push({ from_path: from, to_path: v.to, code: 'REDIRECT_LOOP' });
+      conflicts.push({ from_path: from, to_path: v.to, code: res.code });
       accepted.delete(from);
       const prev = byFrom.get(from);
       if (prev?.is_active) working.set(from, prev.to_path);
@@ -184,6 +185,9 @@ export function planRedirectUpserts(
   for (const it of items) working.set(it.from_path, it.to_path);
 
   // 5. Existing IMPORT rows not in the batch that now point at a source.
+  //    MANUAL rows are never re-pointed by an import: the merchant chose
+  //    their target, and a MANUAL row whose target became an IMPORT source
+  //    still works (the browser follows the second redirect).
   const repoints: RedirectRepoint[] = [];
   for (const r of existing) {
     if (!r.is_active || r.source !== 'IMPORT' || accepted.has(r.from_path)) {

@@ -3,6 +3,7 @@ import { StoreType, TaxBasis, TaxPricingMode } from '@prisma/client';
 import { ConflictException } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { personalizationCoreArgs } from '../personalization/__fixtures__/personalization-service.factory';
 import { PromotionsService } from '../promotions/promotions.service';
 import { ShippingService } from '../shipping/shipping.service';
 import { MailService } from '../mail/mail.service';
@@ -280,6 +281,7 @@ function build(
     marketPricing,
     config as unknown as ConfigService,
     b2b,
+    ...personalizationCoreArgs(prisma),
     undefined,
     opts.withExemptionService === false ? undefined : b2bTax,
   );

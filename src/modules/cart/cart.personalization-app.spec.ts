@@ -1,4 +1,4 @@
-import { BadRequestException, HttpException } from '@nestjs/common';
+import { BadRequestException, HttpException, Logger } from '@nestjs/common';
 import { CartService } from './cart.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TaxService } from '../taxes/tax.service';
@@ -6,8 +6,6 @@ import { MarketsContextService } from '../markets/markets-context.service';
 import { MarketPricingService } from '../markets/market-pricing.service';
 import type { MarketContext } from '../markets/market-context';
 import { B2bService } from '../b2b/b2b.service';
-import { StoreAppsService } from '../store-apps/store-apps.service';
-import { PersonalizationService } from '../personalization/personalization.service';
 import {
   C_COLOR,
   C_NAME,
@@ -20,6 +18,10 @@ import {
   plainFields,
   validValues,
 } from '../personalization/__fixtures__/app-fields';
+import {
+  buildPersonalizationCore,
+  buildPersonalizationService,
+} from '../personalization/__fixtures__/personalization-service.factory';
 
 // M4.1 cart (C29 step 3): with the personalization app on for a product
 // with M4.1 config, add/update run the evaluator (400
@@ -158,14 +160,11 @@ function build(opts: { fields: unknown[]; appOn: boolean; seed?: Row[] }) {
   const marketPricing = new MarketPricingService(
     prisma as unknown as PrismaService,
   );
-  const personalization = new PersonalizationService(
-    prisma as unknown as PrismaService,
-    storeApps as unknown as StoreAppsService,
-    undefined,
-    undefined,
-    undefined,
+  const personalization = buildPersonalizationService({
+    prisma,
+    storeApps,
     marketPricing,
-  );
+  });
   const evaluate = jest.spyOn(personalization, 'evaluateLine');
   const service = new CartService(
     prisma as unknown as PrismaService,
@@ -175,7 +174,7 @@ function build(opts: { fields: unknown[]; appOn: boolean; seed?: Row[] }) {
     } as unknown as MarketsContextService,
     marketPricing,
     {} as B2bService,
-    undefined,
+    buildPersonalizationCore(prisma).core,
     personalization,
   );
   const internals = service as unknown as Record<string, jest.Mock> & {
@@ -508,6 +507,26 @@ describe('CartService personalization app (M4.1 fixes)', () => {
     storeApps.enabledOrUnknown.mockResolvedValue(null as never);
     const [item] = await internals.enrichCartItems([row(validValues())], 'sv');
     expect(item.personalization_invalid).toBe(true);
+  });
+
+  it('M5 A9: a swallowed app-state error on read is logged with the cart item id', async () => {
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    try {
+      const { internals, storeApps } = build({
+        fields: appFields(),
+        appOn: true,
+      });
+      storeApps.enabledOrUnknown.mockResolvedValue(null as never);
+      const stored = row(validValues());
+      await internals.enrichCartItems([stored], 'sv');
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(`Cart item ${stored.id}`),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('a product with active variants needs the variant (400 PERSONALIZATION_VARIANT_REQUIRED)', async () => {

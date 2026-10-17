@@ -11,10 +11,15 @@ import { PrismaService } from '../../prisma/prisma.service';
 import {
   REDIRECT_MAP_MAX_ENTRIES,
   fallbackRedirectPath,
+  isRedirectStatusCode,
   normalizeRedirectPath,
   sanitizeRedirectTarget,
 } from './redirect-path.util';
-import { resolveRedirectChain, rowsPointingAt } from './redirect-chain';
+import {
+  resolveRedirectChain,
+  rowsPointingAt,
+  type ChainFailureCode,
+} from './redirect-chain';
 import {
   IncomingRedirect,
   RedirectDeactivation,
@@ -87,6 +92,68 @@ export function redirectLimitError() {
     message: `A store can have at most ${REDIRECT_MAX_ROWS_PER_STORE} redirects.`,
     limit: REDIRECT_MAX_ROWS_PER_STORE,
   });
+}
+
+/** Rows per bulk CSV upload (`POST redirects/my/bulk`). */
+export const BULK_REDIRECT_MAX_ROWS = 5000;
+
+/** One parsed CSV line of a bulk upload (`from_path,to_path,status`). */
+export interface BulkRedirectRow {
+  /** 1-based line number in the upload (for the conflict report). */
+  line: number;
+  from_path: string;
+  to_path: string;
+  status_code?: number;
+}
+
+export type BulkCreateConflictCode =
+  | 'REDIRECT_INVALID_PATH'
+  | 'REDIRECT_DUPLICATE'
+  | 'REDIRECT_LIMIT'
+  | ChainFailureCode;
+
+export interface BulkCreateResult {
+  created: {
+    line: number;
+    id: string;
+    from_path: string;
+    to_path: string;
+    status_code: number;
+  }[];
+  conflicts: {
+    line: number;
+    from_path: string;
+    to_path: string;
+    code: BulkCreateConflictCode;
+  }[];
+}
+
+/**
+ * Parses the text of a bulk upload: one redirect per line as
+ * `from_path,to_path[,status]` (`;` or a tab also separate the fields,
+ * quotes around a field are removed). Blank lines, `#` comments and a
+ * header line starting with `from_path` are skipped. Line numbers are
+ * 1-based positions in the text.
+ */
+export function parseBulkRedirectCsv(text: string): BulkRedirectRow[] {
+  const out: BulkRedirectRow[] = [];
+  const lines = text.split(/\r\n|\r|\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i].trim();
+    if (!raw || raw.startsWith('#')) continue;
+    const cells = raw.split(/[,;\t]/).map((c) =>
+      c
+        .trim()
+        .replace(/^"(.*)"$/, '$1')
+        .trim(),
+    );
+    if (i === 0 && /^from(_path)?$/i.test(cells[0] ?? '')) continue;
+    const [from_path = '', to_path = '', status = ''] = cells;
+    const row: BulkRedirectRow = { line: i + 1, from_path, to_path };
+    if (status !== '') row.status_code = Number(status);
+    out.push(row);
+  }
+  return out;
 }
 
 export type RedirectTuple = [from: string, to: string, status: number];
@@ -473,12 +540,9 @@ export class RedirectsService {
       idByFrom.set(r.from_path, r.id);
     }
     const res = resolveRedirectChain(map, from, to);
-    if (!res.ok) {
-      throw new ConflictException({
-        code: 'REDIRECT_LOOP',
-        message: 'This redirect would create a loop.',
-      });
-    }
+    if (!res.ok) throw chainError(res.code);
+    // A merchant write re-points every row (MANUAL included) that targeted
+    // `from`; an import never touches MANUAL rows (redirect-plan step 5).
     for (const source of rowsPointingAt(map, from, res.to)) {
       await tx.storeRedirect.update({
         where: { id: idByFrom.get(source)! },
@@ -486,6 +550,116 @@ export class RedirectsService {
       });
     }
     return res.to;
+  }
+
+  /**
+   * Bulk creation of MANUAL rows from a CSV upload (M5 B17): one transaction,
+   * every row validated and chain-flattened like `create`, nothing updated.
+   * A row that cannot be created is reported with its line number and code;
+   * the others are still written. At most BULK_REDIRECT_MAX_ROWS rows.
+   */
+  async bulkCreate(
+    storeId: string,
+    rows: readonly BulkRedirectRow[],
+  ): Promise<BulkCreateResult> {
+    if (rows.length > BULK_REDIRECT_MAX_ROWS) {
+      throw new BadRequestException({
+        code: 'REDIRECT_BULK_TOO_MANY',
+        message: `At most ${BULK_REDIRECT_MAX_ROWS} redirects per upload.`,
+        limit: BULK_REDIRECT_MAX_ROWS,
+      });
+    }
+    const result = await this.prisma.$transaction(
+      async (tx) => {
+        const existing = await tx.storeRedirect.findMany({
+          where: { store_id: storeId },
+          select: {
+            id: true,
+            from_path: true,
+            to_path: true,
+            is_active: true,
+          },
+        });
+        const working = new Map<string, string>();
+        const idByFrom = new Map<string, string>();
+        const taken = new Set<string>();
+        for (const r of existing) {
+          taken.add(r.from_path);
+          if (r.is_active) {
+            working.set(r.from_path, r.to_path);
+            idByFrom.set(r.from_path, r.id);
+          }
+        }
+        let room = Math.max(0, REDIRECT_MAX_ROWS_PER_STORE - existing.length);
+        const conflicts: BulkCreateResult['conflicts'] = [];
+        const created: BulkCreateResult['created'] = [];
+        const reject = (row: BulkRedirectRow, code: BulkCreateConflictCode) => {
+          conflicts.push({
+            line: row.line,
+            from_path: row.from_path,
+            to_path: row.to_path,
+            code,
+          });
+        };
+        for (const row of rows) {
+          const from = normalizeRedirectPath(row.from_path);
+          const to = sanitizeRedirectTarget(row.to_path);
+          const status = row.status_code ?? 301;
+          if (from === null || to === null || !isRedirectStatusCode(status)) {
+            reject(row, 'REDIRECT_INVALID_PATH');
+            continue;
+          }
+          if (taken.has(from)) {
+            reject(row, 'REDIRECT_DUPLICATE');
+            continue;
+          }
+          if (room <= 0) {
+            reject(row, 'REDIRECT_LIMIT');
+            continue;
+          }
+          const res = resolveRedirectChain(working, from, to);
+          if (!res.ok) {
+            reject(row, res.code);
+            continue;
+          }
+          for (const source of rowsPointingAt(working, from, res.to)) {
+            const id = idByFrom.get(source);
+            if (!id) continue;
+            await tx.storeRedirect.update({
+              where: { id },
+              data: { to_path: res.to },
+            });
+            working.set(source, res.to);
+          }
+          const row_ = await tx.storeRedirect.create({
+            data: {
+              store_id: storeId,
+              from_path: from,
+              to_path: res.to,
+              status_code: status,
+              source: RedirectSource.MANUAL,
+              is_active: true,
+            },
+            select: { id: true },
+          });
+          taken.add(from);
+          working.set(from, res.to);
+          idByFrom.set(from, row_.id);
+          room--;
+          created.push({
+            line: row.line,
+            id: row_.id,
+            from_path: from,
+            to_path: res.to,
+            status_code: status,
+          });
+        }
+        return { created, conflicts };
+      },
+      { timeout: 120_000 },
+    );
+    if (result.created.length) this.invalidate(storeId);
+    return result;
   }
 
   // ── Importer ─────────────────────────────────────────────────────────────
@@ -634,6 +808,16 @@ function duplicate() {
   return new ConflictException({
     code: 'REDIRECT_DUPLICATE',
     message: 'A redirect for this path already exists.',
+  });
+}
+
+function chainError(code: ChainFailureCode) {
+  return new ConflictException({
+    code,
+    message:
+      code === 'REDIRECT_LOOP'
+        ? 'This redirect would create a loop.'
+        : 'This redirect would chain through too many other redirects.',
   });
 }
 

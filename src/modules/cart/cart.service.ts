@@ -1,7 +1,8 @@
 import {
-  Injectable,
-  NotFoundException,
   BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
   Optional,
 } from '@nestjs/common';
 import { BundleOffer, CartItem, Prisma } from '@prisma/client';
@@ -32,6 +33,7 @@ import type { B2bTotals } from '../b2b/b2b.types';
 import { pickTranslation } from '../../common/personalization/pick-translation';
 import {
   PersonalizationCoreService,
+  PRODUCT_VARIANT_MISMATCH,
   type LineContext,
 } from '../../common/personalization/personalization-core.service';
 import {
@@ -42,7 +44,6 @@ import {
   lineKey,
   type NormalizedValues,
 } from '../../common/personalization/rules';
-import { CustomerUploadsService } from '../customer-uploads/customer-uploads.service';
 import {
   assertAmountFits,
   assertPriceEvaluated,
@@ -131,15 +132,16 @@ export interface CustomFieldDisplay {
 
 @Injectable()
 export class CartService {
+  private readonly logger = new Logger(CartService.name);
   constructor(
     private prisma: PrismaService,
     private readonly taxService: TaxService,
     private readonly markets: MarketsContextService,
     private readonly marketPricing: MarketPricingService,
     private readonly b2b: B2bService,
-    // M4.0: required by DI (no @Optional). Typed optional only so positional
-    // test constructors stay valid; see `core`.
-    private readonly personalizationCore?: PersonalizationCoreService,
+    // M4.0: the personalization core, required (M5 A16: no fallback built
+    // on the fly; specs pass `buildPersonalizationCore(prisma)`).
+    private readonly core: PersonalizationCoreService,
     // M4.1 personalization app: optional and trailing. Absent = every line
     // takes the M4.0 path.
     @Optional() private readonly personalization?: PersonalizationService,
@@ -147,18 +149,6 @@ export class CartService {
     // is ever a designer line (a sent design_id is not stored).
     @Optional() private readonly designerCart?: DesignerCartService,
   ) {}
-
-  private fallbackCore?: PersonalizationCoreService;
-
-  /** The injected core service, or one built on this Prisma (unit tests). */
-  private get core(): PersonalizationCoreService {
-    if (this.personalizationCore) return this.personalizationCore;
-    this.fallbackCore ??= new PersonalizationCoreService(
-      this.prisma,
-      new CustomerUploadsService(this.prisma),
-    );
-    return this.fallbackCore;
-  }
 
   /**
    * Personalization app (M4.1 C29 step 3): evaluates a cart line in app
@@ -679,7 +669,10 @@ export class CartService {
         let store: PersonalizationStore | null = null;
         try {
           store = await appStoreOf(ownProduct.creator_id);
-        } catch {
+        } catch (e) {
+          this.logger.warn(
+            `Cart item ${item.id} (product ${ownProduct.id}): app state unreadable, line flagged invalid: ${String(e)}`,
+          );
           personalizationInvalidLine = true;
         }
         if (store) {
@@ -714,8 +707,11 @@ export class CartService {
                     Number(res.priceDelta),
                   ),
               );
-            } catch {
+            } catch (e) {
               // No rate to convert base amounts: checkout refuses the line.
+              this.logger.warn(
+                `Cart item ${item.id} (product ${ownProduct.id}, market ${market?.key ?? 'none'}): personalization delta not convertible, line hidden: ${String(e)}`,
+              );
               hiddenInMarket = true;
             }
           }
@@ -726,7 +722,10 @@ export class CartService {
           }
           try {
             assertAmountFits(price, roundMoney(price * item.quantity));
-          } catch {
+          } catch (e) {
+            this.logger.warn(
+              `Cart item ${item.id} (product ${ownProduct.id}): price does not fit, line flagged invalid: ${String(e)}`,
+            );
             personalizationInvalidLine = true;
           }
         }
@@ -1329,6 +1328,10 @@ export class CartService {
     const [ctx] = await this.core.loadContexts([dto]);
     if (!dto.product_id && !dto.custom_product_id && ctx.productId) {
       dto.product_id = ctx.productId;
+    } else if (dto.product_id && dto.variant_id && !dto.custom_product_id) {
+      // A variant borrowed from another product is refused here (one
+      // query on the add path; loadContexts no longer looks it up, M5 A11).
+      await this.assertVariantOfProduct(dto.product_id, dto.variant_id);
     }
     await this.assertAvailableInMarket(dto, locale, marketKey);
     // M4.2 designer (C29 step 2): a line with a design, or of a product the
@@ -1405,6 +1408,23 @@ export class CartService {
 
     // Return enriched cart
     return this.getCart(userId, locale, marketKey, buyer);
+  }
+
+  /** 400 PRODUCT_VARIANT_MISMATCH unless the variant exists on the product. */
+  private async assertVariantOfProduct(
+    productId: string,
+    variantId: string,
+  ): Promise<void> {
+    const variant = await this.prisma.productVariant.findUnique({
+      where: { id: variantId },
+      select: { product_id: true },
+    });
+    if (variant && variant.product_id !== productId) {
+      throw new BadRequestException({
+        code: PRODUCT_VARIANT_MISMATCH,
+        message: 'The selected variant does not belong to this product',
+      });
+    }
   }
 
   async updateItem(

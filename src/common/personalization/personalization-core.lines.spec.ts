@@ -77,6 +77,35 @@ describe('PersonalizationCoreService M4.1 seams', () => {
     expect(app.allFields).toHaveLength(4);
   });
 
+  it('M5 A3: uploadRefsOf + uploadExpired name the field and the line of an unattachable upload', () => {
+    const service = core([]);
+    const rows = service.buildOrderValues(
+      { line_id: 'row-7' },
+      logoCtx,
+      {},
+      {
+        lines: [fileLine()],
+        uploads: new Map([[PREVIEW, { id: UPLOAD_ID, purged: false }]]),
+      },
+    );
+    const refs = service.uploadRefsOf(rows, logoCtx, { line_id: 'row-7' });
+    expect([...refs.keys()]).toEqual([UPLOAD_ID]);
+    const err = service.uploadExpired(refs.get(UPLOAD_ID), 'sv');
+    expect(err.getResponse()).toMatchObject({
+      code: 'CUSTOMER_UPLOAD_EXPIRED',
+      field_id: 'f-logo',
+      field_name: 'logo',
+      line_id: 'row-7',
+      params: { label: 'Logo' },
+    });
+    // Unknown reference (defensive): still the coded error, no field.
+    expect(service.uploadExpired(undefined).getResponse()).toMatchObject({
+      code: 'CUSTOMER_UPLOAD_EXPIRED',
+      field_id: '',
+      field_name: '',
+    });
+  });
+
   it('buildOrderValues with lines: snapshot columns, file row with the upload attached', () => {
     const svc = core([]);
     const rows = svc.buildOrderValues(

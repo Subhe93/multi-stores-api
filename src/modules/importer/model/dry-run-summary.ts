@@ -80,7 +80,11 @@ export interface RedirectCandidate {
     | 'category_leaf'
     /** A slug the platform page had before this run renamed it (fix 3/13). */
     | 'renamed'
-    | 'tag';
+    | 'tag'
+    /** WordPress shortlink `/?p=<id>` of a product or page (M5 B17, `redirect_shortlinks`). */
+    | 'shortlink'
+    /** A WordPress `page` post (M5 B17 hook; no bundle exports pages yet). */
+    | 'page';
   external_ref: string;
 }
 

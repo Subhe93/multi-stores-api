@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { OrderStatus, StoreType, UserRole } from '@prisma/client';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { personalizationCoreArgs } from '../personalization/__fixtures__/personalization-service.factory';
 import { PromotionsService } from '../promotions/promotions.service';
 import { ShippingService } from '../shipping/shipping.service';
 import { MailService } from '../mail/mail.service';
@@ -179,6 +180,7 @@ function buildCreate(opts: {
     marketPricing,
     config as unknown as ConfigService,
     b2b,
+    ...personalizationCoreArgs(prisma),
     opts.invoices,
   );
   return { service, prisma, tax, storeApps, mail };
@@ -237,6 +239,7 @@ function buildLifecycle(invoices?: unknown) {
     {} as MarketPricingService,
     {} as ConfigService,
     {} as B2bService,
+    ...personalizationCoreArgs(prisma),
     invoices as InvoiceTriggersService | undefined,
   );
   const internals = service as unknown as Record<

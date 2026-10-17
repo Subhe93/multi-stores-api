@@ -18,6 +18,10 @@
  */
 import type { OnModuleDestroy } from '@nestjs/common';
 import {
+  chromiumChannel,
+  chromiumExecutablePath,
+} from '../../../common/ops/chromium-env';
+import {
   BrowserHost,
   withTimeout,
   type BrowserHostOptions,
@@ -115,8 +119,9 @@ export function createPdfRenderer(
   if (['off', 'disabled', 'none', 'false', '0'].includes(engine)) {
     return new DisabledPdfRenderer();
   }
+  // INVOICE_PDF_* (legacy) first, then the shared CHROMIUM_PATH / CHROMIUM_CHANNEL.
   return new ChromiumPdfRenderer({
-    executablePath: env.INVOICE_PDF_CHROMIUM_PATH?.trim() || undefined,
-    channel: env.INVOICE_PDF_BROWSER_CHANNEL?.trim() || undefined,
+    executablePath: chromiumExecutablePath(env, 'INVOICE_PDF_CHROMIUM_PATH'),
+    channel: chromiumChannel(env, 'INVOICE_PDF_BROWSER_CHANNEL'),
   });
 }

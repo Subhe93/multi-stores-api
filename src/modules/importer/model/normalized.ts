@@ -337,6 +337,23 @@ export interface NCatalogMeta {
   weight_unit?: string | null;
 }
 
+/**
+ * (M5 B17 hook) A WordPress `page` post. No bundle exports pages today
+ * (`posts.tsv` holds products, variations and templates), so adapters leave
+ * `pages` absent; when one fills it, the redirect planner maps `/<path>` and
+ * the shortlink `/?p=<id>` of every published page to the target that
+ * `pageTarget` resolves (see mapping/map-redirects.ts).
+ */
+export interface NPage {
+  ext_id: string;
+  source_id: string;
+  status: NProductStatus;
+  slug: string;
+  /** Ancestor slugs first, own slug last (WordPress nested page path). */
+  path: string[];
+  title: string;
+}
+
 export interface NormalizedCatalog {
   meta: NCatalogMeta;
   capabilities: SourceCapabilities;
@@ -349,4 +366,6 @@ export interface NormalizedCatalog {
   templates: NTemplate[];
   store_settings: NStoreSettings;
   issues: NIssue[];
+  /** (M5 B17 hook) WordPress pages; absent until an adapter exports them. */
+  pages?: NPage[];
 }

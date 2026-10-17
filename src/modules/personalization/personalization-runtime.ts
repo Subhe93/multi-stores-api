@@ -158,47 +158,6 @@ export function shapeFieldsForStorefront<T extends FieldRowLike>(
 }
 
 /**
- * The M4.0 shape of field rows read through public endpoints while the app
- * is not on: the M4.1 columns are removed only when they hold no value, so
- * pre-M4.1 rows are byte-identical and stored config is never lost.
- */
-export function stripEmptyExtraColumns<T extends FieldRowLike>(row: T): T {
-  const r = row as unknown as Record<string, unknown>;
-  const emptyKeys = FIELD_EXTRA_KEYS.filter(
-    (k) => k in r && (r[k] === null || r[k] === undefined),
-  );
-  const out = omitKeys(row, emptyKeys);
-  if (Array.isArray(row.translations)) {
-    (out as FieldRowLike).translations = row.translations.map((t) => {
-      const tr = t as Record<string, unknown>;
-      return omitKeys(
-        t,
-        TRANSLATION_EXTRA_COLUMNS.filter(
-          (k) => k in tr && (tr[k] === null || tr[k] === undefined),
-        ),
-      );
-    });
-  }
-  return out;
-}
-
-/** True when a field row (or one of its translations) holds an M4.1 value. */
-export function hasExtraValue(row: {
-  translations?: object[] | null;
-}): boolean {
-  const r = row as Record<string, unknown>;
-  if (FIELD_EXTRA_KEYS.some((k) => r[k] !== null && r[k] !== undefined)) {
-    return true;
-  }
-  return (row.translations ?? []).some((t) => {
-    const tr = t as Record<string, unknown>;
-    return TRANSLATION_EXTRA_COLUMNS.some(
-      (k) => tr[k] !== null && tr[k] !== undefined,
-    );
-  });
-}
-
-/**
  * Storefront `variant_option_config` (D9/D10, C36/C38): with the app off,
  * `valueMeta` is removed and `style:'card'` shows as `'text'`; `swatchMap`
  * is never touched. The same array is returned when there is nothing to

@@ -53,6 +53,12 @@ export interface ImportRunOptions {
   };
   designer_fallback_fields: boolean;
   redirect_skipped: boolean;
+  /**
+   * M5 B17: also redirect the WordPress shortlink `/?p=<post id>` of every
+   * published product (and of pages, when the bundle carries them). Off by
+   * default: it adds one row per product.
+   */
+  redirect_shortlinks: boolean;
   verify_media: boolean;
   /**
    * Stock on UPDATE (M4.4 fix 17): `keep` (default) leaves the platform's
@@ -115,6 +121,7 @@ export function defaultRunOptions(): ImportRunOptions {
     },
     designer_fallback_fields: true,
     redirect_skipped: true,
+    redirect_shortlinks: false,
     verify_media: false,
     stock_on_update: 'keep',
     preset_help_images: {},
@@ -195,6 +202,7 @@ export function normalizeRunOptions(input: unknown): {
     'shipping',
     'designer_fallback_fields',
     'redirect_skipped',
+    'redirect_shortlinks',
     'verify_media',
     'stock_on_update',
     'preset_help_images',
@@ -380,6 +388,11 @@ export function normalizeRunOptions(input: unknown): {
     'redirect_skipped',
     input.redirect_skipped,
     (b) => (o.redirect_skipped = b),
+  );
+  bool(
+    'redirect_shortlinks',
+    input.redirect_shortlinks,
+    (b) => (o.redirect_shortlinks = b),
   );
   bool('verify_media', input.verify_media, (b) => (o.verify_media = b));
   oneOf(

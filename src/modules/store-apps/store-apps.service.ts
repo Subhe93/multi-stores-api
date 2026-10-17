@@ -4,10 +4,13 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
 } from '@nestjs/common';
 import { Prisma, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
+import { PgNotifyListener } from '../../common/ops/pg-listener';
 import {
   STORE_APPS,
   STORE_APP_KEYS,
@@ -35,13 +38,18 @@ import { validateStoreAppSettings } from '../../common/store-apps/settings-valid
  * Reads go through an in-memory cache (one entry per store) because
  * isEnabled() sits on hot storefront/checkout paths; every mutation drops the
  * store's entry and asks the storefront to revalidate. The cache is
- * per-process: a multi-instance deployment would need Redis (the same
- * trade-off CorsOriginService makes) — until then a stale instance catches up
- * within CACHE_TTL_MS.
+ * per-process; across instances (M5 W1-C, item 4) every mutation also runs
+ * `pg_notify('store_apps', storeId)` and each instance holds a dedicated
+ * `LISTEN store_apps` connection (PgNotifyListener) that drops the store's
+ * entry at once. When that connection is down (or
+ * `STORE_APPS_LISTEN=off`), a stale instance still catches up within
+ * CACHE_TTL_MS.
  */
 
 /** One store's rows are kept this long before being re-read. */
 const CACHE_TTL_MS = 60 * 1000;
+/** Postgres NOTIFY channel; payload = store id. */
+export const STORE_APPS_CHANNEL = 'store_apps';
 /** Bound on cached stores so a scan over random ids cannot grow memory. */
 const CACHE_MAX_ENTRIES = 5000;
 
@@ -118,14 +126,46 @@ const STORE_APP_NOT_AVAILABLE = {
 };
 
 @Injectable()
-export class StoreAppsService {
+export class StoreAppsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(StoreAppsService.name);
   private readonly cache = new Map<string, CacheEntry>();
+  /** Dedicated LISTEN connection; null when disabled. */
+  private listener: PgNotifyListener | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly revalidation: RevalidationService,
   ) {}
+
+  onModuleInit(): void {
+    if ((process.env.STORE_APPS_LISTEN ?? '').toLowerCase() === 'off') {
+      this.logger.log('StoreApp LISTEN disabled (STORE_APPS_LISTEN=off)');
+      return;
+    }
+    this.listener = new PgNotifyListener(STORE_APPS_CHANNEL, (storeId) =>
+      this.invalidate(storeId),
+    );
+    this.listener.start();
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    await this.listener?.stop();
+    this.listener = null;
+  }
+
+  /** Tells every other instance to drop the store's cached rows (best effort). */
+  private async notifyInstances(storeId: string): Promise<void> {
+    try {
+      await this.prisma
+        .$executeRaw`SELECT pg_notify(${STORE_APPS_CHANNEL}, ${storeId})`;
+    } catch (err) {
+      this.logger.warn(
+        `pg_notify(${STORE_APPS_CHANNEL}) failed for store ${storeId}; other instances fall back to the ${CACHE_TTL_MS / 1000} s TTL: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
 
   // ── Hot-path reads ────────────────────────────────────────────────────────
 
@@ -566,6 +606,7 @@ export class StoreAppsService {
 
   private async afterMutation(storeId: string): Promise<void> {
     this.invalidate(storeId);
+    await this.notifyInstances(storeId);
     await this.revalidation.revalidateStoreById(storeId);
   }
 

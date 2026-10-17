@@ -13,7 +13,7 @@ function redirects(version: string | null) {
   } as unknown as RedirectsService & { versionFor: jest.Mock };
 }
 
-function storesService(version: string | null, withRedirects = true) {
+function storesService(version: string | null) {
   const prisma = {
     store: {
       findUnique: jest.fn(() =>
@@ -30,7 +30,7 @@ function storesService(version: string | null, withRedirects = true) {
     {} as never,
     {} as never,
     marketsContext as unknown as MarketsContextService,
-    withRedirects ? r : undefined,
+    r,
   );
   return { service, r };
 }
@@ -49,13 +49,6 @@ describe('StoresService.findSlugByCustomDomain redirects_version', () => {
     expect(await service.findSlugByCustomDomain('shop.legacy.com')).toEqual({
       slug: 'legacy',
       redirects_version: '3-abc',
-    });
-  });
-
-  it('works without the redirects service (unit-test construction)', async () => {
-    const { service } = storesService('3-abc', false);
-    expect(await service.findSlugByCustomDomain('shop.legacy.com')).toEqual({
-      slug: 'legacy',
     });
   });
 

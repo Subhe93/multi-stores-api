@@ -1,6 +1,10 @@
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { REQUIRE_APP_KEY } from '../../common/decorators';
-import { RedirectsService } from './redirects.service';
+import {
+  BULK_REDIRECT_MAX_ROWS,
+  parseBulkRedirectCsv,
+  RedirectsService,
+} from './redirects.service';
 import { RedirectsCreatorController } from './redirects-creator.controller';
 import { RedirectsPublicController } from './redirects-public.controller';
 import type { PrismaService } from '../../prisma/prisma.service';
@@ -187,7 +191,8 @@ describe('RedirectsService public reads', () => {
       }),
     );
     const res = await svc.mapFor('s1');
-    expect(res).toEqual({ version: expect.any(String), mode: 'lookup' });
+    expect(res).toMatchObject({ mode: 'lookup' });
+    expect(typeof res.version).toBe('string');
     expect(prisma.storeRedirect.findMany).not.toHaveBeenCalled();
   });
 
@@ -447,5 +452,104 @@ describe('redirect controllers: guards and app gating', () => {
     await expect(ctrl.resolve('namez')).rejects.toMatchObject({
       response: { code: 'REDIRECT_NOT_FOUND' },
     });
+  });
+});
+
+// M5 B17: `POST redirects/my/bulk` — CSV text in, created / conflicts out.
+describe('RedirectsService.bulkCreate', () => {
+  it('parses CSV lines: header, comments, quotes, `;` and tab separators, 1-based line numbers', () => {
+    const rows = parseBulkRedirectCsv(
+      [
+        'from_path,to_path,status',
+        '# a comment',
+        '',
+        '"/a","/b",302',
+        '/c;/d',
+        '/e\t/f\t307',
+      ].join('\r\n'),
+    );
+    expect(rows).toEqual([
+      { line: 4, from_path: '/a', to_path: '/b', status_code: 302 },
+      { line: 5, from_path: '/c', to_path: '/d' },
+      { line: 6, from_path: '/e', to_path: '/f', status_code: 307 },
+    ]);
+  });
+
+  it('creates MANUAL rows, flattens chains, re-points rows and reports each failed line with a code', async () => {
+    const { svc, rows } = setup([
+      mkRow({ id: 'm1', from_path: '/taken', to_path: '/x' }),
+      mkRow({ id: 'i1', from_path: '/old', to_path: '/a', source: 'IMPORT' }),
+    ]);
+    const res = await svc.bulkCreate(
+      's1',
+      parseBulkRedirectCsv(
+        [
+          '/a,/b',
+          '/taken,/y',
+          '/b,/a',
+          'not-a-path,/z',
+          '/q,/r,999',
+          '/loop,/loop2',
+          '/loop2,/loop',
+        ].join('\n'),
+      ),
+    );
+    expect(res.created.map((c) => [c.line, c.from_path, c.to_path])).toEqual([
+      [1, '/a', '/b'],
+      [6, '/loop', '/loop2'],
+    ]);
+    expect(res.created.every((c) => c.status_code === 301)).toBe(true);
+    expect(res.conflicts).toEqual([
+      {
+        line: 2,
+        from_path: '/taken',
+        to_path: '/y',
+        code: 'REDIRECT_DUPLICATE',
+      },
+      { line: 3, from_path: '/b', to_path: '/a', code: 'REDIRECT_LOOP' },
+      {
+        line: 4,
+        from_path: 'not-a-path',
+        to_path: '/z',
+        code: 'REDIRECT_INVALID_PATH',
+      },
+      {
+        line: 5,
+        from_path: '/q',
+        to_path: '/r',
+        code: 'REDIRECT_INVALID_PATH',
+      },
+      { line: 7, from_path: '/loop2', to_path: '/loop', code: 'REDIRECT_LOOP' },
+    ]);
+    const all = rows();
+    expect(all.filter((r) => r.from_path === '/a')[0]).toMatchObject({
+      source: 'MANUAL',
+      to_path: '/b',
+      is_active: true,
+    });
+    // The existing row that targeted /a now points at /b (chain flattened).
+    expect(all.find((r) => r.id === 'i1')?.to_path).toBe('/b');
+    expect(all).toHaveLength(4);
+  });
+
+  it('refuses more than the row cap with REDIRECT_BULK_TOO_MANY', async () => {
+    const { svc, prisma } = setup();
+    const rows = Array.from({ length: BULK_REDIRECT_MAX_ROWS + 1 }, (_, i) => ({
+      line: i + 1,
+      from_path: `/f${i}`,
+      to_path: '/t',
+    }));
+    await expect(svc.bulkCreate('s1', rows)).rejects.toMatchObject({
+      response: { code: 'REDIRECT_BULK_TOO_MANY' },
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('the bulk route requires the importer app', () => {
+    const p = RedirectsCreatorController.prototype as unknown as Record<
+      string,
+      object
+    >;
+    expect(Reflect.getMetadata(REQUIRE_APP_KEY, p.bulk)).toBe('importer');
   });
 });

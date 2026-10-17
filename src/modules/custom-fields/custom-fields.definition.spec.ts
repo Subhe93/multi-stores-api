@@ -209,7 +209,8 @@ describe('CustomFieldsService definitions (M4.0)', () => {
     const err = await svc(makePrisma())
       .update(
         'f1',
-        { validation_rules: { pattern: '^([A-Za-z]+ ?)+$' } },
+        // M5 A10: a repeated group whose body is one quantified atom.
+        { validation_rules: { pattern: '^(a+)+$' } },
         'u',
         ADMIN,
       )

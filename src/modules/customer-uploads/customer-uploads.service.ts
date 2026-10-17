@@ -12,6 +12,7 @@ import { OrderStatus, Prisma, UserRole } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import * as path from 'path';
+import { Readable } from 'stream';
 import sharp from 'sharp';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
@@ -49,6 +50,7 @@ import {
   assertFreeDisk,
   CustomerUploadByteBudget,
 } from './customer-upload-admission';
+import { PgUploadQuotaStore } from '../ops/upload-quota-store';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UUID_RE =
@@ -85,9 +87,19 @@ export interface CustomerUploadClient {
 }
 
 export interface CustomerUploadDownload {
-  buffer: Buffer;
+  /** The original bytes, streamed from disk (never buffered whole, M5 A5). */
+  stream: Readable;
+  /** Size in bytes (Content-Length). */
+  length: number;
   mime: string;
   filename: string;
+}
+
+/** Outcome of `tryMarkAttached`: what was attached and what could not be. */
+export interface MarkAttachedResult {
+  attached: number;
+  /** Ids that are purged, unknown, or attached to another store. */
+  unattachable: string[];
 }
 
 /**
@@ -104,8 +116,8 @@ export interface CustomerUploadDownload {
 export class CustomerUploadsService implements OnModuleInit {
   private readonly logger = new Logger(CustomerUploadsService.name);
   private readonly retentionPolicies: CustomerUploadRetentionPolicy[] = [];
-  /** Per-IP daily byte budget of `POST /uploads/customer` (in memory). */
-  readonly byteBudget = new CustomerUploadByteBudget();
+  /** Per-IP daily byte budget of `POST /uploads/customer` (Postgres, in-memory fallback). */
+  readonly byteBudget: CustomerUploadByteBudget;
   private readonly storage: PrivateStorage;
   private uploadsService?: UploadsService;
   /** Where the public previews live (same tree UploadsService writes to). */
@@ -123,6 +135,9 @@ export class CustomerUploadsService implements OnModuleInit {
   ) {
     this.uploadsService = uploads;
     this.storage = storage ?? new PrivateFileStorage();
+    this.byteBudget = new CustomerUploadByteBudget(
+      new PgUploadQuotaStore(prisma),
+    );
   }
 
   onModuleInit() {
@@ -158,7 +173,7 @@ export class CustomerUploadsService implements OnModuleInit {
    * room (503 CUSTOMER_UPLOAD_STORAGE_FULL).
    */
   async admit(client: CustomerUploadClient = {}): Promise<void> {
-    this.byteBudget.assertAllowed(client.ip);
+    await this.byteBudget.assertAllowed(client.ip);
     await assertFreeDisk([this.storage.root, this.previewDir]);
   }
 
@@ -176,7 +191,7 @@ export class CustomerUploadsService implements OnModuleInit {
     if (buffer.length > CUSTOMER_UPLOAD_MAX_BYTES) {
       throw tooLarge();
     }
-    this.byteBudget.assertAllowed(client.ip, buffer.length);
+    await this.byteBudget.assertAllowed(client.ip, buffer.length);
     await assertFreeDisk([this.storage.root, this.previewDir], buffer.length);
 
     const originalName = sanitizeFileName(file.originalname);
@@ -279,7 +294,7 @@ export class CustomerUploadsService implements OnModuleInit {
       ]);
       throw e;
     }
-    this.byteBudget.consume(client.ip, buffer.length);
+    await this.byteBudget.consume(client.ip, buffer.length);
 
     return {
       url: previewUrl,
@@ -355,8 +370,36 @@ export class CustomerUploadsService implements OnModuleInit {
     storeId: string,
     tx: Prisma.TransactionClient,
   ): Promise<number> {
+    const { attached, unattachable } = await this.tryMarkAttached(
+      ids,
+      storeId,
+      tx,
+    );
+    if (unattachable.length > 0) {
+      throw new BadRequestException({
+        code: 'CUSTOMER_UPLOAD_EXPIRED',
+        message:
+          'A file of this order is no longer available. Please upload it again.',
+        params: { upload_ids: unattachable },
+      });
+    }
+    return attached;
+  }
+
+  /**
+   * `markAttached` without the throw: attaches what qualifies and returns
+   * the ids that did not (purged, unknown, or another store's). The caller
+   * decides the error (the order path maps the ids back to their field and
+   * line, M5 A3). When any id is unattachable the caller must roll back,
+   * since the qualifying rows were already updated inside `tx`.
+   */
+  async tryMarkAttached(
+    ids: readonly string[],
+    storeId: string,
+    tx: Prisma.TransactionClient,
+  ): Promise<MarkAttachedResult> {
     const unique = [...new Set(ids)].filter((id) => UUID_RE.test(id));
-    if (unique.length === 0) return 0;
+    if (unique.length === 0) return { attached: 0, unattachable: [] };
     const { count } = await tx.customerUpload.updateMany({
       where: {
         id: { in: unique },
@@ -365,17 +408,19 @@ export class CustomerUploadsService implements OnModuleInit {
       },
       data: { attached_at: new Date(), store_id: storeId },
     });
-    if (count !== unique.length) {
-      this.logger.warn(
-        `markAttached: ${count}/${unique.length} uploads attachable to store ${storeId}; order rolled back`,
-      );
-      throw new BadRequestException({
-        code: 'CUSTOMER_UPLOAD_EXPIRED',
-        message:
-          'A file of this order is no longer available. Please upload it again.',
-      });
-    }
-    return count;
+    if (count === unique.length) return { attached: count, unattachable: [] };
+    // The rows just attached (same transaction) are the attachable ones;
+    // every other requested id is reported back.
+    const attached = await tx.customerUpload.findMany({
+      where: { id: { in: unique }, store_id: storeId, purged_at: null },
+      select: { id: true },
+    });
+    const ok = new Set(attached.map((r) => r.id));
+    const unattachable = unique.filter((id) => !ok.has(id));
+    this.logger.warn(
+      `markAttached: ${count}/${unique.length} uploads attachable to store ${storeId} (unattachable: ${unattachable.join(', ')}); order rolled back`,
+    );
+    return { attached: count, unattachable };
   }
 
   // ── Download ──────────────────────────────────────────────────────────────
@@ -430,8 +475,8 @@ export class CustomerUploadsService implements OnModuleInit {
       });
     }
 
-    const buffer = await this.storage.read(upload.original_key);
-    if (!buffer) {
+    const file = await this.openOriginal(upload.original_key);
+    if (!file) {
       this.logger.warn(
         `Customer upload ${upload.id}: original missing at ${upload.original_key}`,
       );
@@ -443,7 +488,26 @@ export class CustomerUploadsService implements OnModuleInit {
       safeAscii(match.field_name ?? '') || 'file',
       upload.id.slice(0, 8),
     ].join('-');
-    return { buffer, mime: upload.mime, filename: `${filename}${ext}` };
+    return {
+      stream: file.stream,
+      length: file.bytes,
+      mime: upload.mime,
+      filename: `${filename}${ext}`,
+    };
+  }
+
+  /**
+   * The original as a stream: `stat` + `createReadStream` on disk storage
+   * (no whole-file buffer, M5 A5); a storage without `openRead` (test
+   * doubles) is read into memory and wrapped.
+   */
+  private async openOriginal(
+    key: string,
+  ): Promise<{ stream: Readable; bytes: number } | null> {
+    if (this.storage.openRead) return this.storage.openRead(key);
+    const buffer = await this.storage.read(key);
+    if (!buffer) return null;
+    return { stream: Readable.from([buffer]), bytes: buffer.length };
   }
 
   /**
@@ -717,9 +781,6 @@ export class CustomerUploadsService implements OnModuleInit {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-/** Upload id behind a preview URL: the single parser `parseCustomerPreviewId`. */
-export const previewIdOf = parseCustomerPreviewId;
 
 /**
  * multer (busboy) reads multipart file names as latin1, so UTF-8 names

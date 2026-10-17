@@ -9,6 +9,34 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { CreateMenuDto, SetMenuItemsDto, UpdateMenuDto } from './dto/menus.dto';
 
+/** A stored `label_i18n` JSON as a locale → label map (anything else = empty). */
+function asLocaleMap(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === 'string' && v !== '') out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * The `label_i18n` to store for one item: the stored map when the payload
+ * omits it; otherwise the stored map with the sent locales applied (''/null
+ * removes a locale). A new item (no stored map) stores what was sent.
+ */
+export function mergeLabelI18n(
+  stored: Record<string, string> | undefined,
+  sent: Record<string, unknown> | undefined,
+): Record<string, string> {
+  if (sent === undefined) return { ...(stored ?? {}) };
+  const out: Record<string, string> = { ...(stored ?? {}) };
+  for (const [locale, label] of Object.entries(sent)) {
+    if (typeof label === 'string' && label !== '') out[locale] = label;
+    else delete out[locale];
+  }
+  return out;
+}
+
 @Injectable()
 export class MenusService {
   constructor(
@@ -96,6 +124,11 @@ export class MenusService {
     }
   }
 
+  /**
+   * Updates the menu row only (`key`, `name`). The items are never part of
+   * this call: the editor replaces them wholesale through `setItems`, which
+   * carries the per-item `label_i18n` over (M5 A-X).
+   */
   async update(userId: string, menuId: string, dto: UpdateMenuDto) {
     const storeId = await this.resolveCreatorStoreId(userId);
     await this.assertMenuBelongsToStore(menuId, storeId);
@@ -141,12 +174,25 @@ export class MenusService {
    * sort_order is derived from array position within each level; nested
    * `children` are created recursively with parent_id set to the row just
    * created for them.
+   *
+   * X19 carry-over (M5 A-X): an item re-sent with its `id` keeps the
+   * stored `label_i18n` of every locale the payload does not mention
+   * (`label_i18n` absent = all kept; a locale sent as ''/null is cleared),
+   * so an editor that saves one language never wipes the others. The row
+   * is recreated under the same id, so the next save still matches it.
    */
   async setItems(userId: string, menuId: string, dto: SetMenuItemsDto) {
     const storeId = await this.resolveCreatorStoreId(userId);
     await this.assertMenuBelongsToStore(menuId, storeId);
 
     const result = await this.prisma.$transaction(async (tx) => {
+      const stored = await tx.menuItem.findMany({
+        where: { menu_id: menuId },
+        select: { id: true, label_i18n: true },
+      });
+      const storedI18n = new Map(
+        stored.map((r) => [r.id, asLocaleMap(r.label_i18n)]),
+      );
       await tx.menuItem.deleteMany({ where: { menu_id: menuId } });
 
       const createLevel = async (
@@ -155,13 +201,22 @@ export class MenusService {
       ) => {
         for (let i = 0; i < nodes.length; i++) {
           const item = nodes[i];
+          const previous =
+            item.id && storedI18n.has(item.id)
+              ? storedI18n.get(item.id)
+              : undefined;
           const created = await tx.menuItem.create({
             data: {
+              // Keep the id of a re-sent item of this menu (never a foreign one).
+              ...(previous !== undefined ? { id: item.id } : {}),
               menu_id: menuId,
               parent_id: parentId,
               sort_order: i,
               label: item.label,
-              label_i18n: (item.label_i18n ?? {}) as Prisma.InputJsonValue,
+              label_i18n: mergeLabelI18n(
+                previous,
+                item.label_i18n,
+              ) as Prisma.InputJsonValue,
               url: item.url,
               open_in_new_tab: item.open_in_new_tab ?? false,
             },

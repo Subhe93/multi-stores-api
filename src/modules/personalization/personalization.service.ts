@@ -30,10 +30,7 @@ import {
   linesToDisplay,
   readOptionConfig,
   readVariantOptions,
-  shapeFieldsForStorefront,
-  shapeOptionConfigForStorefront,
   usesAdvancedFields,
-  usesAdvancedOptionConfig,
   type PersonalizationDisplayLine,
 } from './personalization-runtime';
 import type { ValidatePersonalizationDto } from './dto/validate-personalization.dto';
@@ -113,26 +110,14 @@ export class PersonalizationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storeApps: StoreAppsService,
-    // WP-C collaborators: optional only so positional unit tests stay short.
-    @Optional() private readonly core?: PersonalizationCoreService,
-    @Optional() private readonly shipping?: ShippingService,
-    @Optional() private readonly markets?: MarketsContextService,
+    // WP-C collaborators, required (M5 A16): specs build the service with
+    // `__fixtures__/personalization-service.factory.ts`.
+    private readonly core: PersonalizationCoreService,
+    private readonly shipping: ShippingService,
+    private readonly markets: MarketsContextService,
+    // Markets app pricing: optional, a store without markets never needs it.
     @Optional() private readonly marketPricing?: MarketPricingService,
   ) {}
-
-  /**
-   * D2: the app applies to a line when it is enabled for the store and the
-   * product is the store creator's own product.
-   */
-  async isOnForProduct(
-    store: { id: string; creator_id: string },
-    product: { creator_id: string | null },
-  ): Promise<boolean> {
-    if (!product.creator_id || product.creator_id !== store.creator_id) {
-      return false;
-    }
-    return this.storeApps.isEnabled(store.id, 'personalization');
-  }
 
   /** Whether the app is in effect for the store (cached by StoreAppsService). */
   isEnabled(storeId: string): Promise<boolean> {
@@ -267,7 +252,7 @@ export class PersonalizationService {
       ...(activeOptionValues ? { activeOptionValues } : {}),
       locale: input.locale || primary,
       primaryLocale: primary,
-      ...(this.core ? { isFileRef: this.core.isFileRef } : {}),
+      isFileRef: this.core.isFileRef,
       patternTester: createServerPatternTester(),
     };
   }
@@ -290,26 +275,6 @@ export class PersonalizationService {
     return evaluatePersonalization(input.defs, input.raw, ctx);
   }
 
-  /** Storefront `custom_fields` (tree when on, M4.0 rows when off). */
-  shapeForStorefront<
-    T extends { id: string; type: string; parent_id?: string | null },
-  >(fields: readonly T[], appOn: boolean) {
-    return shapeFieldsForStorefront(fields, appOn);
-  }
-
-  /** Storefront `variant_option_config` (valueMeta / card only when on). */
-  shapeOptionConfig(config: unknown, appOn: boolean): unknown {
-    return shapeOptionConfigForStorefront(config, appOn);
-  }
-
-  /** True when the product needs the storefront `personalization` block. */
-  productUsesApp(
-    defs: readonly PFieldDef[] | null | undefined,
-    optionConfig: unknown,
-  ): boolean {
-    return usesAdvancedFields(defs) || usesAdvancedOptionConfig(optionConfig);
-  }
-
   /**
    * Free-shipping threshold for the variation cards (§4.7) in the request
    * currency: the settings' country, else the market's first country, else
@@ -324,7 +289,7 @@ export class PersonalizationService {
     /** The product's own profile when already loaded (saves the resolution). */
     profile?: Parameters<ShippingService['freeThresholdFor']>[2],
   ): Promise<number | null> {
-    if (!settings.free_shipping_badge || !this.shipping) return null;
+    if (!settings.free_shipping_badge) return null;
     let country =
       settings.free_shipping_country ??
       market?.countries?.[0] ??
@@ -401,9 +366,10 @@ export class PersonalizationService {
       : null;
     if (body.variant_id && !variant) throw productNotFound();
 
-    const market = this.markets
-      ? await this.markets.resolve(store.id, body.market ?? undefined)
-      : null;
+    const market = await this.markets.resolve(
+      store.id,
+      body.market ?? undefined,
+    );
     const defs = (await this.loadDefs(product.id)) as unknown as PFieldDef[];
     const activeCache: ActiveVariantsCache = new Map();
     const result = await this.evaluateLine({

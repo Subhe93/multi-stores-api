@@ -171,14 +171,3 @@ export function createServerPatternTester(
     }
   };
 }
-
-/**
- * The `patternTester` of a single check (no shared budget); remembers
- * timed-out patterns like `createServerPatternTester`. Evaluations of a
- * whole line use `createServerPatternTester()` instead.
- */
-export const serverPatternTester: PatternTester = (
-  pattern: string,
-  input: string,
-  field: FieldDef,
-): boolean => createServerPatternTester()(pattern, input, field);

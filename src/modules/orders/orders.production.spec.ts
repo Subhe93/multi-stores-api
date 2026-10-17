@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { personalizationCoreArgs } from '../personalization/__fixtures__/personalization-service.factory';
 import { PromotionsService } from '../promotions/promotions.service';
 import { ShippingService } from '../shipping/shipping.service';
 import { MailService } from '../mail/mail.service';
@@ -79,6 +80,7 @@ function positional(prisma: unknown, storeApps: unknown, mail?: unknown) {
     new MarketPricingService(prisma as PrismaService),
     { get: () => undefined } as unknown as ConfigService,
     new B2bService(storeApps as StoreAppsService),
+    ...personalizationCoreArgs(prisma),
   ] as const;
 }
 
@@ -183,8 +185,6 @@ function buildCreate(enabled: boolean, inject = true) {
     ...positional(prisma, storeApps),
     undefined,
     undefined,
-    undefined,
-    undefined,
     undefined, // M4.1 personalization (C28: before production)
     inject ? triggers : undefined,
   );
@@ -256,8 +256,6 @@ describe('OrdersService production hooks (M4.3 slot 2)', () => {
       };
       const service = new OrdersService(
         ...positional(prisma, { isEnabled: jest.fn() }),
-        undefined,
-        undefined,
         undefined,
         undefined,
         undefined, // M4.1 personalization (C28: before production)

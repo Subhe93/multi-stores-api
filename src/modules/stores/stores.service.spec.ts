@@ -6,6 +6,7 @@ import { StoreAppsService } from '../store-apps/store-apps.service';
 import { MarketsService } from '../markets/markets.service';
 import { MarketsContextService } from '../markets/markets-context.service';
 import type { MarketContext } from '../markets/market-context';
+import type { RedirectsService } from '../redirects/redirects.service';
 
 // findSlugByCustomDomain is what the storefront proxy calls for every
 // custom host, so its legacy answer must not move for a store without the
@@ -90,6 +91,8 @@ function build(opts: {
     {} as StoreAppsService,
     {} as MarketsService,
     marketsContext as unknown as MarketsContextService,
+    // M5 B18: the redirects service is required; no active redirects here.
+    { versionFor: jest.fn(() => Promise.resolve(null)) } as unknown as RedirectsService,
   );
   return { service, prisma, marketsContext };
 }

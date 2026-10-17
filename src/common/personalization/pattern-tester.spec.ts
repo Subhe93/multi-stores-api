@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
 import {
+  createServerPatternTester,
   PATTERN_TEST_TIMEOUT_MS,
-  serverPatternTester,
   testPatternWithTimeout,
 } from './pattern-tester';
 import {
@@ -13,9 +13,13 @@ import {
 // M4.0 ReDoS guard: the server runs merchant patterns under a hard timeout
 // and fails closed; save time refuses the classic catastrophic shapes.
 
+// Accepted at save time since M5 A10 (several quantified atoms); still
+// catastrophic at run time, which is what the vm timeout is for.
 const EVIL = '^([A-Za-z]+ ?)+$';
 // 40 characters that almost match: exponential backtracking without a guard.
 const EVIL_INPUT = 'Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!';
+// Refused at save time: a repeated group whose body is one quantified atom.
+const NESTED_PLUS = '^(a+)+$';
 
 describe('server pattern tester', () => {
   it('matches and refuses like a plain RegExp for normal patterns', () => {
@@ -25,15 +29,14 @@ describe('server pattern tester', () => {
     expect(testPatternWithTimeout('^(abc$', 'x')).toBe(true);
   });
 
-  it('the evil pattern with a 40-char input returns within ~100 ms and fails closed', () => {
+  it('the evil pattern with a 40-char input is cut by the vm timeout and fails closed', () => {
     expect(EVIL_INPUT).toHaveLength(40);
+    // The timeout firing is the observable (no wall-clock assertion): the
+    // vm cuts the match at PATTERN_TEST_TIMEOUT_MS and reports it here.
     const onTimeout = jest.fn();
-    const started = Date.now();
     const ok = testPatternWithTimeout(EVIL, EVIL_INPUT, { onTimeout });
-    const elapsed = Date.now() - started;
     expect(ok).toBe(false);
     expect(onTimeout).toHaveBeenCalledTimes(1);
-    expect(elapsed).toBeLessThan(PATTERN_TEST_TIMEOUT_MS + 100);
   });
 
   it('the cached context still works after a timeout', () => {
@@ -51,7 +54,6 @@ describe('server pattern tester', () => {
     const warn = jest
       .spyOn(Logger.prototype, 'warn')
       .mockImplementation(() => undefined);
-    const started = Date.now();
     const res = validatePersonalization({
       fields: [
         {
@@ -63,9 +65,13 @@ describe('server pattern tester', () => {
         },
       ],
       values: { 'field-evil': EVIL_INPUT },
-      patternTester: serverPatternTester,
+      patternTester: createServerPatternTester(),
     });
-    expect(Date.now() - started).toBeLessThan(PATTERN_TEST_TIMEOUT_MS + 100);
+    // The vm timeout fired (observable through the warning), so the test
+    // was cut at PATTERN_TEST_TIMEOUT_MS instead of backtracking for ages.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(`timed out after ${PATTERN_TEST_TIMEOUT_MS} ms`),
+    );
     expect(res.issues).toEqual([
       {
         code: 'CUSTOM_FIELD_INVALID_FORMAT',
@@ -77,9 +83,13 @@ describe('server pattern tester', () => {
     warn.mockRestore();
   });
 
-  it('save time refuses the evil pattern as unsafe', () => {
-    expect(isPatternSafe(EVIL)).toBe(false);
-    expect(patternProblem(EVIL)).toBe('unsafe');
+  it('save time refuses a nested quantifier as unsafe; A10 shapes pass', () => {
+    expect(isPatternSafe(NESTED_PLUS)).toBe(false);
+    expect(patternProblem(NESTED_PLUS)).toBe('unsafe');
     expect(patternProblem('^[A-Za-z ]+$')).toBeNull();
+    // M5 A10: accepted at save time, guarded by the vm timeout at run time.
+    expect(patternProblem(EVIL)).toBeNull();
+    expect(patternProblem('^([A-Z]|[a-z])+$')).toBeNull();
+    expect(patternProblem('^(?:[a-z]+\\s?)+$')).toBeNull();
   });
 });

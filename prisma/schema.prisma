@@ -2838,3 +2838,34 @@ model OrderItemDesign {
   @@index([order_id])
   @@index([design_id])
 }
+
+// M5 W1-C: upload byte budgets shared across API instances (customer uploads
+// and designer photos), one row per scope/key and UTC day. Written with raw
+// SQL (atomic INSERT ... ON CONFLICT), purged by the `ops.quota-windows`
+// retention task.
+model UploadQuotaWindow {
+  scope        String   @db.VarChar(32) // customer.ip | designer.ip | designer.store
+  key          String   @db.VarChar(64) // sha256 hex of the IP / store id
+  window_start DateTime
+  bytes        BigInt   @default(0)
+  updated_at   DateTime @default(now())
+
+  @@id([scope, key, window_start])
+  @@index([window_start])
+}
+
+// M5 W1-C: last scheduler tick per (job, instance) for the ops status
+// endpoint; `ran_at`/`ran_payload` keep the last tick that did work.
+// Purged by the `ops.job-ticks` retention task.
+model OpsJobTick {
+  job         String    @db.VarChar(64)
+  instance    String    @db.VarChar(191)
+  ticked_at   DateTime
+  outcome     String    @db.VarChar(16) // ran | idle | skipped | error
+  payload     Json?
+  ran_at      DateTime?
+  ran_payload Json?
+
+  @@id([job, instance])
+  @@index([ticked_at])
+}

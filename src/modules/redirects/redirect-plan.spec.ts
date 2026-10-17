@@ -67,11 +67,29 @@ describe('resolveRedirectChain', () => {
   it('gives up after the hop limit', () => {
     const map = new Map<string, string>();
     for (let i = 0; i < 30; i++) map.set(`/p${i}`, `/p${i + 1}`);
-    expect(resolveRedirectChain(map, '/start', '/p0', 20).ok).toBe(false);
+    // M5 B22: past the hop limit without returning to the source is not a
+    // loop but a chain too long (its own code).
+    expect(resolveRedirectChain(map, '/start', '/p0', 20)).toEqual({
+      ok: false,
+      code: 'REDIRECT_CHAIN_TOO_LONG',
+    });
     expect(resolveRedirectChain(map, '/start', '/p0', 40)).toEqual({
       ok: true,
       to: '/p30',
     });
+  });
+
+  it('planRedirectUpserts reports REDIRECT_CHAIN_TOO_LONG through existing rows', () => {
+    const existing: ExistingRedirectRow[] = [];
+    for (let i = 0; i < 25; i++)
+      existing.push(row(`r${i}`, `/p${i}`, `/p${i + 1}`));
+    const plan = planRedirectUpserts(existing, [
+      { from_path: '/start', to_path: '/p0' },
+    ]);
+    expect(plan.conflicts).toEqual([
+      { from_path: '/start', to_path: '/p0', code: 'REDIRECT_CHAIN_TOO_LONG' },
+    ]);
+    expect(plan.items.some((i) => i.from_path === '/start')).toBe(false);
   });
 
   it('rowsPointingAt lists the rows to re-point', () => {

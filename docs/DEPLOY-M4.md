@@ -1,6 +1,6 @@
 # Deploying M4 (store apps: personalization, production, importer, designer)
 
-Source of truth for the production rollout of the M4 milestones. Keep this file updated whenever an env var, a migration or a worker flag changes.
+Source of truth for the production rollout of the M4 milestones. Keep this file updated whenever an env var, a migration or a worker flag changes. Day-2 operations (full env table, the scheduler/worker matrix for several PM2 instances, `WORKERS=` and `CHROMIUM_*` switches, logs, disk projections, backup/restore of `storage/`, `GET /api/admin/ops/status`) are in [OPERATIONS.md](./OPERATIONS.md). Migration #9 `20261029120000_upload_quota_windows` (M5 W1-C: `UploadQuotaWindow`, `OpsJobTick`) is additive and goes through the same `migrate deploy`.
 
 ## 0. Preconditions
 
@@ -74,7 +74,7 @@ Verify:
 SELECT migration_name FROM _prisma_migrations ORDER BY finished_at DESC LIMIT 8;
 ```
 
-The partial indexes `ImportRun_one_active_per_store`, `OrderItemDesign_queue_claim_idx` and the GIN index on `OrderItemDesign.assets` must exist. Never run `prisma migrate dev` against this database: Prisma does not model partial indexes and would drop them. All migrations are hand-written SQL applied with `migrate deploy`.
+The partial indexes `ImportRun_one_active_per_store`, `OrderItemDesign_queue_claim_idx` and the GIN index on `OrderItemDesign.assets` must exist. Never run `prisma migrate dev` against this database: Prisma does not model partial indexes and would drop them. All migrations are hand-written SQL applied with `migrate deploy`. The full list of hand-written objects (partial indexes, CHECKs, the invoice trigger) with their migrations is [prisma/RAW-SQL.md](../prisma/RAW-SQL.md); `prisma/raw-sql.spec.ts` checks the migrations against `schema.prisma` when `SHADOW_DATABASE_URL` points at a throw-away database (run it before a release that touched the schema). Column conventions (scope columns without FK and their sweepers, string vs enum) are in [DATA-MODEL-CONVENTIONS.md](./DATA-MODEL-CONVENTIONS.md).
 
 ## 5. Build and start
 
@@ -95,7 +95,7 @@ The partial indexes `ImportRun_one_active_per_store`, `OrderItemDesign_queue_cla
 
 1. Admin makes the apps available; the creator enables them.
 2. Store primary locale and currency match the imported content (Namez: `sv`, `SEK`), tax pricing inclusive.
-3. Importer: upload the bundle (individual files until `fflate` is approved), dry run, review, apply. Verify the counts.
+3. Importer: upload the bundle (individual files until `fflate` is approved), dry run, review, apply. Verify the counts. The dashboard upload is capped at 50 MB (about 3 000 products); a larger catalog (up to the 20 000-product planner limit) goes through `POST /api/admin/importer/stores/:storeId/runs/from-directory` with the files under `IMPORTER_BUNDLE_DIR_ROOT` on the API host (200 MB in total, 160 MB per file).
 4. Designer: upload the fonts, publish the templates, enable the product links (this removes the `npp_fallback` fields per product).
 5. Kustom Playground order with one designer line and one personalization line; check the print queue reaches READY and the print PNG is 3000x4200.
 6. Enable the live markets; sample 20 old URLs for 301s.

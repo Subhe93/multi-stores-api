@@ -89,6 +89,7 @@ import {
   PersonalizationCoreService,
   type LineContext,
   type OrderValueRow,
+  type UploadRef,
 } from '../../common/personalization/personalization-core.service';
 import type { NormalizedValues } from '../../common/personalization/rules';
 import { CustomerUploadsService } from '../customer-uploads/customer-uploads.service';
@@ -453,16 +454,18 @@ export class OrdersService {
     private readonly marketPricing: MarketPricingService,
     private readonly config: ConfigService,
     private readonly b2b: B2bService,
-    // Invoices app (M3 D5): optional and last, so positional test
+    // M4.0 (C28): the personalization core and the customer uploads,
+    // required (M5 A16: no fallback built on the fly; specs pass
+    // `buildPersonalizationCore(prisma)`). Before the optional apps so the
+    // positional spec constructors stay valid.
+    private readonly core: PersonalizationCoreService,
+    private readonly uploads: CustomerUploadsService,
+    // Invoices app (M3 D5): optional and trailing, so positional test
     // constructors stay valid. Every trigger is a no-op without the app.
     @Optional() private readonly invoices?: InvoiceTriggersService,
     // b2b app M2.5 (reverse charge): optional and trailing for the same
     // reason. Absent = no exemption is ever applied.
     @Optional() private readonly b2bTax?: B2bTaxExemptionService,
-    // M4.0 (C28): required by DI (no @Optional). Typed optional only so the
-    // positional test constructors stay valid; see `core` / `uploads`.
-    private readonly personalizationCore?: PersonalizationCoreService,
-    private readonly customerUploads?: CustomerUploadsService,
     // M4.1 personalization app (C28): optional, before production. Absent
     // or app off = every line takes the M4.0 path.
     @Optional() private readonly personalization?: PersonalizationService,
@@ -529,26 +532,6 @@ export class OrdersService {
     }
   }
 
-  private fallbackCore?: PersonalizationCoreService;
-  private fallbackUploads?: CustomerUploadsService;
-
-  /** Customer uploads (injected, or built on this Prisma in unit tests). */
-  private get uploads(): CustomerUploadsService {
-    if (this.customerUploads) return this.customerUploads;
-    this.fallbackUploads ??= new CustomerUploadsService(this.prisma);
-    return this.fallbackUploads;
-  }
-
-  /** Personalization core (injected, or built on this Prisma in unit tests). */
-  private get core(): PersonalizationCoreService {
-    if (this.personalizationCore) return this.personalizationCore;
-    this.fallbackCore ??= new PersonalizationCoreService(
-      this.prisma,
-      this.uploads,
-    );
-    return this.fallbackCore;
-  }
-
   /** Register a callback to run once an order's status becomes SHIPPED. */
   registerShippedHook(hook: ShippedHook): void {
     this.shippedHooks.push(hook);
@@ -603,8 +586,8 @@ export class OrdersService {
         },
       },
       custom_field_values: {
-        // Stable row order (MULTI_IMAGE files keep their insert order).
-        orderBy: { id: 'asc' as const },
+        // Field order first, then insert order (MULTI_IMAGE files keep theirs).
+        orderBy: [{ sort_order: 'asc' as const }, { id: 'asc' as const }],
         include: {
           custom_field: { include: { translations: true } },
           // M4.0 WP-B: the private original behind a customer file value.
@@ -1688,9 +1671,7 @@ export class OrdersService {
       ? await this.marketPricing.loadPricesForLines(orderStore.market, items)
       : null;
     // M4.0 (K2): field rules of every line, batched (Kustom budget, W14).
-    const fieldContexts = await this.core.loadContexts(items, {
-      onVariantMismatch: () => this.rejectForeignItem(),
-    });
+    const fieldContexts = await this.core.loadContexts(items);
     // M4.2 designer (C29 step 2): price-only check of designer lines (the
     // token, when a guest line sends one, must match).
     const designerLines = await this.planDesignerLines(
@@ -2059,9 +2040,7 @@ export class OrdersService {
       : null;
     // M4.0: field definitions + creator values of every line, batched; the
     // validated values per line feed the snapshot writer after the loop.
-    const fieldContexts = await this.core.loadContexts(lines, {
-      onVariantMismatch: () => this.rejectForeignItem(),
-    });
+    const fieldContexts = await this.core.loadContexts(lines);
     // M4.2 designer (C29 step 2): designer lines are validated here (owner
     // and completeness). A stored checkout snapshot trusts only the designs
     // its session verified when it stored the lines.
@@ -2234,6 +2213,8 @@ export class OrdersService {
       );
     }
     const attachUploadIds: string[] = [];
+    // M5 A3: upload id → field + line, for the markAttached error body.
+    const uploadRefs = new Map<string, UploadRef>();
     lineValues.forEach(({ ctx, values, lines: appLines }, index) => {
       const ref = lines[index].id
         ? { line_id: lines[index].id }
@@ -2255,6 +2236,7 @@ export class OrdersService {
       if (rows.length === 0) return;
       orderItems[index].custom_field_values = { create: rows };
       attachUploadIds.push(...this.core.uploadIdsOf(rows));
+      this.core.uploadRefsOf(rows, ctx, ref, uploadRefs);
     });
 
     subtotal = roundMoney(subtotal);
@@ -2595,11 +2577,19 @@ export class OrdersService {
           : await this.prisma.$transaction(async (tx) => {
               const created = await createOrder(tx);
               if (attachUploadIds.length > 0) {
-                await this.uploads.markAttached(
+                // An upload purged (or claimed by another store) since the
+                // quote rolls the order back, naming its field and line.
+                const { unattachable } = await this.uploads.tryMarkAttached(
                   attachUploadIds,
                   orderStore.id,
                   tx,
                 );
+                if (unattachable.length > 0) {
+                  throw this.core.uploadExpired(
+                    uploadRefs.get(unattachable[0]),
+                    dto.locale,
+                  );
+                }
               }
               if (designIds.length > 0) {
                 await this.designerCart?.markOrdered(tx, designFreeze);

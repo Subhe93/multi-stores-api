@@ -26,9 +26,20 @@ import { importError } from '../importer.errors';
  * which rejects with IMPORT_BUNDLE_INVALID_ARCHIVE until `fflate` lands.
  */
 
+/**
+ * Upload cap, 50 MB in total. In practice that is a catalog of about 3 000
+ * products (`postmeta.tsv` dominates: ~15 KB per product with its
+ * variations, images and personalization meta). Larger catalogs — up to the
+ * `CATALOG_LIMITS` of 20 000 products — go through the admin from-directory
+ * run (`BUNDLE_DIR_MAX_BYTES`, 200 MB), which reads from the server disk
+ * and never passes through nginx (M5 B14).
+ */
 export const BUNDLE_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
 /** Per-file multipart limit (multer `fileSize`); the request total is capped separately. */
 export const BUNDLE_UPLOAD_MAX_FILE_BYTES = 40 * 1024 * 1024;
+/** Admin from-directory bundles: 200 MB in total, 160 MB per file (M5 B14). */
+export const BUNDLE_DIR_MAX_BYTES = 200 * 1024 * 1024;
+export const BUNDLE_DIR_MAX_FILE_BYTES = 160 * 1024 * 1024;
 export const BUNDLE_MAX_FILES = 64;
 const INDEX_NAME = 'index.json';
 const ARCHIVE_RE = /\.(zip|tgz|tar\.gz|gz|tar)$/i;
@@ -123,9 +134,14 @@ function baseName(name: string): string {
   return (name ?? '').split(/[\\/]/).pop()!.trim().toLowerCase();
 }
 
-/** Upload checks: allowlisted names, no duplicates, ≤ 64 files, ≤ 50 MB in total; archives are refused. */
+/**
+ * Upload checks: allowlisted names, no duplicates, ≤ 64 files, ≤ 50 MB in
+ * total (`maxTotalBytes`: 200 MB for admin directory bundles); archives are
+ * refused.
+ */
 export async function validateBundleFiles(
   files: UploadedBundleFile[],
+  maxTotalBytes: number = BUNDLE_UPLOAD_MAX_BYTES,
 ): Promise<void> {
   if (!files.length) {
     throw importError(
@@ -173,10 +189,10 @@ export async function validateBundleFiles(
     seen.add(name);
     total += f.buffer.length;
   }
-  if (total > BUNDLE_UPLOAD_MAX_BYTES) {
+  if (total > maxTotalBytes) {
     throw importError(
       'IMPORT_BUNDLE_TOO_LARGE',
-      'The bundle is larger than 50 MB',
+      `The bundle is larger than ${Math.round(maxTotalBytes / (1024 * 1024))} MB`,
     );
   }
   if (!seen.has('posts.tsv') || !seen.has('postmeta.tsv')) {
@@ -337,15 +353,15 @@ export function isRelativeBundleDirName(directory: unknown): boolean {
 /**
  * Allowlisted files of an extracted bundle directory on the server. The
  * directory must resolve inside `IMPORTER_BUNDLE_DIR_ROOT`; unset = refused.
- * The same limits as the upload (40 MB per file, 50 MB in total) are checked
- * from `lstat` sizes BEFORE any file is read into memory.
+ * The directory limits (160 MB per file, 200 MB in total; M5 B14) are
+ * checked from `lstat` sizes BEFORE any file is read into memory.
  */
 export async function readBundleDirectory(
   directory: string,
   limits: { maxFileBytes?: number; maxTotalBytes?: number } = {},
 ): Promise<UploadedBundleFile[]> {
-  const maxFileBytes = limits.maxFileBytes ?? BUNDLE_UPLOAD_MAX_FILE_BYTES;
-  const maxTotalBytes = limits.maxTotalBytes ?? BUNDLE_UPLOAD_MAX_BYTES;
+  const maxFileBytes = limits.maxFileBytes ?? BUNDLE_DIR_MAX_FILE_BYTES;
+  const maxTotalBytes = limits.maxTotalBytes ?? BUNDLE_DIR_MAX_BYTES;
   if (!isRelativeBundleDirName(directory)) {
     throw importError(
       'IMPORT_BUNDLE_MISSING_FILE',

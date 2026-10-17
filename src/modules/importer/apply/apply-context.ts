@@ -41,6 +41,14 @@ export interface ApplyContext {
   ) => Promise<void>;
   /** Called between batches: throws when the run must stop (cancel, timeout). */
   checkpoint: () => Promise<void>;
+  /**
+   * M5 B10: re-checks that this worker still owns the run, as a conditional
+   * heartbeat (`updateMany where worker_id`). Called before each product
+   * transaction and again inside it on `tx`, so a taken-over worker's
+   * transaction aborts instead of committing next to the new worker's.
+   * Throws IMPORT_RUN_INTERRUPTED when the claim is gone.
+   */
+  assertClaim: (db: Tx) => Promise<void>;
 }
 
 export type Tx = Prisma.TransactionClient;

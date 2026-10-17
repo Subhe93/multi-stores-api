@@ -3,6 +3,7 @@ import {
   matchRedirect,
   normalizeRedirectPath,
   sanitizeRedirectTarget,
+  shortlinkRedirectPath,
 } from './redirect-path.util';
 
 // M4.4 §6.2. These vectors are the contract for the web mirror
@@ -44,6 +45,30 @@ describe('normalizeRedirectPath', () => {
     const p = '/' + 'a'.repeat(1023);
     expect(normalizeRedirectPath(p)).toBe(p);
   });
+
+  // M5 B17: the WordPress shortlink `/?p=<ID>` is the one query form that is
+  // a key of its own; M5 B22: a `?` / `#` that only appears after decoding
+  // is a literal path character, never a query.
+  it.each([
+    ['/?p=4256', '/?p=4256'],
+    ['/?p=0042&utm_source=x', '/?p=42'],
+    ['/?p=7#top', '/?p=7'],
+    ['?p=42', '/?p=42'],
+    ['/produkt/x/?p=42', '/produkt/x'],
+    ['/produkt/a%3Fb', '/produkt/a%3fb'],
+    ['/produkt/a%3Fb?utm=1', '/produkt/a%3fb'],
+    ['/produkt/a%23b', '/produkt/a%23b'],
+    ['/produkt/a?b', '/produkt/a'],
+  ])('shortlink / literal query: %j → %j', (input, expected) => {
+    expect(normalizeRedirectPath(input)).toBe(expected);
+  });
+
+  it('shortlinkRedirectPath only accepts a numeric id at the root', () => {
+    expect(shortlinkRedirectPath('/?p=12')).toBe('/?p=12');
+    expect(shortlinkRedirectPath('/?p=abc')).toBeNull();
+    expect(shortlinkRedirectPath('/?page_id=12')).toBeNull();
+    expect(shortlinkRedirectPath('/x/?p=12')).toBeNull();
+  });
 });
 
 describe('fallbackRedirectPath', () => {
@@ -51,7 +76,9 @@ describe('fallbackRedirectPath', () => {
     ['/product-category/barn/page/2', '/product-category/barn'],
     ['/produkt/x/feed', '/produkt/x'],
     ['/produkt/x/amp', '/produkt/x'],
+    ['/produkt/x/embed', '/produkt/x'],
     ['/feed', '/'],
+    ['/embed', '/'],
     ['/page/3', '/'],
   ])('%j → %j', (input, expected) => {
     expect(fallbackRedirectPath(input)).toBe(expected);

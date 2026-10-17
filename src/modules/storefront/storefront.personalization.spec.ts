@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { StoreType } from '@prisma/client';
 import { StorefrontService } from './storefront.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -5,8 +6,6 @@ import { StoreAppsService } from '../store-apps/store-apps.service';
 import { MarketsContextService } from '../markets/markets-context.service';
 import { MarketPricingService } from '../markets/market-pricing.service';
 import { TaxService } from '../taxes/tax.service';
-import { PersonalizationService } from '../personalization/personalization.service';
-import { ShippingService } from '../shipping/shipping.service';
 import {
   C_COLOR,
   C_NAME,
@@ -17,6 +16,7 @@ import {
   plainFields,
   plainFieldsM40,
 } from '../personalization/__fixtures__/app-fields';
+import { buildPersonalizationService } from '../personalization/__fixtures__/personalization-service.factory';
 
 // M4.1 storefront shaping (D10, C36): with the app off — or on, for a
 // product without M4.1 config — GET product is the M4.0 payload; with the
@@ -74,12 +74,11 @@ function build(opts: {
     getSettings: jest.fn(() => Promise.resolve({})),
   };
   const shipping = { freeThresholdFor: jest.fn(() => Promise.resolve(499)) };
-  const personalization = new PersonalizationService(
-    prisma as unknown as PrismaService,
-    storeApps as unknown as StoreAppsService,
-    undefined,
-    shipping as unknown as ShippingService,
-  );
+  const personalization = buildPersonalizationService({
+    prisma,
+    storeApps,
+    shipping,
+  });
   const service = new StorefrontService(
     prisma as unknown as PrismaService,
     storeApps as unknown as StoreAppsService,
@@ -185,6 +184,30 @@ describe('StorefrontService.getProduct personalization (M4.1)', () => {
       currency: 'SEK',
     });
     expect(shipping.freeThresholdFor).toHaveBeenCalledWith('p1', 'SE');
+  });
+
+  it('M5 A9: a failing free-shipping badge is logged with the product id and shown without a threshold', async () => {
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    try {
+      const { service, shipping } = build({
+        fields: appFields(),
+        optionConfig: OPTION_CONFIG,
+        appOn: true,
+      });
+      shipping.freeThresholdFor.mockRejectedValue(new Error('profiles down'));
+      const payload = await get(service);
+      expect(payload.personalization).toMatchObject({
+        enabled: true,
+        free_shipping_threshold: null,
+      });
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('Free-shipping badge of product p1'),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('app on, cards only (no M4.1 fields): block present, plain fields keep the contract keys', async () => {

@@ -831,6 +831,38 @@ export function evaluatePersonalization(defs: readonly PFieldDef[], raw: unknown
   errors.sort((a, b) => a.order[0] - b.order[0] || a.order[1] - b.order[1] || a.order[2] - b.order[2]);
 
   // Pass 3: lines and price.
+  const drafts = buildLineDrafts(top, visible, repeaters, values, ctx);
+  const priceDeltaMinor = guardPrice(drafts, errors);
+  const lines = finishLines(drafts, false);
+  const visibleIds = top.filter((d) => visible.has(d.id)).map((d) => d.id);
+  for (const state of repeaters.values()) {
+    if (state.indexes.length > 0) visibleIds.push(...state.children.map((c) => c.id));
+  }
+  const errorList = errors.map((e) => e.error);
+  return {
+    ok: errorList.length === 0,
+    errors: errorList,
+    values: normalizeFieldValues(values),
+    priceDelta: formatMinorUnits(priceDeltaMinor),
+    priceDeltaMinor,
+    lines,
+    visibleIds,
+    legacy: false,
+  };
+}
+
+/**
+ * Pass 3 of `evaluatePersonalization`: the line drafts of every visible
+ * top-level field and repeater item, with the per-field and repeater
+ * prices (lead fields and option lines are grouped under their repeater).
+ */
+function buildLineDrafts(
+  top: readonly PFieldDef[],
+  visible: ReadonlySet<string>,
+  repeaters: ReadonlyMap<string, RepeaterState>,
+  values: NormalizedValues,
+  ctx: PContext,
+): LineDraft[] {
   const leadOf = new Map<string, RepeaterState>();
   for (const state of repeaters.values()) {
     if (!state.lead || state.indexes.length === 0) continue;
@@ -895,8 +927,16 @@ export function evaluatePersonalization(defs: readonly PFieldDef[], raw: unknown
     });
   }
 
-  // Price guard: every line and the sum must be a safe integer that fits a
-  // Decimal(10,2) amount; otherwise the line cannot be priced (error, never 0).
+  return drafts;
+}
+
+/**
+ * Price guard of `evaluatePersonalization`: every line and the sum must be
+ * a safe integer that fits a Decimal(10,2) amount; otherwise every line's
+ * price is zeroed and `PERSONALIZATION_PRICE_TOO_HIGH` is appended (an
+ * error, never a silent 0). Returns the per-unit delta in minor units.
+ */
+function guardPrice(drafts: LineDraft[], errors: SortedError[]): number {
   let priceDeltaMinor = 0;
   let priceOk = true;
   for (const d of drafts) {
@@ -912,22 +952,7 @@ export function evaluatePersonalization(defs: readonly PFieldDef[], raw: unknown
       order: [Number.MAX_SAFE_INTEGER, 0, 0],
     });
   }
-  const lines = finishLines(drafts, false);
-  const visibleIds = top.filter((d) => visible.has(d.id)).map((d) => d.id);
-  for (const state of repeaters.values()) {
-    if (state.indexes.length > 0) visibleIds.push(...state.children.map((c) => c.id));
-  }
-  const errorList = errors.map((e) => e.error);
-  return {
-    ok: errorList.length === 0,
-    errors: errorList,
-    values: normalizeFieldValues(values),
-    priceDelta: formatMinorUnits(priceDeltaMinor),
-    priceDeltaMinor,
-    lines,
-    visibleIds,
-    legacy: false,
-  };
+  return priceDeltaMinor;
 }
 
 function buildRepeater(def: PFieldDef, children: PFieldDef[], ctx: PContext): RepeaterState {

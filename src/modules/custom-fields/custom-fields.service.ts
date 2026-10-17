@@ -3,9 +3,11 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
@@ -117,12 +119,33 @@ function checkedRules(rules: unknown): Record<string, unknown> {
 
 @Injectable()
 export class CustomFieldsService {
+  private readonly logger = new Logger(CustomFieldsService.name);
+
   constructor(
     private prisma: PrismaService,
     // Global module; optional so the service also runs without it (the
     // personalization app then counts as disabled).
     @Optional() private storeApps?: StoreAppsService,
+    // Global module; optional and trailing (positional unit tests). Absent
+    // = no storefront revalidation (the time-based fallback catches up).
+    @Optional() private readonly revalidation?: RevalidationService,
   ) {}
+
+  /**
+   * D13: the storefront caches product pages with their fields; every
+   * field write of a creator product drops that cache. Fire-and-forget: a
+   * failed revalidation never fails the write.
+   */
+  private revalidateProduct(creatorId: string | null | undefined): void {
+    if (!creatorId || !this.revalidation) return;
+    void this.revalidation
+      .revalidateStoreByCreatorId(creatorId)
+      .catch((e: unknown) => {
+        this.logger.warn(
+          `Storefront revalidation failed for creator ${creatorId}: ${String(e)}`,
+        );
+      });
+  }
 
   async create(
     productId: string,
@@ -130,7 +153,7 @@ export class CustomFieldsService {
     userId: string,
     role: UserRole,
   ) {
-    await this.assertCanManage(productId, userId, role);
+    const product = await this.assertCanManage(productId, userId, role);
     const dto = withEmptyConfigAsNull(input);
 
     const {
@@ -166,7 +189,7 @@ export class CustomFieldsService {
 
     // Field writes of one product are serialized (same advisory lock as
     // presets and library inserts), so the checks below see every row.
-    return this.prisma.$transaction(async (tx) => {
+    const created = await this.prisma.$transaction(async (tx) => {
       await lockProductFields(tx, productId);
       const siblings = await this.loadSiblings(tx, productId);
       this.assertFieldLimits(siblings, parentId);
@@ -247,6 +270,8 @@ export class CustomFieldsService {
         include: { translations: true },
       });
     });
+    this.revalidateProduct(product.creator_id);
+    return created;
   }
 
   async findByProduct(productId: string) {
@@ -296,6 +321,14 @@ export class CustomFieldsService {
     return rows.map(({ preset_key: _key, preset_ref: _ref, ...row }) => row);
   }
 
+  /**
+   * Updates one field. One transaction under the product's field lock: the
+   * field is re-read, the stored translations (X19), every check and every
+   * write. Steps: `computeGate` (does this write need the app, or a tree
+   * re-check?), `validateMerged` (the merged definition against its
+   * siblings), the name/link checks, `writeField`, then `propagateRename`
+   * (sibling links, conditions, repeater leads, `url_prefill`).
+   */
   async update(
     id: string,
     input: UpdateCustomFieldDto,
@@ -303,29 +336,23 @@ export class CustomFieldsService {
     role: UserRole,
   ) {
     const current = await this.findFieldOrThrow(id);
-    await this.assertCanManage(current.product_id, userId, role);
+    const product = await this.assertCanManage(
+      current.product_id,
+      userId,
+      role,
+    );
     const dto = withEmptyConfigAsNull(input);
     let renamedStoreId: string | null = null;
-    // One transaction under the product's field lock: the field is re-read,
-    // the stored translations (X19), every check and every write.
     const updated = await this.prisma.$transaction(async (tx) => {
       await lockProductFields(tx, current.product_id);
       const field = await this.findFieldOrThrow(id, tx);
       const parentId = field.parent_id ?? null;
-
       const {
+        parent_id,
         translations,
         options,
         validation_rules,
         linked_validation,
-        parent_id,
-        conditions,
-        pricing,
-        repeat,
-        ui,
-        preset_key,
-        preset_ref,
-        ...data
       } = dto;
       if (parent_id !== undefined && (parent_id ?? null) !== parentId) {
         // Moving a field between repeaters is not supported (delete and add).
@@ -335,92 +362,24 @@ export class CustomFieldsService {
         { options, validation_rules, linked_validation },
         { name: dto.name ?? field.name, id },
       );
-
-      // X19: the stored M4.1 translation columns, read before the
-      // delete-and-recreate so a save that omits them keeps them.
-      const stored: StoredTranslation[] = translations
-        ? await tx.customFieldTranslation.findMany({
-            where: { field_id: id },
-            select: {
-              locale: true,
-              display_label: true,
-              sublabel: true,
-              note: true,
-              help_text: true,
-              help_image_url: true,
-              messages: true,
-            },
-          })
-        : [];
-      const storedByLocale = new Map(stored.map((t) => [t.locale, t]));
-
-      // M4.1 gate: only config this write *introduces* needs the app, so a
-      // save from the app-off editor that round-trips stored keys still works.
-      const introduced =
-        (dto.type !== undefined &&
-          isAppOnlyType(dto.type) &&
-          dto.type !== field.type) ||
-        CONFIG_KEYS.some(
-          (k) => isFilled(dto[k]) && !jsonEqual(dto[k], field[k] ?? null),
-        ) ||
-        Object.entries(checkedRules(validation_rules)).some(
-          ([k, v]) =>
-            !jsonEqual(
-              v,
-              isPlainObject(field.validation_rules)
-                ? (field.validation_rules[k] ?? null)
-                : null,
-            ),
-        ) ||
-        (translations ?? []).some((t) =>
-          TRANSLATION_EXTRA_KEYS.some(
-            (k) =>
-              isFilled(t[k]) &&
-              !jsonEqual(t[k], storedByLocale.get(t.locale)?.[k] ?? null),
-          ),
-        );
-      const typeChanged = dto.type !== undefined && dto.type !== field.type;
-      const treeField = parentId !== null || field.type === 'REPEATER';
-      // Clearing config of a repeater or a child can break the tree rules
-      // (a REPEATER without `repeat` → REPEAT_REQUIRED): checked too.
-      const clearedConfig = CONFIG_KEYS.some(
-        (k) => dto[k] === null && field[k] !== null && field[k] !== undefined,
+      const storedByLocale = await this.storedTranslations(
+        tx,
+        id,
+        translations,
       );
 
-      if (introduced || (treeField && (typeChanged || clearedConfig))) {
-        const optionConfig = introduced
-          ? await this.assertAppForProduct(field.product_id)
-          : await this.optionConfigOf(field.product_id);
-        const siblings = await this.loadSiblings(tx, field.product_id);
-        const pick = <K extends ConfigKey>(k: K): unknown =>
-          dto[k] !== undefined ? dto[k] : (field[k] ?? null);
-        const merged = {
-          id,
-          name: dto.name ?? field.name,
-          type: dto.type ?? field.type ?? 'TEXT',
-          parent_id: parentId,
-          sort_order: dto.sort_order ?? field.sort_order ?? null,
-          options: options !== undefined ? options : field.options,
-          linked_validation:
-            rules.linked_validation === undefined
-              ? field.linked_validation
-              : rules.linked_validation === Prisma.DbNull
-                ? null
-                : rules.linked_validation,
-          conditions: pick('conditions'),
-          pricing: pick('pricing'),
-          repeat: pick('repeat'),
-          ui: pick('ui'),
-        };
-        const hasChildren =
-          field.type === 'REPEATER' && siblings.some((s) => s.parent_id === id);
-        const issues = [
-          ...validateFieldConfig(merged, siblings, optionConfig, {
-            hasChildren,
-          }),
-          ...(introduced ? this.translationIssues(translations) : []),
-        ];
-        if (issues.length > 0) throw configInvalid(issues);
+      const gate = this.computeGate(dto, field, storedByLocale);
+      if (gate.validate) {
+        await this.validateMerged(tx, field, dto, rules, gate.introduced);
+      }
+      if (gate.reordered) {
+        // M5 A13: a new position can make a reference of this field, or a
+        // reference to it, a forward one (same check as `reorder`).
+        await this.assertOrderReferences(
+          tx,
+          field.product_id,
+          new Map([[id, dto.sort_order as number]]),
+        );
       }
 
       const renamed = dto.name !== undefined && dto.name !== field.name;
@@ -435,58 +394,279 @@ export class CustomFieldsService {
         id,
       );
 
-      // Translations, the field, and the sibling links that point at the old
-      // name (links resolve by name, K3).
-      if (translations) {
-        await tx.customFieldTranslation.deleteMany({
-          where: { field_id: id },
-        });
-      }
-      const updated = await tx.productCustomField.update({
-        where: { id },
-        data: {
-          ...data,
-          ...rules,
-          ...this.personalizationData(
-            { conditions, pricing, repeat, ui, preset_key, preset_ref },
-            'update',
-          ),
-          ...(translations && {
-            translations: {
-              create: translations.map((t) =>
-                this.translationRow(t, storedByLocale.get(t.locale)),
-              ),
-            },
-          }),
-        },
-        include: { translations: true },
-      });
+      const row = await this.writeField(tx, id, dto, rules, storedByLocale);
       if (renamed && dto.name) {
-        await this.renameLinkTargets(
+        renamedStoreId = await this.propagateRename(
           tx,
-          field.product_id,
-          id,
+          field,
           parentId,
-          field.name,
           dto.name,
         );
-        if (parentId === null) {
-          renamedStoreId = await this.renameUrlPrefill(
-            tx,
-            field.product_id,
-            id,
-            field.name,
-            dto.name,
-          );
-        }
       }
-      return updated;
+      return row;
     });
     // The store's app settings changed (url_prefill): drop the cached copy.
     if (renamedStoreId && this.storeApps) {
       await this.storeApps.settingsChanged(renamedStoreId);
     }
+    this.revalidateProduct(product.creator_id);
     return updated;
+  }
+
+  /**
+   * X19: the stored M4.1 translation columns, read before the
+   * delete-and-recreate so a save that omits them keeps them. Not read when
+   * the write carries no translations (unchanged M4.0 path).
+   */
+  private async storedTranslations(
+    tx: Prisma.TransactionClient,
+    fieldId: string,
+    translations: CustomFieldTranslationDto[] | undefined,
+  ): Promise<Map<string, StoredTranslation>> {
+    if (!translations) return new Map();
+    const stored: StoredTranslation[] =
+      await tx.customFieldTranslation.findMany({
+        where: { field_id: fieldId },
+        select: {
+          locale: true,
+          display_label: true,
+          sublabel: true,
+          note: true,
+          help_text: true,
+          help_image_url: true,
+          messages: true,
+        },
+      });
+    return new Map(stored.map((t) => [t.locale, t]));
+  }
+
+  /**
+   * M4.1 gate of an update. `introduced`: the write introduces app-only
+   * config (a changed advanced value, type, checked rule or translation
+   * column), so the app must be on (a save from the app-off editor that
+   * round-trips stored keys still works). `validate`: the merged definition
+   * must be re-validated (introduced, or a type change / cleared config on
+   * a repeater or child, which can break the tree rules). `reordered`: the
+   * write moves the field (M5 A13).
+   */
+  private computeGate(
+    dto: UpdateCustomFieldDto,
+    field: StoredField,
+    storedByLocale: Map<string, StoredTranslation>,
+  ): { introduced: boolean; validate: boolean; reordered: boolean } {
+    const { translations, validation_rules } = dto;
+    const parentId = field.parent_id ?? null;
+    const introduced =
+      (dto.type !== undefined &&
+        isAppOnlyType(dto.type) &&
+        dto.type !== field.type) ||
+      CONFIG_KEYS.some(
+        (k) => isFilled(dto[k]) && !jsonEqual(dto[k], field[k] ?? null),
+      ) ||
+      Object.entries(checkedRules(validation_rules)).some(
+        ([k, v]) =>
+          !jsonEqual(
+            v,
+            isPlainObject(field.validation_rules)
+              ? (field.validation_rules[k] ?? null)
+              : null,
+          ),
+      ) ||
+      (translations ?? []).some((t) =>
+        TRANSLATION_EXTRA_KEYS.some(
+          (k) =>
+            isFilled(t[k]) &&
+            !jsonEqual(t[k], storedByLocale.get(t.locale)?.[k] ?? null),
+        ),
+      );
+    const typeChanged = dto.type !== undefined && dto.type !== field.type;
+    const treeField = parentId !== null || field.type === 'REPEATER';
+    // Clearing config of a repeater or a child can break the tree rules
+    // (a REPEATER without `repeat` → REPEAT_REQUIRED): checked too.
+    const clearedConfig = CONFIG_KEYS.some(
+      (k) => dto[k] === null && field[k] !== null && field[k] !== undefined,
+    );
+    const reordered =
+      parentId === null &&
+      typeof dto.sort_order === 'number' &&
+      dto.sort_order !== (field.sort_order ?? null);
+    return {
+      introduced,
+      validate: introduced || (treeField && (typeChanged || clearedConfig)),
+      reordered,
+    };
+  }
+
+  /**
+   * Validates the field as it will be stored (DTO over the row) against its
+   * siblings: the app gate when config is introduced (403/400), else only
+   * the product's option config.
+   */
+  private async validateMerged(
+    tx: Prisma.TransactionClient,
+    field: StoredField,
+    dto: UpdateCustomFieldDto,
+    rules: ReturnType<CustomFieldsService['sanitizeRules']>,
+    introduced: boolean,
+  ): Promise<void> {
+    const optionConfig = introduced
+      ? await this.assertAppForProduct(field.product_id)
+      : await this.optionConfigOf(field.product_id);
+    const siblings = await this.loadSiblings(tx, field.product_id);
+    const pick = <K extends ConfigKey>(k: K): unknown =>
+      dto[k] !== undefined ? dto[k] : (field[k] ?? null);
+    const merged = {
+      id: field.id,
+      name: dto.name ?? field.name,
+      type: dto.type ?? field.type ?? 'TEXT',
+      parent_id: field.parent_id ?? null,
+      sort_order: dto.sort_order ?? field.sort_order ?? null,
+      options: dto.options !== undefined ? dto.options : field.options,
+      linked_validation:
+        rules.linked_validation === undefined
+          ? field.linked_validation
+          : rules.linked_validation === Prisma.DbNull
+            ? null
+            : rules.linked_validation,
+      conditions: pick('conditions'),
+      pricing: pick('pricing'),
+      repeat: pick('repeat'),
+      ui: pick('ui'),
+    };
+    const hasChildren =
+      field.type === 'REPEATER' &&
+      siblings.some((s) => s.parent_id === field.id);
+    const issues = [
+      ...validateFieldConfig(merged, siblings, optionConfig, { hasChildren }),
+      ...(introduced ? this.translationIssues(dto.translations) : []),
+    ];
+    if (issues.length > 0) throw configInvalid(issues);
+  }
+
+  /**
+   * Writes the field row: scalar columns, the checked rules, the M4.1
+   * config (`null` clears) and, when sent, the translations
+   * (delete-and-recreate with the X19 carry-over).
+   */
+  private async writeField(
+    tx: Prisma.TransactionClient,
+    id: string,
+    dto: UpdateCustomFieldDto,
+    rules: ReturnType<CustomFieldsService['sanitizeRules']>,
+    storedByLocale: Map<string, StoredTranslation>,
+  ) {
+    const {
+      translations,
+      options: _options,
+      validation_rules: _rules,
+      linked_validation: _link,
+      parent_id: _parent,
+      conditions,
+      pricing,
+      repeat,
+      ui,
+      preset_key,
+      preset_ref,
+      ...data
+    } = dto;
+    void _options;
+    void _rules;
+    void _link;
+    void _parent;
+    if (translations) {
+      await tx.customFieldTranslation.deleteMany({ where: { field_id: id } });
+    }
+    return tx.productCustomField.update({
+      where: { id },
+      data: {
+        ...data,
+        ...rules,
+        ...this.personalizationData(
+          { conditions, pricing, repeat, ui, preset_key, preset_ref },
+          'update',
+        ),
+        ...(translations && {
+          translations: {
+            create: translations.map((t) =>
+              this.translationRow(t, storedByLocale.get(t.locale)),
+            ),
+          },
+        }),
+      },
+      include: { translations: true },
+    });
+  }
+
+  /**
+   * After a rename: the sibling links that point at the old name (links
+   * resolve by name, K3), the field-source conditions and repeater leads
+   * of the other top-level fields, and the store's `url_prefill`. Returns
+   * the store id when its settings changed.
+   */
+  private async propagateRename(
+    tx: Prisma.TransactionClient,
+    field: StoredField,
+    parentId: string | null,
+    newName: string,
+  ): Promise<string | null> {
+    await this.renameLinkTargets(
+      tx,
+      field.product_id,
+      field.id,
+      parentId,
+      field.name,
+      newName,
+    );
+    if (parentId !== null) return null;
+    return this.renameUrlPrefill(
+      tx,
+      field.product_id,
+      field.id,
+      field.name,
+      newName,
+    );
+  }
+
+  /**
+   * M4.1: with `overrides` applied to the top-level order, every field
+   * reference must still point at an earlier field (FORWARD_REFERENCE →
+   * 400 PERSONALIZATION_CONFIG_INVALID). Shared by `reorder` and an update
+   * that moves a field (M5 A13).
+   */
+  private async assertOrderReferences(
+    tx: Prisma.TransactionClient,
+    productId: string,
+    overrides: ReadonlyMap<string, number>,
+  ): Promise<void> {
+    const rows = await tx.productCustomField.findMany({
+      where: { product_id: productId },
+      select: {
+        id: true,
+        name: true,
+        type: true,
+        parent_id: true,
+        sort_order: true,
+        conditions: true,
+        repeat: true,
+      },
+    });
+    const next = rows.map((r) => ({
+      ...r,
+      sort_order: overrides.get(r.id) ?? r.sort_order,
+    }));
+    const issues = next
+      .filter(
+        (r) =>
+          !r.parent_id &&
+          ((r.conditions !== null && r.conditions !== undefined) ||
+            (r.repeat !== null && r.repeat !== undefined)),
+      )
+      .flatMap((r) =>
+        validateFieldConfig(r, next, null)
+          .filter((i) => i.code === 'FORWARD_REFERENCE')
+          .map((i) => ({ ...i, path: `${r.name}.${i.path}` })),
+      );
+    if (issues.length > 0) throw configInvalid(issues);
   }
 
   /**
@@ -686,9 +866,17 @@ export class CustomFieldsService {
       if (isPlainObject(link)) {
         const target =
           typeof link.target === 'string' ? link.target.trim() : undefined;
-        if (target === oldName) {
+        // Legacy rows (pre-K3 dashboard) hold the name in `target_field_id`
+        // and may have no `target` at all (M5 A4): honoured and migrated.
+        const legacy =
+          typeof link.target_field_id === 'string'
+            ? link.target_field_id.trim()
+            : undefined;
+        if (target === oldName || (!target && legacy === oldName)) {
+          const { target_field_id: _legacy, ...rest } = link;
+          void _legacy;
           data.linked_validation = {
-            ...link,
+            ...rest,
             target: newName,
           } as Prisma.InputJsonValue;
         }
@@ -920,7 +1108,7 @@ export class CustomFieldsService {
 
   async delete(id: string, userId: string, role: UserRole) {
     const field = await this.findFieldOrThrow(id);
-    await this.assertCanManage(field.product_id, userId, role);
+    const product = await this.assertCanManage(field.product_id, userId, role);
 
     // M4.0: order values keep a snapshot and lose the link (SET NULL), and a
     // creator's value for the field is removed with it (CASCADE), so the
@@ -929,12 +1117,14 @@ export class CustomFieldsService {
     // other fields (or the store's URL prefill) still reference is refused
     // (409 PERSONALIZATION_FIELD_IN_USE): the references would dangle.
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const deleted = await this.prisma.$transaction(async (tx) => {
         await lockProductFields(tx, field.product_id);
         const refs = await this.referencesTo(tx, field);
         if (refs.length > 0) throw fieldInUse(refs);
         return tx.productCustomField.delete({ where: { id } });
       });
+      this.revalidateProduct(product.creator_id);
+      return deleted;
     } catch (err) {
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&
@@ -955,44 +1145,16 @@ export class CustomFieldsService {
     userId: string,
     role: UserRole,
   ) {
-    await this.assertCanManage(productId, userId, role);
+    const product = await this.assertCanManage(productId, userId, role);
 
     const ids = fieldIds || [];
     await this.prisma.$transaction(async (tx) => {
       await lockProductFields(tx, productId);
       // M4.1: field references must still point at earlier fields in the
       // new order (FORWARD_REFERENCE → 400 PERSONALIZATION_CONFIG_INVALID).
-      const rows = await tx.productCustomField.findMany({
-        where: { product_id: productId },
-        select: {
-          id: true,
-          name: true,
-          type: true,
-          parent_id: true,
-          sort_order: true,
-          conditions: true,
-          repeat: true,
-        },
-      });
       const position = new Map<string, number>();
       ids.forEach((id, index) => position.set(id, index));
-      const next = rows.map((r) => ({
-        ...r,
-        sort_order: position.get(r.id) ?? r.sort_order,
-      }));
-      const issues = next
-        .filter(
-          (r) =>
-            !r.parent_id &&
-            ((r.conditions !== null && r.conditions !== undefined) ||
-              (r.repeat !== null && r.repeat !== undefined)),
-        )
-        .flatMap((r) =>
-          validateFieldConfig(r, next, null)
-            .filter((i) => i.code === 'FORWARD_REFERENCE')
-            .map((i) => ({ ...i, path: `${r.name}.${i.path}` })),
-        );
-      if (issues.length > 0) throw configInvalid(issues);
+      await this.assertOrderReferences(tx, productId, position);
 
       // Only touch fields that belong to this product: an id from another
       // product must not be re-sorted through this route.
@@ -1003,6 +1165,7 @@ export class CustomFieldsService {
         });
       }
     });
+    this.revalidateProduct(product.creator_id);
 
     return this.findByProduct(productId);
   }
@@ -1046,11 +1209,12 @@ export class CustomFieldsService {
     productId: string,
     userId: string,
     role: UserRole,
-  ) {
+  ): Promise<{ id: string; creator_id: string | null }> {
     const product = await this.prisma.product.findUnique({
       where: { id: productId },
       select: {
         id: true,
+        creator_id: true,
         provider: { select: { user_id: true } },
         creator: { select: { user_id: true } },
       },
@@ -1061,7 +1225,7 @@ export class CustomFieldsService {
         message: 'Product not found',
       });
 
-    if (role === UserRole.ADMIN) return;
+    if (role === UserRole.ADMIN) return product;
 
     const owns =
       (role === UserRole.PROVIDER &&
@@ -1076,5 +1240,6 @@ export class CustomFieldsService {
         code: 'CUSTOM_FIELD_FORBIDDEN',
         message: 'Not your product',
       });
+    return product;
   }
 }

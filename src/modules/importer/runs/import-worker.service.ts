@@ -23,6 +23,7 @@ import {
   RunCancelledError,
 } from './import-engine.service';
 import { ACTIVE_RUN_STATUSES, assertTransition } from './run-state';
+import { logJobTick } from '../../../common/ops/job-log';
 
 /**
  * In-process importer worker (M4.4 D4, §9.2): a 5 s unref'd tick claims the
@@ -160,6 +161,11 @@ export class ImportWorkerService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.requeueStale();
       const run = await this.claimNext();
+      logJobTick('importer', {
+        outcome: run ? 'ran' : 'idle',
+        run_id: run?.id ?? null,
+        run_status: run?.status ?? null,
+      });
       if (!run) return null;
       await this.process(run);
       return run.id;

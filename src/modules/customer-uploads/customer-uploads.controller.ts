@@ -98,7 +98,7 @@ export class CustomerUploadsController {
     @Param('id') id: string,
     @Res({ passthrough: true }) res?: Response,
   ) {
-    const { buffer, mime, filename } =
+    const { stream, length, mime, filename } =
       await this.customerUploads.downloadOriginal(id, user);
     // Customer bytes are untrusted: never sniffed, never run as a document
     // (a PDF/SVG opened in place gets an opaque, script-less origin).
@@ -106,10 +106,11 @@ export class CustomerUploadsController {
     res?.setHeader('Content-Security-Policy', 'sandbox');
     // Private customer originals must never be stored by shared caches.
     res?.setHeader('Cache-Control', 'private, no-store');
-    return new StreamableFile(buffer, {
+    // Streamed from disk: a 50 MB original never sits in memory (M5 A5).
+    return new StreamableFile(stream, {
       type: mime,
       disposition: `attachment; filename="${filename.replace(/"/g, '')}"`,
-      length: buffer.length,
+      length,
     });
   }
 }

@@ -69,6 +69,7 @@ import {
 } from './designer-render.service';
 import { isOffFlag } from './render/designer-chromium.host';
 import { releaseProofKey } from './designer-proof-keys';
+import { logJobTick } from '../../common/ops/job-log';
 
 export const PRINT_QUEUE_TICK_MS = 15_000;
 /** Total attempts per request (§5.3: `print_attempts < 3`). */
@@ -656,6 +657,11 @@ export class DesignerPrintQueueService
   /** One worker pass (public for specs): fills up to `concurrency` lanes. */
   async tick(): Promise<void> {
     if (!this.workerEnabled) return;
+    logJobTick('designer.print-queue', {
+      outcome: Date.now() < this.pauseUntil ? 'skipped' : 'idle',
+      paused_until: this.pauseUntil || null,
+      concurrency: this.config.concurrency,
+    });
     if (Date.now() < this.pauseUntil) return;
     const lanes: Promise<void>[] = [];
     while (this.lanes < this.config.concurrency) {

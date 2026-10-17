@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, Optional } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { MarketsContextService } from '../markets/markets-context.service';
@@ -104,6 +109,8 @@ interface CustomProductPricingSource {
 
 @Injectable()
 export class StorefrontService {
+  private readonly logger = new Logger(StorefrontService.name);
+
   constructor(
     private prisma: PrismaService,
     private readonly storeApps: StoreAppsService,
@@ -165,8 +172,11 @@ export class StorefrontService {
         settings,
         profile,
       );
-    } catch {
+    } catch (e) {
       // A badge must never break the product page.
+      this.logger.warn(
+        `Free-shipping badge of product ${productId} (store ${store.id}) failed, shown without a threshold: ${String(e)}`,
+      );
       threshold = null;
     }
     let currency: string;

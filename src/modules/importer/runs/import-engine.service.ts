@@ -37,7 +37,10 @@ import {
 import { SafeFetcher } from '../media/safe-fetch';
 import { MediaImporter, type StoredMedia } from '../media/media-importer';
 import { planImport, type ImportPlan, type PlanItem } from '../planner/planner';
-import { loadTargetSnapshot } from '../planner/state-loader';
+import {
+  loadStoreStateStamp,
+  loadTargetSnapshot,
+} from '../planner/state-loader';
 import {
   PERSONALIZATION_PRESET_PORT,
   type PersonalizationPresetPort,
@@ -50,12 +53,17 @@ import {
 } from '../apply/apply-products';
 import { applyShipping } from '../apply/apply-shipping';
 import { applyTemplates } from '../apply/apply-templates';
-import { applyRedirects } from '../apply/apply-redirects';
+import {
+  applyRedirects,
+  type RedirectApplyResult,
+} from '../apply/apply-redirects';
 import { rollbackRun, type RollbackResult } from '../apply/rollback';
 import {
   appliedRefs,
   recordItems,
   type ApplyContext,
+  type ApplyItem,
+  type Tx,
 } from '../apply/apply-context';
 import { ImportRunError } from '../importer.errors';
 import { normalizeRunOptions, type ImportRunOptions } from './run-options';
@@ -143,13 +151,57 @@ function sourceView(source: ImportSource): ImportSourceView {
   };
 }
 
+function takenOver(): ImportRunError {
+  return new ImportRunError('IMPORT_RUN_INTERRUPTED', 'The run was taken over');
+}
+
+/** What `buildPlan` returns (plan + the snapshot facts the apply step needs). */
+export interface BuiltPlan {
+  plan: ImportPlan;
+  options: ImportRunOptions;
+  creatorId: string;
+  primaryLocale: string;
+  creatorHasDefaultProfile: boolean;
+}
+
+/** M5 B14: a plan kept between confirm and apply (same process only). */
+interface CachedPlan {
+  runId: string;
+  fingerprint: string;
+  stamp: string;
+  built: BuiltPlan;
+  at: number;
+}
+
+const PLAN_CACHE_MAX = 4;
+const PLAN_CACHE_TTL_MS = 10 * 60 * 1000;
+
+/** Everything one apply run carries between its phases (M5 B18). */
+interface ApplyRun {
+  run: ImportRun;
+  source: ImportSource;
+  plan: ImportPlan;
+  options: ImportRunOptions;
+  ctx: ApplyContext;
+  control: RunControl;
+  resumed: boolean;
+  cursor: RunCursor;
+  errors: number;
+}
+
 /**
  * Planning, apply and rollback of one run. The worker owns claiming,
  * heartbeats and status transitions around these calls.
+ *
+ * M5 B10: every progress / summary / cursor write on the run row is a
+ * conditional `updateMany` on `worker_id` (when the worker gave one): a
+ * worker that lost its claim throws IMPORT_RUN_INTERRUPTED instead of
+ * overwriting the new worker's state.
  */
 @Injectable()
 export class ImportEngineService {
   private readonly logger = new Logger(ImportEngineService.name);
+  private readonly planCache: CachedPlan[] = [];
 
   constructor(
     private readonly prisma: PrismaService,
@@ -195,6 +247,23 @@ export class ImportEngineService {
         ...(extra.data ? { data: extra.data as Prisma.InputJsonValue } : {}),
       },
     });
+  }
+
+  /**
+   * Guarded write on the run row (M5 B10): only while this worker owns it.
+   * Without a worker id (engine called directly) the write is unconditional.
+   */
+  private async writeRun(
+    db: Tx,
+    runId: string,
+    workerId: string | undefined,
+    data: Prisma.ImportRunUpdateManyMutationInput,
+  ): Promise<void> {
+    const res = await db.importRun.updateMany({
+      where: { id: runId, ...(workerId ? { worker_id: workerId } : {}) },
+      data,
+    });
+    if (res.count !== 1) throw takenOver();
   }
 
   // ── Planning (dry run) ───────────────────────────────────────────────────
@@ -252,13 +321,7 @@ export class ImportEngineService {
     source: ImportSource,
     catalog: NormalizedCatalog,
     catalogHash: string,
-  ): Promise<{
-    plan: ImportPlan;
-    options: ImportRunOptions;
-    creatorId: string;
-    primaryLocale: string;
-    creatorHasDefaultProfile: boolean;
-  }> {
+  ): Promise<BuiltPlan> {
     const { options, errors } = normalizeRunOptions(run.options);
     if (errors.length)
       throw new ImportRunError('IMPORT_RUN_OPTIONS_INVALID', errors.join('; '));
@@ -293,6 +356,44 @@ export class ImportEngineService {
       primaryLocale: snapshot.primaryLocale,
       creatorHasDefaultProfile: snapshot.creatorHasDefaultProfile,
     };
+  }
+
+  /**
+   * M5 B14: the plan built for the confirm check is reused by the apply step
+   * when the store did not change in between (same fingerprint and the same
+   * store-state stamp: counts + newest `updated_at` of the tables the plan
+   * reads). Anything else replans. Per process; a miss is just a replan.
+   */
+  private async buildPlanCached(
+    run: ImportRun,
+    source: ImportSource,
+    catalog: NormalizedCatalog,
+    catalogHash: string,
+  ): Promise<BuiltPlan> {
+    const now = Date.now();
+    const stamp = await loadStoreStateStamp(this.prisma, run.store_id);
+    const hit = this.planCache.find(
+      (c) =>
+        c.runId === run.id &&
+        c.fingerprint === run.plan_fingerprint &&
+        c.stamp === stamp &&
+        now - c.at < PLAN_CACHE_TTL_MS,
+    );
+    if (hit) return hit.built;
+    const built = await this.buildPlan(run, source, catalog, catalogHash);
+    // The stamp is read before planning: a change during the plan makes the
+    // next lookup miss (and the fingerprint check still guards the apply).
+    const idx = this.planCache.findIndex((c) => c.runId === run.id);
+    if (idx >= 0) this.planCache.splice(idx, 1);
+    this.planCache.push({
+      runId: run.id,
+      fingerprint: built.plan.fingerprint,
+      stamp,
+      built,
+      at: now,
+    });
+    while (this.planCache.length > PLAN_CACHE_MAX) this.planCache.shift();
+    return built;
   }
 
   /** UPLOADED → (worker sets PLANNING) → PLANNED / PLAN_FAILED. */
@@ -383,10 +484,7 @@ export class ImportEngineService {
         select: { cancel_requested_at: true },
       });
       if (cur?.cancel_requested_at) throw new RunCancelledError();
-      throw new ImportRunError(
-        'IMPORT_RUN_INTERRUPTED',
-        'The run was taken over',
-      );
+      throw takenOver();
     }
   }
 
@@ -418,7 +516,8 @@ export class ImportEngineService {
       where: { id: run.source_id },
     });
     const catalog = await loadCatalogSnapshot(this.storage, run.snapshot_key);
-    return (await this.buildPlan(run, source, catalog, run.catalog_hash)).plan;
+    return (await this.buildPlanCached(run, source, catalog, run.catalog_hash))
+      .plan;
   }
 
   // ── Apply ────────────────────────────────────────────────────────────────
@@ -428,6 +527,21 @@ export class ImportEngineService {
     runId: string,
     control: RunControl,
   ): Promise<ImportRunStatus> {
+    const a = await this.loadApplyRun(runId, control);
+    await this.applyMediaPhase(a);
+    await this.applyCategoriesPhase(a);
+    await this.applyShippingPhase(a);
+    await this.applyProductsPhase(a);
+    await this.applyTemplatesPhase(a);
+    const redirectResult = await this.applyRedirectsPhase(a);
+    return this.finalizeApply(a, redirectResult);
+  }
+
+  /** Loads run, source, catalog and plan; checks the fingerprint; builds the context. */
+  private async loadApplyRun(
+    runId: string,
+    control: RunControl,
+  ): Promise<ApplyRun> {
     const run = await this.prisma.importRun.findUniqueOrThrow({
       where: { id: runId },
     });
@@ -441,7 +555,12 @@ export class ImportEngineService {
       );
     }
     const catalog = await loadCatalogSnapshot(this.storage, run.snapshot_key);
-    const built = await this.buildPlan(run, source, catalog, run.catalog_hash);
+    const built = await this.buildPlanCached(
+      run,
+      source,
+      catalog,
+      run.catalog_hash,
+    );
     const { plan, options } = built;
     const progress = (run.progress ?? null) as RunProgress | null;
     const resumed = !!progress?.cursor;
@@ -476,7 +595,6 @@ export class ImportEngineService {
         `Resuming at ${progress.cursor!.phase} #${progress.cursor!.index} (attempt ${run.attempt})`,
       );
     }
-
     const ctx: ApplyContext = {
       prisma: this.prisma,
       storeId: run.store_id,
@@ -495,44 +613,61 @@ export class ImportEngineService {
       log: (level, code, message, extra) =>
         this.log(run.id, level, code, message, extra),
       checkpoint: control.checkpoint,
+      assertClaim: (db) =>
+        this.writeRun(db, run.id, control.workerId, {
+          heartbeat_at: new Date(),
+        }),
     };
+    return {
+      run,
+      source,
+      plan,
+      options,
+      ctx,
+      control,
+      resumed,
+      cursor: progress?.cursor ?? { phase: 'media', index: 0 },
+      errors: 0,
+    };
+  }
 
-    let cursor: RunCursor = progress?.cursor ?? { phase: 'media', index: 0 };
-    const save = async (
-      phase: ApplyPhase,
-      index: number,
-      done: number,
-      total: number,
-    ) => {
-      cursor = { phase, index };
-      await this.prisma.importRun.update({
-        where: { id: run.id },
-        data: {
-          progress: {
-            phase,
-            done,
-            total,
-            cursor: { phase, index },
-          } as unknown as Prisma.InputJsonValue,
-        },
-      });
-    };
-    const startOf = (phase: ApplyPhase): number | null => {
-      const at = APPLY_PHASES.indexOf(cursor.phase);
-      const me = APPLY_PHASES.indexOf(phase);
-      if (me < at) return null;
-      return me === at ? cursor.index : 0;
-    };
-    let errors = 0;
+  /** Progress + cursor write, guarded by the worker claim (M5 B10). */
+  private async saveCursor(
+    a: ApplyRun,
+    phase: ApplyPhase,
+    index: number,
+    done: number,
+    total: number,
+    db: Tx = this.prisma,
+  ): Promise<void> {
+    a.cursor = { phase, index };
+    await this.writeRun(db, a.run.id, a.control.workerId, {
+      progress: {
+        phase,
+        done,
+        total,
+        cursor: { phase, index },
+      } as unknown as Prisma.InputJsonValue,
+    });
+  }
 
-    // media
-    let start = startOf('media');
+  /** Start index of `phase` from the cursor, or null when it already ran. */
+  private startOf(a: ApplyRun, phase: ApplyPhase): number | null {
+    const at = APPLY_PHASES.indexOf(a.cursor.phase);
+    const me = APPLY_PHASES.indexOf(phase);
+    if (me < at) return null;
+    return me === at ? a.cursor.index : 0;
+  }
+
+  private async applyMediaPhase(a: ApplyRun): Promise<void> {
+    const start = this.startOf(a, 'media');
     if (start !== null) {
+      const { run, plan, control, resumed } = a;
       const needs = plan.work.media;
       // Fix 8: a cursor exists before the first batch, so a crash inside it
       // resumes instead of failing the fingerprint check.
-      if (!resumed) await save('media', 0, 0, needs.length);
-      const fetcher = this.fetcherFor(source);
+      if (!resumed) await this.saveCursor(a, 'media', 0, 0, needs.length);
+      const fetcher = this.fetcherFor(a.source);
       const mi = new MediaImporter({
         db: this.prisma,
         fetcher,
@@ -563,12 +698,7 @@ export class ImportEngineService {
               ).map((r) => r.source_url)
             : [],
         );
-        const items: {
-          entity_type: string;
-          external_ref: string;
-          action: 'CREATE' | 'UNCHANGED' | 'ERROR';
-          target_id: null;
-        }[] = unchanged.map((n) => ({
+        const items: ApplyItem[] = unchanged.map((n) => ({
           entity_type: 'MEDIA',
           external_ref: `${n.target}:${n.source_url}`,
           action: resumed && ours.has(n.source_url) ? 'CREATE' : n.action,
@@ -591,7 +721,7 @@ export class ImportEngineService {
               action: 'ERROR',
               target_id: null,
             });
-            await ctx.log(
+            await a.ctx.log(
               ImportLogLevel.WARN,
               'W_MEDIA_FETCH_FAILED',
               `${r.code}: ${r.message}`,
@@ -615,81 +745,106 @@ export class ImportEngineService {
             ImportItemPhase.APPLY,
             items.filter((x) => !done.has(x.external_ref.slice(0, 255))),
           );
-          await tx.importRun.update({
-            where: { id: run.id },
-            data: {
-              progress: {
-                phase: 'media',
-                done: next,
-                total: needs.length,
-                cursor: { phase: 'media', index: next },
-              } as unknown as Prisma.InputJsonValue,
-            },
-          });
+          await this.saveCursor(a, 'media', next, next, needs.length, tx);
         });
-        cursor = { phase: 'media', index: next };
       }
-      await save('categories', 0, 0, plan.work.categories.length);
+      await this.saveCursor(a, 'categories', 0, 0, plan.work.categories.length);
     }
-    ctx.media = await this.loadMediaMap(run.store_id, plan);
+    a.ctx.media = await this.loadMediaMap(a.run.store_id, a.plan);
+  }
 
-    start = startOf('categories');
-    if (start !== null) {
-      const res = await applyCategories(
-        ctx,
-        plan.work.categories,
-        start,
-        (next) => save('categories', next, next, plan.work.categories.length),
+  private async applyCategoriesPhase(a: ApplyRun): Promise<void> {
+    const start = this.startOf(a, 'categories');
+    if (start === null) return;
+    const { plan } = a;
+    const res = await applyCategories(
+      a.ctx,
+      plan.work.categories,
+      start,
+      (next) =>
+        this.saveCursor(
+          a,
+          'categories',
+          next,
+          next,
+          plan.work.categories.length,
+        ),
+    );
+    a.errors += res.errors;
+    await this.saveCursor(
+      a,
+      'shipping',
+      0,
+      0,
+      plan.work.shipping?.profiles.length ?? 0,
+    );
+  }
+
+  private async applyShippingPhase(a: ApplyRun): Promise<void> {
+    const start = this.startOf(a, 'shipping');
+    if (start === null) return;
+    const { plan, options } = a;
+    if (plan.work.shipping) {
+      const work = plan.work.shipping;
+      const res = await applyShipping(a.ctx, work, start, (next) =>
+        this.saveCursor(a, 'shipping', next, next, work.profiles.length),
       );
-      errors += res.errors;
-      await save('shipping', 0, 0, plan.work.shipping?.profiles.length ?? 0);
-    }
-
-    start = startOf('shipping');
-    if (start !== null) {
-      if (plan.work.shipping) {
-        const work = plan.work.shipping;
-        const res = await applyShipping(ctx, work, start, (next) =>
-          save('shipping', next, next, work.profiles.length),
-        );
-        errors += res.errors;
-      } else if (options.scopes.shipping) {
-        await ctx.log(
-          ImportLogLevel.WARN,
-          'W_SHIPPING_NOT_IN_BUNDLE',
-          'The bundle has no shipping tables; shipping was not imported',
-        );
-      }
-      await save('products', 0, 0, plan.work.products.length);
-    }
-
-    start = startOf('products');
-    if (start !== null) {
-      const res = await applyProducts(ctx, plan.work.products, start, (next) =>
-        save('products', next, next, plan.work.products.length),
+      a.errors += res.errors;
+    } else if (options.scopes.shipping) {
+      await a.ctx.log(
+        ImportLogLevel.WARN,
+        'W_SHIPPING_NOT_IN_BUNDLE',
+        'The bundle has no shipping tables; shipping was not imported',
       );
-      errors += res.errors;
-      await applySkipped(ctx, plan.work.skipped);
-      await applyRemovals(ctx, plan.work.removals);
-      await save('templates', 0, 0, plan.work.templates.length);
     }
+    await this.saveCursor(a, 'products', 0, 0, plan.work.products.length);
+  }
 
-    start = startOf('templates');
-    if (start !== null) {
-      await applyTemplates(ctx, plan.work.templates, plan.work.products);
-      await save('redirects', 0, 0, plan.work.redirects?.incoming.length ?? 0);
-    }
+  private async applyProductsPhase(a: ApplyRun): Promise<void> {
+    const start = this.startOf(a, 'products');
+    if (start === null) return;
+    const { plan } = a;
+    const res = await applyProducts(a.ctx, plan.work.products, start, (next) =>
+      this.saveCursor(a, 'products', next, next, plan.work.products.length),
+    );
+    a.errors += res.errors;
+    await applySkipped(a.ctx, plan.work.skipped);
+    await applyRemovals(a.ctx, plan.work.removals);
+    await this.saveCursor(a, 'templates', 0, 0, plan.work.templates.length);
+  }
 
-    start = startOf('redirects');
-    let redirectResult: Awaited<ReturnType<typeof applyRedirects>> | null =
-      null;
-    if (start !== null) {
-      if (plan.work.redirects)
-        redirectResult = await applyRedirects(ctx, plan.work.redirects);
-      await save('finalize', 0, 0, 1);
-    }
+  private async applyTemplatesPhase(a: ApplyRun): Promise<void> {
+    const start = this.startOf(a, 'templates');
+    if (start === null) return;
+    const { plan } = a;
+    await applyTemplates(a.ctx, plan.work.templates, plan.work.products);
+    await this.saveCursor(
+      a,
+      'redirects',
+      0,
+      0,
+      plan.work.redirects?.incoming.length ?? 0,
+    );
+  }
 
-    // finalize: one storefront revalidation, apply summary, final status.
+  private async applyRedirectsPhase(
+    a: ApplyRun,
+  ): Promise<RedirectApplyResult | null> {
+    const start = this.startOf(a, 'redirects');
+    if (start === null) return null;
+    let result: RedirectApplyResult | null = null;
+    if (a.plan.work.redirects)
+      result = await applyRedirects(a.ctx, a.plan.work.redirects);
+    await this.saveCursor(a, 'finalize', 0, 0, 1);
+    return result;
+  }
+
+  /** One storefront revalidation, apply summary, final status. */
+  private async finalizeApply(
+    a: ApplyRun,
+    redirectResult: RedirectApplyResult | null,
+  ): Promise<ImportRunStatus> {
+    const { run } = a;
     await this.revalidation
       .revalidateStoreById(run.store_id)
       .catch((e: unknown) => {
@@ -718,7 +873,7 @@ export class ImportEngineService {
     const outcome = runOutcome(counts);
     const status = outcome.failed
       ? ImportRunStatus.FAILED
-      : errors || errorItems || warnLogs
+      : a.errors || errorItems || warnLogs
         ? ImportRunStatus.COMPLETED_WITH_WARNINGS
         : ImportRunStatus.COMPLETED;
     const summary = {
@@ -730,24 +885,21 @@ export class ImportEngineService {
         outcome,
       },
     };
-    await this.prisma.importRun.update({
-      where: { id: run.id },
-      data: {
-        ...(outcome.failed
-          ? {
-              error: `IMPORT_RUN_ERRORS: ${outcome.reasons.join(', ')}`.slice(
-                0,
-                2048,
-              ),
-            }
-          : {}),
-        summary: summary as unknown as Prisma.InputJsonValue,
-        progress: {
-          phase: 'done',
-          done: 1,
-          total: 1,
-          cursor: { phase: 'finalize', index: 1 },
-        },
+    await this.writeRun(this.prisma, run.id, a.control.workerId, {
+      ...(outcome.failed
+        ? {
+            error: `IMPORT_RUN_ERRORS: ${outcome.reasons.join(', ')}`.slice(
+              0,
+              2048,
+            ),
+          }
+        : {}),
+      summary: summary as unknown as Prisma.InputJsonValue,
+      progress: {
+        phase: 'done',
+        done: 1,
+        total: 1,
+        cursor: { phase: 'finalize', index: 1 },
       },
     });
     await this.log(
@@ -832,9 +984,8 @@ export class ImportEngineService {
       ...(run.summary as Record<string, unknown> | null),
       rollback: result,
     };
-    await this.prisma.importRun.update({
-      where: { id: run.id },
-      data: { summary: summary as unknown as Prisma.InputJsonValue },
+    await this.writeRun(this.prisma, run.id, control?.workerId, {
+      summary: summary as unknown as Prisma.InputJsonValue,
     });
     await this.log(
       run.id,

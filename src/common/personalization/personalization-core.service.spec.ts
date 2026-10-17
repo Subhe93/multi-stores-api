@@ -448,21 +448,14 @@ describe('PersonalizationCoreService.loadContexts variant lines (M4.1 fixes)', (
     });
   });
 
-  it('a variant of another product is refused (default 400, or the caller error)', async () => {
-    const lines = [{ product_id: 'p1', variant_id: 'v2' }];
-    await expect(
-      makeCore(prismaWith()).loadContexts(lines),
-    ).rejects.toMatchObject({
-      response: { code: 'PRODUCT_VARIANT_MISMATCH' },
-    });
-    const custom = new Error('foreign');
-    await expect(
-      makeCore(prismaWith()).loadContexts(lines, {
-        onVariantMismatch: () => {
-          throw custom;
-        },
-      }),
-    ).rejects.toBe(custom);
+  it('M5 A11: lines with a product_id make no variant query (the callers check ownership)', async () => {
+    const prisma = prismaWith();
+    const ctxs = await makeCore(prisma).loadContexts([
+      { product_id: 'p1', variant_id: 'v2' },
+      { product_id: 'p1', variant_id: 'v1' },
+    ]);
+    expect(prisma.productVariant.findMany).not.toHaveBeenCalled();
+    expect(ctxs.map((c) => c.productId)).toEqual(['p1', 'p1']);
   });
 
   it('lines without a variant make no variant query (M4.0 budget unchanged)', async () => {

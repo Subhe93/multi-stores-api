@@ -1,6 +1,12 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  Optional,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { readOptionNames } from './personalization-config.validator';
 import {
   createFieldTree,
@@ -52,7 +58,14 @@ export interface ApplyPresetResult {
  */
 @Injectable()
 export class PersonalizationPresetsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(PersonalizationPresetsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    // Global module; optional and trailing (positional unit tests, the
+    // importer port). Absent = no storefront revalidation.
+    @Optional() private readonly revalidation?: RevalidationService,
+  ) {}
 
   list(): PresetSummary[] {
     return presetSummaries();
@@ -66,10 +79,30 @@ export class PersonalizationPresetsService {
     actor: FieldWriteActor,
   ): Promise<ApplyPresetResult> {
     if (!findPreset(key)) throw presetUnknown(key);
-    return this.prisma.$transaction(
+    const result = await this.prisma.$transaction(
       (tx) => this.applyInTx(tx, productId, key, params, opts, actor),
       { timeout: 20_000 },
     );
+    // D13: the storefront caches the product page with its fields. The
+    // importer calls `applyInTx` and revalidates once per run itself.
+    await this.revalidateProduct(productId);
+    return result;
+  }
+
+  private async revalidateProduct(productId: string): Promise<void> {
+    if (!this.revalidation) return;
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+      select: { creator_id: true },
+    });
+    if (!product?.creator_id) return;
+    void this.revalidation
+      .revalidateStoreByCreatorId(product.creator_id)
+      .catch((e: unknown) => {
+        this.logger.warn(
+          `Storefront revalidation failed for product ${productId}: ${String(e)}`,
+        );
+      });
   }
 
   /**

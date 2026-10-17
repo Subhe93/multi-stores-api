@@ -264,6 +264,90 @@ describe('fix 13 — tag redirects', () => {
   });
 });
 
+describe('M5 B17 — shortlinks and WordPress pages', () => {
+  const catalog: any = {
+    meta: { bases: { product: 'produkt', category: 'c', tag: 'tag' } },
+    categories: [],
+    tags: [],
+    pages: [
+      {
+        ext_id: 'pg:7',
+        source_id: '7',
+        status: 'publish',
+        slug: 'om-oss',
+        path: ['info', 'om-oss'],
+        title: 'Om oss',
+      },
+      {
+        ext_id: 'pg:8',
+        source_id: '8',
+        status: 'draft',
+        slug: 'utkast',
+        path: ['utkast'],
+        title: 'Utkast',
+      },
+    ],
+  };
+  const product: any = {
+    ext_id: 'p1',
+    source_id: '4256',
+    slug: 'x',
+    old_slugs: [],
+    tag_ext_ids: [],
+  };
+  const base = {
+    catalog,
+    imported: [{ product, final_slug: 'x', published: true }],
+    skipped: [],
+    categorySlug: new Map<string, string>(),
+    redirectSkipped: false,
+  };
+
+  it('writes `/?p=<id>` rows for published products and pages only when asked', () => {
+    const off = buildImportRedirects(base);
+    expect(off.candidates.some((c) => c.from.startsWith('/?p='))).toBe(false);
+    expect(off.candidates.some((c) => c.rule === 'page')).toBe(false);
+
+    const on = buildImportRedirects({
+      ...base,
+      shortlinks: true,
+      pageTarget: (p) => `/pages/${p.slug}`,
+    });
+    const by = (from: string) => on.candidates.find((c) => c.from === from);
+    expect(by('/?p=4256')).toMatchObject({
+      to: '/products/x',
+      rule: 'shortlink',
+      external_ref: 'p1',
+    });
+    expect(by('/info/om-oss')).toMatchObject({
+      to: '/pages/om-oss',
+      rule: 'page',
+      external_ref: 'pg:7',
+    });
+    expect(by('/?p=7')).toMatchObject({
+      to: '/pages/om-oss',
+      rule: 'shortlink',
+    });
+    // The draft page and a page the hook declines get nothing.
+    expect(on.candidates.some((c) => c.external_ref === 'pg:8')).toBe(false);
+    const none = buildImportRedirects({
+      ...base,
+      shortlinks: true,
+      pageTarget: () => null,
+    });
+    expect(none.candidates.some((c) => c.rule === 'page')).toBe(false);
+  });
+
+  it('a draft product gets no shortlink', () => {
+    const res = buildImportRedirects({
+      ...base,
+      imported: [{ product, final_slug: 'x', published: false }],
+      shortlinks: true,
+    });
+    expect(res.candidates.some((c) => c.rule === 'shortlink')).toBe(false);
+  });
+});
+
 describe('fix 2 — swatches survive an unresolved image', () => {
   it('keeps the current swatch URL when the source swatch was not stored', () => {
     const ctx: any = { media: new Map() };

@@ -635,8 +635,21 @@ async function applyOne(
         }
       }
       await recordItems(tx, ctx.runId, ImportItemPhase.APPLY, items);
+      // M5 B10: the claim is re-checked inside the transaction so a worker
+      // that lost the run commits nothing.
+      await ctx.assertClaim(tx);
     },
     { timeout: PRODUCT_TX_TIMEOUT_MS, maxWait: 10_000 },
+  );
+}
+
+/** True for the engine's own "stop now" errors (never counted as a product error). */
+function isRunControlError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return (
+    code === 'IMPORT_RUN_INTERRUPTED' ||
+    code === 'IMPORT_RUN_CANCELLED' ||
+    code === 'IMPORT_RUN_TIMEOUT'
   );
 }
 
@@ -660,9 +673,12 @@ export async function applyProducts(
     );
     for (const pp of batch) {
       if (done.has(pp.mapped.ref)) continue;
+      // M5 B10: a taken-over worker stops before the next product transaction.
+      await ctx.assertClaim(ctx.prisma);
       try {
         await applyOne(ctx, pp, lookups);
       } catch (err) {
+        if (isRunControlError(err)) throw err;
         errors++;
         await ctx.log(
           ImportLogLevel.ERROR,

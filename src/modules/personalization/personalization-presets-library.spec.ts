@@ -662,6 +662,35 @@ describe('PersonalizationLibraryService (M4.1 D13)', () => {
     );
   });
 
+  it('M5 D13: a preset apply and a library insert revalidate the storefront of the creator', async () => {
+    const revalidation = {
+      revalidateStoreByCreatorId: jest.fn(() => Promise.resolve()),
+    };
+    const presetsR = new PersonalizationPresetsService(
+      fake.prisma as unknown as PrismaService,
+      revalidation as never,
+    );
+    const libR = new PersonalizationLibraryService(
+      fake.prisma as unknown as PrismaService,
+      revalidation as never,
+    );
+    const applied = await presetsR.apply('p1', 'single_name', {}, {}, CREATOR);
+    expect(revalidation.revalidateStoreByCreatorId).toHaveBeenCalledTimes(1);
+    expect(revalidation.revalidateStoreByCreatorId).toHaveBeenCalledWith('c1');
+    const tpl = await libR.create('s1', CREATOR_USER, {
+      name: 'Namn',
+      from_field_id: applied.fields[0].id,
+    } as never);
+    fake.state.products.set('p3', {
+      id: 'p3',
+      creator_id: 'c1',
+      creator_user: CREATOR_USER,
+      variant_option_config: null,
+    });
+    await libR.insertIntoProduct('s1', CREATOR_USER, tpl.id, 'p3');
+    expect(revalidation.revalidateStoreByCreatorId).toHaveBeenCalledTimes(2);
+  });
+
   it('saves a repeater from a field and inserts it into another product of the creator', async () => {
     const applied = await presets.apply(
       'p1',

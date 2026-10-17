@@ -9,9 +9,16 @@ import { UploadsService } from '../uploads/uploads.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import {
   CustomerUploadsService,
-  previewIdOf,
   sanitizeFileName,
 } from './customer-uploads.service';
+import { parseCustomerPreviewId } from './customer-uploads.types';
+import type { Readable } from 'stream';
+
+async function collect(stream: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk as Buffer));
+  return Buffer.concat(chunks);
+}
 import type { RetentionService } from '../retention/retention.service';
 import * as rasterInspect from '../../common/uploads/raster-inspect';
 
@@ -502,13 +509,24 @@ describe('CustomerUploadsService', () => {
       await expect(
         service.markAttached([uuid(1), uuid(2)], 'store-a', tx as never),
       ).rejects.toMatchObject({
-        response: { code: 'CUSTOMER_UPLOAD_EXPIRED' },
+        response: {
+          code: 'CUSTOMER_UPLOAD_EXPIRED',
+          params: { upload_ids: [uuid(2)] },
+        },
       });
       await expect(
         service.markAttached([uuid(3)], 'store-a', tx as never),
       ).rejects.toMatchObject({
         response: { code: 'CUSTOMER_UPLOAD_EXPIRED' },
       });
+      // M5 A3: the non-throwing variant names exactly the unattachable ids.
+      expect(
+        await service.tryMarkAttached(
+          [uuid(1), uuid(2), uuid(3)],
+          'store-a',
+          tx as never,
+        ),
+      ).toEqual({ attached: 1, unattachable: [uuid(2), uuid(3)] });
       expect(await service.markAttached([], 'store-a', tx as never)).toBe(0);
       const where = (
         prisma.customerUpload.updateMany.mock.calls[0] as [
@@ -588,7 +606,8 @@ describe('CustomerUploadsService', () => {
       ['provider fulfilling that item', 'provider-user', UserRole.PROVIDER],
     ])('lets the %s download the exact original', async (_l, id, role) => {
       const res = await service.downloadOriginal(uuid(5), { id, role });
-      expect(res.buffer).toEqual(ORIGINAL);
+      expect(await collect(res.stream)).toEqual(ORIGINAL);
+      expect(res.length).toBe(ORIGINAL.length);
       expect(res.mime).toBe('application/pdf');
       expect(res.filename).toBe(
         `ORD-1001-Logo_file-${uuid(5).slice(0, 8)}.pdf`,
@@ -610,6 +629,21 @@ describe('CustomerUploadsService', () => {
         status: 404,
         response: { code: 'CUSTOMER_UPLOAD_NOT_FOUND' },
       });
+    });
+
+    it('M5 A5: streams the original from disk (stat + createReadStream, no readFile)', async () => {
+      const readFile = jest.spyOn(storage, 'read');
+      const openRead = jest.spyOn(storage, 'openRead');
+      const res = await service.downloadOriginal(uuid(5), {
+        id: 'admin-user',
+        role: UserRole.ADMIN,
+      });
+      expect(openRead).toHaveBeenCalledTimes(1);
+      expect(readFile).not.toHaveBeenCalled();
+      expect(res.length).toBe(ORIGINAL.length);
+      expect(await collect(res.stream)).toEqual(ORIGINAL);
+      readFile.mockRestore();
+      openRead.mockRestore();
     });
 
     it('answers 404 for unattached, unknown and malformed ids (even to admin)', async () => {
@@ -934,7 +968,8 @@ describe('CustomerUploadsService', () => {
 });
 
 describe('customer upload helpers', () => {
-  it('previewIdOf accepts only the exact preview path', () => {
+  it('parseCustomerPreviewId accepts only the exact preview path', () => {
+    const previewIdOf = parseCustomerPreviewId;
     const id = uuid(7);
     expect(previewIdOf(`/uploads/customer-previews/${id}.webp`)).toBe(id);
     expect(

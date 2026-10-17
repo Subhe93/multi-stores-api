@@ -635,9 +635,9 @@ describe('run lifecycle guards', () => {
     const h = await makeHarness();
     const run = await h.dryRun();
     await h.runs.confirm(STORE_ID, USER_ID, run.id, run.plan_fingerprint!);
-    const update = h.db.importRun.update.bind(h.db.importRun);
+    const update = h.db.importRun.updateMany.bind(h.db.importRun);
     let crashed = false;
-    jest.spyOn(h.db.importRun, 'update').mockImplementation((args: any) => {
+    jest.spyOn(h.db.importRun, 'updateMany').mockImplementation((args: any) => {
       if (!crashed && args?.data?.progress?.phase === 'templates') {
         crashed = true;
         return Promise.reject(new Error('process killed'));

@@ -3,10 +3,13 @@ import {
   ConflictException,
   HttpException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import {
   P_FIELD_TYPES,
   REPEATER_CHILD_TYPES,
@@ -352,7 +355,13 @@ export function remapLinkTarget(
  */
 @Injectable()
 export class PersonalizationLibraryService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(PersonalizationLibraryService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    // Global module; optional and trailing (positional unit tests).
+    @Optional() private readonly revalidation?: RevalidationService,
+  ) {}
 
   list(storeId: string) {
     return this.prisma.personalizationFieldTemplate.findMany({
@@ -436,43 +445,60 @@ export class PersonalizationLibraryService {
       template.definition,
     );
     if (!definition) throw configInvalid(errors);
-    return this.prisma.$transaction(
-      async (tx) => {
-        const product = await lockProductForWrite(tx, productId, {
-          userId,
-          role: UserRole.CREATOR,
-        });
-        const existing = await loadFieldSiblings(tx, productId);
-        const name = definition.field.name;
-        if (existing.some((f) => !f.parent_id && f.name === name)) {
-          throw new ConflictException({
-            code: 'CUSTOM_FIELD_NAME_TAKEN',
-            message: `Another field of this product is already named "${name}"`,
-            params: { name },
+    return this.prisma
+      .$transaction(
+        async (tx) => {
+          const product = await lockProductForWrite(tx, productId, {
+            userId,
+            role: UserRole.CREATOR,
           });
-        }
-        const ctx = {
-          productId,
-          optionConfig: product.optionConfig,
-          siblings: existing.map((f) => ({
-            id: f.id,
-            name: f.name,
-            type: f.type,
-            parent_id: f.parent_id,
-            sort_order: f.sort_order,
-          })),
-          nextSortOrder: await nextTopSortOrder(tx, productId),
-        };
-        const created = await createFieldTree(
-          tx,
-          ctx,
-          { ...definition.field, children: definition.children ?? [] },
-          { preset_key: null, preset_ref: null },
+          const existing = await loadFieldSiblings(tx, productId);
+          const name = definition.field.name;
+          if (existing.some((f) => !f.parent_id && f.name === name)) {
+            throw new ConflictException({
+              code: 'CUSTOM_FIELD_NAME_TAKEN',
+              message: `Another field of this product is already named "${name}"`,
+              params: { name },
+            });
+          }
+          const ctx = {
+            productId,
+            optionConfig: product.optionConfig,
+            siblings: existing.map((f) => ({
+              id: f.id,
+              name: f.name,
+              type: f.type,
+              parent_id: f.parent_id,
+              sort_order: f.sort_order,
+            })),
+            nextSortOrder: await nextTopSortOrder(tx, productId),
+          };
+          const created = await createFieldTree(
+            tx,
+            ctx,
+            { ...definition.field, children: definition.children ?? [] },
+            { preset_key: null, preset_ref: null },
+          );
+          return { created: [created], creatorId: product.creatorId };
+        },
+        { timeout: 20_000 },
+      )
+      .then(({ created, creatorId }) => {
+        // D13: the storefront caches the product page with its fields.
+        this.revalidateCreator(creatorId, productId);
+        return created;
+      });
+  }
+
+  private revalidateCreator(creatorId: string, productId: string): void {
+    if (!this.revalidation) return;
+    void this.revalidation
+      .revalidateStoreByCreatorId(creatorId)
+      .catch((e: unknown) => {
+        this.logger.warn(
+          `Storefront revalidation failed for product ${productId}: ${String(e)}`,
         );
-        return [created];
-      },
-      { timeout: 20_000 },
-    );
+      });
   }
 
   private checkedDefinition(raw: unknown): TemplateDefinition {

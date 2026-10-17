@@ -15,8 +15,9 @@ import { UserRole } from '@prisma/client';
 import { CurrentUser, RequireApp, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { RequireAppGuard } from '../../common/guards/require-app.guard';
-import { RedirectsService } from './redirects.service';
+import { parseBulkRedirectCsv, RedirectsService } from './redirects.service';
 import {
+  BulkRedirectDto,
   CreateRedirectDto,
   RedirectListQueryDto,
   TestRedirectDto,
@@ -59,6 +60,19 @@ export class RedirectsCreatorController {
   ) {
     const storeId = await this.redirects.storeIdForCreator(userId);
     return this.redirects.create(storeId, dto);
+  }
+
+  /**
+   * Bulk CSV create (M5 B17): body `{csv}` with `from_path,to_path[,status]`
+   * per line (at most 5000). Answers `{created:[{line,id,from_path,to_path,
+   * status_code}], conflicts:[{line,from_path,to_path,code}]}`; rows that
+   * fail are reported, the rest are written (MANUAL).
+   */
+  @Post('bulk')
+  @RequireApp('importer')
+  async bulk(@CurrentUser('id') userId: string, @Body() dto: BulkRedirectDto) {
+    const storeId = await this.redirects.storeIdForCreator(userId);
+    return this.redirects.bulkCreate(storeId, parseBulkRedirectCsv(dto.csv));
   }
 
   @Put(':id')

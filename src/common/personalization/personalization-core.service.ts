@@ -152,10 +152,6 @@ export class PersonalizationCoreService {
    */
   async loadContexts(
     lines: readonly PersonalizationLineRef[],
-    opts: {
-      /** Thrown when a line's variant belongs to another product (default 400 PRODUCT_VARIANT_MISMATCH). */
-      onVariantMismatch?: () => never;
-    } = {},
   ): Promise<LineContext[]> {
     const customIds = [
       ...new Set(
@@ -176,13 +172,15 @@ export class PersonalizationCoreService {
       : [];
     const byCustom = new Map(customProducts.map((cp) => [cp.id, cp]));
 
-    // M4.1: own-product lines with a variant resolve (and check) their
-    // product through the variant, in one batched query, so a variant-only
-    // line (no product_id) still gets its fields and personalization.
+    // M4.1: a variant-only line (no product_id) resolves its product
+    // through the variant, in one batched query, so it still gets its
+    // fields and personalization. Lines that carry a product_id make no
+    // variant query here (M5 A11): the cart write and the order loop
+    // check that the variant belongs to the product themselves.
     const variantIds = [
       ...new Set(
         lines
-          .filter((l) => !l.custom_product_id && l.variant_id)
+          .filter((l) => !l.custom_product_id && !l.product_id && l.variant_id)
           .map((l) => l.variant_id as string),
       ),
     ];
@@ -193,17 +191,6 @@ export class PersonalizationCoreService {
         })
       : [];
     const productOfVariant = new Map(variants.map((v) => [v.id, v.product_id]));
-    for (const l of lines) {
-      if (l.custom_product_id || !l.variant_id || !l.product_id) continue;
-      const owner = productOfVariant.get(l.variant_id);
-      if (owner !== undefined && owner !== l.product_id) {
-        if (opts.onVariantMismatch) opts.onVariantMismatch();
-        throw new BadRequestException({
-          code: PRODUCT_VARIANT_MISMATCH,
-          message: 'The selected variant does not belong to this product',
-        });
-      }
-    }
 
     const productIdOf = (l: PersonalizationLineRef): string | null =>
       l.custom_product_id
@@ -497,6 +484,51 @@ export class PersonalizationCoreService {
     });
   }
 
+  /**
+   * Per upload id, the field and the line whose row references it, so an
+   * upload that `markAttached` cannot attach (purged or claimed by another
+   * store between the quote and the commit) is reported like a missing one:
+   * `CUSTOMER_UPLOAD_EXPIRED` with `field_id/field_name/line_id|line_index`
+   * (M5 A3). The first row wins when several reference the same upload.
+   */
+  uploadRefsOf(
+    rows: readonly OrderValueRow[],
+    ctx: LineContext,
+    line: LineErrorRef,
+    into: Map<string, UploadRef> = new Map(),
+  ): Map<string, UploadRef> {
+    const all = ctx.allFields ?? ctx.fields;
+    for (const r of rows) {
+      if (!r.upload_id || into.has(r.upload_id)) continue;
+      const field = r.custom_field_id
+        ? all.find((f) => f.id === r.custom_field_id)
+        : undefined;
+      into.set(r.upload_id, { field, line });
+    }
+    return into;
+  }
+
+  /**
+   * The `CUSTOMER_UPLOAD_EXPIRED` error for one upload reference (the same
+   * body `buildOrderValues` throws for a missing or purged upload).
+   */
+  uploadExpired(ref: UploadRef | undefined, locale?: string | null) {
+    const field = ref?.field;
+    const label = field ? this.fieldLabel(field, locale) : '';
+    const line = ref?.line ?? {};
+    return new BadRequestException({
+      code: CUSTOMER_UPLOAD_EXPIRED,
+      message: label
+        ? `The file for "${label}" is no longer available. Please upload it again.`
+        : 'A file of this order is no longer available. Please upload it again.',
+      params: { label },
+      field_id: field?.id ?? '',
+      field_name: field?.name ?? '',
+      ...(line.line_id !== undefined ? { line_id: line.line_id } : {}),
+      ...(line.line_index !== undefined ? { line_index: line.line_index } : {}),
+    });
+  }
+
   /** Upload ids referenced by built rows (for `markAttached`). */
   uploadIdsOf(rows: readonly OrderValueRow[]): string[] {
     return [
@@ -531,20 +563,17 @@ export class PersonalizationCoreService {
     if (!parseCustomerPreviewId(url)) return null; // legacy value, no upload row
     const up = uploads.get(url);
     if (up && !up.purged) return up.id;
-    const label = this.fieldLabel(field, locale);
     this.logger.warn(
       `Customer upload behind ${fileRefPath(url) ?? 'a value'} is ${up ? 'purged' : 'missing'} (field ${field.id})`,
     );
-    throw new BadRequestException({
-      code: CUSTOMER_UPLOAD_EXPIRED,
-      message: `The file for "${label}" is no longer available. Please upload it again.`,
-      params: { label },
-      field_id: field.id,
-      field_name: field.name,
-      ...(line.line_id !== undefined ? { line_id: line.line_id } : {}),
-      ...(line.line_index !== undefined ? { line_index: line.line_index } : {}),
-    });
+    throw this.uploadExpired({ field, line }, locale);
   }
+}
+
+/** The field and line behind an upload id of built order rows (M5 A3). */
+export interface UploadRef {
+  field: CoreFieldDef | undefined;
+  line: LineErrorRef;
 }
 
 /** One text of a customer design (M4.2), written as a `DESIGN` value row. */

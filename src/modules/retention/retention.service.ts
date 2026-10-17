@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { logJobTick } from '../../common/ops/job-log';
 import {
   RETENTION_DEFAULT_LIMIT,
   RETENTION_LOCK_NAME,
@@ -103,6 +104,12 @@ export class RetentionService implements RetentionRegistry {
         },
         { maxWait: 10_000, timeout: RUN_TIMEOUT_MS },
       );
+      logJobTick('retention', {
+        outcome: outcome.acquired ? 'ran' : 'skipped',
+        dry_run: runOpts.dryRun,
+        task: opts.task ?? null,
+        results: outcome.results,
+      });
       if (!outcome.acquired) {
         this.logger.log(
           'Retention run skipped: another instance holds the lock',

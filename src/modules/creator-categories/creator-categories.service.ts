@@ -243,18 +243,25 @@ export class CreatorCategoriesService {
     });
 
     if (translations) {
-      // Delete-and-recreate: carry the SEO fields over when the client did
-      // not send them (M4.4 X19), so imported meta survives a manual save.
-      const rows = await this.withSeoCarryOver(id, translations);
-      await this.prisma.creatorCategoryTranslation.deleteMany({
-        where: { creator_category_id: id },
-      });
-      await this.prisma.creatorCategoryTranslation.createMany({
-        data: rows.map((t) => ({
-          ...t,
-          creator_category_id: id,
-        })),
-      });
+      // X19 carry-over (M5 A-X, same semantics as ProductsService): only the
+      // locales sent are rewritten, so saving one language never wipes the
+      // others; within a sent row `undefined` keeps the stored value of
+      // that locale and an explicit empty (`null`/'') clears it.
+      const rows = await this.withTranslationCarryOver(id, translations);
+      await this.prisma.$transaction([
+        this.prisma.creatorCategoryTranslation.deleteMany({
+          where: {
+            creator_category_id: id,
+            locale: { in: rows.map((t) => t.locale) },
+          },
+        }),
+        this.prisma.creatorCategoryTranslation.createMany({
+          data: rows.map((t) => ({
+            ...t,
+            creator_category_id: id,
+          })),
+        }),
+      ]);
     }
 
     if (product_ids !== undefined) {
@@ -279,40 +286,59 @@ export class CreatorCategoriesService {
   }
 
   /**
-   * X19 carry-over: `meta_title`/`meta_desc` left `undefined` keep the value
-   * stored for the same locale; `null`/'' clears it. Reads only when a row
-   * omits one of them.
+   * X19 carry-over for the sent rows: `description`, `meta_title` and
+   * `meta_desc` left `undefined` keep the value stored for the same locale;
+   * `null`/'' clears. Reads only when a row omits one of them. Locales not
+   * sent are not touched by the caller at all.
    */
-  private async withSeoCarryOver(
+  private async withTranslationCarryOver(
     categoryId: string,
     translations: CreatorCategoryTranslationDto[],
-  ): Promise<CreatorCategoryTranslationDto[]> {
+  ): Promise<
+    (Omit<CreatorCategoryTranslationDto, 'description'> & {
+      description: string | null;
+    })[]
+  > {
     const omits = translations.some(
-      (t) => t.meta_title === undefined || t.meta_desc === undefined,
+      (t) =>
+        t.description === undefined ||
+        t.meta_title === undefined ||
+        t.meta_desc === undefined,
     );
     const byLocale = new Map<
       string,
-      { meta_title: string | null; meta_desc: string | null }
+      {
+        description: string | null;
+        meta_title: string | null;
+        meta_desc: string | null;
+      }
     >();
     if (omits) {
       const stored = await this.prisma.creatorCategoryTranslation.findMany({
-        where: { creator_category_id: categoryId },
-        select: { locale: true, meta_title: true, meta_desc: true },
+        where: {
+          creator_category_id: categoryId,
+          locale: { in: translations.map((t) => t.locale) },
+        },
+        select: {
+          locale: true,
+          description: true,
+          meta_title: true,
+          meta_desc: true,
+        },
       });
       for (const r of stored) byLocale.set(r.locale, r);
     }
+    const keep = (
+      sent: string | null | undefined,
+      stored: string | null | undefined,
+    ): string | null => (sent === undefined ? (stored ?? null) : sent || null);
     return translations.map((t) => {
       const prev = byLocale.get(t.locale);
       return {
         ...t,
-        meta_title:
-          t.meta_title === undefined
-            ? (prev?.meta_title ?? null)
-            : t.meta_title || null,
-        meta_desc:
-          t.meta_desc === undefined
-            ? (prev?.meta_desc ?? null)
-            : t.meta_desc || null,
+        description: keep(t.description, prev?.description),
+        meta_title: keep(t.meta_title, prev?.meta_title),
+        meta_desc: keep(t.meta_desc, prev?.meta_desc),
       };
     });
   }

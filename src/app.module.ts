@@ -53,6 +53,7 @@ import { RetentionModule } from './modules/retention/retention.module';
 import { CustomerUploadsModule } from './modules/customer-uploads/customer-uploads.module';
 import { ProductionModule } from './modules/production/production.module';
 import { DesignerModule } from './modules/designer/designer.module';
+import { OpsModule } from './modules/ops/ops.module';
 
 @Module({
   imports: [
@@ -117,6 +118,8 @@ import { DesignerModule } from './modules/designer/designer.module';
     ImporterModule,
     // M4.2 designer app (P3: storage, template assets, fonts, signed links).
     DesignerModule,
+    // M5 W1-C operability: /admin/ops/status, job tick sink, WORKERS switch.
+    OpsModule,
   ],
   providers: [
     // ThrottlerModule alone throttles nothing — only routes that explicitly

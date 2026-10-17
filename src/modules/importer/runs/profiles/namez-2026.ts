@@ -71,6 +71,7 @@ export const NAMEZ_2026_PROFILE = {
   },
   designer_fallback_fields: true,
   redirect_skipped: true,
+  redirect_shortlinks: false,
   verify_media: true,
   stock_on_update: 'keep',
   // The iWings "two names" help modal images are plugin constants, not

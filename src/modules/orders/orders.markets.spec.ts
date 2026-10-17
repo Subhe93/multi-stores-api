@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { StoreType } from '@prisma/client';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { personalizationCoreArgs } from '../personalization/__fixtures__/personalization-service.factory';
 import { PromotionsService } from '../promotions/promotions.service';
 import { ShippingService } from '../shipping/shipping.service';
 import { MailService } from '../mail/mail.service';
@@ -219,6 +220,7 @@ function build(opts: {
     marketPricing,
     config as unknown as ConfigService,
     b2b as unknown as B2bService,
+    ...personalizationCoreArgs(prisma),
   );
   return { service, prisma, shipping, promotions, tax, markets };
 }

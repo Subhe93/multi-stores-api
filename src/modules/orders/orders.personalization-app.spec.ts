@@ -15,7 +15,6 @@ import { StoreAppsService } from '../store-apps/store-apps.service';
 import type { CreateOrderDto } from './dto/order.dto';
 import { PersonalizationCoreService } from '../../common/personalization/personalization-core.service';
 import { CustomerUploadsService } from '../customer-uploads/customer-uploads.service';
-import { PersonalizationService } from '../personalization/personalization.service';
 import { buildKustomOrderLines } from '../payments/kustom/kustom.mapper';
 import {
   C_COLOR,
@@ -28,6 +27,7 @@ import {
   appFields,
   validValues,
 } from '../personalization/__fixtures__/app-fields';
+import { buildPersonalizationService } from '../personalization/__fixtures__/personalization-service.factory';
 
 // M4.1 quote / order create (C19/C28/C29, D4/D11): app lines are evaluated
 // in priceLine, the per-unit delta is added after the market price and
@@ -233,14 +233,12 @@ function build(
     prisma as unknown as PrismaService,
     uploads,
   );
-  const personalization = new PersonalizationService(
-    prisma as unknown as PrismaService,
-    storeApps as unknown as StoreAppsService,
+  const personalization = buildPersonalizationService({
+    prisma,
+    storeApps,
     core,
-    undefined,
-    undefined,
     marketPricing,
-  );
+  });
   const evaluate = jest.spyOn(personalization, 'evaluateLine');
   const service = new OrdersService(
     prisma as unknown as PrismaService,
@@ -256,10 +254,10 @@ function build(
     marketPricing,
     { get: () => undefined } as unknown as ConfigService,
     new B2bService(storeApps as unknown as StoreAppsService),
-    undefined,
-    undefined,
     core,
     uploads,
+    undefined,
+    undefined,
     opts.withService === false ? undefined : personalization,
   );
   return { service, prisma, evaluate, storeApps };

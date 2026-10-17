@@ -4,7 +4,6 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
-  Optional,
 } from '@nestjs/common';
 import { Prisma, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -45,8 +44,8 @@ export class StoresService {
     private readonly storeApps: StoreAppsService,
     private readonly markets: MarketsService,
     private readonly marketsContext: MarketsContextService,
-    // Optional so unit tests built without it keep working (no redirects).
-    @Optional() private readonly redirects?: RedirectsService,
+    // M4.4 D17 / M5 B18: required (StoresModule imports RedirectsModule).
+    private readonly redirects: RedirectsService,
   ) {}
 
   async create(userId: string, dto: CreateStoreDto) {
@@ -206,9 +205,7 @@ export class StoresService {
     const res = await this.lookupCustomDomain(host);
     // M4.4 D17: `redirects_version` only when the store has active redirects
     // (cached per store); every other answer is byte-identical.
-    const version = this.redirects
-      ? await this.redirects.versionFor(res.storeId)
-      : null;
+    const version = await this.redirects.versionFor(res.storeId);
     return version ? { ...res.body, redirects_version: version } : res.body;
   }
 

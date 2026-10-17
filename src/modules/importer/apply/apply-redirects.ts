@@ -1,7 +1,6 @@
 import { ImportItemAction, ImportItemPhase } from '@prisma/client';
 import type { PlanWork } from '../planner/planner';
 import {
-  appliedRefs,
   recordItems,
   type ApplyContext,
   type ApplyItem,
@@ -14,7 +13,7 @@ export interface RedirectApplyResult {
   repointed: number;
   deactivated: number;
   conflicts: number;
-  /** Product redirects dropped because the product failed in this run (fix 13). */
+  /** Redirects dropped because their product / collection failed in this run (fix 13, M5 B22). */
   dropped: number;
 }
 
@@ -42,21 +41,27 @@ export async function applyRedirects(
     conflicts: 0,
     dropped: 0,
   };
-  const marker =
-    work.plan.items[0]?.from_path ?? work.plan.repoints[0]?.from_path;
-  const already = marker
-    ? await appliedRefs(ctx.prisma, ctx.runId, 'REDIRECT', [marker])
-    : new Set<string>();
-  if (already.size) return empty;
+  // Resume marker (M5 B22): the phase writes every item in one transaction,
+  // so any REDIRECT item of this run means it already ran — also for a plan
+  // that only has conflicts or deactivations (no `items` / `repoints`).
+  const already = await ctx.prisma.importRunItem.count({
+    where: {
+      run_id: ctx.runId,
+      phase: ImportItemPhase.APPLY,
+      entity_type: 'REDIRECT',
+    },
+  });
+  if (already > 0) return empty;
 
-  // Products of this run that ended in ERROR (fix 13).
+  // Products and collections of this run that ended in ERROR (fix 13, M5
+  // B22): their pages may not exist, so their redirects are dropped.
   const failed = new Set(
     (
       await ctx.prisma.importRunItem.findMany({
         where: {
           run_id: ctx.runId,
           phase: ImportItemPhase.APPLY,
-          entity_type: 'PRODUCT',
+          entity_type: { in: ['PRODUCT', 'CATEGORY'] },
           action: ImportItemAction.ERROR,
         },
         select: { external_ref: true },
@@ -138,7 +143,7 @@ export async function applyRedirects(
           external_ref: r.from_path,
           action: 'SKIP' as const,
           target_id: null,
-          message: 'product failed in this run',
+          message: 'source entity failed in this run',
         })),
       ];
       await recordItems(tx, ctx.runId, ImportItemPhase.APPLY, items);

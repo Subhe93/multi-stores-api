@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call */
 import { Prisma, UserRole } from '@prisma/client';
 import { CustomFieldsService } from './custom-fields.service';
+import type { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 
@@ -109,11 +110,15 @@ function setup(
     ),
   };
   const storeApps = { isEnabled: jest.fn(() => Promise.resolve(!!opts.appOn)) };
+  const revalidation = {
+    revalidateStoreByCreatorId: jest.fn(() => Promise.resolve()),
+  };
   const service = new CustomFieldsService(
     prisma as unknown as PrismaService,
     storeApps as unknown as StoreAppsService,
+    revalidation as unknown as RevalidationService,
   );
-  return { prisma, storeApps, service };
+  return { prisma, storeApps, service, revalidation };
 }
 
 const CREATOR = ['u-creator', UserRole.CREATOR] as const;
@@ -799,6 +804,140 @@ describe('CustomFieldsService M4.1 fixes', () => {
       },
     });
     expect(apps.settingsChanged).toHaveBeenCalledWith('s1');
+  });
+
+  it('M5 A4: a legacy link whose target_field_id holds the NAME follows a rename (and is migrated to target)', async () => {
+    const { prisma, service } = setup({
+      field: { name: 'name_1' },
+      siblings: [
+        { id: 'f1', name: 'name_1', parent_id: null, linked_validation: null },
+        {
+          id: 'f2',
+          name: 'name_2',
+          parent_id: null,
+          // Written by the pre-K3 dashboard: the name, under the old key.
+          linked_validation: {
+            type: 'equal_length',
+            target_field_id: 'name_1',
+            fill_char: '\u2764',
+          },
+          conditions: null,
+          repeat: null,
+        },
+      ],
+    });
+    await service.update('f1', { name: 'namn' }, ...CREATOR);
+    const calls = prisma.productCustomField.update.mock.calls.map(
+      (c) => (c as unknown[])[0] as { where: { id: string }; data: unknown },
+    );
+    expect(calls[1]).toEqual({
+      where: { id: 'f2' },
+      data: {
+        linked_validation: {
+          type: 'equal_length',
+          target: 'namn',
+          fill_char: '\u2764',
+        },
+      },
+    });
+  });
+
+  it('M5 A4: deleting the target of a legacy name link → 409 PERSONALIZATION_FIELD_IN_USE', async () => {
+    const { prisma, service } = setup({
+      siblings: [
+        { id: 'f1', name: 'name_1', parent_id: null },
+        {
+          id: 'f2',
+          name: 'name_2',
+          parent_id: null,
+          linked_validation: {
+            type: 'equal_length',
+            target_field_id: 'name_1',
+          },
+        },
+      ],
+    });
+    const err = await errorOf(service.delete('f1', ...CREATOR));
+    expect(err).toEqual({
+      status: 409,
+      body: expect.objectContaining({
+        code: 'PERSONALIZATION_FIELD_IN_USE',
+        params: { fields: ['name_2'] },
+      }),
+    });
+    expect(prisma.productCustomField.delete).not.toHaveBeenCalled();
+  });
+
+  it('M5 A13: an update with only sort_order re-validates FORWARD_REFERENCE', async () => {
+    const siblings = [
+      {
+        id: 'f1',
+        name: 'name_1',
+        type: 'TEXT',
+        parent_id: null,
+        sort_order: 0,
+      },
+      {
+        id: 'f2',
+        name: 'gift',
+        type: 'TEXT',
+        parent_id: null,
+        sort_order: 1,
+        conditions: {
+          match: 'all',
+          rules: [{ source: 'field', key: 'name_1', op: 'set' }],
+        },
+      },
+    ];
+    const { prisma, service } = setup({
+      field: { id: 'f1', name: 'name_1', sort_order: 0 },
+      siblings,
+    });
+    // Moving name_1 after gift makes gift's reference a forward one.
+    const err = await errorOf(
+      service.update('f1', { sort_order: 5 }, ...CREATOR),
+    );
+    expect(err).toEqual({
+      status: 400,
+      body: expect.objectContaining({
+        code: 'PERSONALIZATION_CONFIG_INVALID',
+        errors: [
+          {
+            path: 'gift.conditions.rules[0].key',
+            code: 'FORWARD_REFERENCE',
+            params: { key: 'name_1' },
+          },
+        ],
+      }),
+    });
+    expect(prisma.productCustomField.update).not.toHaveBeenCalled();
+    // The same position is not a move: no re-check, the write goes through.
+    await service.update('f1', { sort_order: 0 }, ...CREATOR);
+    expect(prisma.productCustomField.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('M5 D13: create, update, delete and reorder revalidate the storefront of the creator', async () => {
+    const { service, revalidation } = setup({
+      siblings: [
+        {
+          id: 'f1',
+          name: 'name_1',
+          type: 'TEXT',
+          parent_id: null,
+          sort_order: 0,
+        },
+      ],
+    });
+    await service.create(
+      'p1',
+      { name: 'n2', type: 'TEXT', is_required: false } as never,
+      ...CREATOR,
+    );
+    await service.update('f1', { placeholder: 'x' }, ...CREATOR);
+    await service.delete('f1', ...CREATOR);
+    await service.reorder('p1', ['f1'], ...CREATOR);
+    expect(revalidation.revalidateStoreByCreatorId).toHaveBeenCalledTimes(4);
+    expect(revalidation.revalidateStoreByCreatorId).toHaveBeenCalledWith('c1');
   });
 
   it('reorder refuses a forward reference (400 CONFIG_INVALID FORWARD_REFERENCE) and writes nothing', async () => {

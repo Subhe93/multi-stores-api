@@ -4,6 +4,7 @@ import {
   StreamableFile,
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
+import { Readable } from 'stream';
 import { lastValueFrom, of, throwError } from 'rxjs';
 import {
   CustomerUploadAdmissionInterceptor,
@@ -31,7 +32,9 @@ describe('CustomerUploadsController', () => {
 
   it('streams the original as an attachment', async () => {
     const downloadOriginal = jest.fn().mockResolvedValue({
-      buffer: Buffer.from('abc'),
+      // M5 A5: the service streams from disk; the controller never buffers.
+      stream: Readable.from([Buffer.from('abc')]),
+      length: 3,
       mime: 'image/png',
       filename: 'ORD-1-Photo-0000.png',
     });

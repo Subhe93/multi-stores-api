@@ -1,5 +1,6 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { Readable } from 'stream';
 import {
   ImportItemPhase,
   ImportRunStatus,
@@ -13,6 +14,7 @@ import {
 } from '../../../common/storage/private-file-storage';
 import {
   importError,
+  importErrorFromRun,
   ImportRunError,
   isUniqueViolation,
 } from '../importer.errors';
@@ -28,6 +30,7 @@ import {
   canTransition,
 } from './run-state';
 import {
+  BUNDLE_DIR_MAX_BYTES,
   deleteBundle,
   readBundleDirectory,
   storeBundleFiles,
@@ -101,6 +104,9 @@ export function toRunView(r: ImportRun, withSummary = true): ImportRunView {
 }
 
 const LIST_COUNT_TYPES = ['PRODUCT', 'CATEGORY', 'REDIRECT'] as const;
+
+/** Rows per page of the streamed CSV report (M5 B14). */
+export const REPORT_CSV_PAGE = 1000;
 
 /** Small per-run counts for the runs list (fix 24): apply counts, else plan counts. */
 export function listCounts(
@@ -193,6 +199,7 @@ export class ImportRunsService {
     sourceId: string,
     raw: unknown,
     files: UploadedBundleFile[],
+    limits: { maxTotalBytes?: number } = {},
   ): Promise<ImportRunView> {
     const source = await this.sources.get(storeId, sourceId);
     if (source.kind !== 'WP_BUNDLE') {
@@ -204,7 +211,7 @@ export class ImportRunsService {
     const { options, errors } = normalizeRunOptions(raw);
     if (errors.length)
       throw importError('IMPORT_RUN_OPTIONS_INVALID', errors[0], { errors });
-    await validateBundleFiles(files);
+    await validateBundleFiles(files, limits.maxTotalBytes);
     await this.assertNoActiveRun(storeId);
 
     const runId = randomUUID();
@@ -263,7 +270,9 @@ export class ImportRunsService {
     raw: unknown,
   ): Promise<ImportRunView> {
     const files = await readBundleDirectory(directory);
-    return this.create(storeId, userId, sourceId, raw, files);
+    return this.create(storeId, userId, sourceId, raw, files, {
+      maxTotalBytes: BUNDLE_DIR_MAX_BYTES,
+    });
   }
 
   async list(storeId: string, q: RunListQueryDto) {
@@ -430,43 +439,78 @@ export class ImportRunsService {
     return { items: rows, total, page, limit };
   }
 
-  /** CSV of the items of one phase (default: APPLY when the run applied, else PLAN). */
+  /**
+   * CSV of the items of one phase (default: APPLY when the run applied, else
+   * PLAN), streamed in pages of REPORT_CSV_PAGE rows (M5 B14): the response
+   * never holds the whole report. Starts with a BOM for spreadsheets.
+   */
+  async reportCsvStream(
+    storeId: string,
+    id: string,
+    phase?: ImportItemPhase,
+  ): Promise<Readable> {
+    const run = await this.get(storeId, id);
+    const ph =
+      phase ?? (run.started_at ? ImportItemPhase.APPLY : ImportItemPhase.PLAN);
+    const prisma = this.prisma;
+    async function* lines(): AsyncGenerator<string> {
+      yield '﻿' +
+        [
+          'phase',
+          'entity_type',
+          'external_ref',
+          'action',
+          'target_id',
+          'message',
+        ].join(',') +
+        '\n';
+      for (let skip = 0; ; skip += REPORT_CSV_PAGE) {
+        const rows = await prisma.importRunItem.findMany({
+          where: { run_id: run.id, phase: ph },
+          orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+          skip,
+          take: REPORT_CSV_PAGE,
+          select: {
+            phase: true,
+            entity_type: true,
+            external_ref: true,
+            action: true,
+            target_id: true,
+            message: true,
+          },
+        });
+        if (!rows.length) return;
+        yield rows
+          .map(
+            (r) =>
+              [
+                r.phase,
+                r.entity_type,
+                r.external_ref,
+                r.action,
+                r.target_id,
+                r.message,
+              ]
+                .map(csvCell)
+                .join(',') + '\n',
+          )
+          .join('');
+        if (rows.length < REPORT_CSV_PAGE) return;
+      }
+    }
+    return Readable.from(lines(), { encoding: 'utf8' });
+  }
+
+  /** The whole report as one string (tests, small runs); `reportCsvStream` is the HTTP path. */
   async reportCsv(
     storeId: string,
     id: string,
     phase?: ImportItemPhase,
   ): Promise<string> {
-    const run = await this.get(storeId, id);
-    const ph =
-      phase ?? (run.started_at ? ImportItemPhase.APPLY : ImportItemPhase.PLAN);
-    const rows = await this.prisma.importRunItem.findMany({
-      where: { run_id: run.id, phase: ph },
-      orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
-      take: 200_000,
-    });
-    const head = [
-      'phase',
-      'entity_type',
-      'external_ref',
-      'action',
-      'target_id',
-      'message',
-    ];
-    const lines = [head.join(',')];
-    for (const r of rows)
-      lines.push(
-        [
-          r.phase,
-          r.entity_type,
-          r.external_ref,
-          r.action,
-          r.target_id,
-          r.message,
-        ]
-          .map(csvCell)
-          .join(','),
-      );
-    return lines.join('\n') + '\n';
+    const stream = await this.reportCsvStream(storeId, id, phase);
+    let out = '';
+    for await (const chunk of stream) out += String(chunk);
+    return out.startsWith('﻿') ? out.slice(1) : out;
   }
 
   /** Mapping-review edits: PLANNED / PLAN_FAILED → UPLOADED (re-plan). */
@@ -527,8 +571,7 @@ export class ImportRunsService {
     try {
       plan = await this.engine.replanForConfirm(run);
     } catch (e) {
-      if (e instanceof ImportRunError)
-        throw importError(e.code as never, e.message);
+      if (e instanceof ImportRunError) throw importErrorFromRun(e);
       throw e;
     }
     if (plan.blockers.length) {
@@ -590,7 +633,11 @@ export class ImportRunsService {
     return toRunView(await this.get(storeId, id));
   }
 
-  /** Completed / failed / cancelled runs → ROLLBACK_QUEUED. */
+  /**
+   * Completed / failed / cancelled runs → ROLLBACK_QUEUED. M5 B12: refused
+   * while a later run of the store has applied and was not rolled back
+   * (its writes sit on top of this run's; roll that one back first).
+   */
   async rollback(
     storeId: string,
     userId: string,
@@ -601,6 +648,28 @@ export class ImportRunsService {
       throw invalidState(run, 'roll back');
     if (!canTransition(run.status, ImportRunStatus.ROLLBACK_QUEUED))
       throw invalidState(run, 'roll back');
+    const later = await this.prisma.importRun.findFirst({
+      where: {
+        store_id: storeId,
+        id: { not: run.id },
+        started_at: { gt: run.started_at },
+        status: {
+          in: [
+            ImportRunStatus.COMPLETED,
+            ImportRunStatus.COMPLETED_WITH_WARNINGS,
+          ],
+        },
+      },
+      orderBy: { started_at: 'desc' },
+      select: { id: true, started_at: true },
+    });
+    if (later) {
+      throw importError(
+        'IMPORT_RUN_INVALID_STATE',
+        `A later run (${later.id}) applied after this one; roll it back first`,
+        { status: run.status, later_run_id: later.id },
+      );
+    }
     await this.assertNoActiveRun(storeId);
     try {
       const res = await this.prisma.importRun.updateMany({

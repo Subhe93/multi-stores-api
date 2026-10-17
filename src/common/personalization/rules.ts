@@ -441,23 +441,116 @@ export function isValidPattern(pattern: string): boolean {
 }
 
 /** First atom of an alternative, for the overlap check. */
-type FirstAtom = { kind: 'char'; ch: string } | { kind: 'other' } | { kind: 'empty' };
+type FirstAtom =
+  | { kind: 'char'; ch: string }
+  | { kind: 'class'; ranges: [number, number][] }
+  | { kind: 'other' }
+  | { kind: 'empty' };
+
+/** One alternative of a group: its first atom and how its atoms are quantified. */
+interface Alternative {
+  first: FirstAtom;
+  /** Atoms (chars, classes, escapes, nested groups) seen in this alternative. */
+  atoms: number;
+  /** Atoms of this alternative that carry a quantifier. */
+  quantified: number;
+}
 
 interface PatternFrame {
-  /** Any quantifier inside this group (nested groups included). */
-  hasQuantifier: boolean;
-  /** First atom of every alternative seen so far (the current one is last). */
-  firsts: FirstAtom[];
+  /** A quantifier inside a nested group, or a quantified nested group. */
+  nestedQuantifier: boolean;
+  /** Every alternative seen so far (the current one is last). */
+  alts: Alternative[];
+}
+
+const DIGIT_RANGES: [number, number][] = [[48, 57]];
+const WORD_RANGES: [number, number][] = [[48, 57], [65, 90], [95, 95], [97, 122]];
+const SPACE_RANGES: [number, number][] = [
+  [9, 13],
+  [32, 32],
+  [160, 160],
+  [0x1680, 0x1680],
+  [0x2000, 0x200a],
+  [0x2028, 0x2029],
+  [0x202f, 0x202f],
+  [0x205f, 0x205f],
+  [0x3000, 0x3000],
+  [0xfeff, 0xfeff],
+];
+
+/** `\d`, `\w`, `\s` as code ranges; null for anything else. */
+function escapeRanges(n: string): [number, number][] | null {
+  if (n === 'd') return DIGIT_RANGES;
+  if (n === 'w') return WORD_RANGES;
+  if (n === 's') return SPACE_RANGES;
+  return null;
+}
+
+/**
+ * Code ranges of a positive character class body (`a-zA-Z0-9`, `\d`, `_-`),
+ * or null when the body is negated or uses anything the overlap check does
+ * not model (the class then counts as "may start with anything").
+ */
+function classRanges(body: string): [number, number][] | null {
+  if (body.startsWith('^')) return null;
+  const out: [number, number][] = [];
+  let i = 0;
+  // One class item: a code point, -1 for an escape already added to `out`,
+  // null when the item is not modelled.
+  const readOne = (): number | null => {
+    const c = body[i];
+    if (c === '\\') {
+      const n = body[i + 1];
+      if (n === undefined) return null;
+      i += 2;
+      const r = escapeRanges(n);
+      if (r) {
+        out.push(...r);
+        return -1;
+      }
+      if (/[DWSbBpPux0-9k]/.test(n)) return null;
+      return n.codePointAt(0) ?? null;
+    }
+    i++;
+    return c.codePointAt(0) ?? null;
+  };
+  while (i < body.length) {
+    const lo = readOne();
+    if (lo === null) return null;
+    if (lo === -1) continue;
+    if (body[i] === '-' && i + 1 < body.length) {
+      i++;
+      const hi = readOne();
+      if (hi === null || hi === -1 || hi < lo) return null;
+      out.push([lo, hi]);
+      continue;
+    }
+    out.push([lo, lo]);
+  }
+  return out;
+}
+
+function rangesOverlap(a: [number, number][], b: [number, number][]): boolean {
+  return a.some(([alo, ahi]) => b.some(([blo, bhi]) => alo <= bhi && blo <= ahi));
+}
+
+/** True when two first atoms may match the same character. */
+function atomsOverlap(a: FirstAtom, b: FirstAtom): boolean {
+  if (a.kind === 'other' || b.kind === 'other' || a.kind === 'empty' || b.kind === 'empty') return true;
+  if (a.kind === 'char' && b.kind === 'char') return a.ch.toLowerCase() === b.ch.toLowerCase();
+  if (a.kind === 'class' && b.kind === 'class') return rangesOverlap(a.ranges, b.ranges);
+  const ch = a.kind === 'char' ? a : (b as { kind: 'char'; ch: string });
+  const cls = a.kind === 'class' ? a : (b as { kind: 'class'; ranges: [number, number][] });
+  const code = ch.ch.codePointAt(0) ?? -1;
+  return rangesOverlap([[code, code]], cls.ranges);
 }
 
 /** True when two alternatives may start with the same character. */
-function alternativesOverlap(firsts: FirstAtom[]): boolean {
-  const seen = new Set<string>();
-  for (const f of firsts) {
-    if (f.kind !== 'char') return true;
-    const key = f.ch.toLowerCase();
-    if (seen.has(key)) return true;
-    seen.add(key);
+function alternativesOverlap(alts: Alternative[]): boolean {
+  for (let i = 0; i < alts.length; i++) {
+    for (let j = i + 1; j < alts.length; j++) {
+      if (atomsOverlap(alts[i].first, alts[j].first)) return true;
+    }
   }
   return false;
 }
@@ -490,33 +583,50 @@ function readQuantifier(p: string, i: number): { end: number; max: number } | nu
 }
 
 /**
- * Conservative ReDoS heuristic for merchant patterns (no `re2`, M4.0). Refuses:
+ * ReDoS heuristic for merchant patterns (no `re2`, M4.0; relaxed in M5 A10).
+ * Refuses:
  * - backreferences (`\1`, `\k<name>`) and lookarounds (`(?=`, `(?!`, `(?<=`, `(?<!`);
  * - a group repeated more than once (`*`, `+`, `{n,}`, `{n,m}` with m > 1)
- *   that contains any quantifier (star height > 1, e.g. `^(a+)+$`);
+ *   whose body, or one of its alternatives, is a single quantified atom
+ *   (`^(a+)+$`, `^(a{1,3}){2}$`, `^(a+|b+)+$`), or that holds a quantified
+ *   nested group or a quantifier inside one (`^((a+)b)+$`);
  * - such a repeated group whose alternatives may start with the same
- *   character (`(a|ab)*`, `(\d|[0-9])+`).
- * Some safe patterns are refused too (e.g. `( [A-Z][a-z]*)*`); the merchant
- * can rewrite them. Polynomial cases such as `.*.*` pass; they are bounded by
- * `maxPatternInputChars` and, on the server, by the pattern tester's timeout.
+ *   character (`(a|ab)*`, `(\d|[0-9])+`); disjoint classes are fine
+ *   (`([A-Z]|[a-z])+`).
+ * A repeated group of several quantified atoms (`^(?:[a-z]+\s?)+$`, the
+ * "words with an optional separator" idiom) is accepted: on the server every
+ * pattern runs under the vm timeout (`pattern-tester.ts`), which is the
+ * guard for anything this heuristic lets through. Polynomial cases such as
+ * `.*.*` pass; they are bounded by `maxPatternInputChars` and that timeout.
  */
 export function isPatternSafe(pattern: string): boolean {
   const p = pattern;
-  const stack: PatternFrame[] = [{ hasQuantifier: false, firsts: [{ kind: 'empty' }] }];
+  const newFrame = (): PatternFrame => ({
+    nestedQuantifier: false,
+    alts: [{ first: { kind: 'empty' }, atoms: 0, quantified: 0 }],
+  });
+  const stack: PatternFrame[] = [newFrame()];
   const top = (): PatternFrame => stack[stack.length - 1];
-  // Records the first atom of the current alternative.
+  const current = (): Alternative => {
+    const alts = top().alts;
+    return alts[alts.length - 1];
+  };
+  // Records an atom of the current alternative (the first one is kept).
   const atom = (a: FirstAtom): void => {
-    const f = top().firsts;
-    if (f[f.length - 1].kind === 'empty') f[f.length - 1] = a;
+    const alt = current();
+    alt.atoms++;
+    if (alt.first.kind === 'empty') alt.first = a;
   };
   // Applies a quantifier after an atom: the next index, or -1 when unsafe.
   const quantify = (i: number, group: PatternFrame | null): number => {
     const q = readQuantifier(p, i);
     if (!q) return i;
-    top().hasQuantifier = true;
+    current().quantified++;
+    if (group) top().nestedQuantifier = true;
     if (group && q.max > 1) {
-      if (group.hasQuantifier) return -1;
-      if (group.firsts.length > 1 && alternativesOverlap(group.firsts)) return -1;
+      if (group.nestedQuantifier) return -1;
+      if (group.alts.some((a) => a.atoms === 1 && a.quantified > 0)) return -1;
+      if (group.alts.length > 1 && alternativesOverlap(group.alts)) return -1;
     }
     return q.end;
   };
@@ -528,7 +638,8 @@ export function isPatternSafe(pattern: string): boolean {
       const n = p[i + 1];
       if (n === undefined) return false;
       if (/[1-9k]/.test(n)) return false; // backreference
-      atom(/[dDwWsSbB]/.test(n) ? { kind: 'other' } : { kind: 'char', ch: n });
+      const ranges = escapeRanges(n);
+      atom(ranges ? { kind: 'class', ranges } : /[DWSbB]/.test(n) ? { kind: 'other' } : { kind: 'char', ch: n });
       i = quantify(i + 2, null);
     } else if (c === '[') {
       let j = i + 1;
@@ -536,7 +647,8 @@ export function isPatternSafe(pattern: string): boolean {
       // A `]` right away closes the class (`[]` / `[^]` in JS).
       while (j < p.length && p[j] !== ']') j += p[j] === '\\' ? 2 : 1;
       if (j >= p.length) return false;
-      atom({ kind: 'other' });
+      const ranges = classRanges(p.slice(i + 1, j));
+      atom(ranges ? { kind: 'class', ranges } : { kind: 'other' });
       i = quantify(j + 1, null);
     } else if (c === '(') {
       let body = i + 1;
@@ -550,15 +662,17 @@ export function isPatternSafe(pattern: string): boolean {
         } else return false; // lookaround or unknown group
       }
       atom({ kind: 'other' });
-      stack.push({ hasQuantifier: false, firsts: [{ kind: 'empty' }] });
+      stack.push(newFrame());
       i = body;
     } else if (c === ')') {
       if (stack.length < 2) return false;
       const group = stack.pop() as PatternFrame;
-      if (group.hasQuantifier) top().hasQuantifier = true;
+      if (group.nestedQuantifier || group.alts.some((a) => a.quantified > 0)) {
+        top().nestedQuantifier = true;
+      }
       i = quantify(i + 1, group);
     } else if (c === '|') {
-      top().firsts.push({ kind: 'empty' });
+      top().alts.push({ first: { kind: 'empty' }, atoms: 0, quantified: 0 });
       i++;
     } else if (c === '^' || c === '$') {
       i++;
@@ -579,9 +693,6 @@ export function isValidAllowedChars(body: string): boolean {
 // ---------------------------------------------------------------------------
 // File references
 // ---------------------------------------------------------------------------
-
-/** Folders under /uploads that may hold customer field files. */
-export const CUSTOMER_FILE_FOLDERS = ['custom-fields', 'customer-uploads', 'customer-previews'] as const;
 
 const FILE_REF_PATH =
   /^\/uploads\/(?:custom-fields|customer-uploads|customer-previews)\/[A-Za-z0-9_-][A-Za-z0-9._-]{0,199}$/;
@@ -796,16 +907,19 @@ export function validatePersonalization(
 
   const isFileRef = input.isFileRef ?? isFileRefPath;
   const isVisible = input.isVisible ?? (() => true);
-  const prefilled = input.prefilled ?? {};
   const all = normalizeFieldValues(raw);
 
   // Known fields only; prefilled values replace whatever the customer sent.
+  // A prefilled entry that normalizes to nothing (empty or blank) does not
+  // count as prefilled: the field is then validated like any other (M5 A12).
+  const prefilled: Record<string, NormalizedValue> = {};
+  for (const [id, rawPre] of Object.entries(input.prefilled ?? {})) {
+    const pre = normalizeValue(rawPre, false);
+    if (pre !== undefined && !isBlank(pre)) prefilled[id] = pre;
+  }
   const known: NormalizedValues = {};
   for (const f of fields) {
-    const pre = Object.prototype.hasOwnProperty.call(prefilled, f.id)
-      ? normalizeValue(prefilled[f.id], false)
-      : undefined;
-    const v = pre !== undefined ? pre : all[f.id];
+    const v = Object.prototype.hasOwnProperty.call(prefilled, f.id) ? prefilled[f.id] : all[f.id];
     if (v !== undefined) known[f.id] = v;
   }
 

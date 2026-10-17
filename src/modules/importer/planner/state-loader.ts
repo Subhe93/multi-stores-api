@@ -13,6 +13,7 @@ import {
 import type { ImportRunOptions } from '../runs/run-options';
 import {
   ledgerKey,
+  type LedgerRow,
   type SnapshotCategory,
   type SnapshotProduct,
   type SnapshotVariant,
@@ -21,12 +22,93 @@ import {
 
 type Db = Prisma.TransactionClient;
 
-const CHUNK = 1000;
+/** Rows per query (M5 B14: 500, so a 20k-product store never loads one giant page). */
+export const SNAPSHOT_PAGE = 500;
+const CHUNK = SNAPSHOT_PAGE;
 
 function chunks<T>(list: T[], size = CHUNK): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
   return out;
+}
+
+/**
+ * Pages a table with offset/limit in the given order until a short page;
+ * the callback consumes one page at a time so only that page is held.
+ */
+async function forEachPage<T>(
+  fetch: (skip: number, take: number) => Promise<T[]>,
+  consume: (rows: T[]) => void,
+): Promise<void> {
+  for (let skip = 0; ; skip += SNAPSHOT_PAGE) {
+    const rows = await fetch(skip, SNAPSHOT_PAGE);
+    consume(rows);
+    if (rows.length < SNAPSHOT_PAGE) return;
+  }
+}
+
+/**
+ * M5 B14: a cheap "did the store change" stamp (counts + newest
+ * `updated_at` / `created_at` of every table the planner reads), so the plan
+ * built for the confirm check can be reused by the apply step.
+ */
+export async function loadStoreStateStamp(
+  db: Db,
+  storeId: string,
+): Promise<string> {
+  const store = await db.store.findUnique({
+    where: { id: storeId },
+    select: { creator_id: true },
+  });
+  const creatorId = store?.creator_id ?? '';
+  const [products, categories, ledger, redirects, media, profiles] =
+    await Promise.all([
+      db.product.aggregate({
+        where: { creator_id: creatorId },
+        _count: { _all: true },
+        _max: { updated_at: true },
+      }),
+      db.creatorCategory.aggregate({
+        where: { creator_id: creatorId },
+        _count: { _all: true },
+        _max: { updated_at: true },
+      }),
+      db.importEntity.aggregate({
+        where: { store_id: storeId },
+        _count: { _all: true },
+        _max: { updated_at: true },
+      }),
+      db.storeRedirect.aggregate({
+        where: { store_id: storeId },
+        _count: { _all: true },
+        _max: { updated_at: true },
+      }),
+      db.importMedia.aggregate({
+        where: { store_id: storeId },
+        _count: { _all: true },
+        _max: { created_at: true },
+      }),
+      db.shippingProfile.aggregate({
+        where: { creator_id: creatorId },
+        _count: { _all: true },
+        _max: { created_at: true },
+      }),
+    ]);
+  const t = (d: Date | null | undefined) => (d ? d.getTime() : 0);
+  return [
+    products._count._all,
+    t(products._max.updated_at),
+    categories._count._all,
+    t(categories._max.updated_at),
+    ledger._count._all,
+    t(ledger._max.updated_at),
+    redirects._count._all,
+    t(redirects._max.updated_at),
+    media._count._all,
+    t(media._max.created_at),
+    profiles._count._all,
+    t(profiles._max.created_at),
+  ].join('|');
 }
 
 export function groupBy<T, K>(list: T[], key: (t: T) => K): Map<K, T[]> {
@@ -192,75 +274,148 @@ export async function loadTargetSnapshot(
         select: { id: true },
       }))
     : false;
+  /** Per-page follow-up queries awaited after the page loop. */
+  const pending: Promise<void>[] = [];
 
-  const ledgerRows = await db.importEntity.findMany({
-    where: { store_id: storeId },
-  });
-  const ledger = new Map(
-    ledgerRows.map((r) => [ledgerKey(r.entity_type, r.external_ref), r]),
+  // Ledger: paged (M5 B14); the payload is only read for PRODUCT rows (fix 1).
+  const ledger = new Map<string, LedgerRow>();
+  const ledgerRows: LedgerRow[] = [];
+  await forEachPage(
+    (skip, take) =>
+      db.importEntity.findMany({
+        where: { store_id: storeId },
+        orderBy: { id: 'asc' },
+        skip,
+        take,
+        select: {
+          id: true,
+          entity_type: true,
+          external_ref: true,
+          target_id: true,
+          source_hash: true,
+          applied_hash: true,
+          created_by_import: true,
+          status: true,
+          first_run_id: true,
+          last_run_id: true,
+          payload: true,
+        },
+      }),
+    (rows) => {
+      for (const r of rows) {
+        const row: LedgerRow =
+          r.entity_type === 'PRODUCT' ? r : { ...r, payload: undefined };
+        ledgerRows.push(row);
+        ledger.set(ledgerKey(r.entity_type, r.external_ref), row);
+      }
+    },
   );
 
-  // Products: every product of the creator (slugs), state of the imported ones.
-  const allProducts = await db.product.findMany({
-    where: { creator_id: creatorId },
-    select: { id: true, status: true, external_ref: true },
-  });
+  // Products: every product of the creator (slugs, paged), full state only
+  // for the ones the catalog or the ledger refers to (M5 B14).
+  const sourceRefs = new Set(catalog.products.map((p) => p.ext_id));
   const productSlugs = new Map<string, string>();
   const publishedProductSlugs = new Set<string>();
   const slugById = new Map<string, string>();
-  const statusById = new Map(allProducts.map((p) => [p.id, p.status]));
-  for (const ids of chunks(allProducts.map((p) => p.id))) {
-    const trs = await db.productTranslation.findMany({
-      where: { product_id: { in: ids }, locale: primaryLocale },
-      select: { product_id: true, slug: true },
-    });
-    for (const t of trs) {
-      productSlugs.set(t.slug, t.product_id);
-      slugById.set(t.product_id, t.slug);
-      if (statusById.get(t.product_id) === 'PUBLISHED')
-        publishedProductSlugs.add(t.slug);
-    }
-  }
-  const imported = allProducts.filter((p) => p.external_ref);
-  const states = await loadProductStateRows(
-    db,
-    imported.map((p) => p.id),
-    primaryLocale,
+  /** Imported products the plan needs: catalog refs (full state) and ledger-only refs (id/status). */
+  const needed: { id: string; status: string; external_ref: string }[] = [];
+  const trackedRefs = new Set(
+    ledgerRows
+      .filter((r) => r.entity_type === 'PRODUCT')
+      .map((r) => r.external_ref),
   );
+  await forEachPage(
+    (skip, take) =>
+      db.product.findMany({
+        where: { creator_id: creatorId },
+        orderBy: { id: 'asc' },
+        skip,
+        take,
+        select: { id: true, status: true, external_ref: true },
+      }),
+    (rows) => {
+      for (const p of rows)
+        if (
+          p.external_ref &&
+          (sourceRefs.has(p.external_ref) || trackedRefs.has(p.external_ref))
+        )
+          needed.push({
+            id: p.id,
+            status: p.status,
+            external_ref: p.external_ref,
+          });
+      const statusById = new Map(rows.map((p) => [p.id, p.status]));
+      // Slugs of this page (one query per page, nothing else kept).
+      pending.push(
+        db.productTranslation
+          .findMany({
+            where: {
+              product_id: { in: rows.map((p) => p.id) },
+              locale: primaryLocale,
+            },
+            select: { product_id: true, slug: true },
+          })
+          .then((trs) => {
+            for (const t of trs) {
+              productSlugs.set(t.slug, t.product_id);
+              slugById.set(t.product_id, t.slug);
+              if (statusById.get(t.product_id) === 'PUBLISHED')
+                publishedProductSlugs.add(t.slug);
+            }
+          }),
+      );
+    },
+  );
+  await Promise.all(pending.splice(0));
+  const withState = needed.filter((p) => sourceRefs.has(p.external_ref));
   const productsByRef = new Map<string, SnapshotProduct>();
   const variantsByProduct = new Map<string, SnapshotVariant[]>();
   const productCategoryLinks = new Map<string, Set<string>>();
-  for (const ids of chunks(imported.map((p) => p.id))) {
-    if (!ids.length) continue;
-    const links = await db.productCreatorCategory.findMany({
-      where: { product_id: { in: ids } },
-      select: { product_id: true, creator_category_id: true },
-    });
+  for (const page of chunks(withState)) {
+    if (!page.length) continue;
+    const ids = page.map((p) => p.id);
+    const [states, links] = await Promise.all([
+      loadProductStateRows(db, ids, primaryLocale),
+      db.productCreatorCategory.findMany({
+        where: { product_id: { in: ids } },
+        select: { product_id: true, creator_category_id: true },
+      }),
+    ]);
     for (const l of links) {
       const set = productCategoryLinks.get(l.product_id) ?? new Set<string>();
       set.add(l.creator_category_id);
       productCategoryLinks.set(l.product_id, set);
     }
+    for (const p of page) {
+      const rows = states.get(p.id);
+      if (!rows) continue;
+      productsByRef.set(p.external_ref, {
+        id: p.id,
+        slug: slugById.get(p.id) ?? null,
+        status: p.status,
+        state_hash: productStateHash(rows),
+      });
+      variantsByProduct.set(
+        p.id,
+        rows.variants.map((v) => ({
+          id: v.id,
+          product_id: p.id,
+          external_ref: v.external_ref,
+          is_active: v.is_active,
+        })),
+      );
+    }
   }
-  for (const p of imported) {
-    const rows = states.get(p.id);
-    if (!rows) continue;
-    productsByRef.set(p.external_ref!, {
-      id: p.id,
-      slug: slugById.get(p.id) ?? null,
-      status: p.status,
-      state_hash: productStateHash(rows),
-    });
-    variantsByProduct.set(
-      p.id,
-      rows.variants.map((v) => ({
-        id: v.id,
-        product_id: p.id,
-        external_ref: v.external_ref,
-        is_active: v.is_active,
-      })),
-    );
-  }
+  // Ledger-tracked products that left the source: id and status only
+  // (`on_source_removed`); their managed fields are not compared.
+  for (const p of needed)
+    if (!productsByRef.has(p.external_ref))
+      productsByRef.set(p.external_ref, {
+        id: p.id,
+        slug: slugById.get(p.id) ?? null,
+        status: p.status,
+        state_hash: '',
+      });
 
   const sourceSkus = [
     ...new Set(
@@ -362,15 +517,24 @@ export async function loadTargetSnapshot(
       where: { creator_id: creatorId, is_default: true },
     })) > 0;
 
-  const mediaRows = await db.importMedia.findMany({
-    where: { store_id: storeId },
-    select: { source_url: true, public_url: true, private_key: true },
-  });
-  const media = new Map(
-    mediaRows.map((m) => [
-      m.source_url,
-      { public: !!m.public_url, private: !!m.private_key },
-    ]),
+  // Media ledger, paged; two booleans per URL are kept.
+  const media = new Map<string, { public: boolean; private: boolean }>();
+  await forEachPage(
+    (skip, take) =>
+      db.importMedia.findMany({
+        where: { store_id: storeId },
+        orderBy: { id: 'asc' },
+        skip,
+        take,
+        select: { source_url: true, public_url: true, private_key: true },
+      }),
+    (rows) => {
+      for (const m of rows)
+        media.set(m.source_url, {
+          public: !!m.public_url,
+          private: !!m.private_key,
+        });
+    },
   );
 
   return {

@@ -68,7 +68,12 @@ export class ImportAdapterError extends Error {
   }
 }
 
-/** §9.3 catalog size limits. */
+/**
+ * §9.3 catalog size limits (what the planner and apply are built for). The
+ * 50 MB upload reaches about 3 000 products; the 20 000 ceiling is only
+ * reachable through the admin from-directory run (200 MB), see
+ * `runs/bundle-store.ts` and docs/DEPLOY-M4.md §7 (M5 B14).
+ */
 export const CATALOG_LIMITS = {
   products: 20_000,
   variations: 200_000,

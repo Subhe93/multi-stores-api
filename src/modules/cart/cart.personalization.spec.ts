@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { CartService } from './cart.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { buildPersonalizationCore } from '../personalization/__fixtures__/personalization-service.factory';
 import { TaxService } from '../taxes/tax.service';
 import { MarketsContextService } from '../markets/markets-context.service';
 import { MarketPricingService } from '../markets/market-pricing.service';
@@ -116,6 +117,7 @@ function build(fields: unknown[] = FIELDS, seed: Row[] = []) {
     } as unknown as MarketsContextService,
     new MarketPricingService(prisma as unknown as PrismaService),
     {} as B2bService,
+    buildPersonalizationCore(prisma).core,
   );
   const internals = service as unknown as Record<string, jest.Mock>;
   jest.spyOn(service, 'getCart').mockResolvedValue({} as never);

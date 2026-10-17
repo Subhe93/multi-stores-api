@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { CartService } from './cart.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { buildPersonalizationCore } from '../personalization/__fixtures__/personalization-service.factory';
 import { TaxService } from '../taxes/tax.service';
 import { MarketsContextService } from '../markets/markets-context.service';
 import { MarketPricingService } from '../markets/market-pricing.service';
@@ -104,7 +105,7 @@ function build(fields: unknown[], designer?: unknown) {
     } as unknown as MarketsContextService,
     new MarketPricingService(prisma as unknown as PrismaService),
     {} as B2bService,
-    undefined,
+    buildPersonalizationCore(prisma).core,
     undefined,
     designer as DesignerCartService | undefined,
   );

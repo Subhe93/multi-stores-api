@@ -239,7 +239,9 @@ function build(
   jest
     .spyOn(uploads, 'resolveForOrder')
     .mockResolvedValue((opts.uploads ?? new Map()) as never);
-  const markAttached = jest.spyOn(uploads, 'markAttached').mockResolvedValue(1);
+  const markAttached = jest
+    .spyOn(uploads, 'tryMarkAttached')
+    .mockResolvedValue({ attached: 1, unattachable: [] });
   const core = new PersonalizationCoreService(
     prisma as unknown as PrismaService,
     uploads,
@@ -258,8 +260,6 @@ function build(
     marketPricing,
     { get: () => undefined } as unknown as ConfigService,
     new B2bService(storeApps as unknown as StoreAppsService),
-    undefined,
-    undefined,
     core,
     uploads,
   );
@@ -491,13 +491,14 @@ describe('OrdersService personalization (M4.0)', () => {
     );
   });
 
-  it('create: a coded error from markAttached (lost race) keeps its code', async () => {
+  it('create: an upload lost in the attach race (M5 A3) is CUSTOMER_UPLOAD_EXPIRED naming its field and line', async () => {
     const { service, markAttached } = build({
       uploads: new Map([[PREVIEW, { id: UPLOAD_ID, purged: false }]]),
     });
-    markAttached.mockRejectedValueOnce(
-      new BadRequestException({ code: 'CUSTOMER_UPLOAD_EXPIRED' }),
-    );
+    markAttached.mockResolvedValueOnce({
+      attached: 0,
+      unattachable: [UPLOAD_ID],
+    });
     const body = await caught(
       service.create('u1', DTO, {
         lines: [
@@ -509,7 +510,12 @@ describe('OrdersService personalization (M4.0)', () => {
         ],
       }),
     );
-    expect(body).toMatchObject({ code: 'CUSTOMER_UPLOAD_EXPIRED' });
+    expect(body).toMatchObject({
+      code: 'CUSTOMER_UPLOAD_EXPIRED',
+      field_id: F_PHOTOS,
+      field_name: 'photos',
+      line_index: 0,
+    });
   });
 
   it('create from the cart: errors carry line_id; item_customizations is validated too', async () => {

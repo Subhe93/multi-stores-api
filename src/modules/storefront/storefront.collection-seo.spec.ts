@@ -163,6 +163,14 @@ describe('CreatorCategoriesService.update SEO carry-over (X19)', () => {
         deleteMany: jest.fn(),
         createMany,
       },
+      // Pass-through: the array form resolves its operations, the callback
+      // form runs against this fake (M5 A-X: the rewrite is one transaction).
+      $transaction: jest.fn(
+        (arg: unknown): Promise<unknown> =>
+          Array.isArray(arg)
+            ? Promise.all(arg as Promise<unknown>[])
+            : (arg as (tx: unknown) => Promise<unknown>)(prisma),
+      ),
     };
     const svc = new CreatorCategoriesService(
       prisma as unknown as PrismaService,
@@ -194,11 +202,17 @@ describe('CreatorCategoriesService.update SEO carry-over (X19)', () => {
     ]);
   });
 
-  it('no read when every row carries both fields', async () => {
+  it('no read when every row carries every carried-over column (description + meta)', async () => {
     const { svc, findManyTr } = setup([]);
     await svc.update('cat1', 'u1', {
       translations: [
-        { locale: 'sv', name: 'Barn', meta_title: null, meta_desc: 'x' },
+        {
+          locale: 'sv',
+          name: 'Barn',
+          description: '',
+          meta_title: null,
+          meta_desc: 'x',
+        },
       ],
     });
     expect(findManyTr).not.toHaveBeenCalled();

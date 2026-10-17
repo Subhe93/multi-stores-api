@@ -11,8 +11,15 @@ export const REDIRECT_STATUS_CODES = [301, 302, 307, 308] as const;
 export type RedirectStatusCode = (typeof REDIRECT_STATUS_CODES)[number];
 
 // Trailing segments WordPress serves for the same resource (pagination,
-// feeds, AMP). Tried once when there is no exact match.
-const FALLBACK_SUFFIX = /\/(?:page\/\d+|feed|amp)$/;
+// feeds, AMP, oEmbed). Tried once when there is no exact match.
+const FALLBACK_SUFFIX = /\/(?:page\/\d+|feed|amp|embed)$/;
+
+/**
+ * WordPress shortlink `/?p=<ID>` (M5 B17): the only query form that is part
+ * of a matching key. The key is `/?p=<id>` verbatim; every other query is
+ * dropped.
+ */
+const SHORTLINK_RE = /^\/?\?p=(\d{1,12})(?:[&#]|$)/;
 
 /** Percent-decode; an invalid sequence leaves the input unchanged. */
 function safeDecode(value: string): string {
@@ -23,19 +30,35 @@ function safeDecode(value: string): string {
   }
 }
 
+/** The `/?p=<id>` key of a shortlink request, or null. */
+export function shortlinkRedirectPath(input: string): string | null {
+  const m = SHORTLINK_RE.exec(input.trim());
+  return m ? `/?p=${Number(m[1])}` : null;
+}
+
 /**
  * Normalised matching key of a request path or a stored `from_path`:
- * query and fragment dropped, percent-decoded (safely), NFC, lower-case,
- * `//` collapsed, trailing `/` removed (except on root). Returns null for
- * input that is not a path (no leading `/`, control characters, too long).
+ * query and fragment dropped (except the `/?p=<id>` shortlink, kept as its
+ * own key), percent-decoded (safely), NFC, lower-case, `//` collapsed,
+ * trailing `/` removed (except on root). A `?` or `#` that only appears
+ * after decoding (`%3F`, `%23`) is a literal path character and is kept
+ * encoded (`%3f`, `%23`) so the key never reads as a query (M5 B22). Returns
+ * null for input that is not a path (no leading `/`, control characters,
+ * too long).
  */
 export function normalizeRedirectPath(input: string): string | null {
   if (typeof input !== 'string') return null;
   let path = input.trim();
+  const shortlink = shortlinkRedirectPath(path);
+  if (shortlink) return shortlink;
   const cut = path.search(/[?#]/);
   if (cut >= 0) path = path.slice(0, cut);
   if (!path.startsWith('/')) return null;
-  path = safeDecode(path).normalize('NFC').toLowerCase();
+  path = safeDecode(path)
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/\?/g, '%3f')
+    .replace(/#/g, '%23');
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(path)) return null;
   path = path.replace(/\/{2,}/g, '/');
@@ -79,7 +102,7 @@ export function targetKey(to: string): string | null {
   return normalizeRedirectPath(to);
 }
 
-/** True when the target carries a query string or fragment. */
+/** True when the target carries a query string or fragment (a `/?p=` shortlink counts). */
 export function targetHasQuery(to: string): boolean {
   return /[?#]/.test(to);
 }

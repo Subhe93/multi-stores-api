@@ -458,10 +458,11 @@ describe('server pattern tester (memory and budget)', () => {
     const tester = createServerPatternTester();
     expect(tester(EVIL, EVIL_INPUT, field)).toBe(false);
     expect(isKnownSlowPattern(EVIL)).toBe(true);
-    const started = Date.now();
-    // Would match, but the pattern is known to be slow: refused at once.
+    // Would match, but the pattern is known to be slow: refused without
+    // running (no second timeout warning is logged).
+    const warnings = warn.mock.calls.length;
     expect(createServerPatternTester()(EVIL, 'Anna', field)).toBe(false);
-    expect(Date.now() - started).toBeLessThan(20);
+    expect(warn).toHaveBeenCalledTimes(warnings);
   });
 
   it('the total vm time of one evaluation is capped', () => {

@@ -82,9 +82,18 @@
     { "name": "optional group without nested repeat", "pattern": "^\\d+(\\.\\d{1,2})?$", "valid": true, "reason": null },
     { "name": "repeated group with disjoint alternatives", "pattern": "^(com|net|org)+$", "valid": true, "reason": null },
     { "name": "fixed repeat of a plain group", "pattern": "^(abc){3}$", "valid": true, "reason": null },
-    { "name": "ReDoS: words with optional space repeated", "pattern": "^([A-Za-z]+ ?)+$", "valid": false, "reason": "unsafe" },
+    { "name": "A10: words with optional space repeated (several quantified atoms; vm timeout guards it)", "pattern": "^([A-Za-z]+ ?)+$", "valid": true, "reason": null },
     { "name": "ReDoS: nested plus", "pattern": "^(a+)+$", "valid": false, "reason": "unsafe" },
-    { "name": "ReDoS: non-capturing nested star", "pattern": "^(?:\\w+\\s?)*$", "valid": false, "reason": "unsafe" },
+    { "name": "A10: non-capturing words with optional space (accepted)", "pattern": "^(?:\\w+\\s?)*$", "valid": true, "reason": null },
+    { "name": "A10: lower-case words with optional whitespace (accepted)", "pattern": "^(?:[a-z]+\\s?)+$", "valid": true, "reason": null },
+    { "name": "A10: disjoint class alternatives repeated (accepted)", "pattern": "^([A-Z]|[a-z])+$", "valid": true, "reason": null },
+    { "name": "A10: disjoint class and escape alternatives repeated (accepted)", "pattern": "^([a-z]|\\d)+$", "valid": true, "reason": null },
+    { "name": "A10: overlapping class and escape alternatives refused", "pattern": "^(\\w|_)+$", "valid": false, "reason": "unsafe" },
+    { "name": "A10: negated class alternative refused (not modelled)", "pattern": "^([^a]|b)+$", "valid": false, "reason": "unsafe" },
+    { "name": "A10: single quantified atom per alternative refused", "pattern": "^(a+|b+)+$", "valid": false, "reason": "unsafe" },
+    { "name": "A10: quantified nested group refused", "pattern": "^((a+)b)+$", "valid": false, "reason": "unsafe" },
+    { "name": "A10: repeated group holding a repeated group refused", "pattern": "^((ab)+c)+$", "valid": false, "reason": "unsafe" },
+    { "name": "A10: single quantified class refused", "pattern": "^([a-z]*)+$", "valid": false, "reason": "unsafe" },
     { "name": "ReDoS: bounded repeat of a quantified group", "pattern": "^(a{1,3}){2}$", "valid": false, "reason": "unsafe" },
     { "name": "ReDoS: overlapping alternatives repeated", "pattern": "^(a|ab)*$", "valid": false, "reason": "unsafe" },
     { "name": "ReDoS: class and digit alternatives repeated", "pattern": "^(\\d|[0-9])+$", "valid": false, "reason": "unsafe" },
@@ -533,6 +542,20 @@
       "values": {},
       "prefilled": { "f1": "/uploads/custom-fields/logo.webp" },
       "expected": { "ok": true, "issues": [], "values": { "f1": "/uploads/custom-fields/logo.webp" } }
+    },
+    {
+      "name": "A12: blank prefilled value does not count as prefilled (required still reported)",
+      "fields": [{ "id": "f1", "name": "name", "type": "TEXT", "is_required": true }],
+      "values": {},
+      "prefilled": { "f1": "   " },
+      "expected": { "ok": false, "issues": [{ "code": "CUSTOM_FIELD_REQUIRED", "field_id": "f1", "field_name": "name" }], "values": {} }
+    },
+    {
+      "name": "A12: empty prefilled value lets the customer value through",
+      "fields": [{ "id": "f1", "name": "name", "type": "TEXT", "is_required": true, "validation_rules": { "max_length": 3 } }],
+      "values": { "f1": "Anna" },
+      "prefilled": { "f1": "" },
+      "expected": { "ok": false, "issues": [{ "code": "CUSTOM_FIELD_TOO_LONG", "field_id": "f1", "field_name": "name", "params": { "max": 3 } }], "values": { "f1": "Anna" } }
     },
     {
       "name": "too many keys",

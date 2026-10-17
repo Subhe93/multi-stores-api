@@ -1,9 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
-import { PersonalizationService } from './personalization.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { StoreAppsService } from '../store-apps/store-apps.service';
-import { ShippingService } from '../shipping/shipping.service';
-import { MarketsContextService } from '../markets/markets-context.service';
 import { MarketPricingService } from '../markets/market-pricing.service';
 import type { MarketContext } from '../markets/market-context';
 import { parsePersonalizationSettings } from './personalization-settings';
@@ -18,6 +14,7 @@ import {
   appFields,
   validValues,
 } from './__fixtures__/app-fields';
+import { buildPersonalizationService } from './__fixtures__/personalization-service.factory';
 
 // M4.1 WP-C: the runtime service — line evaluation (context, palette from
 // active variants), the public validate endpoint and the card threshold.
@@ -112,14 +109,13 @@ function build(
   const marketPricing = new MarketPricingService(
     prisma as unknown as PrismaService,
   );
-  const service = new PersonalizationService(
-    prisma as unknown as PrismaService,
-    storeApps as unknown as StoreAppsService,
-    undefined,
-    shipping as unknown as ShippingService,
-    markets as unknown as MarketsContextService,
+  const service = buildPersonalizationService({
+    prisma,
+    storeApps,
+    shipping,
+    markets,
     marketPricing,
-  );
+  });
   return { service, prisma, storeApps, shipping, markets };
 }
 

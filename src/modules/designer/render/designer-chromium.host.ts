@@ -34,6 +34,10 @@
 import { Logger, ServiceUnavailableException } from '@nestjs/common';
 import type { BrowserContext, Route } from 'playwright-core';
 import {
+  chromiumChannel,
+  chromiumExecutablePath,
+} from '../../../common/ops/chromium-env';
+import {
   BrowserHost,
   withTimeout,
   type BrowserHostOptions,
@@ -414,17 +418,18 @@ export function createDesignerRenderer(
   if (isOffFlag(env.DESIGNER_RENDER_ENGINE)) {
     return new DisabledDesignerRenderer();
   }
-  const pick = (...vals: (string | undefined)[]) =>
-    vals.map((v) => v?.trim()).find((v) => !!v) || undefined;
+  // DESIGNER_* then INVOICE_PDF_* (legacy), then CHROMIUM_PATH / CHROMIUM_CHANNEL.
   return new DesignerChromiumHost({
     printConcurrency: Number(env.DESIGNER_RENDER_CONCURRENCY) === 2 ? 2 : 1,
-    executablePath: pick(
-      env.DESIGNER_CHROMIUM_PATH,
-      env.INVOICE_PDF_CHROMIUM_PATH,
+    executablePath: chromiumExecutablePath(
+      env,
+      'DESIGNER_CHROMIUM_PATH',
+      'INVOICE_PDF_CHROMIUM_PATH',
     ),
-    channel: pick(
-      env.DESIGNER_BROWSER_CHANNEL,
-      env.INVOICE_PDF_BROWSER_CHANNEL,
+    channel: chromiumChannel(
+      env,
+      'DESIGNER_BROWSER_CHANNEL',
+      'INVOICE_PDF_BROWSER_CHANNEL',
     ),
   });
 }

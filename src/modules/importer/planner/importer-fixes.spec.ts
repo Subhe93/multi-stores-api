@@ -435,8 +435,8 @@ describe('fix 7/8 — worker caps, app disabled, cancel', () => {
       h.db.importRun.rows.find((r: any) => r.id === run.id).cancel_requested_at,
     ).toBeNull();
     const seen: string[] = [];
-    const update = h.db.importRun.update.bind(h.db.importRun);
-    jest.spyOn(h.db.importRun, 'update').mockImplementation((args: any) => {
+    const update = h.db.importRun.updateMany.bind(h.db.importRun);
+    jest.spyOn(h.db.importRun, 'updateMany').mockImplementation((args: any) => {
       const c = args?.data?.progress?.cursor;
       if (c) seen.push(`${c.phase}:${c.index}`);
       return update(args);
