@@ -42,6 +42,9 @@ const UNIQUES: Record<string, string[][]> = {
   productCreatorCategory: [['product_id', 'creator_category_id']],
   store: [['slug'], ['creator_id']],
   creator: [['user_id']],
+  page: [['store_id', 'slug']],
+  pageTranslation: [['page_id', 'locale']],
+  pageSectionTranslation: [['section_id', 'locale']],
 };
 
 const DEFAULTS: Record<string, () => Row> = {
@@ -572,6 +575,11 @@ const CASCADES: Record<string, { model: string; field: string }[]> = {
   importSource: [{ model: 'importRun', field: 'source_id' }],
   shippingProfile: [{ model: 'shippingZone', field: 'profile_id' }],
   shippingZone: [{ model: 'shippingMethod', field: 'zone_id' }],
+  page: [
+    { model: 'pageTranslation', field: 'page_id' },
+    { model: 'pageSection', field: 'page_id' },
+  ],
+  pageSection: [{ model: 'pageSectionTranslation', field: 'section_id' }],
 };
 
 export class FakePrisma {

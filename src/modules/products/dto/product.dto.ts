@@ -12,6 +12,7 @@ import {
   ValidateIf,
   Min,
   MaxLength,
+  IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import {
@@ -20,6 +21,9 @@ import {
   ProductStatus,
   Prisma,
 } from '@prisma/client';
+
+/** Allowed `condition` values of a product (feeds app); null = new. */
+export const PRODUCT_CONDITIONS = ['new', 'refurbished', 'used'] as const;
 
 export class ProductTranslationDto {
   @IsString()
@@ -181,6 +185,43 @@ export class CreateProductDto {
   @IsBoolean()
   tax_exempt?: boolean;
 
+  // Feed data (M5.6 feeds app). Every field is optional and nullable: on
+  // update an absent key keeps the stored value (X19 carry-over), null or ''
+  // clears it. gtin must be a GTIN-8/12/13/14 with a valid check digit
+  // (checked in the service: PRODUCT_GTIN_INVALID). condition null = "new".
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(14)
+  gtin?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(70)
+  mpn?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(70)
+  brand?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(191)
+  google_product_category?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== '')
+  @IsIn(PRODUCT_CONDITIONS)
+  condition?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  feed_excluded?: boolean;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => ProductTranslationDto)
@@ -296,6 +337,43 @@ export class UpdateProductDto {
   @IsOptional()
   @IsBoolean()
   tax_exempt?: boolean;
+
+  // Feed data (M5.6 feeds app). Every field is optional and nullable: on
+  // update an absent key keeps the stored value (X19 carry-over), null or ''
+  // clears it. gtin must be a GTIN-8/12/13/14 with a valid check digit
+  // (checked in the service: PRODUCT_GTIN_INVALID). condition null = "new".
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(14)
+  gtin?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(70)
+  mpn?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(70)
+  brand?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(191)
+  google_product_category?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== '')
+  @IsIn(PRODUCT_CONDITIONS)
+  condition?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  feed_excluded?: boolean;
 
   @IsOptional()
   @IsEnum(ProductStatus)

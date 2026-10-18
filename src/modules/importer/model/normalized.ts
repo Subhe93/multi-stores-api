@@ -337,21 +337,43 @@ export interface NCatalogMeta {
   weight_unit?: string | null;
 }
 
+/** Rank Math SEO of a page / post (M5 B17 content migration). */
+export interface NPageSeo {
+  meta_title?: string;
+  meta_desc?: string;
+  /** `rank_math_robots` contains `noindex`. */
+  noindex: boolean;
+}
+
 /**
- * (M5 B17 hook) A WordPress `page` post. No bundle exports pages today
- * (`posts.tsv` holds products, variations and templates), so adapters leave
- * `pages` absent; when one fills it, the redirect planner maps `/<path>` and
- * the shortlink `/?p=<id>` of every published page to the target that
- * `pageTarget` resolves (see mapping/map-redirects.ts).
+ * A WordPress `page` or blog `post` (M5 B17, bundle v1 exports published
+ * ones). The redirect planner maps `path` (and, with `redirect_shortlinks`,
+ * `/?p=<id>`) to the target the merchant chose in `content_redirects`;
+ * `scopes.pages` + target `import` creates a draft builder page from `html`.
  */
 export interface NPage {
-  ext_id: string;
+  /** `woo:<host>:page:<id>` / `woo:<host>:post:<id>`. */
+  ref: string;
+  /** Raw post ID. */
   source_id: string;
-  status: NProductStatus;
+  kind: 'page' | 'post';
   slug: string;
-  /** Ancestor slugs first, own slug last (WordPress nested page path). */
-  path: string[];
+  /**
+   * Public path on the old site with a trailing slash (`/om-oss/`,
+   * `/blog/hej/`): nested page slugs, or the `permalink_structure` tokens
+   * resolved for a post. The front page is `/`.
+   */
+  path: string;
   title: string;
+  excerpt: string;
+  /** Raw `post_content` (sanitized in apply through the HtmlSanitizer seam). */
+  html: string;
+  status: NProductStatus;
+  parent_ref: string | null;
+  /** `post_date` / `post_modified` as ISO-like `YYYY-MM-DD HH:MM:SS` (site time). */
+  published_at: string;
+  modified_at: string;
+  seo: NPageSeo;
 }
 
 export interface NormalizedCatalog {
@@ -366,6 +388,6 @@ export interface NormalizedCatalog {
   templates: NTemplate[];
   store_settings: NStoreSettings;
   issues: NIssue[];
-  /** (M5 B17 hook) WordPress pages; absent until an adapter exports them. */
+  /** (M5 B17) WordPress pages and posts; absent when the bundle has none (legacy export). */
   pages?: NPage[];
 }

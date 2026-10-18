@@ -1,4 +1,7 @@
-import { PlainTextHtmlSanitizer } from '../html/html-sanitizer';
+import {
+  AllowlistHtmlSanitizer,
+  PlainTextHtmlSanitizer,
+} from '../html/html-sanitizer';
 import type {
   NormalizedCatalog,
   NProduct,
@@ -265,5 +268,61 @@ describe('mapProduct — template thumbnail as the product image', () => {
     expect(noThumb.warnings.map((w) => w.code)).not.toContain(
       'W_IMAGE_FROM_TEMPLATE',
     );
+  });
+});
+
+describe('inline images and `inline_image_hosts` (W2-A)', () => {
+  function mapWith(hosts: string[]) {
+    const warnings: MapWarning[] = [];
+    const { options, errors } = normalizeRunOptions({
+      platform_category_id: 'cat',
+      inline_image_hosts: hosts,
+    });
+    expect(errors).toEqual([]);
+    const p = product({
+      content_html:
+        '<p>Hej</p>' +
+        `<img src="https://${HOST}/wp-content/uploads/a.jpg" alt="A">` +
+        '<img src="https://cdn.example/b.jpg" alt="B">' +
+        '<img src="https://other.example/c.jpg" alt="C">',
+    });
+    const mapped = mapProduct(p, {
+      catalog: catalog({ products: [p] }),
+      options,
+      sanitizer: new AllowlistHtmlSanitizer(),
+      now: NOW,
+      warn: (w) => warnings.push(w),
+    });
+    return { mapped, warnings };
+  }
+
+  it('keeps source-host images (fetched) and images on the listed hosts (as they are); drops the rest', () => {
+    const { mapped, warnings } = mapWith(['cdn.example']);
+    expect(mapped.translation.description).toContain(
+      `https://${HOST}/wp-content/uploads/a.jpg`,
+    );
+    expect(mapped.translation.description).toContain(
+      'https://cdn.example/b.jpg',
+    );
+    expect(mapped.translation.description).not.toContain('other.example');
+    // Only the source-host image goes through the media pipeline.
+    expect(mapped.inline_images.map((i) => i.source_url)).toEqual([
+      `https://${HOST}/wp-content/uploads/a.jpg`,
+    ]);
+    expect(
+      warnings.filter((w) => w.code === 'W_HTML_IMAGE_REMOVED'),
+    ).toHaveLength(1);
+  });
+
+  it('without the option only the source host survives', () => {
+    const { mapped, warnings } = mapWith([]);
+    expect(mapped.translation.description).toContain(
+      `https://${HOST}/wp-content/uploads/a.jpg`,
+    );
+    expect(mapped.translation.description).not.toContain('cdn.example');
+    expect(mapped.translation.description).not.toContain('other.example');
+    expect(
+      warnings.find((w) => w.code === 'W_HTML_IMAGE_REMOVED')?.message,
+    ).toContain('2 inline image(s)');
   });
 });

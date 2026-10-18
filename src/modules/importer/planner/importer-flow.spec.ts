@@ -71,7 +71,10 @@ describe('importer flow (Namez slice)', () => {
     expect(s.counts.PERSONALIZATION).toEqual({ CREATE: 7, SKIP: 1 });
     expect(s.counts.FALLBACK_FIELD).toEqual({ CREATE: 1 });
     expect(s.counts.DESIGN_TEMPLATE).toEqual({ STAGE: 2 });
-    expect(s.counts.REDIRECT).toEqual({ CREATE: 117 });
+    // 117 catalog rows + the 13 WordPress system paths (M5 B17 W2-B;
+    // `/cart/` and `/checkout/` are self-redirects and get no row).
+    expect(s.redirects.by_rule.system).toBe(13);
+    expect(s.counts.REDIRECT).toEqual({ CREATE: 117 + 13 });
     expect(s.plan).toMatchObject({
       blockers: [],
       sanitizer: 'plain_text_fallback',

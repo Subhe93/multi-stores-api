@@ -145,6 +145,23 @@ export class UpdateOrderStatusDto {
   @IsOptional()
   @IsString()
   note?: string;
+
+  // Production app ship prompt (M5.4): with SHIPPED, written to the actor's
+  // items (the shipped email reads the first item tracking number).
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  tracking_number?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  tracking_url?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  carrier?: string;
 }
 
 export class UpdateFulfillmentDto {

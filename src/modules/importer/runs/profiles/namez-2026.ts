@@ -23,6 +23,7 @@ export const NAMEZ_2026_PROFILE = {
     personalization: true,
     templates: true,
     redirects: true,
+    pages: false,
   },
   platform_category_id: null,
   skip_ext_ids: ['woo:namez.se:product:4326'],
@@ -83,6 +84,10 @@ export const NAMEZ_2026_PROFILE = {
       model_text: 'https://namez.se/wp-content/uploads/2024/09/framsidan.jpg',
     },
   },
+  // M5 B17: the Namez pages / posts are mapped in Mapping review once the
+  // bundle v1 export carries them (the 2026-10-15 export has none).
+  content_redirects: { mode: 'map', targets: {} },
+  inline_image_hosts: [],
 } as const;
 
 /** The ImportSource of the Namez run (§12.1). */

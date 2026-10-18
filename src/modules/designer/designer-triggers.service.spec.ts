@@ -2,6 +2,10 @@ import { DesignerTriggersService } from './designer-triggers.service';
 
 function build(enabled: boolean, hasDesigns = false) {
   const storeApps = { isEnabled: jest.fn(() => Promise.resolve(enabled)) };
+  const listeners: ((row: {
+    order_id: string;
+    store_id: string;
+  }) => unknown)[] = [];
   const queue = {
     enqueueOrder: jest.fn(() => Promise.resolve(1)),
     reviveOrder: jest.fn(() => Promise.resolve(0)),
@@ -9,12 +13,17 @@ function build(enabled: boolean, hasDesigns = false) {
     markShipped: jest.fn(() => Promise.resolve(1)),
     markPaymentFailed: jest.fn(() => Promise.resolve({ rows: 1, released: 1 })),
     storeHasDesigns: jest.fn(() => Promise.resolve(hasDesigns)),
+    onPrintReady: jest.fn((l: (typeof listeners)[number]) => {
+      listeners.push(l);
+    }),
   };
+  const production = { onPrintReady: jest.fn(() => Promise.resolve()) };
   const triggers = new DesignerTriggersService(
     storeApps as never,
     queue as never,
+    production as never,
   );
-  return { triggers, storeApps, queue };
+  return { triggers, storeApps, queue, production, listeners };
 }
 
 const order = { id: 'o1', store_id: 's1' };
@@ -46,6 +55,22 @@ describe('DesignerTriggersService', () => {
     expect(b.queue.cancelOrder).toHaveBeenCalledWith('o1');
     expect(b.queue.enqueueOrder).toHaveBeenCalledWith('o1');
     expect(b.queue.markPaymentFailed).toHaveBeenCalledWith('o1');
+  });
+
+  it('print file READY (M5.4): the queue listener reaches the production hook once per row', async () => {
+    const b = build(true);
+    expect(b.listeners).toHaveLength(1);
+    await b.listeners[0]({ order_id: 'o1', store_id: 's1' });
+    expect(b.production.onPrintReady).toHaveBeenCalledWith('o1', 's1');
+    // A failing production step never reaches the worker.
+    b.production.onPrintReady.mockRejectedValueOnce(new Error('boom'));
+    await expect(
+      b.listeners[0]({ order_id: 'o1', store_id: 's1' }),
+    ).resolves.toBeUndefined();
+    // Store without designs and app off: no hook call.
+    const off = build(false, false);
+    await off.listeners[0]({ order_id: 'o1', store_id: 's1' });
+    expect(off.production.onPrintReady).not.toHaveBeenCalled();
   });
 
   it('app on: no probe query', async () => {

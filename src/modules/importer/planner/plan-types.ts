@@ -9,7 +9,7 @@ import type {
   SummaryAction,
   SummaryEntityType,
 } from '../model/dry-run-summary';
-import type { NormalizedCatalog, NTemplate } from '../model/normalized';
+import type { NormalizedCatalog, NPage, NTemplate } from '../model/normalized';
 import type { PresetDescriptor } from '../model/presets';
 import { hashOf } from '../mapping/hash';
 import type { MappedCategory } from '../mapping/map-category';
@@ -112,6 +112,23 @@ export interface PlannedMedia extends MediaNeed {
   action: 'CREATE' | 'UNCHANGED';
 }
 
+/** What the apply step writes for one imported WP page (M5 B17, `scopes.pages`). */
+export interface MappedPage {
+  ref: string;
+  slug: string;
+  title: string;
+  /** Sanitized through the HtmlSanitizer seam (one rich-text section). */
+  html: string;
+  meta_title: string | null;
+  meta_description: string | null;
+  noindex: boolean;
+}
+
+export interface PlannedPage extends Planned {
+  page: NPage;
+  mapped: MappedPage;
+}
+
 /**
  * Presets that only add the importer's own fields and read nothing the
  * merchant may have edited on the product (no option references): they are
@@ -147,6 +164,8 @@ export interface PlanWork {
     methods: PlannedShippingMethod[];
   } | null;
   templates: PlannedTemplate[];
+  /** Draft builder pages to create (M5 B17, `scopes.pages`). */
+  pages: PlannedPage[];
   media: PlannedMedia[];
   /**
    * Every media source URL the written entities reference, whether or not
@@ -239,6 +258,7 @@ export function planFingerprint(
         redirects:
           work.redirects?.plan.items.map((r) => [r.from_path, r.to_path]) ?? [],
         redirects_off: work.redirects?.deactivate.map((r) => r.id) ?? [],
+        pages: work.pages.map((p) => [p.mapped.ref, p.source_hash]),
       }
     : null;
   return hashOf({ catalogHash, options, tuples, written });

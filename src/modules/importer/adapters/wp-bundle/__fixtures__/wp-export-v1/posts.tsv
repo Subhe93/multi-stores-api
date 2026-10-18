@@ -5,3 +5,6 @@ ID	post_author	post_date	post_date_gmt	post_content	post_title	post_excerpt	post
 202	0	2026-05-01 10:00:00	2026-05-01 10:00:00		Namnskylt - Blå		private	open	closed		skylt-bla			2026-05-01 10:00:00	2026-05-01 10:00:00		200	https://shop.example/?post_type=product_variation&p=202	2	product_variation		0
 210	0	2026-05-01 10:00:00	2026-05-01 10:00:00		Utkast		draft	open	closed		utkast			2026-05-01 10:00:00	2026-05-01 10:00:00		0	https://shop.example/?post_type=product&p=210	0	product		0
 300	0	2026-05-01 10:00:00	2026-05-01 10:00:00		Mall 1		publish	open	closed		mall-1			2026-05-01 10:00:00	2026-05-01 10:00:00		0	https://shop.example/?post_type=npp_template&p=300	0	npp_template		0
+600	0	2026-05-02 09:00:00	2026-05-02 09:00:00	<p>Vi är Shop Example.</p><script>alert(1)</script>	Om oss		publish	open	closed		om-oss			2026-05-02 09:00:00	2026-05-02 09:00:00		0	https://shop.example/?page_id=600	0	page		0
+601	0	2026-05-02 09:05:00	2026-05-02 09:05:00	<p>Mejla oss.</p>	Kontakt		publish	open	closed		kontakt			2026-05-02 09:05:00	2026-05-02 09:05:00		600	https://shop.example/?page_id=601	0	page		0
+700	0	2026-05-03 12:00:00	2026-05-03 12:00:00	<p>Nytt sortiment.</p>	Nyheter våren	Vårnyheter	publish	open	closed		nyheter-varen			2026-05-03 12:00:00	2026-05-03 12:00:00		0	https://shop.example/?p=700	0	post		0

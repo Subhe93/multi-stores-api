@@ -18,6 +18,8 @@ import {
   orderCancelledEmail,
   orderRefundedEmail,
   newOrderOwnerEmail,
+  productionDigestEmail,
+  productionNewOrderEmail,
   welcomeEmail,
   OrderConfirmationData,
   OrderShippedData,
@@ -25,6 +27,7 @@ import {
   OrderCancelledData,
   OrderRefundedData,
   NewOrderOwnerData,
+  ProductionDigestOrder,
   WelcomeData,
 } from './templates';
 import {
@@ -909,6 +912,139 @@ export class MailService {
       event: 'new_order_owner',
       orderId: data.orderId,
     });
+  }
+
+  // ── Production app (M5.4) staff emails ──────────────────────────────────
+
+  /**
+   * "New order to produce" to the store's production address: the store /
+   * platform `production_new_order` template when one exists, else the
+   * bundled builder. Same order context (items, customer, admin link) as
+   * the owner notification. Logged under `production_new_order`.
+   */
+  async sendProductionNewOrder(
+    orderId: string,
+    to: string,
+    counts: { itemsCount: number; checksCount: number },
+  ): Promise<{ sent: boolean }> {
+    const order = await loadOrderForEmail(this.prisma, orderId);
+    if (!order) return { sent: false };
+    const ctx = await this.orderTemplateContext(order, 'new_order_owner');
+    const customerName = await this.customerNameOf(order);
+    const data = {
+      orderId: order.id,
+      storeId: order.storeCtx?.id,
+      storeName: order.storeCtx?.name,
+      storeLogoUrl: ctx.logoUrl,
+      extraVars: ctx.extraVars,
+      orderNumber: ctx.orderNumber,
+      itemsCount: counts.itemsCount,
+      checksCount: counts.checksCount,
+      customerName,
+      orderAdminUrl: ctx.orderAdminUrl,
+      itemsHtml: ctx.items_html,
+      itemsText: ctx.items_text,
+    };
+    const cta = this.orderCta(ctx.orderAdminUrl, 'Open production');
+    const rendered = await this.templates.render(
+      'production_new_order',
+      ctx.locale,
+      {
+        ...(ctx.extraVars ?? {}),
+        order_number: ctx.orderNumber,
+        items_count: String(counts.itemsCount),
+        checks_count: String(counts.checksCount),
+        store_name: order.storeCtx?.name ?? '',
+        customer_name: customerName ?? ctx.extraVars?.customer_name ?? '',
+        order_button: cta.html,
+        order_url_text: cta.text,
+        items_html: ctx.items_html,
+        items_text: ctx.items_text,
+      },
+      order.storeCtx?.id,
+    );
+    return this.send({
+      to,
+      ...(rendered ?? productionNewOrderEmail(data)),
+      storeId: order.storeCtx?.id,
+      brandFooter: { locale: ctx.locale },
+      event: 'production_new_order',
+      orderId: order.id,
+    });
+  }
+
+  /**
+   * Daily digest of the orders still in production (bundled template only;
+   * one per store per day, guarded by the caller through the EmailLog
+   * event `production_daily_digest`).
+   */
+  async sendProductionDigest(
+    storeId: string,
+    to: string,
+    input: {
+      orders: {
+        order_id: string;
+        order_number: string;
+        status: string;
+        created_at: Date;
+        total: number;
+        done: number;
+        state: string;
+      }[];
+      timezone?: string;
+      now?: Date;
+    },
+  ): Promise<{ sent: boolean }> {
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { name: true, language_config: true },
+    });
+    const locale =
+      (store?.language_config as { primary_locale?: string } | null)
+        ?.primary_locale ?? 'en';
+    const dashboardBase = (
+      this.config.get<string>('DASHBOARD_URL') || 'http://localhost:3002'
+    ).replace(/\/$/, '');
+    const dateOf = (d: Date) =>
+      new Intl.DateTimeFormat(locale, {
+        dateStyle: 'medium',
+        timeZone: input.timezone,
+      }).format(d);
+    const orders: ProductionDigestOrder[] = input.orders.map((o) => ({
+      orderNumber: o.order_number,
+      status: o.status,
+      placedOn: dateOf(o.created_at),
+      total: o.total,
+      done: o.done,
+      state: o.state,
+      adminUrl: `${dashboardBase}/creator/orders/${o.order_id}`,
+    }));
+    return this.send({
+      to,
+      ...productionDigestEmail({
+        storeId,
+        storeName: store?.name,
+        dateLabel: dateOf(input.now ?? new Date()),
+        orders,
+        dashboardUrl: `${dashboardBase}/creator/production`,
+      }),
+      storeId,
+      brandFooter: { locale },
+      event: 'production_daily_digest',
+    });
+  }
+
+  /** Customer name from the profile (first/last), best-effort. */
+  private async customerNameOf(
+    order: OrderForEmail,
+  ): Promise<string | undefined> {
+    if (!order.customer) return undefined;
+    const c = await this.prisma.customer.findUnique({
+      where: { id: order.customer.id },
+      select: { first_name: true, last_name: true },
+    });
+    const full = [c?.first_name, c?.last_name].filter(Boolean).join(' ').trim();
+    return full || undefined;
   }
 
   // Signup is a platform event, not a store one — it goes out under the

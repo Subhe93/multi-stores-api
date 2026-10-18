@@ -29,7 +29,8 @@ import { ImporterRetentionTask } from './runs/importer-retention.task';
  * - `DESIGNER_IMPORT_PORT` → M4.2 WP7 `NppDesignerImportPort` (C26); it acts as
  *   the Null port per call for stores whose designer app is off, and the
  *   Null port is bound when the designer module is not provided;
- * - `IMPORTER_HTML_SANITIZER` → plain-text fallback until `sanitize-html` is approved.
+ * - `IMPORTER_HTML_SANITIZER` → `AllowlistHtmlSanitizer` (sanitize-html, D11);
+ *   env `IMPORTER_HTML_SANITIZER=plain` binds the plain-text fallback instead.
  */
 @Module({
   imports: [

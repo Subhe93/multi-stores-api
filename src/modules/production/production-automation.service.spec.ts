@@ -28,14 +28,36 @@ function build(
   settings: Record<string, unknown>,
   status: OrderStatus,
   itemStatuses: string[] = ['MANUFACTURING'],
+  designs: string[] = ['READY'],
 ) {
   const state = { status };
+  const events: Record<string, unknown>[] = [];
   const prisma = {
     order: {
       findUnique: jest.fn(() =>
         Promise.resolve({
           status: state.status,
           items: itemStatuses.map((s) => ({ fulfillment_status: s })),
+        }),
+      ),
+    },
+    orderItemDesign: {
+      findMany: jest.fn(() =>
+        Promise.resolve(designs.map((print_status) => ({ print_status }))),
+      ),
+    },
+    orderProductionEvent: {
+      // The M5.4 idempotency read: `payload.reason = print_ready`.
+      findFirst: jest.fn((q: { where: { payload?: { equals?: string } } }) =>
+        Promise.resolve(
+          events.find((e) => e.reason === q.where.payload?.equals) ?? null,
+        ),
+      ),
+    },
+    store: {
+      findUnique: jest.fn(() =>
+        Promise.resolve({
+          creator: { id: 'cr1', user_id: 'u1', display_name: 'Anna' },
         }),
       ),
     },
@@ -48,7 +70,12 @@ function build(
   };
   const pending = { value: false };
   const checklist = {
-    logAutoAdvance: jest.fn(() => Promise.resolve()),
+    logAutoAdvance: jest.fn(
+      (_id: string, _actor: unknown, payload: Record<string, unknown>) => {
+        events.push(payload);
+        return Promise.resolve();
+      },
+    ),
     isAutoAdvancePending: jest.fn(() => Promise.resolve(pending.value)),
     setAutoAdvancePending: jest.fn((_id: string, v: boolean) => {
       pending.value = v;
@@ -62,7 +89,7 @@ function build(
     orders as unknown as OrdersService,
     checklist as unknown as ProductionChecklistService,
   );
-  return { service, orders, checklist, state, pending };
+  return { service, orders, checklist, state, pending, prisma };
 }
 
 const done = (summary = READY) => ({
@@ -92,7 +119,11 @@ describe('ProductionAutomationService (M4.3 §3.6)', () => {
       OrderStatus.MANUFACTURING,
     );
     const r = await service.afterWrite(CTX, 'o1', done());
-    expect(r.suggestion).toEqual({ next_status: 'SHIPPED' });
+    expect(r.suggestion).toEqual({
+      next_status: 'SHIPPED',
+      ask_tracking: true,
+      requires_tracking: false,
+    });
     expect(r.order_status).toBe(OrderStatus.MANUFACTURING);
     expect(orders.updateStatus).not.toHaveBeenCalled();
     // Not READY or already at/after the target → nothing.
@@ -172,7 +203,7 @@ describe('ProductionAutomationService (M4.3 §3.6)', () => {
     );
     const r = await service.afterWrite(CTX, 'o1', done());
     expect(orders.updateStatus).not.toHaveBeenCalled();
-    expect(r.suggestion).toEqual({ next_status: 'SHIPPED' });
+    expect(r.suggestion).toMatchObject({ next_status: 'SHIPPED' });
   });
 
   it('start_on_first_check: CONFIRMED → MANUFACTURING on the starting write only', async () => {
@@ -212,7 +243,11 @@ describe('ProductionAutomationService (M4.3 §3.6)', () => {
     );
     const r = await service.afterWrite(CTX, 'o1', done());
     expect(r.auto_advanced_to).toBeUndefined();
-    expect(r.suggestion).toEqual({ next_status: 'QUALITY_CHECK' });
+    expect(r.suggestion).toEqual({
+      next_status: 'QUALITY_CHECK',
+      ask_tracking: false,
+      requires_tracking: false,
+    });
   });
 
   it('a failed auto-advance is recorded and retried by the next write of the order', async () => {
@@ -250,6 +285,141 @@ describe('ProductionAutomationService (M4.3 §3.6)', () => {
       summary: READY,
     });
     expect(orders.updateStatus).not.toHaveBeenCalled();
+  });
+
+  // ── M5.4: ship prompt flags and the print-ready step ────────────────────
+
+  it('ship_prompt drives the SHIPPED suggestion flags; other targets never ask', async () => {
+    const required = build(
+      {
+        on_complete: 'suggest',
+        complete_target: 'SHIPPED',
+        use_quality_check: false,
+        ship_prompt: 'tracking_required',
+      },
+      OrderStatus.MANUFACTURING,
+    );
+    expect(
+      (await required.service.afterWrite(CTX, 'o1', done())).suggestion,
+    ).toEqual({
+      next_status: 'SHIPPED',
+      ask_tracking: true,
+      requires_tracking: true,
+    });
+    const none = build(
+      {
+        on_complete: 'suggest',
+        complete_target: 'SHIPPED',
+        use_quality_check: false,
+        ship_prompt: 'none',
+      },
+      OrderStatus.MANUFACTURING,
+    );
+    expect(
+      (await none.service.afterWrite(CTX, 'o1', done())).suggestion,
+    ).toEqual({
+      next_status: 'SHIPPED',
+      ask_tracking: false,
+      requires_tracking: false,
+    });
+  });
+
+  it('on_print_ready default (none): a READY print file changes nothing (G0)', async () => {
+    const { service, orders } = build({}, OrderStatus.CONFIRMED, [
+      'PROCESSING',
+    ]);
+    expect(await service.onPrintReady('o1', 's1')).toBeUndefined();
+    expect(orders.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('on_print_ready: moves CONFIRMED → MANUFACTURING once, logged with reason print_ready', async () => {
+    const { service, orders, checklist, state } = build(
+      { on_print_ready: 'MANUFACTURING' },
+      OrderStatus.CONFIRMED,
+      ['PROCESSING'],
+    );
+    expect(await service.onPrintReady('o1', 's1')).toBe(
+      OrderStatus.MANUFACTURING,
+    );
+    expect(orders.updateStatus).toHaveBeenCalledWith(
+      'o1',
+      { status: OrderStatus.MANUFACTURING, note: 'Print files ready' },
+      'u1',
+      UserRole.CREATOR,
+    );
+    expect(checklist.logAutoAdvance).toHaveBeenCalledWith(
+      'o1',
+      { id: 'u1', name: 'Anna' },
+      {
+        from: OrderStatus.CONFIRMED,
+        to: OrderStatus.MANUFACTURING,
+        reason: 'print_ready',
+      },
+    );
+    // A second READY file of the same order (or a replay) is a no-op.
+    state.status = OrderStatus.CONFIRMED;
+    orders.updateStatus.mockClear();
+    expect(await service.onPrintReady('o1', 's1')).toBeUndefined();
+    expect(orders.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('on_print_ready waits for every live design of the order to be READY', async () => {
+    const { service, orders } = build(
+      { on_print_ready: 'PROCESSING' },
+      OrderStatus.CONFIRMED,
+      ['PROCESSING'],
+      ['READY', 'RENDERING'],
+    );
+    expect(await service.onPrintReady('o1', 's1')).toBeUndefined();
+    expect(orders.updateStatus).not.toHaveBeenCalled();
+    // An order without designs never moves on this hook either.
+    const noDesigns = build(
+      { on_print_ready: 'PROCESSING' },
+      OrderStatus.CONFIRMED,
+      ['PROCESSING'],
+      [],
+    );
+    expect(await noDesigns.service.onPrintReady('o1', 's1')).toBeUndefined();
+    expect(noDesigns.orders.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('on_print_ready is forward-only: never past the current status, never SHIPPED', async () => {
+    // Already MANUFACTURING: PROCESSING would be a step back.
+    const ahead = build(
+      { on_print_ready: 'PROCESSING' },
+      OrderStatus.MANUFACTURING,
+      ['MANUFACTURING'],
+    );
+    expect(await ahead.service.onPrintReady('o1', 's1')).toBeUndefined();
+    expect(ahead.orders.updateStatus).not.toHaveBeenCalled();
+    // A line already at the target: nothing to move.
+    const lineAhead = build(
+      { on_print_ready: 'MANUFACTURING' },
+      OrderStatus.PROCESSING,
+      ['MANUFACTURING'],
+    );
+    expect(await lineAhead.service.onPrintReady('o1', 's1')).toBeUndefined();
+    // SHIPPED is not an accepted value: read as the default (none).
+    const shipped = build(
+      { on_print_ready: 'SHIPPED' },
+      OrderStatus.CONFIRMED,
+      ['PROCESSING'],
+    );
+    expect(await shipped.service.onPrintReady('o1', 's1')).toBeUndefined();
+    expect(shipped.orders.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('a failing updateStatus in the print-ready step is swallowed (retried on the next READY file)', async () => {
+    const { service, orders } = build(
+      { on_print_ready: 'MANUFACTURING' },
+      OrderStatus.CONFIRMED,
+      ['PROCESSING'],
+    );
+    orders.updateStatus.mockRejectedValueOnce(new Error('db down'));
+    expect(await service.onPrintReady('o1', 's1')).toBeUndefined();
+    expect(await service.onPrintReady('o1', 's1')).toBe(
+      OrderStatus.MANUFACTURING,
+    );
   });
 
   it('retryPending (workspace read) runs an owed advance, e.g. after a sync-driven READY', async () => {

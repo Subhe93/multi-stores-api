@@ -1,29 +1,32 @@
 import { Injectable, Provider } from '@nestjs/common';
-import { decodeHtmlEntities, type HtmlSanitizer } from '../model/clean';
+import sanitizeHtml from 'sanitize-html';
+import {
+  decodeHtmlEntities,
+  HTML_ALLOWED_ATTRIBUTES,
+  HTML_ALLOWED_TAGS,
+  type HtmlSanitizer,
+} from '../model/clean';
 
 /**
  * HTML sanitizer seam of the importer (M4.4 D11, §4.3 step 4).
  *
- * STATUS: the `sanitize-html` dependency the design calls for (allowlist in
- * `model/clean.ts`: `HTML_ALLOWED_TAGS` / `HTML_ALLOWED_ATTRIBUTES`) is
- * PENDING APPROVAL (M4-INTEGRATION B2) and is not installed. No allowlist
- * sanitizer is written by hand in its place.
+ * Two implementations share the `IMPORTER_HTML_SANITIZER` token:
  *
- * WHAT RUNS TODAY: the token is bound to `PlainTextHtmlSanitizer`
- * (`mode: 'plain_text_fallback'`). It keeps no source markup: the HTML is
- * tokenized only to find paragraph / line boundaries and to drop the content
- * of script, style, iframe, form and similar elements; every tag and
- * attribute is discarded, the remaining text is HTML-escaped, and the output
- * is rebuilt as `<p>` / `<br>` that the sanitizer itself generates
- * (`htmlToSafeParagraphs`). Descriptions therefore lose their formatting and
- * inline images, and every plan / run that used it records
- * `W_HTML_SANITIZER_FALLBACK`.
+ * - `AllowlistHtmlSanitizer` (`mode: 'allowlist'`, the default): `sanitize-html`
+ *   with the allowlist of `model/clean.ts` (`HTML_ALLOWED_TAGS` /
+ *   `HTML_ALLOWED_ATTRIBUTES`), http/https URLs only, no inline styles, no
+ *   `on*` handlers, no `javascript:` / `data:` URLs, nested anchors
+ *   flattened, external links get `rel="noopener nofollow"`, and `<img>` kept
+ *   only when its host is allowed (the source host and the run option
+ *   `inline_image_hosts`; without a context the caller is expected to have
+ *   filtered hosts already, as `mapping/map-product.ts` does).
+ * - `PlainTextHtmlSanitizer` (`mode: 'plain_text_fallback'`): keeps no source
+ *   markup at all (text rebuilt as `<p>` / `<br>`). Selected with the env
+ *   `IMPORTER_HTML_SANITIZER=plain` for emergencies; every plan / run that
+ *   used it records `W_HTML_SANITIZER_FALLBACK`.
  *
- * Switching to the real sanitizer once approved is one place: implement
- * `ImporterHtmlSanitizer` with `mode: 'allowlist'` over `sanitize-html`
- * (allowedTags = HTML_ALLOWED_TAGS, allowedAttributes =
- * HTML_ALLOWED_ATTRIBUTES, allowedSchemes http/https/mailto) and change
- * `useClass` in `importerHtmlSanitizerProvider` below.
+ * The sanitized HTML is part of the ledger `source_hash`, so switching the
+ * sanitizer makes every product with markup an UPDATE on the next run.
  */
 
 export const IMPORTER_HTML_SANITIZER = Symbol('IMPORTER_HTML_SANITIZER');
@@ -31,9 +34,34 @@ export const IMPORTER_HTML_SANITIZER = Symbol('IMPORTER_HTML_SANITIZER');
 /** Warning code recorded in every plan/run that used the fallback. */
 export const W_HTML_SANITIZER_FALLBACK = 'W_HTML_SANITIZER_FALLBACK';
 
+/** Env switch: `IMPORTER_HTML_SANITIZER=plain` binds the plain-text fallback. */
+export const IMPORTER_HTML_SANITIZER_ENV = 'IMPORTER_HTML_SANITIZER';
+
+/**
+ * Optional host context for `<img>` / `<a>` decisions. Without it every
+ * http(s) image is kept and every absolute link counts as external.
+ */
+export interface HtmlSanitizeContext {
+  /** Host of the source site (images there are rewritten by the media pipeline). */
+  source_host?: string | null;
+  /** Extra hosts whose inline images are kept (run option `inline_image_hosts`). */
+  image_hosts?: readonly string[];
+}
+
+export interface HtmlSanitizeResult {
+  html: string;
+  /** True when sanitizing removed or rewrote markup (→ `W_HTML_SANITIZED`). */
+  changed: boolean;
+  /** `<img>` dropped for their host or URL scheme (→ `W_HTML_IMAGE_REMOVED`). */
+  images_removed: number;
+}
+
 export interface ImporterHtmlSanitizer extends HtmlSanitizer {
   /** `allowlist` = real sanitizer; `plain_text_fallback` = markup dropped. */
   readonly mode: 'allowlist' | 'plain_text_fallback';
+  sanitize(html: string, ctx?: HtmlSanitizeContext): string;
+  /** `sanitize` plus what it changed, for warnings. */
+  sanitizeDetailed(html: string, ctx?: HtmlSanitizeContext): HtmlSanitizeResult;
 }
 
 /** Elements whose content is dropped together with the element. */
@@ -250,7 +278,7 @@ export function htmlToSafeParagraphs(html: string | null | undefined): string {
     .join('');
 }
 
-/** Safe fallback bound until `sanitize-html` is approved (see the file header). */
+/** Plain-text fallback (`IMPORTER_HTML_SANITIZER=plain`). */
 @Injectable()
 export class PlainTextHtmlSanitizer implements ImporterHtmlSanitizer {
   readonly mode = 'plain_text_fallback' as const;
@@ -258,10 +286,247 @@ export class PlainTextHtmlSanitizer implements ImporterHtmlSanitizer {
   sanitize(html: string): string {
     return htmlToSafeParagraphs(html);
   }
+
+  sanitizeDetailed(html: string): HtmlSanitizeResult {
+    const out = htmlToSafeParagraphs(html);
+    return {
+      html: out,
+      changed: out !== (html ?? ''),
+      images_removed: (html ?? '').match(/<img\b/gi)?.length ?? 0,
+    };
+  }
 }
 
-/** The one binding to change when the allowlist sanitizer lands. */
+// ── Allowlist sanitizer ───────────────────────────────────────────────────
+
+/** Elements whose text content is dropped with the element (sanitize-html `nonTextTags`). */
+const NON_TEXT_TAGS = [
+  'script',
+  'style',
+  'textarea',
+  'option',
+  'select',
+  'noscript',
+  'template',
+  'iframe',
+  'object',
+  'embed',
+  'svg',
+  'math',
+  'head',
+  'title',
+  'xmp',
+  'noembed',
+  'noframes',
+  'canvas',
+  'audio',
+  'video',
+  'button',
+];
+
+const URL_SCHEMES = ['http', 'https'];
+const DIMENSION_RE = /^\d{1,5}$/;
+
+/**
+ * Classifies a URL attribute: `relative` (no scheme, so on the source
+ * host; `//host/...` is rewritten to https and treated as absolute),
+ * `absolute` http(s) with its host, or `rejected` (any other scheme,
+ * `javascript:`, `data:`, unparsable).
+ */
+function classifyUrl(
+  raw: string,
+):
+  | { kind: 'relative' }
+  | { kind: 'absolute'; url: string; host: string }
+  | null {
+  const value = (raw ?? '').trim();
+  if (!value) return null;
+  if (value.startsWith('//')) return classifyUrl(`https:${value}`);
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(value)) {
+    // No scheme at all. A control character or a stray colon later on is
+    // still a scheme attempt for some browsers: let sanitize-html decide.
+    // eslint-disable-next-line no-control-regex
+    return /^[\s\u0000-\u001f]*(javascript|data|vbscript)\s*:/i.test(value)
+      ? null
+      : { kind: 'relative' };
+  }
+  try {
+    const u = new URL(value);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    const host = u.hostname.toLowerCase();
+    return host ? { kind: 'absolute', url: u.toString(), host } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * sanitize-html keeps `<a>` inside `<a>` (htmlparser2 does not auto-close
+ * it); the inner anchor's tags are removed, its text stays. The input is
+ * sanitize-html output, so every tag is well formed and attribute values
+ * are entity-escaped (no `>` inside them).
+ */
+export function unnestAnchors(html: string): string {
+  if (!/<\/?a\b/i.test(html)) return html;
+  let depth = 0;
+  return html.replace(/<a\b[^>]*>|<\/a\s*>/gi, (tag) => {
+    if (tag[1] === '/') {
+      if (depth === 0) return '';
+      depth--;
+      return depth === 0 ? tag : '';
+    }
+    depth++;
+    return depth === 1 ? tag : '';
+  });
+}
+
+const BLOCK_TAG_RE =
+  /<(p|div|ul|ol|li|h[1-6]|table|blockquote|pre|section|article|figure|hr)\b/i;
+
+/**
+ * WordPress stores content without `<p>` and applies `wpautop` at render
+ * time. Content that has no block element at all but does have newlines
+ * gets the same treatment (blank line = paragraph, newline = `<br>`), so
+ * the storefront, which renders the stored HTML as is, keeps the breaks.
+ * Content that already carries block markup is left alone.
+ */
+export function autoParagraphs(html: string): string {
+  if (!/\n/.test(html) || BLOCK_TAG_RE.test(html)) return html;
+  const text = html.replace(/\r\n?/g, '\n').trim();
+  if (!text) return '';
+  return text
+    .split(/\n[ \t]*\n+/)
+    .map((p) => p.trim())
+    .filter((p) => p !== '')
+    .map((p) => `<p>${p.replace(/[ \t]*\n[ \t]*/g, '<br />')}</p>`)
+    .join('');
+}
+
+/**
+ * The real D11 sanitizer. Pure and stateless: one instance serves every
+ * run; the host context is passed per call.
+ */
+@Injectable()
+export class AllowlistHtmlSanitizer implements ImporterHtmlSanitizer {
+  readonly mode = 'allowlist' as const;
+
+  sanitize(html: string, ctx: HtmlSanitizeContext = {}): string {
+    return this.run(html, ctx).html;
+  }
+
+  sanitizeDetailed(
+    html: string,
+    ctx: HtmlSanitizeContext = {},
+  ): HtmlSanitizeResult {
+    const r = this.run(html, ctx);
+    // "Changed" compares against the same serializer with nothing removed,
+    // so `<br/>` → `<br />` re-serialization alone never counts as a change.
+    const canonical = sanitizeHtml(autoParagraphs(html ?? ''), {
+      allowedTags: false,
+      allowedAttributes: false,
+      allowVulnerableTags: true,
+      allowProtocolRelative: true,
+      nonTextTags: [],
+    });
+    return {
+      html: r.html,
+      changed: r.html !== canonical.trim() || r.images_removed > 0,
+      images_removed: r.images_removed,
+    };
+  }
+
+  private run(
+    html: string,
+    ctx: HtmlSanitizeContext,
+  ): { html: string; images_removed: number } {
+    const sourceHost = ctx.source_host?.toLowerCase() || null;
+    const imageHosts = new Set(
+      [sourceHost, ...(ctx.image_hosts ?? [])]
+        .filter((h): h is string => !!h)
+        .map((h) => h.toLowerCase()),
+    );
+    const restrictImages = sourceHost !== null || imageHosts.size > 0;
+    let images_removed = 0;
+    const out = sanitizeHtml(autoParagraphs(html ?? ''), {
+      allowedTags: [...HTML_ALLOWED_TAGS],
+      allowedAttributes: Object.fromEntries(
+        Object.entries(HTML_ALLOWED_ATTRIBUTES).map(([k, v]) => [k, [...v]]),
+      ),
+      allowedSchemes: URL_SCHEMES,
+      allowedSchemesAppliedToAttributes: ['href', 'src'],
+      allowProtocolRelative: false,
+      disallowedTagsMode: 'discard',
+      nonTextTags: NON_TEXT_TAGS,
+      parseStyleAttributes: false,
+      transformTags: {
+        a: (tagName, attribs) => {
+          const link = classifyUrl(attribs.href ?? '');
+          const external =
+            link?.kind === 'absolute' && link.host !== sourceHost;
+          const rel = new Set(
+            (attribs.rel ?? '')
+              .toLowerCase()
+              .split(/\s+/)
+              .filter((t) => /^(nofollow|noopener|noreferrer)$/.test(t)),
+          );
+          const blank = attribs.target === '_blank';
+          if (external || blank) {
+            rel.add('noopener');
+            if (external) rel.add('nofollow');
+          }
+          const kept: Record<string, string> = {};
+          // Rejected schemes are left to sanitize-html's own check (dropped).
+          if (link?.kind === 'absolute') kept.href = link.url;
+          else if (attribs.href) kept.href = attribs.href;
+          if (attribs.title) kept.title = attribs.title;
+          if (blank) kept.target = '_blank';
+          if (rel.size) kept.rel = [...rel].sort().join(' ');
+          return { tagName, attribs: kept };
+        },
+        img: (tagName, attribs) => {
+          const kept: Record<string, string> = {};
+          const src = classifyUrl(attribs.src ?? '');
+          // Relative = on the source host; absolute = host must be allowed.
+          const keep =
+            src?.kind === 'relative' ||
+            (src?.kind === 'absolute' &&
+              (!restrictImages || imageHosts.has(src.host)));
+          if (keep) {
+            kept.src = src.kind === 'absolute' ? src.url : attribs.src.trim();
+            if (attribs.alt !== undefined) kept.alt = attribs.alt;
+            if (DIMENSION_RE.test(attribs.width ?? ''))
+              kept.width = attribs.width;
+            if (DIMENSION_RE.test(attribs.height ?? ''))
+              kept.height = attribs.height;
+          }
+          return { tagName, attribs: kept };
+        },
+      },
+      // Images without an acceptable src are dropped as a whole, not kept as `<img />`.
+      exclusiveFilter: (frame) => {
+        if (frame.tag === 'img' && !frame.attribs.src) {
+          images_removed++;
+          return true;
+        }
+        return false;
+      },
+    });
+    return { html: unnestAnchors(out).trim(), images_removed };
+  }
+}
+
+/** `IMPORTER_HTML_SANITIZER=plain` → fallback; anything else → allowlist. */
+export function createImporterHtmlSanitizer(
+  env: NodeJS.ProcessEnv = process.env,
+): ImporterHtmlSanitizer {
+  return (env[IMPORTER_HTML_SANITIZER_ENV] ?? '').trim().toLowerCase() ===
+    'plain'
+    ? new PlainTextHtmlSanitizer()
+    : new AllowlistHtmlSanitizer();
+}
+
+/** Nest binding of the token (resolved once at boot from the env). */
 export const importerHtmlSanitizerProvider: Provider = {
   provide: IMPORTER_HTML_SANITIZER,
-  useClass: PlainTextHtmlSanitizer,
+  useFactory: () => createImporterHtmlSanitizer(),
 };

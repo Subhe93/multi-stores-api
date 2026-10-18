@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import {
+  DesignPrintStatus,
   FulfillerType,
   FulfillmentStatus,
   OrderStatus,
@@ -14,6 +15,7 @@ import {
   type ProductionSettings,
 } from './production-settings';
 import { ProductionChecklistService } from './production-checklist.service';
+import { ProductionTriggersService } from './production-triggers.service';
 import type {
   ProductionActor,
   ProductionSummaryView,
@@ -41,7 +43,21 @@ const ITEM_RANK: Record<FulfillmentStatus, number> = {
 
 export interface ProductionSuggestion {
   next_status: ProductionCompleteTarget;
+  /** SHIPPED only (M5.4 `ship_prompt`): the dashboard asks for tracking. */
+  ask_tracking: boolean;
+  /** SHIPPED only: the move is refused by the dashboard until it is entered. */
+  requires_tracking: boolean;
 }
+
+/** AUTO_ADVANCE event payload reason of the print-ready step (M5.4). */
+export const PRINT_READY_REASON = 'print_ready';
+
+/** Statuses the print-ready step may leave, per target (forward-only). */
+const PRINT_READY_FROM: Record<'PROCESSING' | 'MANUFACTURING', OrderStatus[]> =
+  {
+    PROCESSING: [OrderStatus.CONFIRMED],
+    MANUFACTURING: [OrderStatus.CONFIRMED, OrderStatus.PROCESSING],
+  };
 
 export interface ProductionAutomationResult {
   suggestion: ProductionSuggestion | null;
@@ -67,7 +83,7 @@ type AdvanceOutcome = 'advanced' | 'skipped' | 'failed';
  * automatic.
  */
 @Injectable()
-export class ProductionAutomationService {
+export class ProductionAutomationService implements OnModuleInit {
   private readonly logger = new Logger(ProductionAutomationService.name);
 
   constructor(
@@ -75,7 +91,15 @@ export class ProductionAutomationService {
     private readonly storeApps: StoreAppsService,
     private readonly orders: OrdersService,
     private readonly checklist: ProductionChecklistService,
+    private readonly triggers?: ProductionTriggersService,
   ) {}
+
+  /** The print queue reaches this service through the core triggers (M5.4). */
+  onModuleInit(): void {
+    this.triggers?.registerPrintReadyHandler(async (orderId, storeId) => {
+      await this.onPrintReady(orderId, storeId);
+    });
+  }
 
   async settingsOf(storeId: string): Promise<ProductionSettings> {
     return normalizeProductionSettings(
@@ -97,7 +121,71 @@ export class ProductionAutomationService {
     if (rank === undefined || target === undefined || rank >= target) {
       return null;
     }
-    return { next_status: settings.complete_target };
+    const shipping = settings.complete_target === 'SHIPPED';
+    return {
+      next_status: settings.complete_target,
+      ask_tracking: shipping && settings.ship_prompt !== 'none',
+      requires_tracking:
+        shipping && settings.ship_prompt === 'tracking_required',
+    };
+  }
+
+  /**
+   * M5.4 `on_print_ready`: the designer rendered a print file of the order.
+   * Once every live design of the order is READY, the store's own lines
+   * move forward to the configured status, once per order (an AUTO_ADVANCE
+   * event with reason `print_ready` is the idempotency mark), never back
+   * and never to SHIPPED (the setting cannot name it). Returns the status
+   * the order moved to, if it did.
+   */
+  async onPrintReady(
+    orderId: string,
+    storeId: string,
+  ): Promise<OrderStatus | undefined> {
+    const settings = await this.settingsOf(storeId);
+    if (settings.on_print_ready === 'none') return undefined;
+    const to = OrderStatus[settings.on_print_ready];
+    const [designs, already, store] = await Promise.all([
+      this.prisma.orderItemDesign.findMany({
+        where: { order_id: orderId, terminal_at: null },
+        select: { print_status: true },
+      }),
+      this.prisma.orderProductionEvent.findFirst({
+        where: {
+          order_id: orderId,
+          action: 'AUTO_ADVANCE',
+          payload: { path: ['reason'], equals: PRINT_READY_REASON },
+        },
+        select: { id: true },
+      }),
+      this.prisma.store.findUnique({
+        where: { id: storeId },
+        select: {
+          creator: {
+            select: { id: true, user_id: true, display_name: true },
+          },
+        },
+      }),
+    ]);
+    if (
+      already ||
+      !store?.creator ||
+      designs.length === 0 ||
+      designs.some((d) => d.print_status !== DesignPrintStatus.READY)
+    ) {
+      return undefined;
+    }
+    const outcome = await this.advance(
+      {
+        creatorId: store.creator.id,
+        actor: { id: store.creator.user_id, name: store.creator.display_name },
+      },
+      orderId,
+      to,
+      PRINT_READY_FROM[settings.on_print_ready],
+      { note: 'Print files ready', reason: PRINT_READY_REASON },
+    );
+    return outcome === 'advanced' ? to : undefined;
   }
 
   /**
@@ -217,6 +305,7 @@ export class ProductionAutomationService {
     orderId: string,
     to: OrderStatus,
     from: OrderStatus[],
+    detail: { note?: string; reason?: string } = {},
   ): Promise<AdvanceOutcome> {
     try {
       const order = await this.prisma.order.findUnique({
@@ -245,9 +334,10 @@ export class ProductionAutomationService {
         {
           status: to,
           note:
-            to === OrderStatus.QUALITY_CHECK
+            detail.note ??
+            (to === OrderStatus.QUALITY_CHECK
               ? 'Production checklist completed'
-              : 'Production started',
+              : 'Production started'),
         },
         ctx.actor.id,
         UserRole.CREATOR,
@@ -255,6 +345,7 @@ export class ProductionAutomationService {
       await this.checklist.logAutoAdvance(orderId, ctx.actor, {
         from: order.status,
         to,
+        ...(detail.reason ? { reason: detail.reason } : {}),
       });
       return 'advanced';
     } catch (err) {

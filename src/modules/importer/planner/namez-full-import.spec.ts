@@ -3,6 +3,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { NAMEZ_EXPORT_DIR } from '../adapters/wp-bundle/__fixtures__/fixtures';
 import { makeHarness, NAMEZ_OPTIONS } from '../__fixtures__/harness';
+import { SYSTEM_REDIRECTS } from '../mapping/map-redirects';
 
 /**
  * Full read-only Namez export (legacy bundle, 2026-10-15) through the whole
@@ -15,6 +16,11 @@ const available = existsSync(join(NAMEZ_EXPORT_DIR, 'posts.tsv'));
 const describeIfExport = available ? describe : describe.skip;
 
 type Item = { entity_type: string; external_ref: string; action: string };
+/** System rows that become redirects: `/shop/`, `/my-account/`, `/wp-login.php` (302), feeds, Rank Math sitemaps. */
+const SYSTEM_ROWS = SYSTEM_REDIRECTS.filter(
+  (r) => r.from.replace(/\/$/, '') !== r.to,
+);
+const SYSTEM_FROM = new Set(SYSTEM_ROWS.map((r) => r.from.replace(/\/$/, '')));
 const keys = (items: Item[]) =>
   new Set(items.map((i) => `${i.entity_type}|${i.external_ref}|${i.action}`));
 
@@ -35,7 +41,17 @@ describeIfExport('Namez full export — dry run, apply, re-run (§12.3)', () => 
     expect(c.PERSONALIZATION).toEqual({ CREATE: 14, SKIP: 1 });
     expect(c.FALLBACK_FIELD).toEqual({ CREATE: 24 });
     expect(c.DESIGN_TEMPLATE).toEqual({ STAGE: 10 });
-    expect(c.REDIRECT).toEqual({ CREATE: 194 });
+    // 194 catalog rows (§12.3) + the WordPress system paths (M5 B17 W2-B):
+    // `/cart/` and `/checkout/` already are the platform paths → no row.
+    expect(SYSTEM_ROWS).toHaveLength(13);
+    expect(c.REDIRECT).toEqual({ CREATE: 194 + SYSTEM_ROWS.length });
+    const byRule = (run.summary as any).redirects.by_rule;
+    expect(byRule.system).toBe(SYSTEM_ROWS.length);
+    expect(
+      Object.entries(byRule)
+        .filter(([rule]) => rule !== 'system')
+        .reduce((n, [, v]) => n + (v as number), 0),
+    ).toBe(194);
     expect((run.summary as any).plan.blockers).toEqual([]);
 
     const done = await h.apply(run.id);
@@ -54,7 +70,18 @@ describeIfExport('Namez full export — dry run, apply, re-run (§12.3)', () => 
         (x: any) => x.is_active && x.noindex_when_empty,
       ),
     ).toBe(true);
-    expect(h.db.storeRedirect.rows).toHaveLength(194);
+    expect(h.db.storeRedirect.rows).toHaveLength(194 + SYSTEM_ROWS.length);
+    const systemRows = h.db.storeRedirect.rows
+      .filter((r: any) => SYSTEM_FROM.has(r.from_path))
+      .map((r: any) => [r.from_path, r.to_path, r.status_code])
+      .sort();
+    expect(systemRows).toEqual(
+      SYSTEM_ROWS.map((r) => [
+        r.from.replace(/\/$/, ''),
+        r.to,
+        r.status_code,
+      ]).sort(),
+    );
     expect(
       h.db.productCustomField.rows.filter(
         (f: any) => f.preset_key === 'npp_fallback',

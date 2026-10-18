@@ -64,11 +64,17 @@ describe('bundle store', () => {
     });
     await expect(
       validateBundleFiles([file('../posts.tsv'), file('postmeta.tsv')]),
-    ).resolves.toBeUndefined();
+    ).resolves.toHaveLength(2);
     await expect(
       validateBundleFiles([file('bundle.zip')]),
     ).rejects.toMatchObject({
       response: { code: 'IMPORT_BUNDLE_INVALID_ARCHIVE' },
+    });
+    // One archive OR the plain files, never both.
+    await expect(
+      validateBundleFiles([file('bundle.zip'), file('posts.tsv')]),
+    ).rejects.toMatchObject({
+      response: { code: 'IMPORT_BUNDLE_UNEXPECTED_FILE' },
     });
   });
 

@@ -29,8 +29,9 @@ const seMarket: MarketContext = {
   hostnames: ['namez.se'],
 };
 
-function build(market: MarketContext | null) {
+function build(market: MarketContext | null, storeOver: Record<string, unknown> = {}) {
   const store = {
+    ...storeOver,
     id: 's1',
     slug: 'namez',
     name: 'Namez',
@@ -173,6 +174,54 @@ describe('StorefrontService.getStore payload', () => {
     expect(payload.markets).toHaveLength(1);
     // Kustom availability is judged against the market currency.
     expect(payload.kustom_enabled).toBe(true);
+  });
+});
+
+// Checkout behaviour (M5 W2-A): the raw `checkout_settings` column never
+// travels, and the public `checkout` key exists only for a store that
+// overrides a default — so every existing store's payload is byte-identical.
+describe('StorefrontService.getStore checkout settings (M5.1)', () => {
+  it('G0: no column value (legacy row / NULL) → neither checkout nor checkout_settings key', async () => {
+    for (const over of [{}, { checkout_settings: null }]) {
+      const { service } = build(null, over);
+      const payload = await service.getStore('namez');
+      expect(Object.keys(payload)).not.toContain('checkout');
+      expect(Object.keys(payload)).not.toContain('checkout_settings');
+    }
+  });
+
+  it('G0: a stored all-default object projects to nothing either', async () => {
+    const { service } = build(null, {
+      checkout_settings: {
+        after_add_to_cart: 'stay',
+        phone_required: false,
+        pay_button_label: null,
+        coupon_param: ['coupon'],
+        coupon_autoapply: false,
+      },
+    });
+    const payload = await service.getStore('namez');
+    expect(Object.keys(payload)).not.toContain('checkout');
+  });
+
+  it('with overrides: a full normalized `checkout` block, raw column stripped', async () => {
+    const { service } = build(null, {
+      checkout_settings: {
+        after_add_to_cart: 'checkout',
+        pay_button_label: { sv: 'Betala med kort' },
+        coupon_param: ['coupon', 'coupon1'],
+        coupon_autoapply: true,
+      },
+    });
+    const payload = (await service.getStore('namez')) as Record<string, unknown>;
+    expect(payload.checkout).toEqual({
+      after_add_to_cart: 'checkout',
+      phone_required: false,
+      pay_button_label: { sv: 'Betala med kort' },
+      coupon_param: ['coupon', 'coupon1'],
+      coupon_autoapply: true,
+    });
+    expect(Object.keys(payload)).not.toContain('checkout_settings');
   });
 });
 

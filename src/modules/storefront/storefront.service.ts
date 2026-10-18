@@ -33,6 +33,7 @@ import {
 import type { PFieldDef } from '../../common/personalization/types';
 import { DesignerTemplatesService } from '../designer/designer-templates.service';
 import { countPublishedInCollections } from './collection-counts';
+import { publicCheckoutSettings } from '../stores/checkout-settings';
 
 /** The legacy freeform Store.theme_config JSON as getStore() reads it. */
 interface LegacyThemeConfig {
@@ -56,6 +57,48 @@ interface PromotionConditions {
 
 /** A variant row plus the custom price its CustomProductVariant carries. */
 type PricedVariant = ProductVariant & { _custom_price?: number };
+
+/**
+ * Feed data (M5.6) is merchant-only: gtin / mpn / google_product_category /
+ * condition / feed_excluded never reach the storefront, and `brand` is
+ * served only when set (products without it keep their pre-feeds payload).
+ */
+export function withoutFeedFields<
+  T extends {
+    gtin?: unknown;
+    mpn?: unknown;
+    brand?: unknown;
+    google_product_category?: unknown;
+    condition?: unknown;
+    feed_excluded?: unknown;
+  },
+>(
+  p: T,
+): Omit<
+  T,
+  | 'gtin'
+  | 'mpn'
+  | 'brand'
+  | 'google_product_category'
+  | 'condition'
+  | 'feed_excluded'
+> & { brand?: string } {
+  const {
+    gtin: _gtin,
+    mpn: _mpn,
+    brand,
+    google_product_category: _gpc,
+    condition: _condition,
+    feed_excluded: _excluded,
+    ...rest
+  } = p;
+  void _gtin;
+  void _mpn;
+  void _gpc;
+  void _condition;
+  void _excluded;
+  return typeof brand === 'string' && brand ? { ...rest, brand } : rest;
+}
 
 /** Drops the importer identity (`external_ref`) from a variant before it is served. */
 export function publicVariant<T extends { external_ref?: unknown }>(
@@ -418,8 +461,13 @@ export class StorefrontService {
       ...store.static_pages.filter((p) => !v2Slugs.has(p.slug)),
     ];
 
+    // Checkout behaviour (M5.1): the raw column never travels; the public
+    // `checkout` key is added below only when the store overrides a default.
+    const { checkout_settings: rawCheckoutSettings, ...storeRow } = store;
+    const checkout = publicCheckoutSettings(rawCheckoutSettings);
+
     return {
-      ...store,
+      ...storeRow,
       // Independent stores may price in their own currency; everyone else
       // shows the platform default.
       currency: resolveStoreCurrency(store, platformConfig?.default_currency),
@@ -458,6 +506,8 @@ export class StorefrontService {
       // Enabled store apps keyed by app key; always present (`{}` when none)
       // so the storefront payload has a stable shape.
       apps,
+      // Checkout behaviour overrides — only present when non-default.
+      ...(checkout ? { checkout } : {}),
       pages: mergedPages,
       // New theme system: storefront resolves the registry by theme_key and
       // merges theme_customizations on top.
@@ -714,7 +764,7 @@ export class StorefrontService {
     // cost_price is a merchant-only margin input; never serve it publicly.
     const mappedOwn = ownProducts.map(
       ({ cost_price: _costPrice, external_ref: _externalRef, ...p }) => ({
-        ...p,
+        ...withoutFeedFields(p),
         base_price: Number(p.base_price),
         compare_at_price: p.compare_at_price
           ? Number(p.compare_at_price)
@@ -965,8 +1015,9 @@ export class StorefrontService {
       const {
         cost_price: _costPrice,
         external_ref: _externalRef,
-        ...publicProduct
+        ...ownerProduct
       } = product;
+      const publicProduct = withoutFeedFields(ownerProduct);
       // Designer app (M4.2 §4.1): the editor block, only when the app is on
       // and the product's link is enabled; the key is absent otherwise.
       const designer = this.designerTemplates

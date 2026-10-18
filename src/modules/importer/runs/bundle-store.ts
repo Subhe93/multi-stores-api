@@ -9,21 +9,22 @@ import {
   BUNDLE_DEFAULT_MAX_FILE_BYTES,
   BundleReadError,
   DirectoryBundleReader,
-  openArchiveBundle,
   type BundleReader,
 } from '../adapters/bundle-reader';
+import { extractArchive, isArchiveName } from '../adapters/archive-bundle';
 import { isAllowedBundleFile } from '../adapters/wp-bundle/bundle-schema';
 import type { NormalizedCatalog } from '../model/normalized';
 import { importError } from '../importer.errors';
 
 /**
- * Bundle upload without an archive dependency (M4-INTEGRATION B2 pending):
- * the merchant uploads the extracted bundle files themselves (allowlisted
- * names only, §2.1). They are kept in private storage under
- * `importer/<storeId>/bundles/<runId>/<name>` with an `index.json` listing
- * them; `StorageBundleReader` serves them to the WordPress adapter.
- * An archive upload (`.zip` / `.tgz`) still goes through `openArchiveBundle`,
- * which rejects with IMPORT_BUNDLE_INVALID_ARCHIVE until `fflate` lands.
+ * Bundle upload: the merchant uploads either ONE archive (`file`: the
+ * `.tgz` the export script wrote, or a `.zip`) or the extracted bundle
+ * files themselves (`files`, allowlisted names only, §2.1). An archive is
+ * expanded in memory by `extractArchive` (§9.3 limits) inside
+ * `validateBundleFiles`, so everything after it sees plain files: they are
+ * kept in private storage under `importer/<storeId>/bundles/<runId>/<name>`
+ * with an `index.json` listing them; `StorageBundleReader` serves them to
+ * the WordPress adapter.
  */
 
 /**
@@ -42,7 +43,13 @@ export const BUNDLE_DIR_MAX_BYTES = 200 * 1024 * 1024;
 export const BUNDLE_DIR_MAX_FILE_BYTES = 160 * 1024 * 1024;
 export const BUNDLE_MAX_FILES = 64;
 const INDEX_NAME = 'index.json';
-const ARCHIVE_RE = /\.(zip|tgz|tar\.gz|gz|tar)$/i;
+/** Anything archive-like; only `.zip` / `.tgz` / `.tar.gz` are then accepted. */
+const ARCHIVE_LIKE_RE = /\.(zip|tgz|tar\.gz|gz|tar|rar|7z)$/i;
+
+export interface BundleLimits {
+  maxTotalBytes?: number;
+  maxFileBytes?: number;
+}
 
 export interface UploadedBundleFile {
   originalname: string;
@@ -135,33 +142,87 @@ function baseName(name: string): string {
 }
 
 /**
- * Upload checks: allowlisted names, no duplicates, ≤ 64 files, ≤ 50 MB in
- * total (`maxTotalBytes`: 200 MB for admin directory bundles); archives are
- * refused.
+ * One archive (`.zip` / `.tgz` / `.tar.gz`) → its allowlisted entries as
+ * plain bundle files. An archive next to other files, or two archives, is
+ * refused: the client sends ONE archive or the extracted files.
  */
-export async function validateBundleFiles(
+export function expandBundleArchives(
   files: UploadedBundleFile[],
-  maxTotalBytes: number = BUNDLE_UPLOAD_MAX_BYTES,
-): Promise<void> {
-  if (!files.length) {
+  limits: BundleLimits = {},
+): UploadedBundleFile[] {
+  const archives = files.filter((f) =>
+    ARCHIVE_LIKE_RE.test(f.originalname ?? ''),
+  );
+  if (!archives.length) return files;
+  if (archives.length > 1 || files.length > 1) {
+    throw importError(
+      'IMPORT_BUNDLE_UNEXPECTED_FILE',
+      'Upload one archive, or the extracted bundle files, not both',
+      { file: baseName(archives[0].originalname) },
+    );
+  }
+  const archive = archives[0];
+  const name = baseName(archive.originalname);
+  if (!isArchiveName(name)) {
+    throw importError(
+      'IMPORT_BUNDLE_INVALID_ARCHIVE',
+      'Only .zip, .tgz and .tar.gz archives are accepted',
+      { file: name },
+    );
+  }
+  try {
+    const extracted = extractArchive(archive.buffer, name, {
+      maxTotalBytes: limits.maxTotalBytes ?? BUNDLE_UPLOAD_MAX_BYTES,
+      maxEntries: BUNDLE_MAX_FILES,
+    });
+    return extracted.entries.map((e) => ({
+      originalname: e.name,
+      buffer: e.buffer,
+      size: e.buffer.length,
+    }));
+  } catch (e) {
+    if (e instanceof BundleReadError)
+      throw importError(e.code, e.message, { file: name });
+    throw e;
+  }
+}
+
+/**
+ * Upload checks: an archive is expanded first (`expandBundleArchives`),
+ * then allowlisted names, no duplicates, ≤ 64 files, ≤ `maxFileBytes` per
+ * file and ≤ `maxTotalBytes` in total (50 MB / 40 MB for uploads; 200 MB /
+ * 160 MB for admin directory bundles). Returns the plain bundle files.
+ */
+export function validateBundleFiles(
+  input: UploadedBundleFile[],
+  limits: number | BundleLimits = {},
+): Promise<UploadedBundleFile[]> {
+  try {
+    return Promise.resolve(validateBundleFilesSync(input, limits));
+  } catch (e) {
+    return Promise.reject(e as Error);
+  }
+}
+
+function validateBundleFilesSync(
+  input: UploadedBundleFile[],
+  limits: number | BundleLimits,
+): UploadedBundleFile[] {
+  const l: BundleLimits =
+    typeof limits === 'number' ? { maxTotalBytes: limits } : limits;
+  const maxTotalBytes = l.maxTotalBytes ?? BUNDLE_UPLOAD_MAX_BYTES;
+  const maxFileBytes =
+    l.maxFileBytes ??
+    (maxTotalBytes > BUNDLE_UPLOAD_MAX_BYTES
+      ? BUNDLE_DIR_MAX_FILE_BYTES
+      : BUNDLE_UPLOAD_MAX_FILE_BYTES);
+  if (!input.length) {
     throw importError(
       'IMPORT_BUNDLE_MISSING_FILE',
       'Upload the files of the export bundle',
     );
   }
-  const archive = files.find((f) => ARCHIVE_RE.test(f.originalname ?? ''));
-  if (archive) {
-    try {
-      await openArchiveBundle(archive.buffer, archive.originalname);
-    } catch (e) {
-      const code =
-        e instanceof BundleReadError ? e.code : 'IMPORT_BUNDLE_INVALID_ARCHIVE';
-      throw importError(
-        code,
-        'Archive bundles are not supported yet: extract the archive and upload its files',
-      );
-    }
-  }
+  const files = expandBundleArchives(input, { maxTotalBytes });
   if (files.length > BUNDLE_MAX_FILES) {
     throw importError(
       'IMPORT_BUNDLE_UNEXPECTED_FILE',
@@ -187,6 +248,13 @@ export async function validateBundleFiles(
       );
     }
     seen.add(name);
+    if (f.buffer.length > maxFileBytes) {
+      throw importError(
+        'IMPORT_BUNDLE_TOO_LARGE',
+        `Bundle file larger than ${Math.round(maxFileBytes / (1024 * 1024))} MB: ${name}`,
+        { file: name },
+      );
+    }
     total += f.buffer.length;
   }
   if (total > maxTotalBytes) {
@@ -201,6 +269,7 @@ export async function validateBundleFiles(
       'posts.tsv and postmeta.tsv are required',
     );
   }
+  return files;
 }
 
 export async function storeBundleFiles(
@@ -351,10 +420,12 @@ export function isRelativeBundleDirName(directory: unknown): boolean {
 }
 
 /**
- * Allowlisted files of an extracted bundle directory on the server. The
- * directory must resolve inside `IMPORTER_BUNDLE_DIR_ROOT`; unset = refused.
- * The directory limits (160 MB per file, 200 MB in total; M5 B14) are
- * checked from `lstat` sizes BEFORE any file is read into memory.
+ * Allowlisted files of an extracted bundle directory on the server, or the
+ * one archive (`.tgz` / `.tar.gz` / `.zip`) given instead of a directory
+ * (returned as a single file for `validateBundleFiles` to expand under the
+ * same total). The path must resolve inside `IMPORTER_BUNDLE_DIR_ROOT`;
+ * unset = refused. The directory limits (160 MB per file, 200 MB in total;
+ * M5 B14) are checked from `lstat` sizes BEFORE any file is read into memory.
  */
 export async function readBundleDirectory(
   directory: string,
@@ -385,6 +456,26 @@ export async function readBundleDirectory(
       'IMPORT_BUNDLE_MISSING_FILE',
       'Bundle directory not found below the server bundle root',
     );
+  }
+  const target = await fs.lstat(dir);
+  if (target.isFile()) {
+    const name = path.basename(dir);
+    if (!isArchiveName(name)) {
+      throw importError(
+        'IMPORT_BUNDLE_INVALID_ARCHIVE',
+        'Give a bundle directory or a .tgz / .tar.gz / .zip archive',
+        { file: name },
+      );
+    }
+    if (target.size > maxTotalBytes) {
+      throw importError(
+        'IMPORT_BUNDLE_TOO_LARGE',
+        `The archive is larger than ${Math.round(maxTotalBytes / (1024 * 1024))} MB`,
+        { file: name },
+      );
+    }
+    const buffer = await fs.readFile(dir);
+    return [{ originalname: name, buffer, size: buffer.length }];
   }
   const reader = new DirectoryBundleReader(dir);
   const names = await reader.list();

@@ -27,7 +27,7 @@ import { ImportSourcesService } from './sources/import-sources.service';
 import { ImportRunsService } from './runs/import-runs.service';
 import {
   BUNDLE_MAX_FILES,
-  BUNDLE_UPLOAD_MAX_FILE_BYTES,
+  BUNDLE_UPLOAD_MAX_BYTES,
   boundedBundleStorage,
 } from './runs/bundle-store';
 import { CreateImportSourceDto, UpdateImportSourceDto } from './dto/source.dto';
@@ -132,9 +132,11 @@ export class ImporterCreatorController {
   // ── Runs ──────────────────────────────────────────────────────────────────
 
   /**
-   * Multipart: `source_id`, `options` (JSON string) and the bundle — `file`
-   * (one archive: refused with IMPORT_BUNDLE_INVALID_ARCHIVE until `fflate`
-   * is approved) and/or `files` (the extracted, allowlisted bundle files).
+   * Multipart: `source_id`, `options` (JSON string) and the bundle — EITHER
+   * `file` (one `.tgz` / `.tar.gz` / `.zip` archive, <= 50 MB compressed,
+   * expanded in memory under the §9.3 limits) OR `files` (the extracted,
+   * allowlisted bundle files, <= 40 MB each, <= 50 MB together). Both at
+   * once → 400 IMPORT_BUNDLE_UNEXPECTED_FILE.
    */
   @Post('runs')
   @RequireApp('importer')
@@ -146,9 +148,11 @@ export class ImporterCreatorController {
       ],
       {
         // The 50 MB total is enforced while streaming (nginx: client_max_body_size ~55M).
+        // The per-file cap here only has to admit a 50 MB archive; plain
+        // files are held to BUNDLE_UPLOAD_MAX_FILE_BYTES by validateBundleFiles.
         storage: boundedBundleStorage(),
         limits: {
-          fileSize: BUNDLE_UPLOAD_MAX_FILE_BYTES,
+          fileSize: BUNDLE_UPLOAD_MAX_BYTES,
           files: BUNDLE_MAX_FILES + 1,
         },
       },
@@ -166,11 +170,18 @@ export class ImporterCreatorController {
     // Unsupported source kinds (WC_REST) fail before the empty-bundle check.
     await this.sources.assertBundleKind(storeId, dto.source_id);
     const options = ImportRunsService.parseOptionsField(dto.options);
-    const files = [...(uploaded?.file ?? []), ...(uploaded?.files ?? [])];
+    const archive = uploaded?.file ?? [];
+    const plain = uploaded?.files ?? [];
+    if (archive.length && plain.length)
+      throw importError(
+        'IMPORT_BUNDLE_UNEXPECTED_FILE',
+        'Send either one archive as "file" or the extracted files as "files"',
+      );
+    const files = [...archive, ...plain];
     if (!files.length)
       throw importError(
         'IMPORT_BUNDLE_MISSING_FILE',
-        'Upload the export bundle',
+        'Upload the export bundle (.tgz / .zip) or its files',
       );
     return this.runs.create(storeId, userId, dto.source_id, options, files);
   }

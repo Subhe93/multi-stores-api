@@ -4,6 +4,7 @@ import { validateInvoiceSettings } from '../../modules/invoices/invoice-settings
 import { validatePersonalizationSettings } from '../../modules/personalization/personalization-settings';
 import { validateProductionSettings } from '../../modules/production/production-settings';
 import { validateDesignerSettings } from '../../modules/designer/designer-settings';
+import { validateFeedsSettings } from '../../modules/feeds/feeds-settings';
 
 // Per-app settings validators run by StoreAppsService.updateSettings before
 // the settings object is stored. Pure functions only (no injection), so the
@@ -17,6 +18,7 @@ const SETTINGS_VALIDATORS: Partial<
   personalization: validatePersonalizationSettings,
   production: validateProductionSettings,
   designer: validateDesignerSettings,
+  feeds: validateFeedsSettings,
 };
 
 /** Problems with `settings` for `key`; empty = accepted. */

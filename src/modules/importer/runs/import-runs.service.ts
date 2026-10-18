@@ -32,9 +32,11 @@ import {
 import {
   BUNDLE_DIR_MAX_BYTES,
   deleteBundle,
+  BUNDLE_DIR_MAX_FILE_BYTES,
   readBundleDirectory,
   storeBundleFiles,
   validateBundleFiles,
+  type BundleLimits,
   type UploadedBundleFile,
 } from './bundle-store';
 import type {
@@ -199,7 +201,7 @@ export class ImportRunsService {
     sourceId: string,
     raw: unknown,
     files: UploadedBundleFile[],
-    limits: { maxTotalBytes?: number } = {},
+    limits: BundleLimits = {},
   ): Promise<ImportRunView> {
     const source = await this.sources.get(storeId, sourceId);
     if (source.kind !== 'WP_BUNDLE') {
@@ -211,7 +213,8 @@ export class ImportRunsService {
     const { options, errors } = normalizeRunOptions(raw);
     if (errors.length)
       throw importError('IMPORT_RUN_OPTIONS_INVALID', errors[0], { errors });
-    await validateBundleFiles(files, limits.maxTotalBytes);
+    // An uploaded archive is expanded here; everything below sees plain files.
+    files = await validateBundleFiles(files, limits);
     await this.assertNoActiveRun(storeId);
 
     const runId = randomUUID();
@@ -259,8 +262,8 @@ export class ImportRunsService {
 
   /**
    * Admin / server-side run (e.g. the Namez run): reads an extracted bundle
-   * directory below `IMPORTER_BUNDLE_DIR_ROOT` (unset = disabled) and creates
-   * the run exactly like an upload.
+   * directory (or one `.tgz` / `.zip`) below `IMPORTER_BUNDLE_DIR_ROOT`
+   * (unset = disabled) and creates the run exactly like an upload.
    */
   async createFromDirectory(
     storeId: string,
@@ -272,6 +275,7 @@ export class ImportRunsService {
     const files = await readBundleDirectory(directory);
     return this.create(storeId, userId, sourceId, raw, files, {
       maxTotalBytes: BUNDLE_DIR_MAX_BYTES,
+      maxFileBytes: BUNDLE_DIR_MAX_FILE_BYTES,
     });
   }
 

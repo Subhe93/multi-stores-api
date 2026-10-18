@@ -3,6 +3,7 @@ import { W_HTML_SANITIZER_FALLBACK } from '../html/html-sanitizer';
 import { createPlanContext, type PlanContext } from './plan-context';
 import { planCategories } from './plan-categories';
 import { planMedia } from './plan-media';
+import { planPages } from './plan-pages';
 import { planProducts } from './plan-products';
 import { planRedirects } from './plan-redirects';
 import { planShipping } from './plan-shipping';
@@ -94,7 +95,8 @@ export function planImport(input: PlanInput): ImportPlan {
     products.planned,
     plannedTemplates,
   );
-  const redirects = planRedirects(ctx, categories, products);
+  const plannedPages = planPages(ctx);
+  const redirects = planRedirects(ctx, categories, products, plannedPages);
 
   // ── Summary (report shape of model/dry-run-summary + plan counts) ─────────
   const base = summarizeCatalog(catalog, {
@@ -164,6 +166,12 @@ export function planImport(input: PlanInput): ImportPlan {
       redirected: redirects.byRule.old_slug ?? 0,
       excluded: redirects.excludedOldSlugs,
     },
+    ...(redirects.content
+      ? {
+          content: redirects.content,
+          content_unmapped: redirects.contentUnmapped,
+        }
+      : {}),
     plan: {
       items: ctx.items.length,
       blockers,
@@ -186,6 +194,7 @@ export function planImport(input: PlanInput): ImportPlan {
     removals: products.removals,
     shipping: shippingWork,
     templates: plannedTemplates,
+    pages: plannedPages,
     media: mediaPlan.media,
     media_urls: mediaPlan.mediaUrls,
     redirects: redirects.work,

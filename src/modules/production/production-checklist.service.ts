@@ -791,6 +791,29 @@ export class ProductionChecklistService {
     });
   }
 
+  /**
+   * The order's latest AUTO_ADVANCE event (workspace notice, M5.4): the
+   * print-ready step runs in the worker, so the dashboard learns about it
+   * from here rather than from a write result.
+   */
+  async lastAutoAdvance(
+    orderId: string,
+  ): Promise<{ to: string; reason: string | null; at: Date } | null> {
+    const row = await this.prisma.orderProductionEvent.findFirst({
+      where: { order_id: orderId, action: 'AUTO_ADVANCE' },
+      orderBy: { created_at: 'desc' },
+      select: { payload: true, created_at: true },
+    });
+    if (!row) return null;
+    const p = (row.payload ?? {}) as { to?: unknown; reason?: unknown };
+    if (typeof p.to !== 'string') return null;
+    return {
+      to: p.to,
+      reason: typeof p.reason === 'string' ? p.reason : null,
+      at: row.created_at,
+    };
+  }
+
   /** Append an AUTO_ADVANCE event (automation service). */
   async logAutoAdvance(
     orderId: string,

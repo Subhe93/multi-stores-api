@@ -30,6 +30,21 @@ export const POSTS_COLUMNS = [
   'comment_count',
 ] as const;
 
+/**
+ * Post types of `posts.tsv` (same lists as `WPX_POST_TYPES` /
+ * `WPX_CONTENT_POST_TYPES` in tools/importer/wp-export.sh, checked by
+ * wp-export-format.spec.ts). Catalog types are exported in every status but
+ * trash / auto-draft / inherit; content types (M5 B17) only when published.
+ */
+export const CATALOG_POST_TYPES: readonly string[] = [
+  'product',
+  'product_variation',
+  'npp_template',
+  'acf-field-group',
+  'acf-field',
+];
+export const CONTENT_POST_TYPES: readonly string[] = ['page', 'post'];
+
 export interface TableSpec {
   file: string;
   /** Column order of the legacy bundle (format 0). */
@@ -188,6 +203,10 @@ export const OPTION_ALLOWLIST: readonly string[] = [
   'blogname',
   'WPLANG',
   'permalink_structure',
+  'category_base',
+  'show_on_front',
+  'page_on_front',
+  'page_for_posts',
   'woocommerce_permalinks',
   'woocommerce_currency',
   'woocommerce_price_num_decimals',

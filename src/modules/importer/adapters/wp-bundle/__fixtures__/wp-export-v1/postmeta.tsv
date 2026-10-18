@@ -19,3 +19,6 @@ meta_id	post_id	meta_key	meta_value
 18	210	_price	10
 19	210	_regular_price	10
 20	100	rank_math_description	NULL
+21	600	rank_math_title	Om oss %sep% %sitename%
+22	601	rank_math_robots	a:1:{i:0;s:7:"noindex";}
+23	700	rank_math_description	Vårens nyheter

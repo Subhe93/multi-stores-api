@@ -5,6 +5,8 @@ import {
   BUNDLE_FILE_ALLOWLIST,
   BUNDLE_TABLES,
   BundleTableName,
+  CATALOG_POST_TYPES,
+  CONTENT_POST_TYPES,
   TableSpec,
   OPTION_ALLOWLIST,
   RANK_MATH_GENERAL_ALLOWED_KEYS,
@@ -85,6 +87,38 @@ describe('wp-export.sh ↔ bundle-schema parity', () => {
         'rank-math-options-general',
         'rank-math-options-titles',
       ]).toContain(o);
+  });
+
+  it('exports the catalog and content post types the parser knows (M5 B17)', () => {
+    const quoted = (name: string) =>
+      new RegExp(`^${name}="([^"]*)"$`, 'm')
+        .exec(script)![1]
+        .split(',')
+        .map((x) => x.replace(/^'|'$/g, ''));
+    expect(quoted('WPX_POST_TYPES')).toEqual([...CATALOG_POST_TYPES]);
+    expect(quoted('WPX_CONTENT_POST_TYPES')).toEqual([...CONTENT_POST_TYPES]);
+    // Content types only when published; catalog types in every non-excluded status.
+    expect(script).toContain(
+      "( post_type IN (${WPX_CONTENT_POST_TYPES}) AND post_status = 'publish' )",
+    );
+    // The self-check accepts exactly these post types in posts.tsv.
+    const scan = /\$21 !~ \/\^\(([^)]+)\)\$\//.exec(script);
+    expect(scan).not.toBeNull();
+    expect(scan![1].split('|').sort()).toEqual(
+      [...CATALOG_POST_TYPES, ...CONTENT_POST_TYPES].sort(),
+    );
+    expect(script).toContain('$21 ~ /^(page|post)$/ && $8 != "publish"');
+    // The permalink options the page path needs are exported.
+    const opts = bashArray('WPX_OPTIONS');
+    for (const o of [
+      'permalink_structure',
+      'category_base',
+      'show_on_front',
+      'page_on_front',
+      'page_for_posts',
+    ])
+      expect(opts).toContain(o);
+    expect(script).toContain("'product_shipping_class','category'");
   });
 
   it('keeps the same Rank Math general sub-keys as the parser', () => {
@@ -236,7 +270,7 @@ describe('wp-export v1 fixture → BundleReader → WpBundleAdapter', () => {
 
   it('parses every row without TSV warnings', () => {
     expect(tables.issues.filter((i) => i.code.startsWith('W_TSV'))).toEqual([]);
-    expect(tables.posts.size).toBe(6);
+    expect(tables.posts.size).toBe(9);
     expect(tables.posts.get(100)!.content).toBe(
       '<p>Vit mugg.\nTål diskmaskin\tja.</p>',
     );

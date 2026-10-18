@@ -5,3 +5,4 @@ term_taxonomy_id	term_id	taxonomy	description	parent	count
 11	11	pa_farg		0	1
 12	12	pa_farg		0	1
 20	20	product_shipping_class		0	1
+30	30	category		0	1

@@ -13,6 +13,7 @@ export const STORE_APP_KEYS = [
   'personalization',
   'production',
   'designer',
+  'feeds',
 ] as const;
 
 export type StoreAppKey = (typeof STORE_APP_KEYS)[number];
@@ -124,6 +125,16 @@ export const STORE_APPS: Record<StoreAppKey, StoreAppDefinition> = {
       'min_effective_dpi_warning',
       'shop_button_text',
     ],
+  },
+  // M5.6: Google Merchant / Meta catalog product feeds (public token URLs).
+  // Any store type; settings (token!) never reach the storefront payload.
+  feeds: {
+    key: 'feeds',
+    name_key: 'feeds.name',
+    description_key: 'feeds.description',
+    requires_independent: false,
+    depends_on: [],
+    expose_settings_to_storefront: false,
   },
 };
 

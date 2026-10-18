@@ -15,6 +15,7 @@ export const IMPORT_SCOPES = [
   'personalization',
   'templates',
   'redirects',
+  'pages',
 ] as const;
 export type ImportScope = (typeof IMPORT_SCOPES)[number];
 
@@ -33,7 +34,28 @@ export interface CustomizationTypeRuleOption {
   type: CustomizationType;
 }
 
+/**
+ * M5 B17 content migration: where the old pages / posts go.
+ * - `mode: 'map'` (default): only refs listed in `targets` get a redirect;
+ *   the others are reported as `content_unmapped` for Mapping review.
+ * - `mode: 'home'`: unmapped pages / posts redirect to `/`.
+ * - `mode: 'skip'`: unmapped pages / posts get no redirect.
+ * `targets` is keyed by the page / post ref (`woo:<host>:page:<id>`) or by
+ * one of the WordPress system paths (`/shop/`, `/cart/`, …, to override the
+ * built-in target); values are an absolute path (`/collections/x`), or
+ * `home` (→ `/`), `skip` (no redirect) or, for pages with `scopes.pages`,
+ * `import` (create a draft builder page and redirect to it).
+ */
+export interface ContentRedirectOptions {
+  mode: 'map' | 'home' | 'skip';
+  targets: Record<string, string>;
+}
+
+export const CONTENT_TARGET_KEYWORDS = ['home', 'skip', 'import'] as const;
+export type ContentTargetKeyword = (typeof CONTENT_TARGET_KEYWORDS)[number];
+
 export interface ImportRunOptions {
+  /** `pages` (M5 B17, default off): create draft builder pages for WP pages mapped to `import`. */
   scopes: Record<ImportScope, boolean>;
   platform_category_id: string | null;
   skip_ext_ids: string[];
@@ -73,6 +95,13 @@ export interface ImportRunOptions {
    * to the preset as `help_images` with the uploaded URLs.
    */
   preset_help_images: Record<string, Record<string, string>>;
+  content_redirects: ContentRedirectOptions;
+  /**
+   * D11: hosts (besides the source host) whose inline `<img>` in
+   * descriptions are kept by the sanitizer, e.g. a CDN the shop used.
+   * Default empty: every off-host image is removed (W_HTML_IMAGE_REMOVED).
+   */
+  inline_image_hosts: string[];
 }
 
 /** Preset keys / image keys accepted in `preset_help_images`. */
@@ -92,6 +121,7 @@ export function defaultRunOptions(): ImportRunOptions {
       personalization: true,
       templates: true,
       redirects: true,
+      pages: false,
     },
     platform_category_id: null,
     skip_ext_ids: [],
@@ -125,6 +155,8 @@ export function defaultRunOptions(): ImportRunOptions {
     verify_media: false,
     stock_on_update: 'keep',
     preset_help_images: {},
+    content_redirects: { mode: 'map', targets: {} },
+    inline_image_hosts: [],
   };
 }
 
@@ -206,6 +238,8 @@ export function normalizeRunOptions(input: unknown): {
     'verify_media',
     'stock_on_update',
     'preset_help_images',
+    'content_redirects',
+    'inline_image_hosts',
   ]);
   for (const k of Object.keys(input))
     if (!known.has(k)) errors.push(`unknown option: ${k}`);
@@ -439,5 +473,71 @@ export function normalizeRunOptions(input: unknown): {
       o.preset_help_images = out;
     }
   }
+  if (input.content_redirects !== undefined) {
+    const v = input.content_redirects;
+    if (!isObj(v)) errors.push('content_redirects must be an object');
+    else {
+      oneOf(
+        'content_redirects.mode',
+        v.mode,
+        ['map', 'home', 'skip'] as const,
+        (x) => (o.content_redirects.mode = x),
+      );
+      if (v.targets !== undefined) {
+        if (!isObj(v.targets))
+          errors.push('content_redirects.targets must be an object');
+        else {
+          const targets: Record<string, string> = {};
+          let n = 0;
+          for (const [k, val] of Object.entries(v.targets)) {
+            if (++n > MAX_LIST) {
+              errors.push('content_redirects.targets has too many entries');
+              break;
+            }
+            if (!k.trim() || k.length > 255) {
+              errors.push(`content_redirects.targets: invalid key`);
+              continue;
+            }
+            if (!isContentTarget(val)) {
+              errors.push(
+                `content_redirects.targets.${k} must be a path starting with / or one of: ${CONTENT_TARGET_KEYWORDS.join(', ')}`,
+              );
+              continue;
+            }
+            targets[k] = val;
+          }
+          o.content_redirects.targets = targets;
+        }
+      }
+    }
+  }
+  if (input.inline_image_hosts !== undefined) {
+    const v = input.inline_image_hosts;
+    const HOST_RE =
+      /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
+    if (
+      !Array.isArray(v) ||
+      v.length > 50 ||
+      v.some((h) => typeof h !== 'string' || h.length > 253 || !HOST_RE.test(h))
+    )
+      errors.push('inline_image_hosts must be a list of host names');
+    else
+      o.inline_image_hosts = [
+        ...new Set((v as string[]).map((h) => h.toLowerCase())),
+      ];
+  }
   return { options: o, errors };
+}
+
+/** A content target: `home` / `skip` / `import`, or an absolute same-host path. */
+export function isContentTarget(v: unknown): v is string {
+  if (typeof v !== 'string') return false;
+  if ((CONTENT_TARGET_KEYWORDS as readonly string[]).includes(v)) return true;
+  return (
+    v.length <= 1024 &&
+    v.startsWith('/') &&
+    !v.startsWith('//') &&
+    // eslint-disable-next-line no-control-regex
+    !/[\s\u0000-\u001f\u007f\\]/.test(v)
+  );
 }

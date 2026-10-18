@@ -4,6 +4,10 @@
   "testEnvironment": "node",
   "testRegex": ".e2e-spec.ts$",
   "transform": {
+    "[\\\\/]node_modules[\\\\/](htmlparser2|domhandler|domutils|dom-serializer|entities|domelementtype)[\\\\/].+\\.js$": "<rootDir>/jest-esm-cjs.transform.js",
     "^.+\\.(t|j)s$": "ts-jest"
-  }
+  },
+  "transformIgnorePatterns": [
+    "[\\\\/]node_modules[\\\\/](?!(htmlparser2|domhandler|domutils|dom-serializer|entities|domelementtype)[\\\\/])"
+  ]
 }

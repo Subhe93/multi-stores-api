@@ -6,10 +6,19 @@ import {
   withoutDeactivated,
   type IncomingRedirect,
 } from '../../redirects/redirect-plan';
-import type { DryRunSummary } from '../model/dry-run-summary';
-import { buildImportRedirects } from '../mapping/map-redirects';
+import {
+  CONTENT_ROWS_MAX,
+  type ContentRow,
+  type ContentUnmappedRow,
+  type DryRunSummary,
+} from '../model/dry-run-summary';
+import {
+  buildImportRedirects,
+  resolveContentTarget,
+} from '../mapping/map-redirects';
 import type { CategoryPlan } from './plan-categories';
 import type { PlanContext } from './plan-context';
+import { importedPagePath } from './plan-pages';
 import type { ProductPlan } from './plan-products';
 import {
   isProxyReservedPath,
@@ -23,6 +32,58 @@ export interface RedirectPlanResult {
   byRule: Record<string, number>;
   preview: DryRunSummary['redirects']['preview'];
   excludedOldSlugs: { external_ref: string; slug: string; reason: string }[];
+  /** M5 B17: pages / posts of the source and their targets (null when the bundle has none). */
+  content: DryRunSummary['content'] | null;
+  contentUnmapped: ContentUnmappedRow[];
+}
+
+/**
+ * Content rows for the summary (M5 B17): every published page / post with
+ * the target `content_redirects` resolves, plus the unmapped list. Computed
+ * even when the redirects scope is off, so Mapping review can map them first.
+ */
+export function summarizeContent(
+  ctx: PlanContext,
+  importedRefs: ReadonlySet<string>,
+): {
+  content: DryRunSummary['content'] | null;
+  unmapped: ContentUnmappedRow[];
+} {
+  const pages = (ctx.catalog.pages ?? []).filter((p) => p.status === 'publish');
+  if (!pages.length) return { content: null, unmapped: [] };
+  const items: ContentRow[] = [];
+  const unmapped: ContentUnmappedRow[] = [];
+  let mapped = 0;
+  for (const p of pages) {
+    const r = resolveContentTarget(p.ref, ctx.options.content_redirects);
+    const row: ContentUnmappedRow = {
+      ref: p.ref,
+      kind: p.kind,
+      path: p.path,
+      title: p.title,
+    };
+    let target: string | null = null;
+    if (r.kind === 'unmapped') {
+      if (unmapped.length < CONTENT_ROWS_MAX) unmapped.push(row);
+    } else {
+      mapped++;
+      target =
+        ctx.options.content_redirects.targets[p.ref] ??
+        (r.kind === 'path' ? r.to : 'skip');
+    }
+    if (items.length < CONTENT_ROWS_MAX) items.push({ ...row, target });
+  }
+  return {
+    content: {
+      pages: pages.filter((p) => p.kind === 'page').length,
+      posts: pages.filter((p) => p.kind === 'post').length,
+      mapped,
+      unmapped: pages.length - mapped,
+      imported: pages.filter((p) => importedRefs.has(p.ref)).length,
+      items,
+    },
+    unmapped,
+  };
 }
 
 /**
@@ -35,6 +96,8 @@ export function planRedirects(
   ctx: PlanContext,
   categories: CategoryPlan,
   products: ProductPlan,
+  /** Pages the pages scope creates (their `/<slug>` is the `import` target). */
+  importedPages: readonly { mapped: { ref: string } }[] = [],
 ): RedirectPlanResult {
   const { catalog, options, snapshot, scopes, warn, push } = ctx;
   const { categorySlug } = categories;
@@ -46,8 +109,20 @@ export function planRedirects(
     external_ref: string;
   }[] = [];
   const byRule: Record<string, number> = {};
+  const importedRefs = new Set(importedPages.map((p) => p.mapped.ref));
+  const { content, unmapped: contentUnmapped } = summarizeContent(
+    ctx,
+    importedRefs,
+  );
   if (!scopes.redirects)
-    return { work: null, byRule, preview: [], excludedOldSlugs: [] };
+    return {
+      work: null,
+      byRule,
+      preview: [],
+      excludedOldSlugs: [],
+      content,
+      contentUnmapped,
+    };
 
   // Fix 13: a redirect may only point at a page that will be live.
   const willBePublished = (p: PlannedProduct): boolean => {
@@ -68,10 +143,19 @@ export function planRedirects(
     categorySlug,
     redirectSkipped: options.redirect_skipped,
     shortlinks: options.redirect_shortlinks,
-    // Pages hook (M5 B17): no adapter exports pages yet and the platform has
-    // no page slug map in the snapshot, so pages get no redirects for now.
-    pageTarget: undefined,
+    // M5 B17: pages / posts per `content_redirects`, plus the system paths.
+    // An `import` target only gets a row when the pages scope creates the page.
+    content: options.content_redirects,
+    importedPagePath: (page) =>
+      importedRefs.has(page.ref) ? importedPagePath(page) : null,
   });
+  for (const row of contentUnmapped)
+    warn({
+      code: 'W_CONTENT_UNMAPPED',
+      external_ref: row.ref,
+      title: row.title,
+      message: `${row.path} has no target yet (Mapping review → Old pages and posts)`,
+    });
   const excludedOldSlugs = built.excludedOldSlugs;
   // A from-path equal to a live product or collection path is a CONFLICT (§6.1).
   const livePaths = new Set<string>();
@@ -253,5 +337,7 @@ export function planRedirects(
     byRule,
     preview: preview as DryRunSummary['redirects']['preview'],
     excludedOldSlugs,
+    content,
+    contentUnmapped,
   };
 }

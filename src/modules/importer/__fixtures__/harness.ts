@@ -10,7 +10,10 @@ import {
   NAMEZ_RUN_OPTIONS,
 } from '../adapters/wp-bundle/__fixtures__/fixtures';
 import { isAllowedBundleFile } from '../adapters/wp-bundle/bundle-schema';
-import { PlainTextHtmlSanitizer } from '../html/html-sanitizer';
+import {
+  PlainTextHtmlSanitizer,
+  type ImporterHtmlSanitizer,
+} from '../html/html-sanitizer';
 import type {
   PersonalizationPresetPort,
   PresetRequest,
@@ -94,6 +97,8 @@ export async function makeHarness(
   opts: {
     personalization?: boolean;
     failMedia?: (url: string) => boolean;
+    /** Defaults to the plain-text fallback (the existing specs assert its warning). */
+    sanitizer?: ImporterHtmlSanitizer;
   } = {},
 ) {
   const db: any = createFakePrisma();
@@ -169,7 +174,7 @@ export async function makeHarness(
     ),
   };
   const designer = new NullDesignerImportPort();
-  const sanitizer = new PlainTextHtmlSanitizer();
+  const sanitizer = opts.sanitizer ?? new PlainTextHtmlSanitizer();
   const engine = new ImportEngineService(
     db as never,
     storage,

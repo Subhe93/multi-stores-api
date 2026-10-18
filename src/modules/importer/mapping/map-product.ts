@@ -9,6 +9,7 @@ import {
   htmlToPlainText,
   type HtmlSanitizer,
 } from '../model/clean';
+import type { HtmlSanitizeContext } from '../html/html-sanitizer';
 import type {
   NAttribute,
   NMediaRef,
@@ -138,7 +139,9 @@ export interface MapWarning {
 export interface ProductMapContext {
   catalog: NormalizedCatalog;
   options: ImportRunOptions;
-  sanitizer: HtmlSanitizer;
+  sanitizer: HtmlSanitizer & {
+    sanitize(html: string, ctx?: HtmlSanitizeContext): string;
+  };
   now: Date;
   warn: (w: MapWarning) => void;
   /** Source host aliases rewritten to the site host (D10). */
@@ -161,13 +164,17 @@ function isSourceHostUrl(url: string, siteHost: string): boolean {
 
 /**
  * §4.3 step 5: inline `<img>` of other hosts are removed (W_HTML_IMAGE_REMOVED),
- * images on the source host are kept for the applier to rewrite.
+ * images on the source host are kept for the applier to rewrite, and images
+ * on `imageHosts` (run option `inline_image_hosts`, e.g. a CDN) are kept as
+ * they are (not fetched; the sanitizer gets the same hosts).
  */
 function splitInlineImages(
   html: string,
   catalog: NormalizedCatalog,
   aliases: Map<string, string>,
+  imageHosts: readonly string[] = [],
 ): { html: string; local: MappedImage[]; removed: number } {
+  const kept = new Set(imageHosts.map((h) => h.toLowerCase()));
   const local: MappedImage[] = [];
   let removed = 0;
   const out = html.replace(/<img\b[^>]*>/gi, (tag) => {
@@ -183,6 +190,13 @@ function splitInlineImages(
       url = u.toString();
     } catch {
       url = null;
+    }
+    if (url && !isSourceHostUrl(url, catalog.meta.site_host)) {
+      try {
+        if (kept.has(new URL(url).hostname.toLowerCase())) return tag;
+      } catch {
+        /* unreachable: `url` came from URL.toString() */
+      }
     }
     if (!url || !isSourceHostUrl(url, catalog.meta.site_host)) {
       removed++;
@@ -568,7 +582,12 @@ export function mapProduct(p: NProduct, ctx: ProductMapContext): MappedProduct {
   const inline_images: MappedImage[] = [];
   const html = (raw: string): string => {
     const sc = stripShortcodes(raw ?? '');
-    const split = splitInlineImages(sc.html, catalog, aliases);
+    const split = splitInlineImages(
+      sc.html,
+      catalog,
+      aliases,
+      options.inline_image_hosts,
+    );
     if (split.removed)
       warn(
         'W_HTML_IMAGE_REMOVED',
@@ -577,7 +596,12 @@ export function mapProduct(p: NProduct, ctx: ProductMapContext): MappedProduct {
     // The plain-text fallback drops every tag, so inline images are not fetched then.
     if ((sanitizer as { mode?: string }).mode !== 'plain_text_fallback')
       inline_images.push(...split.local);
-    return sanitizer.sanitize(split.html).trim();
+    return sanitizer
+      .sanitize(split.html, {
+        source_host: catalog.meta.site_host,
+        image_hosts: options.inline_image_hosts,
+      })
+      .trim();
   };
   const description = html(p.content_html);
   const short_description = nullIfEmpty(html(p.excerpt_html));

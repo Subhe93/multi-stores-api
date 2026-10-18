@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ProductionCoreModule } from '../production/production-core.module';
 import { DesignerAssetsModule } from './designer-assets.module';
 import { DesignerPrintQueueController } from './designer-print-queue.controller';
 import { DesignerPrintQueueService } from './designer-print-queue.service';
@@ -19,9 +20,11 @@ import {
  * paid call sites and WP4's DesignerCoreModule can import it to bind
  * `DesignerTriggersService` to its port. Nest keeps one instance per
  * provider, so the worker interval and the browser exist once.
+ * `ProductionCoreModule` (imports nothing) provides the optional
+ * production print-ready hook (M5.4).
  */
 @Module({
-  imports: [DesignerAssetsModule],
+  imports: [DesignerAssetsModule, ProductionCoreModule],
   controllers: [DesignerPrintQueueController],
   providers: [
     { provide: DESIGNER_BROWSER, useFactory: () => createDesignerRenderer() },

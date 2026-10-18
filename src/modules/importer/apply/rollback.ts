@@ -91,6 +91,10 @@ export interface RollbackResult {
   shipping_kept: number;
   media_deleted: number;
   templates: number;
+  /** M5 B17: draft builder pages the run created, deleted again. */
+  pages_deleted: number;
+  /** Imported pages the merchant published since: kept. */
+  pages_kept: number;
   errors: number;
   /** Created by the run, edited by the merchant since: archived, not deleted. */
   archived_edited: RollbackEditedEntry[];
@@ -158,6 +162,7 @@ export async function rollbackRun(deps: RollbackDeps): Promise<RollbackResult> {
   await rollbackUpdatedCategories(s);
   await rollbackShipping(s);
   await rollbackTemplates(s);
+  await rollbackPages(s);
   await s.beat(true);
   // 6. Media of the run that nothing references any more (batched, fix 14 / M5 B14).
   s.out.media_deleted = await rollbackMedia(deps, s.items);
@@ -185,6 +190,8 @@ async function loadRollbackState(deps: RollbackDeps): Promise<RollbackState> {
     shipping_kept: 0,
     media_deleted: 0,
     templates: 0,
+    pages_deleted: 0,
+    pages_kept: 0,
     errors: 0,
     archived_edited: [],
     skipped_edited: [],
@@ -962,6 +969,64 @@ async function rollbackTemplates(s: RollbackState): Promise<void> {
     });
   }
   await s.markRolledBack(s.ofType('DESIGN_TEMPLATE').map((e) => e.id));
+  await s.flush();
+}
+
+// M5 B17: imported pages. Only pages that are still unpublished drafts are
+// deleted (a page the merchant published since the run is kept); the
+// ledger row goes ROLLED_BACK either way, so the next run plans CREATE.
+async function rollbackPages(s: RollbackState): Promise<void> {
+  const { prisma, storeId, out, items } = s;
+  const rows = s.ofType('PAGE');
+  for (const e of rows) {
+    await s.beat();
+    try {
+      const page = e.target_id
+        ? await prisma.page.findFirst({
+            where: { id: e.target_id, store_id: storeId },
+            select: { id: true, status: true, published_version_id: true },
+          })
+        : null;
+      if (!page) {
+        items.push({
+          entity_type: 'PAGE',
+          external_ref: e.external_ref,
+          action: 'SKIP',
+          target_id: e.target_id,
+          message: 'already gone',
+        });
+        continue;
+      }
+      if (page.status !== 'DRAFT' || page.published_version_id) {
+        out.pages_kept++;
+        out.skipped_edited.push({
+          entity_type: 'PAGE',
+          external_ref: e.external_ref,
+          target_id: page.id,
+          title: null,
+        });
+        items.push({
+          entity_type: 'PAGE',
+          external_ref: e.external_ref,
+          action: 'SKIP',
+          target_id: page.id,
+          message: 'published since the import',
+        });
+        continue;
+      }
+      await prisma.page.delete({ where: { id: page.id } });
+      out.pages_deleted++;
+      items.push({
+        entity_type: 'PAGE',
+        external_ref: e.external_ref,
+        action: 'DELETE',
+        target_id: page.id,
+      });
+    } catch (err) {
+      recordError(s, 'PAGE', e.external_ref, e.target_id, err);
+    }
+  }
+  await s.markRolledBack(rows.map((e) => e.id));
   await s.flush();
 }
 

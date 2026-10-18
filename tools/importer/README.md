@@ -11,10 +11,10 @@ is read-only, and exports the catalog only.
 | File | Source | Rows / columns |
 |---|---|---|
 | `manifest.json` | `siteurl`, `home`, `WPLANG`, `woocommerce_version`, `wp core version`, table prefix | `format`, `format_version: 1`, `site_url`, `home_url`, `wp_version`, `wc_version`, `db_prefix`, `exported_at`, `locale`, `files`. Empty values are left out: **`locale` is absent** when `WPLANG` is empty (WordPress default `en_US`), and readers must treat it as optional. |
-| `posts.tsv` | `wp_posts` | `post_type IN (product, product_variation, npp_template, acf-field-group, acf-field)` and `post_status NOT IN (trash, auto-draft, inherit)`. The 23 standard columns; **`post_author` is written as 0 and `post_password` as empty**. |
+| `posts.tsv` | `wp_posts` | `post_type IN (product, product_variation, npp_template, acf-field-group, acf-field)` and `post_status NOT IN (trash, auto-draft, inherit)`, plus **published** `page` and `post` rows (M5 B17: old-URL redirects and page import; `post_content` included, comments and authors never). The 23 standard columns; **`post_author` is written as 0 and `post_password` as empty**. |
 | `postmeta.tsv` | `wp_postmeta` | `meta_id, post_id, meta_key, meta_value` of the posts above, without `_edit_lock` / `_edit_last` (user ids). |
-| `terms.tsv` | `wp_terms` | `term_id, name, slug, term_group` (+ `term_order` when the column exists) of product taxonomies only. |
-| `term_taxonomy.tsv` | `wp_term_taxonomy` | `term_taxonomy_id, term_id, taxonomy, description, parent, count` for `product_cat, product_tag, product_type, product_visibility, product_shipping_class, pa_*`. |
+| `terms.tsv` | `wp_terms` | `term_id, name, slug, term_group` (+ `term_order` when the column exists) of product taxonomies and the blog `category` taxonomy (for `%category%` permalinks of posts). |
+| `term_taxonomy.tsv` | `wp_term_taxonomy` | `term_taxonomy_id, term_id, taxonomy, description, parent, count` for `product_cat, product_tag, product_type, product_visibility, product_shipping_class, category, pa_*`. |
 | `termmeta.tsv` | `wp_termmeta` | `meta_id, term_id, meta_key, meta_value` of those terms. |
 | `term_relationships.tsv` | `wp_term_relationships` | `object_id, term_taxonomy_id, term_order` between exported posts and product taxonomies. |
 | `attribute_taxonomies.tsv` | `wp_woocommerce_attribute_taxonomies` | `attribute_id, attribute_name, attribute_label, attribute_type, attribute_orderby, attribute_public`. |
@@ -30,6 +30,7 @@ is read-only, and exports the catalog only.
 | `versions.txt` | — | **Legacy only.** Not written by this script; it stays in the file allowlist so that bundles made by hand before `manifest.json` existed are still accepted. The importer ignores it. |
 
 Option allowlist: `siteurl, home, blogname, WPLANG, permalink_structure,
+category_base, show_on_front, page_on_front, page_for_posts,
 woocommerce_permalinks, woocommerce_currency, woocommerce_price_num_decimals,
 woocommerce_prices_include_tax, woocommerce_calc_taxes, woocommerce_tax_based_on,
 woocommerce_default_country, woocommerce_weight_unit, woocommerce_dimension_unit,
@@ -52,6 +53,16 @@ before they are written:
 All TSV files have a header row and use the MySQL batch format: TAB between
 fields, `\t \n \\ \0` escaped, SQL NULL as `NULL`. The column lists match
 `src/modules/importer/adapters/wp-bundle/bundle-schema.ts`.
+
+### Pages and posts (M5 B17)
+
+Published WordPress `page` and `post` rows are exported with their
+`post_content`, Rank Math title / description / robots meta and the blog
+`category` terms, so the importer can plan a redirect for every old URL
+(`/om-oss/`, `/blog/<slug>/`, the `permalink_structure` tokens are resolved
+from `options.tsv`) and, when the merchant maps a page to **import**, create
+a draft builder page from it. Drafts, private and password-protected content
+are not exported; comments and authors never are.
 
 ## What it never exports
 
@@ -88,7 +99,7 @@ fields, `\t \n \\ \0` escaped, SQL NULL as `NULL`. The column lists match
   product texts (`post_content`, `post_excerpt`, `post_content_filtered`) are
   not scanned (a description may say "password", "licence" or carry a
   `text-token-…` class); the title, slug, guid and every other column are.
-  `posts.tsv` may only hold catalog post types, and only
+  `posts.tsv` may only hold catalog post types and published pages / posts, and only
   allowlisted file names may be present. On any hit the script stops **before**
   creating the archive and prints the file and line number (and, for
   `options.tsv`, the option name) — never the value.
@@ -244,12 +255,16 @@ Real hits that must **not** be allowed: anything under
 
 Either file works:
 
-- **Directory** (what the importer reads today): copy the whole
-  `<host>-export-<yyyymmdd>/` folder, e.g. `scp -r -P <port> <user>@<host>:~/<host>-export-<yyyymmdd> .`
-- **Archive**: `scp -P <port> <user>@<host>:~/<host>-export-<yyyymmdd>.tgz .`
-  and send the SHA-256 printed by the script with it.
-  (Uploading archives directly in the dashboard needs the archive reader that
-  is still pending; until then the developers extract it and load the directory.)
+- **Archive** (preferred): `scp -P <port> <user>@<host>:~/<host>-export-<yyyymmdd>.tgz .`
+  and send the SHA-256 printed by the script with it. The `.tgz` (or a `.zip`
+  of the same files) is uploaded as is in the dashboard's Importer app (one
+  archive, at most 50 MB compressed and 50 MB extracted); the API expands it
+  in memory under the §9.3 limits (≤ 64 entries, no links, no `..`, bomb
+  ratio ≤ 100) and reads only the allowlisted file names, so a top-level
+  folder inside the archive or macOS `__MACOSX` junk is harmless.
+- **Directory**: copy the whole `<host>-export-<yyyymmdd>/` folder, e.g.
+  `scp -r -P <port> <user>@<host>:~/<host>-export-<yyyymmdd> .`, and upload
+  its files (the dashboard also accepts the individual files).
 
 Send it through a private channel (not a public link). Then **delete both copies
 from the server**:
@@ -290,8 +305,10 @@ The script prints a `warning:` for a file above 40 MB and for a total above
 50 MB; the export itself still completes. A catalog that large (roughly more
 than 20 000 products, or very long `postmeta.tsv` from page-builder data) must
 go through the developers' server-side import below instead of the dashboard
-upload. (The `200 MB` figure of design §9.3 is the archive reader's uncompressed
-ceiling, not an upload limit.)
+upload. An uploaded archive counts twice: at most 50 MB compressed (the
+request) and at most 50 MB once extracted (`ARCHIVE_MAX_TOTAL_BYTES` in
+`src/modules/importer/adapters/archive-bundle.ts`); the server-side path
+allows 200 MB extracted.
 
 The dashboard upload is `POST /api/importer/my/runs`. The API enforces the
 total while the upload streams; the reverse proxy must still let a body of that
@@ -331,16 +348,20 @@ API host:
 1. `IMPORTER_BUNDLE_DIR_ROOT` must be set in the API environment, e.g.
    `/var/lib/multi-stores/import-bundles` (see `docs/DEPLOY-M4.md`); unset means
    the endpoint is disabled.
-2. Copy the bundle **directory** (not the `.tgz`) below that root, under a
-   relative name without `..` or a leading `/`, e.g.
-   `/var/lib/multi-stores/import-bundles/namez/2026-10-20/`. Only the
-   allowlisted file names inside it are read; anything else is ignored.
+2. Copy the bundle **directory** or the **`.tgz` / `.tar.gz` / `.zip`** below
+   that root, under a relative name without `..` or a leading `/`, e.g.
+   `/var/lib/multi-stores/import-bundles/namez/2026-10-20/` or
+   `.../namez/namez-export-20261020.tgz`. Only the allowlisted file names
+   inside it are read; anything else is ignored. An archive is expanded in
+   memory with the same reader as the dashboard upload, under the directory
+   limits (200 MB extracted).
 3. Ownership: the directory and its files must be readable by the user the API
    runs as (`chown -R <api-user>: <dir>; chmod 700 <dir>; chmod 600 <dir>/*`),
    and must be regular files (a symlinked file is not listed, a symlinked
    name that is read anyway is refused like an archive entry).
 4. Call the endpoint as an admin with the store id, `source_id` and
-   `directory: "namez/2026-10-20"` (the relative name). The API checks that the
+   `directory: "namez/2026-10-20"` (the relative name of the directory or of
+   the archive file). The API checks that the
    resolved path stays below the root, sums the `lstat` sizes against the
    limits above before reading anything, then copies the files into private
    storage as if they had been uploaded and creates the run; from there the

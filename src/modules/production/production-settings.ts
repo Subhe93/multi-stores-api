@@ -16,6 +16,26 @@ export const PRODUCTION_COMPLETE_TARGETS = [
 export type ProductionCompleteTarget =
   (typeof PRODUCTION_COMPLETE_TARGETS)[number];
 
+/** M5.4: status the order moves to when its print files are READY. */
+export const PRODUCTION_ON_PRINT_READY = [
+  'none',
+  'PROCESSING',
+  'MANUFACTURING',
+] as const;
+export type ProductionOnPrintReady = (typeof PRODUCTION_ON_PRINT_READY)[number];
+
+/** M5.4: what the "move to SHIPPED" suggestion asks for before shipping. */
+export const PRODUCTION_SHIP_PROMPT = [
+  'none',
+  'tracking_optional',
+  'tracking_required',
+] as const;
+export type ProductionShipPrompt = (typeof PRODUCTION_SHIP_PROMPT)[number];
+
+/** Longest accepted notification address (RFC 5321 mailbox). */
+export const PRODUCTION_EMAIL_MAX = 254;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export interface ProductionSettings {
   /** Variant attributes (e.g. colour) become checks (WOPS parity). */
   include_variant_options: boolean;
@@ -34,6 +54,22 @@ export interface ProductionSettings {
   start_on_first_check: boolean;
   /** Offer QUALITY_CHECK in the creator status dropdown (dashboard). */
   use_quality_check: boolean;
+  /**
+   * M5.4: when the designer print queue has rendered every print file of
+   * the order, move it (forward-only, once per order) to this status.
+   */
+  on_print_ready: ProductionOnPrintReady;
+  /**
+   * M5.4: the SHIPPED suggestion opens a tracking dialog; `tracking_required`
+   * blocks the move until a tracking number is entered.
+   */
+  ship_prompt: ProductionShipPrompt;
+  /** M5.4: email the staff when a new order needs production. */
+  notify_new_order: boolean;
+  /** Recipient of the production emails; null = the store's contact email. */
+  notify_email: string | null;
+  /** M5.4: one email per day (07:00 store time) listing orders still open. */
+  notify_daily_digest: boolean;
 }
 
 export const PRODUCTION_LIMITS = {
@@ -55,6 +91,11 @@ export const DEFAULT_PRODUCTION_SETTINGS: Readonly<ProductionSettings> =
     complete_target: 'QUALITY_CHECK',
     start_on_first_check: false,
     use_quality_check: true,
+    on_print_ready: 'none',
+    ship_prompt: 'tracking_optional',
+    notify_new_order: false,
+    notify_email: null,
+    notify_daily_digest: false,
   });
 
 /**
@@ -97,6 +138,27 @@ function isTarget(value: unknown): value is ProductionCompleteTarget {
     typeof value === 'string' &&
     (PRODUCTION_COMPLETE_TARGETS as readonly string[]).includes(value)
   );
+}
+
+function isOnPrintReady(value: unknown): value is ProductionOnPrintReady {
+  return (
+    typeof value === 'string' &&
+    (PRODUCTION_ON_PRINT_READY as readonly string[]).includes(value)
+  );
+}
+
+function isShipPrompt(value: unknown): value is ProductionShipPrompt {
+  return (
+    typeof value === 'string' &&
+    (PRODUCTION_SHIP_PROMPT as readonly string[]).includes(value)
+  );
+}
+
+/** A plausible, trimmed email address; null for anything else. */
+function emailOrNull(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const s = value.trim();
+  return s && s.length <= PRODUCTION_EMAIL_MAX && EMAIL_RE.test(s) ? s : null;
 }
 
 /** Trimmed, non-empty, de-duplicated strings, capped in count and length. */
@@ -169,6 +231,13 @@ export function normalizeProductionSettings(raw: unknown): ProductionSettings {
     complete_target: target,
     start_on_first_check: bool('start_on_first_check', d.start_on_first_check),
     use_quality_check: bool('use_quality_check', d.use_quality_check),
+    on_print_ready: isOnPrintReady(r.on_print_ready)
+      ? r.on_print_ready
+      : d.on_print_ready,
+    ship_prompt: isShipPrompt(r.ship_prompt) ? r.ship_prompt : d.ship_prompt,
+    notify_new_order: bool('notify_new_order', d.notify_new_order),
+    notify_email: emailOrNull(r.notify_email),
+    notify_daily_digest: bool('notify_daily_digest', d.notify_daily_digest),
   };
 }
 
@@ -222,6 +291,8 @@ export function validateProductionSettings(raw: unknown): {
     'include_variant_options',
     'start_on_first_check',
     'use_quality_check',
+    'notify_new_order',
+    'notify_daily_digest',
   ]) {
     if (key in raw && typeof raw[key] !== 'boolean') {
       errors.push(`${key} must be true or false.`);
@@ -267,6 +338,26 @@ export function validateProductionSettings(raw: unknown): {
   if ('complete_target' in raw && !isTarget(raw.complete_target)) {
     errors.push(
       `complete_target must be one of ${PRODUCTION_COMPLETE_TARGETS.join(', ')}.`,
+    );
+  }
+  if ('on_print_ready' in raw && !isOnPrintReady(raw.on_print_ready)) {
+    errors.push(
+      `on_print_ready must be one of ${PRODUCTION_ON_PRINT_READY.join(', ')}.`,
+    );
+  }
+  if ('ship_prompt' in raw && !isShipPrompt(raw.ship_prompt)) {
+    errors.push(
+      `ship_prompt must be one of ${PRODUCTION_SHIP_PROMPT.join(', ')}.`,
+    );
+  }
+  if (
+    'notify_email' in raw &&
+    raw.notify_email !== null &&
+    (typeof raw.notify_email !== 'string' ||
+      (raw.notify_email.trim() !== '' && !emailOrNull(raw.notify_email)))
+  ) {
+    errors.push(
+      `notify_email must be an email address of at most ${PRODUCTION_EMAIL_MAX} characters, or null.`,
     );
   }
   if (errors.length === 0) {

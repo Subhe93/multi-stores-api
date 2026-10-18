@@ -19,11 +19,12 @@
  * `orders.service.ts` through `DESIGNER_TRIGGERS_PORT`, which
  * `DesignerCoreModule` binds to this service.
  */
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import type {
   DesignerTriggerOrder as PortOrder,
   DesignerTriggersPort,
 } from '../../common/ports/designer-triggers.port';
+import { ProductionTriggersService } from '../production/production-triggers.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { DesignerPrintQueueService } from './designer-print-queue.service';
 
@@ -59,7 +60,24 @@ export class DesignerTriggersService implements DesignerTriggersPort {
   constructor(
     private readonly storeApps: StoreAppsService,
     private readonly queue: DesignerPrintQueueService,
-  ) {}
+    // M5.4: the production app's print-ready step (absent in a build
+    // without the production core module).
+    @Optional() private readonly production?: ProductionTriggersService,
+  ) {
+    this.queue.onPrintReady?.((row) =>
+      this.onPrintReady({ id: row.order_id, store_id: row.store_id }),
+    );
+  }
+
+  /**
+   * A print file of the order reached READY (print queue worker): the
+   * production app may move the order forward (`on_print_ready`, M5.4).
+   */
+  async onPrintReady(order: DesignerTriggerOrder): Promise<void> {
+    await this.run(order, 'onPrintReady', async () => {
+      await this.production?.onPrintReady(order.id, order.store_id);
+    });
+  }
 
   /** Payment confirmed (Stripe succeeded, Kustom authorized): queue the print files. */
   async onOrderPaid(order: DesignerTriggerOrder): Promise<void> {

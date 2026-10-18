@@ -1,6 +1,7 @@
 /**
  * External identity: `woo:<site_host>:<kind>:<id>` (M4-INTEGRATION C7, M4.4 D2).
- * Persisted kinds: product, variation, product_cat, product_tag, npp_template.
+ * Persisted kinds: product, variation, product_cat, product_tag, npp_template,
+ * page, post (pages/posts live in the ledger only: `Page` has no external_ref column).
  * The other kinds are importer-internal (ledger / media / report only).
  */
 
@@ -15,6 +16,8 @@ export const EXTERNAL_REF_KINDS = [
   'term',
   'shipping_class',
   'shipping_zone',
+  'page',
+  'post',
 ] as const;
 
 export type ExternalRefKind = (typeof EXTERNAL_REF_KINDS)[number];

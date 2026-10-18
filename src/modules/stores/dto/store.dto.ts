@@ -116,6 +116,13 @@ export class UpdateStoreDto {
     message: 'currency must be a supported ISO-4217 code',
   })
   currency?: string;
+
+  // Checkout behaviour overrides (M5.1). Validated and normalized by the
+  // service (modules/stores/checkout-settings.ts); null clears them back to
+  // the platform defaults.
+  @IsOptional()
+  @IsObject()
+  checkout_settings?: Record<string, unknown> | null;
 }
 
 // Admin-only store update: also allows switching the store type. The creator

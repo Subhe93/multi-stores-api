@@ -262,6 +262,20 @@ export class NotificationTemplatesService {
         ],
       },
       {
+        // Production app (M5.4): staff "new order to produce" email.
+        event: 'production_new_order',
+        variables: [
+          ...ORDER_COMMON_VARIABLES,
+          'order_number',
+          'items_count',
+          'checks_count',
+          'order_button',
+          'order_url_text',
+          'items_html',
+          'items_text',
+        ],
+      },
+      {
         event: 'welcome',
         variables: ['platform_name', 'name', 'login_url'],
       },

@@ -38,7 +38,9 @@ export type SummaryEntityType =
   | 'SHIPPING_PROFILE'
   | 'SHIPPING_ZONE'
   | 'SHIPPING_METHOD'
-  | 'REDIRECT';
+  | 'REDIRECT'
+  /** A WordPress page imported as a draft builder page (M5 B17, `scopes.pages`). */
+  | 'PAGE';
 
 export interface CustomizationTypeRule {
   mechanisms?: string[];
@@ -83,9 +85,28 @@ export interface RedirectCandidate {
     | 'tag'
     /** WordPress shortlink `/?p=<id>` of a product or page (M5 B17, `redirect_shortlinks`). */
     | 'shortlink'
-    /** A WordPress `page` post (M5 B17 hook; no bundle exports pages yet). */
-    | 'page';
+    /** A WordPress `page` mapped in `content_redirects` (M5 B17). */
+    | 'page'
+    /** A WordPress blog `post` mapped in `content_redirects` (M5 B17). */
+    | 'post'
+    /** WordPress / WooCommerce system path (`/shop/`, `/cart/`, sitemaps, …; M5 B17). */
+    | 'system';
   external_ref: string;
+}
+
+/** A page / post the merchant has not mapped yet (`content_redirects.targets`). */
+export interface ContentUnmappedRow {
+  ref: string;
+  kind: 'page' | 'post';
+  /** Old URL path. */
+  path: string;
+  title: string;
+}
+
+/** Every page / post of the source with its current target (Mapping review). */
+export interface ContentRow extends ContentUnmappedRow {
+  /** `content_redirects.targets[ref]`, or the mode fallback (`home` / `skip`), or null when unmapped. */
+  target: string | null;
 }
 
 export interface DryRunSummary {
@@ -189,7 +210,25 @@ export interface DryRunSummary {
   warnings: Record<string, { count: number; samples: WarningSample[] }>;
   skipped: { external_ref: string; title: string; reason: string }[];
   unmapped_meta_prefixes: Record<string, number>;
+  /**
+   * M5 B17 content migration (filled by the planner; absent when the
+   * bundle has no pages / posts). `items` is capped at CONTENT_ROWS_MAX.
+   */
+  content?: {
+    pages: number;
+    posts: number;
+    mapped: number;
+    unmapped: number;
+    /** Pages planned as draft builder pages (`scopes.pages` + target `import`). */
+    imported: number;
+    items: ContentRow[];
+  };
+  /** Pages / posts without a target in `content_redirects.targets` (capped at CONTENT_ROWS_MAX). */
+  content_unmapped?: ContentUnmappedRow[];
 }
+
+/** Cap of the content rows kept in the summary (the dashboard pages them at 50). */
+export const CONTENT_ROWS_MAX = 2000;
 
 const DEFAULT_STATUS_MAP: Record<string, string> = {
   publish: 'PUBLISHED',

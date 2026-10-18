@@ -353,6 +353,110 @@ export function newOrderOwnerEmail(data: NewOrderOwnerData): EmailParts {
   };
 }
 
+// ── Production app (M5.4) staff emails ────────────────────────────────────
+
+export interface ProductionNewOrderData extends EmailBrand {
+  orderNumber: string;
+  itemsCount: number;
+  checksCount: number;
+  customerName?: string;
+  orderAdminUrl?: string;
+  itemsHtml?: string;
+  itemsText?: string;
+}
+
+/** "New order to produce: #… (n items, m checks)" — bundled default. */
+export function productionNewOrderEmail(
+  data: ProductionNewOrderData,
+): EmailParts {
+  const counts = `${data.itemsCount} ${data.itemsCount === 1 ? 'item' : 'items'}, ${data.checksCount} ${data.checksCount === 1 ? 'check' : 'checks'}`;
+  const subject = `New order to produce: ${data.orderNumber} (${counts})`;
+  const customerBit = data.customerName
+    ? `<p style="font-size:13px;color:#71717a;">Customer: ${esc(data.customerName)}</p>`
+    : '';
+  const cta = data.orderAdminUrl
+    ? `<p style="margin:20px 0;">${button('Open production', data.orderAdminUrl)}</p>`
+    : '';
+  return {
+    subject,
+    html: layout(
+      'New order to produce',
+      `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">
+         Order <strong>${esc(data.orderNumber)}</strong> is waiting for production: <strong>${esc(counts)}</strong>.
+       </p>
+       ${customerBit}
+       ${data.itemsHtml || ''}
+       ${cta}`,
+      data,
+    ),
+    text:
+      `${subject}.` +
+      (data.customerName ? `\nCustomer: ${data.customerName}` : '') +
+      (data.itemsText ? `\n\n${data.itemsText}` : '') +
+      (data.orderAdminUrl ? `\n\nOpen: ${data.orderAdminUrl}` : ''),
+  };
+}
+
+export interface ProductionDigestOrder {
+  orderNumber: string;
+  status: string;
+  /** Localised order date. */
+  placedOn: string;
+  total: number;
+  done: number;
+  state: string;
+  adminUrl?: string;
+}
+
+export interface ProductionDigestData extends EmailBrand {
+  /** Localised date of the digest ("18 Oct 2026"). */
+  dateLabel: string;
+  orders: ProductionDigestOrder[];
+  dashboardUrl?: string;
+}
+
+/** Daily list of the orders still in production — bundled default. */
+export function productionDigestEmail(data: ProductionDigestData): EmailParts {
+  const n = data.orders.length;
+  const subject = `Production today: ${n} ${n === 1 ? 'order' : 'orders'} open (${data.dateLabel})`;
+  const rows = data.orders
+    .map(
+      (o) => `<tr>
+  <td style="padding:8px 6px;border-bottom:1px solid #e4e4e7;font-size:13px;">${
+    o.adminUrl
+      ? `<a href="${esc(o.adminUrl)}" style="color:#18181b;font-weight:600;">${esc(o.orderNumber)}</a>`
+      : `<strong>${esc(o.orderNumber)}</strong>`
+  }</td>
+  <td style="padding:8px 6px;border-bottom:1px solid #e4e4e7;font-size:12px;color:#71717a;">${esc(o.placedOn)}</td>
+  <td style="padding:8px 6px;border-bottom:1px solid #e4e4e7;font-size:12px;color:#71717a;">${esc(o.status)}</td>
+  <td style="padding:8px 6px;border-bottom:1px solid #e4e4e7;font-size:12px;text-align:end;white-space:nowrap;">${o.done}/${o.total}</td>
+</tr>`,
+    )
+    .join('');
+  const cta = data.dashboardUrl
+    ? `<p style="margin:20px 0;">${button('Open production', data.dashboardUrl)}</p>`
+    : '';
+  return {
+    subject,
+    html: layout(
+      `Orders in production (${data.dateLabel})`,
+      `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">${n} ${n === 1 ? 'order is' : 'orders are'} not finished yet.</p>
+       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">${rows}</table>
+       ${cta}`,
+      data,
+    ),
+    text:
+      `${subject}\n\n` +
+      data.orders
+        .map(
+          (o) =>
+            `${o.orderNumber} · ${o.placedOn} · ${o.status} · ${o.done}/${o.total}${o.adminUrl ? ` · ${o.adminUrl}` : ''}`,
+        )
+        .join('\n') +
+      (data.dashboardUrl ? `\n\nOpen: ${data.dashboardUrl}` : ''),
+  };
+}
+
 export interface WelcomeData {
   name?: string;
   loginUrl?: string;

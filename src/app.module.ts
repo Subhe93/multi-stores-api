@@ -54,6 +54,7 @@ import { CustomerUploadsModule } from './modules/customer-uploads/customer-uploa
 import { ProductionModule } from './modules/production/production.module';
 import { DesignerModule } from './modules/designer/designer.module';
 import { OpsModule } from './modules/ops/ops.module';
+import { FeedsModule } from './modules/feeds/feeds.module';
 
 @Module({
   imports: [
@@ -120,6 +121,8 @@ import { OpsModule } from './modules/ops/ops.module';
     DesignerModule,
     // M5 W1-C operability: /admin/ops/status, job tick sink, WORKERS switch.
     OpsModule,
+    // M5.6 feeds app: Google Merchant / Meta catalog feeds (public token URLs).
+    FeedsModule,
   ],
   providers: [
     // ThrottlerModule alone throttles nothing — only routes that explicitly

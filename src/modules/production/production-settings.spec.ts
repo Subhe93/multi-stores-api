@@ -127,6 +127,75 @@ describe('production settings (M4.3 §3.3)', () => {
     expect(nameKey('Välj antal')).toBe(nameKey('valj-antal'));
   });
 
+  it('M5.4 keys default to off: print-ready none, optional tracking, no emails', () => {
+    expect(DEFAULT_PRODUCTION_SETTINGS).toMatchObject({
+      on_print_ready: 'none',
+      ship_prompt: 'tracking_optional',
+      notify_new_order: false,
+      notify_email: null,
+      notify_daily_digest: false,
+    });
+    // Lenient read: odd values fall back, the address is trimmed.
+    expect(
+      normalizeProductionSettings({
+        on_print_ready: 'SHIPPED',
+        ship_prompt: 'always',
+        notify_new_order: 'yes',
+        notify_email: '  staff@example.com ',
+        notify_daily_digest: true,
+      }),
+    ).toMatchObject({
+      on_print_ready: 'none',
+      ship_prompt: 'tracking_optional',
+      notify_new_order: false,
+      notify_email: 'staff@example.com',
+      notify_daily_digest: true,
+    });
+    expect(
+      normalizeProductionSettings({ notify_email: 'not-an-address' })
+        .notify_email,
+    ).toBeNull();
+    expect(
+      normalizeProductionSettings({ on_print_ready: 'PROCESSING' })
+        .on_print_ready,
+    ).toBe('PROCESSING');
+  });
+
+  it('M5.4 strict validation: enums, booleans and the address', () => {
+    expect(
+      validateProductionSettings({
+        on_print_ready: 'MANUFACTURING',
+        ship_prompt: 'tracking_required',
+        notify_new_order: true,
+        notify_email: 'staff@example.com',
+        notify_daily_digest: false,
+      }).ok,
+    ).toBe(true);
+    expect(validateProductionSettings({ notify_email: null }).ok).toBe(true);
+    expect(validateProductionSettings({ notify_email: '' }).ok).toBe(true);
+    const bad = validateProductionSettings({
+      on_print_ready: 'SHIPPED',
+      ship_prompt: 'maybe',
+      notify_new_order: 'yes',
+      notify_email: 'nope',
+    });
+    expect(bad.ok).toBe(false);
+    expect(bad.errors).toEqual([
+      'notify_new_order must be true or false.',
+      'on_print_ready must be one of none, PROCESSING, MANUFACTURING.',
+      'ship_prompt must be one of none, tracking_optional, tracking_required.',
+      'notify_email must be an email address of at most 254 characters, or null.',
+    ]);
+    // Still refused through the store-apps validator: auto-ship.
+    expect(
+      validateStoreAppSettings('production', {
+        on_complete: 'auto',
+        complete_target: 'SHIPPED',
+        ship_prompt: 'tracking_required',
+      }),
+    ).not.toEqual([]);
+  });
+
   it('strict validation reports unknown keys instead of dropping them', () => {
     const r = validateProductionSettings({
       include_variant_options: true,

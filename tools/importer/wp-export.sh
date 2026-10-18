@@ -47,8 +47,13 @@ WPX_GENERATOR="multi-stores wp-export.sh 1.0.0"
 # Post types of the catalog (products, variations, NPP templates, ACF fields).
 WPX_POST_TYPES="'product','product_variation','npp_template','acf-field-group','acf-field'"
 WPX_EXCLUDED_STATUSES="'trash','auto-draft','inherit'"
-# Product taxonomies (plus the attribute taxonomies pa_*).
-WPX_TAXONOMIES="'product_cat','product_tag','product_type','product_visibility','product_shipping_class'"
+# Content post types (M5 B17: pages and blog posts for redirects / page
+# import): published rows only, post_content included, no comments, no
+# authors (post_author is zeroed like every other row).
+WPX_CONTENT_POST_TYPES="'page','post'"
+# Product taxonomies (plus the attribute taxonomies pa_*) and the blog
+# `category` taxonomy (needed for %category% permalinks of posts).
+WPX_TAXONOMIES="'product_cat','product_tag','product_type','product_visibility','product_shipping_class','category'"
 
 # Options exported as-is. Must stay a subset of OPTION_ALLOWLIST in
 # src/modules/importer/adapters/wp-bundle/bundle-schema.ts (checked by
@@ -60,6 +65,10 @@ WPX_OPTIONS=(
   blogname
   WPLANG
   permalink_structure
+  category_base
+  show_on_front
+  page_on_front
+  page_for_posts
   woocommerce_permalinks
   woocommerce_currency
   woocommerce_price_num_decimals
@@ -299,11 +308,16 @@ wpx_scan_forbidden() {
       done
     fi
 
-    # posts.tsv: only catalog post types (column 21 = post_type).
+    # posts.tsv: only catalog and content post types (column 21 = post_type);
+    # content types (page, post) must be published (column 8 = post_status).
     if [ "$base" = posts.tsv ]; then
-      lines=$(awk -F '\t' 'NR > 1 && $21 !~ /^(product|product_variation|npp_template|acf-field-group|acf-field)$/ { print NR }' "$f" | head -n 5 || true)
+      lines=$(awk -F '\t' 'NR > 1 && $21 !~ /^(product|product_variation|npp_template|acf-field-group|acf-field|page|post)$/ { print NR }' "$f" | head -n 5 || true)
       for n in $lines; do
         wpx_scan_hit "$base" "$n" "has a post type outside the catalog allowlist"
+      done
+      lines=$(awk -F '\t' 'NR > 1 && $21 ~ /^(page|post)$/ && $8 != "publish" { print NR }' "$f" | head -n 5 || true)
+      for n in $lines; do
+        wpx_scan_hit "$base" "$n" "is an unpublished page / post (only published content is exported)"
       done
     fi
   done
@@ -582,8 +596,11 @@ wpx_main() {
   esac
   wpx_log "exporting ${host} (prefix ${P}) to ${WPX_OUT}"
 
-  local exported_posts exported_products product_tt product_terms
-  exported_posts="SELECT ep.ID FROM ${P}posts ep WHERE ( ep.post_type IN (${WPX_POST_TYPES}) ) AND ( ep.post_status NOT IN (${WPX_EXCLUDED_STATUSES}) )"
+  local exported_posts exported_products product_tt product_terms post_filter
+  # Catalog types in every status but the excluded ones; content types
+  # (pages, posts) only when published.
+  post_filter="( ( post_type IN (${WPX_POST_TYPES}) AND post_status NOT IN (${WPX_EXCLUDED_STATUSES}) ) OR ( post_type IN (${WPX_CONTENT_POST_TYPES}) AND post_status = 'publish' ) )"
+  exported_posts="SELECT ep.ID FROM ${P}posts ep WHERE ( ${post_filter//post_/ep.post_} )"
   # Only products and variations carry _product_image_gallery.
   exported_products="SELECT epr.ID FROM ${P}posts epr WHERE ( epr.post_type IN ('product','product_variation') ) AND ( epr.post_status NOT IN (${WPX_EXCLUDED_STATUSES}) )"
   product_tt="SELECT ptt.term_taxonomy_id FROM ${P}term_taxonomy ptt WHERE ( ptt.taxonomy IN (${WPX_TAXONOMIES}) OR ptt.taxonomy LIKE 'pa\\_%' )"
@@ -595,7 +612,7 @@ wpx_main() {
     "ID post_author post_date post_date_gmt post_content post_title post_excerpt post_status comment_status ping_status post_password post_name to_ping pinged post_modified post_modified_gmt post_content_filtered post_parent guid menu_order post_type post_mime_type comment_count" \
     "SELECT p.ID, 0 AS post_author, p.post_date, p.post_date_gmt, p.post_content, p.post_title, p.post_excerpt, p.post_status, p.comment_status, p.ping_status, '' AS post_password, p.post_name, p.to_ping, p.pinged, p.post_modified, p.post_modified_gmt, p.post_content_filtered, p.post_parent, p.guid, p.menu_order, p.post_type, p.post_mime_type, p.comment_count
      FROM ${P}posts p
-     WHERE ( p.post_type IN (${WPX_POST_TYPES}) ) AND ( p.post_status NOT IN (${WPX_EXCLUDED_STATUSES}) )
+     WHERE ( ${post_filter//post_/p.post_} )
      ORDER BY p.ID"
 
   # --- postmeta of those posts, without the _edit_lock / _edit_last user ids.
@@ -786,7 +803,7 @@ wpx_main() {
 
   # --- warnings that do not block.
   local protected
-  protected=$(wpx_scalar "SELECT COUNT(*) FROM ${P}posts pw WHERE ( pw.post_type IN (${WPX_POST_TYPES}) ) AND ( pw.post_status NOT IN (${WPX_EXCLUDED_STATUSES}) ) AND ( pw.post_password <> '' )")
+  protected=$(wpx_scalar "SELECT COUNT(*) FROM ${P}posts pw WHERE ( ${post_filter//post_/pw.post_} ) AND ( pw.post_password <> '' )")
   if [ "${protected:-0}" != 0 ]; then
     wpx_log "warning: ${protected} exported post(s) are password-protected; the password is NOT exported, the posts will import without it"
   fi

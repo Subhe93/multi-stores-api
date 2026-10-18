@@ -157,12 +157,27 @@ export class DesignerPrintQueueService
   private pauseUntil = 0;
   /** Rows this instance is rendering: id → lock timestamp (shutdown release). */
   private readonly inflight = new Map<string, Date | null>();
+  /** Told after a row reached READY (M5.4 production hook); never throws into the worker. */
+  private readonly readyListeners: ((row: {
+    order_id: string;
+    store_id: string;
+  }) => Promise<void> | void)[] = [];
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly render: DesignerRenderService,
     @Inject(PRIVATE_STORAGE) private readonly storage: PrivateStorage,
   ) {}
+
+  /** Subscribe to "print file READY" (DesignerTriggersService → production). */
+  onPrintReady(
+    listener: (row: {
+      order_id: string;
+      store_id: string;
+    }) => Promise<void> | void,
+  ): void {
+    this.readyListeners.push(listener);
+  }
 
   /** Whether this instance runs the worker. */
   get workerEnabled(): boolean {
@@ -843,6 +858,18 @@ export class DesignerPrintQueueService
           await releaseProofKey(this.prisma, this.storage, result.proof_key, {
             logger: this.logger,
           });
+        }
+      } else {
+        for (const listener of this.readyListeners) {
+          try {
+            await listener({ order_id: row.order_id, store_id: row.store_id });
+          } catch (e) {
+            this.logger.warn(
+              `Designer print-ready listener failed for order ${row.order_id}: ${
+                e instanceof Error ? e.message : String(e)
+              }`,
+            );
+          }
         }
       }
     } catch (e) {

@@ -271,19 +271,21 @@ describe('M5 B17 — shortlinks and WordPress pages', () => {
     tags: [],
     pages: [
       {
-        ext_id: 'pg:7',
+        ref: 'pg:7',
         source_id: '7',
+        kind: 'page',
         status: 'publish',
         slug: 'om-oss',
-        path: ['info', 'om-oss'],
+        path: '/info/om-oss/',
         title: 'Om oss',
       },
       {
-        ext_id: 'pg:8',
+        ref: 'pg:8',
         source_id: '8',
+        kind: 'page',
         status: 'draft',
         slug: 'utkast',
-        path: ['utkast'],
+        path: '/utkast/',
         title: 'Utkast',
       },
     ],
@@ -311,7 +313,7 @@ describe('M5 B17 — shortlinks and WordPress pages', () => {
     const on = buildImportRedirects({
       ...base,
       shortlinks: true,
-      pageTarget: (p) => `/pages/${p.slug}`,
+      content: { mode: 'map', targets: { 'pg:7': '/pages/om-oss' } },
     });
     const by = (from: string) => on.candidates.find((c) => c.from === from);
     expect(by('/?p=4256')).toMatchObject({
@@ -328,12 +330,12 @@ describe('M5 B17 — shortlinks and WordPress pages', () => {
       to: '/pages/om-oss',
       rule: 'shortlink',
     });
-    // The draft page and a page the hook declines get nothing.
+    // The draft page and an unmapped / skipped page get nothing.
     expect(on.candidates.some((c) => c.external_ref === 'pg:8')).toBe(false);
     const none = buildImportRedirects({
       ...base,
       shortlinks: true,
-      pageTarget: () => null,
+      content: { mode: 'skip', targets: {} },
     });
     expect(none.candidates.some((c) => c.rule === 'page')).toBe(false);
   });

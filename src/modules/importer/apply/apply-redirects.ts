@@ -53,15 +53,16 @@ export async function applyRedirects(
   });
   if (already > 0) return empty;
 
-  // Products and collections of this run that ended in ERROR (fix 13, M5
-  // B22): their pages may not exist, so their redirects are dropped.
+  // Products, collections and imported pages of this run that ended in
+  // ERROR (fix 13, M5 B22, M5 B17): their pages may not exist, so their
+  // redirects are dropped.
   const failed = new Set(
     (
       await ctx.prisma.importRunItem.findMany({
         where: {
           run_id: ctx.runId,
           phase: ImportItemPhase.APPLY,
-          entity_type: { in: ['PRODUCT', 'CATEGORY'] },
+          entity_type: { in: ['PRODUCT', 'CATEGORY', 'PAGE'] },
           action: ImportItemAction.ERROR,
         },
         select: { external_ref: true },

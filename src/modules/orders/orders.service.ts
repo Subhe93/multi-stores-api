@@ -360,6 +360,30 @@ function deriveCommissionStatus(orderStatus: OrderStatus): CommissionStatus {
 // so item badges don't get stuck on PENDING after the order advances.
 // Terminal failure states (CANCELLED/REFUNDED/RETURNED) return null — we leave items
 // alone there so the UI keeps the historical fulfillment context.
+/**
+ * Production app ship prompt (M5.4): the tracking a SHIPPED update carries
+ * is written to the items it moves (the shipped email reads the first
+ * item tracking number). Empty for every other update.
+ */
+function shipTracking(dto: UpdateOrderStatusDto): {
+  tracking_number?: string;
+  tracking_url?: string;
+} {
+  const number = dto.tracking_number?.trim();
+  if (dto.status !== OrderStatus.SHIPPED || !number) return {};
+  const url = dto.tracking_url?.trim();
+  return { tracking_number: number, ...(url ? { tracking_url: url } : {}) };
+}
+
+/** Timeline note of a SHIPPED update that carries carrier / tracking. */
+function shipNote(dto: UpdateOrderStatusDto): string | undefined {
+  if (dto.status !== OrderStatus.SHIPPED) return undefined;
+  const carrier = dto.carrier?.trim();
+  const number = dto.tracking_number?.trim();
+  if (!carrier && !number) return undefined;
+  return `Shipped${carrier ? ` via ${carrier}` : ''}${number ? ` (${number})` : ''}`;
+}
+
 function deriveFulfillmentStatus(
   orderStatus: OrderStatus,
 ): FulfillmentStatus | null {
@@ -3455,7 +3479,7 @@ export class OrdersService {
         data: {
           order_id: id,
           status: dto.status,
-          note: dto.note,
+          note: dto.note ?? shipNote(dto),
           actor: actorId,
         },
       });
@@ -3467,7 +3491,7 @@ export class OrdersService {
       if (nextFulfillment) {
         await this.prisma.orderItem.updateMany({
           where: { order_id: id },
-          data: { fulfillment_status: nextFulfillment },
+          data: { fulfillment_status: nextFulfillment, ...shipTracking(dto) },
         });
       }
       if (
@@ -3511,7 +3535,7 @@ export class OrdersService {
         fulfiller_id: fulfillerId,
         fulfiller_type: expectedType,
       },
-      data: { fulfillment_status: targetFulfillment },
+      data: { fulfillment_status: targetFulfillment, ...shipTracking(dto) },
     });
     if (res.count === 0) {
       throw new ForbiddenException({
@@ -3524,7 +3548,10 @@ export class OrdersService {
       data: {
         order_id: id,
         status: dto.status,
-        note: dto.note ?? `${expectedType} items → ${targetFulfillment}`,
+        note:
+          dto.note ??
+          shipNote(dto) ??
+          `${expectedType} items → ${targetFulfillment}`,
         actor: actorId,
       },
     });

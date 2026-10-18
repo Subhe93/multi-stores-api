@@ -1,11 +1,8 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import {
-  DirectoryBundleReader,
-  MemoryBundleReader,
-  openArchiveBundle,
-} from './bundle-reader';
+import { DirectoryBundleReader, MemoryBundleReader } from './bundle-reader';
+import { openArchiveBundle } from './archive-bundle';
 
 describe('bundle readers', () => {
   let dir: string;
@@ -54,9 +51,15 @@ describe('bundle readers', () => {
     });
   });
 
-  it('archive bundles stay behind the pending seam', async () => {
+  it('garbage archives are refused (the readers themselves are specified in archive-bundle.spec)', async () => {
     await expect(
       openArchiveBundle(Buffer.from('PK'), 'b.zip'),
+    ).rejects.toMatchObject({ code: 'IMPORT_BUNDLE_INVALID_ARCHIVE' });
+    await expect(
+      openArchiveBundle(Buffer.from('not gzip'), 'b.tgz'),
+    ).rejects.toMatchObject({ code: 'IMPORT_BUNDLE_INVALID_ARCHIVE' });
+    await expect(
+      openArchiveBundle(Buffer.alloc(0), 'b.rar'),
     ).rejects.toMatchObject({ code: 'IMPORT_BUNDLE_INVALID_ARCHIVE' });
   });
 });

@@ -1,8 +1,12 @@
 option_name	option_value
 blogname	Shop Example
+category_base	
 home	https://shop.example
+page_for_posts	0
+page_on_front	0
 permalink_structure	/%postname%/
 rank_math_modules	a:2:{i:0;s:11:"woocommerce";i:1;s:7:"sitemap";}
+show_on_front	posts
 siteurl	https://shop.example
 woo_variation_swatches	a:1:{s:20:"show_variation_label";s:3:"yes";}
 woocommerce_calc_taxes	yes

@@ -68,6 +68,7 @@ import {
   wvsSettings,
 } from './detectors/wvs';
 import { SHIPPING_METHOD_OPTION_RE } from './bundle-schema';
+import { buildPages } from './pages';
 
 /**
  * WordPress export bundle → NormalizedCatalog (M4.4 §5.1 `wp-bundle.adapter.ts`).
@@ -1054,6 +1055,8 @@ export function buildCatalogFromTables(
     issues,
   );
   const shipping = buildShipping(ctx);
+  // M5 B17: pages / posts (bundle v1 with content post types; else absent).
+  const pages = buildPages(tables, ref, issues);
 
   const variationCount = products.reduce((n, p) => n + p.variations.length, 0);
   if (
@@ -1125,6 +1128,7 @@ export function buildCatalogFromTables(
       ...(npp ? { npp_display: npp } : {}),
     },
     issues,
+    ...(pages.length ? { pages } : {}),
   };
 }
 

@@ -5,11 +5,10 @@ import { isAllowedBundleFile } from './wp-bundle/bundle-schema';
 /**
  * Read access to the files of an export bundle (M4.4 §5.1 / §9.3).
  *
- * Seam: the archive readers (`.zip` via `fflate`, `.tgz` via zlib + an
- * in-house ustar/pax reader, both with entry allowlists and bomb checks) are
- * pending dependency approval (M4-INTEGRATION B2). Until then the adapter
- * works on any `BundleReader`, and the importer can use the directory and
- * in-memory readers below (tests, local CLI runs).
+ * The adapter works on any `BundleReader`: the in-memory and directory
+ * readers below, `StorageBundleReader` (uploaded files) and
+ * `ArchiveBundleReader` in `./archive-bundle` (`.zip` / `.tgz` through
+ * fflate with the §9.3 entry allowlist and bomb checks).
  */
 export interface BundleReader {
   /** File names (flat, allowlisted) present in the bundle. */
@@ -27,7 +26,8 @@ export class BundleReadError extends Error {
       | 'IMPORT_BUNDLE_MISSING_FILE'
       | 'IMPORT_BUNDLE_TOO_LARGE'
       | 'IMPORT_BUNDLE_UNEXPECTED_FILE'
-      | 'IMPORT_BUNDLE_INVALID_ARCHIVE',
+      | 'IMPORT_BUNDLE_INVALID_ARCHIVE'
+      | 'IMPORT_BUNDLE_BOMB',
     message: string,
   ) {
     super(message);
@@ -159,22 +159,4 @@ export class DirectoryBundleReader implements BundleReader {
     }
     return decodeUtf8(await fs.readFile(file));
   }
-}
-
-/**
- * Archive entry point. TODO(M4.4 WP-B, after B2 approval): `.zip` with
- * `fflate`, `.tar.gz`/`.tgz` with zlib + ustar/pax; limits of §9.3
- * (≤64 entries, ≤300 MB uncompressed, ratio ≤100, no `..`/absolute/symlink/
- * device entries, flat or one top-level folder).
- */
-export function openArchiveBundle(
-  _archive: Buffer,
-  _fileName: string,
-): Promise<BundleReader> {
-  return Promise.reject(
-    new BundleReadError(
-      'IMPORT_BUNDLE_INVALID_ARCHIVE',
-      'Archive bundles are not supported yet (archive reader pending)',
-    ),
-  );
 }

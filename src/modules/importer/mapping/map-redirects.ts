@@ -1,5 +1,6 @@
 import { redirectPath, type RedirectCandidate } from '../model/dry-run-summary';
 import type { NormalizedCatalog, NPage, NProduct } from '../model/normalized';
+import type { ContentRedirectOptions } from '../runs/run-options';
 
 /**
  * Redirect generation (M4.4 §6.1) over the planner's final slugs:
@@ -13,8 +14,13 @@ import type { NormalizedCatalog, NPage, NProduct } from '../model/normalized';
  *  - `/<tag_base>/<slug>` → the single product carrying the tag, else `/`;
  *  - (M5 B17, `redirect_shortlinks`) the WordPress shortlink `/?p=<post id>`
  *    of every published product → the same target as its slug;
- *  - (M5 B17 hook) WordPress pages (`catalog.pages`, none exported yet):
- *    `/<page path>` and `/?p=<id>` → whatever `pageTarget` resolves.
+ *  - (M5 B17) WordPress pages / posts (`catalog.pages`): `/<path>` (and
+ *    `/?p=<id>` with shortlinks) → the target `content_redirects` gives
+ *    (see `resolveContentTarget`); unmapped ones follow the mode;
+ *  - (M5 B17) the WordPress / WooCommerce system paths (`/shop/`, `/cart/`,
+ *    `/checkout/`, `/my-account/`, `/wp-login.php` (302), feeds, Rank Math
+ *    sitemaps) → their platform counterpart, overridable per path through
+ *    `content_redirects.targets`.
  * The from-path is normalised by the redirects module when it is planned.
  */
 
@@ -30,13 +36,81 @@ export interface RedirectBuildInput {
   skipped: NProduct[];
   categorySlug: Map<string, string>;
   redirectSkipped: boolean;
-  /** `/?p=<id>` rows for published products (and pages). Default false. */
+  /** `/?p=<id>` rows for published products (and pages / posts). Default false. */
   shortlinks?: boolean;
   /**
-   * Target path of a WordPress page on the platform (`/pages/<slug>`, a
-   * collection, …), or null to skip it. Without it pages get no redirects.
+   * M5 B17: where pages / posts and the system paths go. Absent = no
+   * content rows and no system rows (catalog-only summaries).
    */
-  pageTarget?: (page: NPage) => string | null;
+  content?: ContentRedirectOptions;
+  /**
+   * Platform path of a page whose target is `import` (`/<slug>`), when the
+   * pages scope creates it; absent = `import` targets get no redirect.
+   */
+  importedPagePath?: (page: NPage) => string | null;
+}
+
+/** Catalog root of the platform (the CATALOG_TEMPLATE page serves it). */
+export const PLATFORM_CATALOG_PATH = '/products';
+
+/**
+ * WordPress / WooCommerce system paths and their platform targets (M5 B17).
+ * `wp-login.php` is temporary (302): the merchant may later point it at a
+ * login page of their own. The Rank Math sitemaps are listed by name
+ * (redirect rows are exact paths).
+ */
+export const SYSTEM_REDIRECTS: readonly {
+  from: string;
+  to: string;
+  status_code: 301 | 302;
+}[] = [
+  { from: '/shop/', to: PLATFORM_CATALOG_PATH, status_code: 301 },
+  { from: '/cart/', to: '/cart', status_code: 301 },
+  { from: '/checkout/', to: '/checkout', status_code: 301 },
+  { from: '/my-account/', to: '/account', status_code: 301 },
+  { from: '/wp-login.php', to: '/account', status_code: 302 },
+  { from: '/feed/', to: '/', status_code: 301 },
+  { from: '/comments/feed/', to: '/', status_code: 301 },
+  { from: '/sitemap_index.xml', to: '/sitemap.xml', status_code: 301 },
+  { from: '/product-sitemap.xml', to: '/sitemap.xml', status_code: 301 },
+  { from: '/product_cat-sitemap.xml', to: '/sitemap.xml', status_code: 301 },
+  { from: '/product_tag-sitemap.xml', to: '/sitemap.xml', status_code: 301 },
+  { from: '/page-sitemap.xml', to: '/sitemap.xml', status_code: 301 },
+  { from: '/post-sitemap.xml', to: '/sitemap.xml', status_code: 301 },
+  { from: '/category-sitemap.xml', to: '/sitemap.xml', status_code: 301 },
+  { from: '/wp-sitemap.xml', to: '/sitemap.xml', status_code: 301 },
+];
+
+export type ContentResolution =
+  | { kind: 'path'; to: string }
+  | { kind: 'import' }
+  | { kind: 'skip' }
+  | { kind: 'unmapped' };
+
+/**
+ * Target of one page / post under `content_redirects`: the explicit target,
+ * else the mode (`home` → `/`, `skip` → none, `map` → unmapped).
+ */
+export function resolveContentTarget(
+  ref: string,
+  content: ContentRedirectOptions,
+): ContentResolution {
+  const t = content.targets[ref];
+  if (t === undefined) {
+    if (content.mode === 'home') return { kind: 'path', to: '/' };
+    if (content.mode === 'skip') return { kind: 'skip' };
+    return { kind: 'unmapped' };
+  }
+  if (t === 'home') return { kind: 'path', to: '/' };
+  if (t === 'skip') return { kind: 'skip' };
+  if (t === 'import') return { kind: 'import' };
+  return { kind: 'path', to: t };
+}
+
+/** Same matching key (trailing slash, case, encoding ignored): no self-redirect row. */
+function sameTarget(from: string, to: string): boolean {
+  const key = (p: string) => redirectPath(p.split(/[?#]/)[0]);
+  return key(from) === key(to);
 }
 
 /** The WordPress shortlink of a post, as the redirects module keys it. */
@@ -45,7 +119,7 @@ export function shortlinkPath(sourceId: string): string | null {
 }
 
 export interface ImportRedirectCandidate extends RedirectCandidate {
-  status_code: 301;
+  status_code: 301 | 302;
 }
 
 export function buildImportRedirects(input: RedirectBuildInput): {
@@ -56,10 +130,14 @@ export function buildImportRedirects(input: RedirectBuildInput): {
   const { bases } = catalog.meta;
   const out: ImportRedirectCandidate[] = [];
   const seen = new Set<string>();
-  const add = (c: Omit<ImportRedirectCandidate, 'status_code'>) => {
+  const add = (
+    c: Omit<ImportRedirectCandidate, 'status_code'> & {
+      status_code?: 301 | 302;
+    },
+  ) => {
     if (seen.has(c.from)) return;
     seen.add(c.from);
-    out.push({ ...c, status_code: 301 });
+    out.push({ ...c, status_code: c.status_code ?? 301 });
   };
   const excludedOldSlugs: {
     external_ref: string;
@@ -91,20 +169,24 @@ export function buildImportRedirects(input: RedirectBuildInput): {
           external_ref: p.product.ext_id,
         });
     }
-  // Pages (hook): nothing exports them yet, see NPage.
-  if (input.pageTarget)
+  // Pages / posts (M5 B17): mapped targets, mode fallback for the rest.
+  if (input.content)
     for (const page of catalog.pages ?? []) {
       if (page.status !== 'publish') continue;
-      const to = input.pageTarget(page);
-      if (!to) continue;
+      const r = resolveContentTarget(page.ref, input.content);
+      let to: string | null = null;
+      if (r.kind === 'path') to = r.to;
+      else if (r.kind === 'import') to = input.importedPagePath?.(page) ?? null;
+      // The front page (`/`) and a page re-created under the same path need no row.
+      if (!to || page.path === '/' || sameTarget(page.path, to)) continue;
       add({
-        from: redirectPath(...page.path),
+        from: redirectPath(page.path),
         to,
-        rule: 'page',
-        external_ref: page.ext_id,
+        rule: page.kind,
+        external_ref: page.ref,
       });
       const from = input.shortlinks ? shortlinkPath(page.source_id) : null;
-      if (from) add({ from, to, rule: 'shortlink', external_ref: page.ext_id });
+      if (from) add({ from, to, rule: 'shortlink', external_ref: page.ref });
     }
   for (const p of input.imported) {
     for (const old of p.product.old_slugs) {
@@ -183,6 +265,26 @@ export function buildImportRedirects(input: RedirectBuildInput): {
       rule: 'tag',
       external_ref: t.ext_id,
     });
+  }
+  // System paths (M5 B17): built-in targets, overridable per from-path.
+  // Always planned (legacy bundles too): the WordPress shop, account, feed
+  // and sitemap URLs exist on every source site.
+  if (input.content) {
+    for (const sys of SYSTEM_REDIRECTS) {
+      let to: string | null = sys.to;
+      if (input.content.targets[sys.from] !== undefined) {
+        const r = resolveContentTarget(sys.from, input.content);
+        to = r.kind === 'path' ? r.to : null;
+      }
+      if (!to || sameTarget(sys.from, to)) continue;
+      add({
+        from: redirectPath(sys.from),
+        to,
+        rule: 'system',
+        external_ref: `system:${sys.from}`,
+        status_code: sys.status_code,
+      });
+    }
   }
   return { candidates: out, excludedOldSlugs };
 }

@@ -359,6 +359,16 @@ model Product {
   is_featured           Boolean            @default(false)
   // Importer identity "woo:<site_host>:product:<id>" (M4.4); never copied by duplicate().
   external_ref          String?            @db.VarChar(191)
+  // Feed data (M5.6, feeds app): Google Merchant / Meta catalog identifiers.
+  // All nullable; `condition` null = "new"; feed_excluded keeps the product
+  // out of every feed. Served only on the owner/creator endpoints (the
+  // storefront exposes `brand` alone, and only when set).
+  gtin                    String?          @db.VarChar(14)
+  mpn                     String?          @db.VarChar(70)
+  brand                   String?          @db.VarChar(70)
+  google_product_category String?          @db.VarChar(191)
+  condition               String?          @db.VarChar(16)
+  feed_excluded           Boolean          @default(false)
   created_at            DateTime           @default(now())
   updated_at            DateTime           @updatedAt
 
@@ -1049,6 +1059,11 @@ model Store {
   display_prices_incl_tax Boolean        @default(true)
   // Where "new order" notifications go. Null = the creator's login email.
   notification_email      String?
+  // Checkout behaviour overrides (M5.1): after-add-to-cart destination,
+  // phone requirement, pay button label per locale, coupon URL params.
+  // Null = the platform defaults (today's behaviour); see
+  // modules/stores/checkout-settings.ts for the shape.
+  checkout_settings       Json?
   created_at              DateTime       @default(now())
   updated_at              DateTime       @updatedAt
 

@@ -98,25 +98,31 @@ export class ProductionController {
       userId,
       UserRole.CREATOR,
     )) as unknown as WorkspaceOrderSource;
-    const [{ checks, summary }, settings, printFiles] = await Promise.all([
-      this.checklist.orderState(orderId),
-      this.automation.settingsOf(ctx.storeId),
-      this.checklist.printFiles(orderId),
-    ]);
-    return buildWorkspace({
-      order,
-      checks,
-      summary,
-      suggestion: this.automation.suggestionFor(
-        settings,
-        order.status as never,
+    const [{ checks, summary }, settings, printFiles, autoAdvanced] =
+      await Promise.all([
+        this.checklist.orderState(orderId),
+        this.automation.settingsOf(ctx.storeId),
+        this.checklist.printFiles(orderId),
+        this.checklist.lastAutoAdvance(orderId),
+      ]);
+    return {
+      ...buildWorkspace({
+        order,
+        checks,
         summary,
-      ),
-      settings,
-      creatorId: ctx.creatorId,
-      primaryLocale: ctx.primaryLocale,
-      printFiles,
-    });
+        suggestion: this.automation.suggestionFor(
+          settings,
+          order.status as never,
+          summary,
+        ),
+        settings,
+        creatorId: ctx.creatorId,
+        primaryLocale: ctx.primaryLocale,
+        printFiles,
+      }),
+      // M5.4: the latest automation move (print-ready notice).
+      auto_advanced: autoAdvanced,
+    };
   }
 
   /** Audit log page (`?page=1&limit=50`, limit at most 200), newest first. */

@@ -17,6 +17,7 @@ import type { StoreByDomainResponse } from '../markets/market.types';
 import { RedirectsService } from '../redirects/redirects.service';
 import { isReservedDomain } from '../../common/domains/reserved-hosts';
 import { stripBrandFromThemeConfig } from './theme-config';
+import { normalizeCheckoutSettingsInput } from './checkout-settings';
 import {
   CreateStoreDto,
   UpdateStoreDto,
@@ -701,8 +702,13 @@ export class StoresService {
 // Convert a custom_domain submitted from the dashboard into the canonical form
 // stored in DB: trimmed/lowercased, with an empty string treated as "clear it"
 // so Prisma stores NULL (the @unique index disallows duplicate empty strings).
-function normalizeStoreUpdate(dto: UpdateStoreDto): UpdateStoreDto {
-  let out = dto;
+// The DTO after normalization: the JSON column takes Prisma's typed null.
+type StoreUpdateData = Omit<UpdateStoreDto, 'checkout_settings'> & {
+  checkout_settings?: Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput;
+};
+
+function normalizeStoreUpdate(dto: UpdateStoreDto): StoreUpdateData {
+  let out: StoreUpdateData = dto as StoreUpdateData;
   // "Field was sent" must be judged by value, not hasOwnProperty: the global
   // ValidationPipe (transform: true) materializes EVERY declared DTO property
   // on the instance, so hasOwnProperty is true even for fields the client
@@ -711,12 +717,24 @@ function normalizeStoreUpdate(dto: UpdateStoreDto): UpdateStoreDto {
   // carry undefined, so undefined reliably means "not provided".
   if (dto.custom_domain !== undefined) {
     const raw = (dto.custom_domain ?? '').trim().toLowerCase();
-    out = { ...out, custom_domain: raw || null } as UpdateStoreDto;
+    out = { ...out, custom_domain: raw || null } as StoreUpdateData;
   }
   // An empty currency means "go back to the platform default", which is NULL.
   if (dto.currency !== undefined) {
     const raw = (dto.currency ?? '').trim().toUpperCase();
-    out = { ...out, currency: raw || null } as UpdateStoreDto;
+    out = { ...out, currency: raw || null } as StoreUpdateData;
+  }
+  // Checkout behaviour (M5.1): validated here so a bad body is a 400 with a
+  // coded error; an all-default object is stored as NULL so the storefront
+  // payload of such a store stays byte-identical (G0).
+  if (dto.checkout_settings !== undefined) {
+    const normalized = normalizeCheckoutSettingsInput(dto.checkout_settings);
+    out = {
+      ...out,
+      checkout_settings: normalized
+        ? (normalized as unknown as Prisma.InputJsonValue)
+        : Prisma.JsonNull,
+    };
   }
   return out;
 }

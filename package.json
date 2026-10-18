@@ -45,6 +45,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.0",
     "dotenv": "^17.4.1",
+    "fflate": "^0.8.3",
     "nodemailer": "^8.0.7",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.0",
@@ -52,6 +53,7 @@
     "playwright-core": "^1.64.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
+    "sanitize-html": "^2.18.1",
     "sharp": "^0.34.5",
     "stripe": "^22.0.1"
   },
@@ -71,6 +73,7 @@
     "@types/node": "^24.0.0",
     "@types/nodemailer": "^8.0.0",
     "@types/passport-jwt": "^4.0.1",
+    "@types/sanitize-html": "^2.16.2",
     "@types/supertest": "^7.0.0",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
@@ -101,8 +104,12 @@
     ],
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
+      "[\\\\/]node_modules[\\\\/](htmlparser2|domhandler|domutils|dom-serializer|entities|domelementtype)[\\\\/].+\\.js$": "<rootDir>/../test/jest-esm-cjs.transform.js",
       "^.+\\.(t|j)s$": "ts-jest"
     },
+    "transformIgnorePatterns": [
+      "[\\\\/]node_modules[\\\\/](?!(htmlparser2|domhandler|domutils|dom-serializer|entities|domelementtype)[\\\\/])"
+    ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],

@@ -34,6 +34,10 @@ IMPORTER_WORKER=on                  # one instance
 RETENTION_SCHEDULER=on              # safe on all instances (advisory lock)
 BACKUP_SCHEDULER=on                 # ONE instance only (no lock)
 IMPORTER_BUNDLE_DIR_ROOT=/var/lib/multi-stores/import-bundles   # admin from-directory imports only
+# IMPORTER_HTML_SANITIZER=plain     # emergency only: drop every tag of imported descriptions
+#                                   # (default: allowlist sanitizer, sanitize-html, D11). Switching
+#                                   # changes the sanitized HTML and so makes every imported product
+#                                   # UPDATE on its next run; switch back before the next run.
 
 # optional quotas (defaults shown)
 CUSTOMER_UPLOAD_DAILY_BYTES_PER_IP=524288000
@@ -95,10 +99,11 @@ The partial indexes `ImportRun_one_active_per_store`, `OrderItemDesign_queue_cla
 
 1. Admin makes the apps available; the creator enables them.
 2. Store primary locale and currency match the imported content (Namez: `sv`, `SEK`), tax pricing inclusive.
-3. Importer: upload the bundle (individual files until `fflate` is approved), dry run, review, apply. Verify the counts. The dashboard upload is capped at 50 MB (about 3 000 products); a larger catalog (up to the 20 000-product planner limit) goes through `POST /api/admin/importer/stores/:storeId/runs/from-directory` with the files under `IMPORTER_BUNDLE_DIR_ROOT` on the API host (200 MB in total, 160 MB per file).
+3. Importer: upload the bundle (the `.tgz` / `.zip` from the export script, or its individual files), dry run, review, apply. Verify the counts. The dashboard upload is capped at 50 MB compressed and 50 MB extracted (about 3 000 products); a larger catalog (up to the 20 000-product planner limit) goes through `POST /api/admin/importer/stores/:storeId/runs/from-directory` with the files, or the `.tgz`, under `IMPORTER_BUNDLE_DIR_ROOT` on the API host (200 MB in total, 160 MB per file).
 4. Designer: upload the fonts, publish the templates, enable the product links (this removes the `npp_fallback` fields per product).
 5. Kustom Playground order with one designer line and one personalization line; check the print queue reaches READY and the print PNG is 3000x4200.
 6. Enable the live markets; sample 20 old URLs for 301s.
+7. Content migration (M5 B17, W2-B): in Mapping review → Advanced → "Old pages and posts", give every old page / post URL a target (a collection, a store page, the home page, `import` for a page that should become a draft builder page, or `skip`); the shop paths (`/shop/`, `/my-account/`, `/wp-login.php`, feeds, Rank Math sitemaps) are redirected without configuration. `3dnamez.se` is **not** an importer concern: it is a legacy domain of the same store and is handled at the domain level (a `StoreDomain` with `redirect_to` → `namez.se`, M5-PLAN B8), so the same redirect rows serve both hosts after the host redirect.
 
 ## 8. Rollback
 

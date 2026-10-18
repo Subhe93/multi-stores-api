@@ -57,6 +57,7 @@ import {
   applyRedirects,
   type RedirectApplyResult,
 } from '../apply/apply-redirects';
+import { applyPages } from '../apply/apply-pages';
 import { rollbackRun, type RollbackResult } from '../apply/rollback';
 import {
   appliedRefs,
@@ -81,6 +82,7 @@ export const APPLY_PHASES = [
   'shipping',
   'products',
   'templates',
+  'pages',
   'redirects',
   'finalize',
 ] as const;
@@ -533,6 +535,7 @@ export class ImportEngineService {
     await this.applyShippingPhase(a);
     await this.applyProductsPhase(a);
     await this.applyTemplatesPhase(a);
+    await this.applyPagesPhase(a);
     const redirectResult = await this.applyRedirectsPhase(a);
     return this.finalizeApply(a, redirectResult);
   }
@@ -818,6 +821,16 @@ export class ImportEngineService {
     if (start === null) return;
     const { plan } = a;
     await applyTemplates(a.ctx, plan.work.templates, plan.work.products);
+    await this.saveCursor(a, 'pages', 0, 0, (plan.work.pages ?? []).length);
+  }
+
+  /** M5 B17: draft builder pages for the WP pages mapped to `import`. */
+  private async applyPagesPhase(a: ApplyRun): Promise<void> {
+    const start = this.startOf(a, 'pages');
+    if (start === null) return;
+    const { plan } = a;
+    const res = await applyPages(a.ctx, plan.work.pages ?? []);
+    a.errors += res.errors;
     await this.saveCursor(
       a,
       'redirects',

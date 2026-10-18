@@ -146,6 +146,13 @@ describe('ProductionController (M4.3 §3.7)', () => {
         }),
       ),
       printFiles: jest.fn(() => Promise.resolve([])),
+      lastAutoAdvance: jest.fn(() =>
+        Promise.resolve({
+          to: 'MANUFACTURING',
+          reason: 'print_ready',
+          at: new Date('2026-10-18T06:00:00Z'),
+        }),
+      ),
     };
     const automation = {
       retryPending: jest.fn(() => {
@@ -177,9 +184,13 @@ describe('ProductionController (M4.3 §3.7)', () => {
       page: 3,
       limit: 20,
     });
-    await controller.workspace('u1', 'o1');
+    const ws = await controller.workspace('u1', 'o1');
     expect(automation.retryPending).toHaveBeenCalledWith(ctx, 'o1');
     // Sync, then the owed advance, then the order is read (fresh status).
     expect(calls).toEqual(['sync', 'retry', 'read']);
+    // M5.4: the latest automation move rides along (print-ready notice).
+    expect(ws).toMatchObject({
+      auto_advanced: { to: 'MANUFACTURING', reason: 'print_ready' },
+    });
   });
 });

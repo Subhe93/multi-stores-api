@@ -2,7 +2,8 @@
  * Installs a branded set of order email templates for one INDEPENDENT store
  * (StoreNotificationTemplate rows), in Swedish and English:
  * order_confirmation, order_shipped, order_delivered, order_cancelled,
- * order_refunded and new_order_owner.
+ * order_refunded, new_order_owner and production_new_order (production
+ * app staff notification, M5.4).
  *
  * Colours come from the store's theme (theme_customizations.colors). Products,
  * prices and totals are the pre-rendered {{items_html}} / {{totals_html}}
@@ -137,6 +138,15 @@ const COPY: Record<Locale, Copy> = {
         intro:
           '{{#if customer_name}}{{customer_name}} har{{/if}}{{#unless customer_name}}En kund har{{/unless}} lagt en beställning på {{total}} i {{store_name}}.',
       },
+      production_new_order: {
+        subject:
+          'Ny order att producera: {{order_number}} ({{items_count}} rader, {{checks_count}} moment)',
+        preheader: 'Order {{order_number}} väntar på produktion.',
+        eyebrow: 'Produktion',
+        title: 'Ny order att producera',
+        intro:
+          'Order {{order_number}} väntar på produktion: {{items_count}} rader och {{checks_count}} moment i checklistan.',
+      },
     },
   },
   en: {
@@ -205,6 +215,15 @@ const COPY: Record<Locale, Copy> = {
         title: 'You have a new order',
         intro:
           '{{#if customer_name}}{{customer_name}}{{/if}}{{#unless customer_name}}A customer{{/unless}} placed an order for {{total}} in {{store_name}}.',
+      },
+      production_new_order: {
+        subject:
+          'New order to produce: {{order_number}} ({{items_count}} items, {{checks_count}} checks)',
+        preheader: 'Order {{order_number}} is waiting for production.',
+        eyebrow: 'Production',
+        title: 'New order to produce',
+        intro:
+          'Order {{order_number}} is waiting for production: {{items_count}} items and {{checks_count}} checklist items.',
       },
     },
   },
@@ -404,6 +423,19 @@ ${items(b, c)}
 ${address(b, c)}
 {{#if order_url}}${button(b, c.openOrder, '{{order_url}}')}{{/if}}`,
       );
+    case 'production_new_order':
+      return shell(
+        b,
+        locale,
+        c,
+        e,
+        `${meta(b, c)}
+${sectionTitle(b, c.customer)}
+<p style="margin:12px 0 0;font-family:${SANS};font-size:13px;line-height:1.7;color:${b.text};">{{customer_name}}{{#if customer_email}}<br /><a href="mailto:{{customer_email}}" style="color:${b.text};">{{customer_email}}</a>{{/if}}</p>
+${items(b, c)}
+${address(b, c)}
+{{#if order_url}}${button(b, c.openOrder, '{{order_url}}')}{{/if}}`,
+      );
     default:
       throw new Error(`Unknown event ${event}`);
   }
@@ -416,7 +448,8 @@ function textFor(event: string, b: Brand, locale: Locale): string {
   const itemsText = `\n{{items_text}}\n`;
   const totals = `\n{{totals_text}}\n`;
   const addr = `{{#if shipping_address_text}}\n${c.deliveryAddress}:\n{{shipping_address_text}}\n{{/if}}{{#if company_block_text}}\n{{company_block_text}}\n{{/if}}`;
-  const view = `{{#if order_url}}\n${event === 'new_order_owner' ? c.openOrder : c.viewOrder}: {{order_url}}\n{{/if}}`;
+  const staff = event === 'new_order_owner' || event === 'production_new_order';
+  const view = `{{#if order_url}}\n${staff ? c.openOrder : c.viewOrder}: {{order_url}}\n{{/if}}`;
   const foot = `\n${b.name}{{#if platform_name}} · {{platform_name}}{{/if}}\n{{store_url}}{{#if seller_block_text}}\n\n{{seller_block_text}}{{/if}}`;
   // invoices app: empty without an issued invoice.
   const invoice = `{{#if invoice_number}}\n${c.invoice} {{invoice_number}}: {{invoice_url}}\n{{/if}}`;
@@ -449,6 +482,15 @@ function textFor(event: string, b: Brand, locale: Locale): string {
         view +
         foot
       );
+    case 'production_new_order':
+      return (
+        head +
+        `\n${c.customer}: {{customer_name}}{{#if customer_email}} <{{customer_email}}>{{/if}}\n` +
+        itemsText +
+        addr +
+        view +
+        foot
+      );
     case 'new_order_owner':
       return (
         head +
@@ -473,6 +515,7 @@ const EVENTS = [
   'order_cancelled',
   'order_refunded',
   'new_order_owner',
+  'production_new_order',
 ];
 
 export function buildTemplates(brand: Brand) {

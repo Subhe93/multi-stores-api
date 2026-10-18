@@ -36,6 +36,7 @@ import {
   introducesCardConfig,
 } from '../personalization/personalization-option-refs';
 import { isPlainObject } from '../../common/personalization/rules';
+import { isValidGtin } from '../feeds/gtin';
 
 /**
  * Public projection of `GET /products` (anonymous callers and non-owners):
@@ -140,6 +141,40 @@ export function redactProductForNonOwner<
     });
   }
   return out as Omit<T, 'cost_price' | 'external_ref'>;
+}
+
+/** Feed data keys of the product DTOs (M5.6 feeds app). */
+const FEED_TEXT_FIELDS = [
+  'gtin',
+  'mpn',
+  'brand',
+  'google_product_category',
+  'condition',
+] as const;
+
+/**
+ * Trims the feed text fields in place; '' becomes null (clears), an absent
+ * key stays absent (update keeps the stored value). Throws
+ * PRODUCT_GTIN_INVALID for a GTIN without a valid check digit, so a feed
+ * never carries an identifier Google would reject.
+ */
+export function normalizeFeedFields(
+  data: Partial<Record<(typeof FEED_TEXT_FIELDS)[number], string | null>>,
+): void {
+  for (const key of FEED_TEXT_FIELDS) {
+    if (!(key in data)) continue;
+    const raw = data[key];
+    const value = typeof raw === 'string' ? raw.trim() : null;
+    data[key] = value ? value : null;
+  }
+  if (data.gtin && !isValidGtin(data.gtin)) {
+    throw new BadRequestException({
+      code: 'PRODUCT_GTIN_INVALID',
+      message:
+        'GTIN must be 8, 12, 13 or 14 digits with a valid check digit (EAN/UPC/ISBN barcode number).',
+    });
+  }
+  if (data.condition === 'new') data.condition = null;
 }
 
 @Injectable()
@@ -527,6 +562,7 @@ export class ProductsService {
       productData.creator_id = creator.id;
     }
 
+    normalizeFeedFields(data);
     await this.assertTaxClassAllowed(dto.tax_class_id, productData.creator_id);
     await this.assertShippingProfileAllowed(
       dto.shipping_profile_id,
@@ -848,6 +884,9 @@ export class ProductsService {
       ...data
     } = dto;
 
+    // Feed fields: absent keys are not in `data`, so the stored values are
+    // kept (X19 carry-over); '' / null clears them.
+    normalizeFeedFields(data);
     await this.assertTaxClassAllowed(dto.tax_class_id, product.creator_id);
     await this.assertShippingProfileAllowed(dto.shipping_profile_id, product);
     if (data.variant_option_config !== undefined) {
@@ -1066,6 +1105,14 @@ export class ProductsService {
           shipping_profile_id: source.shipping_profile_id,
           tax_class_id: source.tax_class_id,
           tax_exempt: source.tax_exempt,
+          // Feed data (M5.6) is copied as-is; the clone is a DRAFT so a
+          // shared GTIN never reaches a feed until the creator reviews it.
+          gtin: source.gtin,
+          mpn: source.mpn,
+          brand: source.brand,
+          google_product_category: source.google_product_category,
+          condition: source.condition,
+          feed_excluded: source.feed_excluded,
           // Force safe defaults for the clone.
           status: ProductStatus.DRAFT,
           is_featured: false,

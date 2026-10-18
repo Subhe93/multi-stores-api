@@ -77,6 +77,18 @@ clean_copy "$TMP/order"
 awk -F '\t' 'BEGIN { OFS = "\t" } NR == 2 { $21 = "shop_order" } { print }' "$FIXTURE/posts.tsv" >"$TMP/order/posts.tsv"
 check_not "scan: a shop_order row in posts.tsv is refused" wpx_scan_forbidden "$TMP/order"
 
+# Pages and posts (M5 B17): published rows pass, anything else is refused.
+check "scan: the fixture holds published page and post rows" \
+  bash -c 'awk -F "\t" "NR > 1 && \$21 == \"page\"" "$1" | grep -q . && awk -F "\t" "NR > 1 && \$21 == \"post\"" "$1" | grep -q .' _ "$FIXTURE/posts.tsv"
+clean_copy "$TMP/draft-page"
+awk -F '\t' 'BEGIN { OFS = "\t" } NR > 1 && $21 == "page" { $8 = "draft" } { print }' "$FIXTURE/posts.tsv" >"$TMP/draft-page/posts.tsv"
+check_not "scan: an unpublished page row is refused" wpx_scan_forbidden "$TMP/draft-page"
+out=$(wpx_scan_forbidden "$TMP/draft-page")
+case $out in *"is an unpublished page / post"*) ok "scan: names the unpublished content row" ;; *) bad "scan: names the unpublished content row ($out)" ;; esac
+clean_copy "$TMP/private-post"
+awk -F '\t' 'BEGIN { OFS = "\t" } NR > 1 && $21 == "post" { $8 = "private" } { print }' "$FIXTURE/posts.tsv" >"$TMP/private-post/posts.tsv"
+check_not "scan: a private post row is refused" wpx_scan_forbidden "$TMP/private-post"
+
 clean_copy "$TMP/extra"
 printf 'x\n' >"$TMP/extra/users.tsv"
 check_not "scan: a file outside the allowlist is refused" wpx_scan_forbidden "$TMP/extra"
@@ -319,7 +331,7 @@ FAKE_EOF
   check "e2e: archive created" test -f "$run_out.tgz"
   check "e2e: archive is flat and holds exactly the bundle files" \
     bash -c 'diff <(tar -tzf "$1" | sort) <(ls -A "$2" | sort)' _ "$run_out.tgz" "$run_out"
-  check "e2e: summary prints row counts" grep -qE '^posts\.tsv +6 ' "$TMP/run.log"
+  check "e2e: summary prints row counts" grep -qE '^posts\.tsv +9 ' "$TMP/run.log"
   check "e2e: summary prints the total size" grep -qE '^total +[0-9]+$' "$TMP/run.log"
   check_not "e2e: no size warning for a small bundle" grep -q 'is larger than' "$TMP/run.log"
   check_not "e2e: no leftover temp files" bash -c 'ls -A "$1" | grep -qE "\.part$|^\.err$"' _ "$run_out"
@@ -337,6 +349,17 @@ FAKE_EOF
   check "e2e: attachments still come from parent, thumbnail, gallery and term meta" \
     bash -c 'grep -F "SELECT a.ID" -A 20 "$1" | grep -qF "_thumbnail_id" && grep -F "SELECT a.ID" -A 20 "$1" | grep -qF "a.post_parent IN" && grep -F "SELECT a.ID" -A 20 "$1" | grep -qF "product_attribute_image"' _ "$SQL_LOG"
 
+  # Pages / posts (M5 B17): published only, same posts query, blog categories.
+  check "e2e: posts query takes catalog types in every non-excluded status" \
+    grep -qF "( p.post_type IN ('product','product_variation','npp_template','acf-field-group','acf-field') AND p.post_status NOT IN ('trash','auto-draft','inherit') )" "$SQL_LOG"
+  check "e2e: posts query takes pages and posts only when published" \
+    grep -qF "( p.post_type IN ('page','post') AND p.post_status = 'publish' )" "$SQL_LOG"
+  check "e2e: postmeta and relationships use the same published-content filter" \
+    bash -c 'test "$(grep -cF "( ep.post_type IN ('"'"'page'"'"','"'"'post'"'"') AND ep.post_status = '"'"'publish'"'"' )" "$1")" -ge 3' _ "$SQL_LOG"
+  check "e2e: the blog category taxonomy is exported for %category% permalinks" \
+    grep -qF "'product_shipping_class','category'" "$SQL_LOG"
+  check "e2e: the permalink options are exported" \
+    bash -c 'grep -qF "'"'"'category_base'"'"'" "$1" && grep -qF "'"'"'page_on_front'"'"'" "$1" && grep -qF "'"'"'show_on_front'"'"'" "$1"' _ "$SQL_LOG"
   check_not "e2e: SQL never touches users, orders, sessions or API keys" \
     grep -qiE 'wp_users|usermeta|shop_order|wc_orders|woocommerce_order|woocommerce_sessions|woocommerce_api_keys|wc_customer|comments' "$SQL_LOG"
   check_not "e2e: SQL never writes" grep -qiwE 'INSERT|UPDATE|DELETE|REPLACE|DROP|ALTER|CREATE|TRUNCATE' "$SQL_LOG"
