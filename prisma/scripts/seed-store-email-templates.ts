@@ -20,6 +20,9 @@
  * Options:
  *   --preview <dir>   also write rendered sample HTML files there
  *   --dry-run         build (and preview) only; do not touch the database
+ *   --only-missing    keep every event the store already has (customised or
+ *                     not) and insert only the events it lacks; safe to re-run
+ *                     on a live store, e.g. to add production_new_order
  */
 import 'dotenv/config';
 import { promises as fs } from 'fs';
@@ -613,6 +616,7 @@ const HEX = /^#[0-9a-fA-F]{3,8}$/;
 async function main(): Promise<void> {
   const slug = arg('slug');
   const dryRun = process.argv.includes('--dry-run');
+  const onlyMissing = process.argv.includes('--only-missing');
   const previewDir = arg('preview');
   if (!slug && !dryRun) throw new Error('Pass --slug <store slug>');
 
@@ -683,7 +687,8 @@ async function main(): Promise<void> {
     const existing = await prisma.storeNotificationTemplate.findMany({
       where: { store_id: storeId },
     });
-    if (existing.length > 0) {
+    const existingEvents = new Set(existing.map((row) => row.event));
+    if (existing.length > 0 && !onlyMissing) {
       const backupDir = process.env.BACKUP_DIR || process.cwd();
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const file = join(backupDir, `email-templates-${slug}-${stamp}.json`);
@@ -691,7 +696,13 @@ async function main(): Promise<void> {
       console.log(`Backed up ${existing.length} existing row(s) to ${file}`);
     }
 
+    let installed = 0;
     for (const t of templates) {
+      if (onlyMissing && existingEvents.has(t.event)) {
+        console.log(`  • ${t.event} kept (already present)`);
+        continue;
+      }
+      installed++;
       await prisma.storeNotificationTemplate.upsert({
         where: { store_id_event: { store_id: storeId, event: t.event } },
         create: {
@@ -711,7 +722,9 @@ async function main(): Promise<void> {
       });
       console.log(`  • ${t.event} (${LOCALES.join(', ')})`);
     }
-    console.log(`Done. Installed ${templates.length} templates for ${slug}.`);
+    console.log(
+      `Done. Installed ${installed} of ${templates.length} templates for ${slug}${onlyMissing ? ' (--only-missing)' : ''}.`,
+    );
   } finally {
     await prisma?.$disconnect();
   }

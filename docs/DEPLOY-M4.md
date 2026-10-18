@@ -90,7 +90,7 @@ The partial indexes `ImportRun_one_active_per_store`, `OrderItemDesign_queue_cla
 
 - `GET /api/health` returns 200. `GET /api/stores/by-domain/<host>` contains `redirects_version` only for stores with redirects.
 - `node scripts/report-unsafe-patterns.js` (read-only): expect 0 rows, or a list of merchants to contact.
-- `node prisma/scripts/seed-store-email-templates.ts` for stores created before M2/M3 (confirm idempotence on customised templates first).
+- `npx ts-node prisma/scripts/seed-store-email-templates.ts --slug <slug> --only-missing` for stores created before M2/M3 or before the production app: adds only the missing events (e.g. `production_new_order`) and never overwrites customised templates. Without `--only-missing` the script replaces every event of that store (after a JSON backup) — use it only for a fresh store.
 - `pm2 logs api | grep -i "runs as root"` must be empty once the designer is enabled.
 - `POST /api/admin/retention/run?dry_run=1`: every task reports ok.
 - Existing-store smoke test: a checkout on an unrelated store is unchanged.
