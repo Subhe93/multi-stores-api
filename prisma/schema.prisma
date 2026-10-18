@@ -540,15 +540,19 @@ model ShippingProfile {
 }
 
 model ShippingZone {
-  id                 String   @id @default(uuid())
-  profile_id         String
-  name               String
-  countries          String[]
-  base_cost          Decimal  @db.Decimal(10, 2)
-  per_item_cost      Decimal  @default(0) @db.Decimal(10, 2)
-  free_threshold     Decimal? @db.Decimal(10, 2)
-  estimated_days_min Int
-  estimated_days_max Int
+  id                    String   @id @default(uuid())
+  profile_id            String
+  name                  String
+  countries             String[]
+  base_cost             Decimal  @db.Decimal(10, 2)
+  per_item_cost         Decimal  @default(0) @db.Decimal(10, 2)
+  free_threshold        Decimal? @db.Decimal(10, 2)
+  estimated_days_min    Int
+  estimated_days_max    Int
+  // When on and a method's free_threshold is met, only those threshold-free
+  // methods are offered (other methods, pickup included, are hidden), like
+  // WooCommerce's "Hide shipping methods" plugin in hide_all mode.
+  hide_others_when_free Boolean  @default(false)
 
   profile ShippingProfile  @relation(fields: [profile_id], references: [id], onDelete: Cascade)
   // Selectable methods offered for this zone. The cost/days columns above are

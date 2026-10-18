@@ -7,6 +7,7 @@ import { Prisma, ShippingMethodType, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   CreateShippingProfileDto,
+  UpdateShippingProfileDto,
   CreateShippingZoneDto,
   UpdateShippingZoneDto,
   CreateShippingMethodDto,
@@ -252,6 +253,21 @@ export class ShippingService {
     return profile;
   }
 
+  /** Rename a profile the requester owns; returns it with its zones. */
+  async updateProfile(
+    id: string,
+    dto: UpdateShippingProfileDto,
+    ownerId: string,
+    ownerType: OwnerType,
+  ) {
+    await this.assertProfileOwned(id, ownerId, ownerType);
+    return this.prisma.shippingProfile.update({
+      where: { id },
+      data: { name: dto.name.trim() },
+      include: zonesInclude,
+    });
+  }
+
   async deleteProfile(id: string, ownerId: string, ownerType: OwnerType) {
     const where =
       ownerType === 'provider'
@@ -478,6 +494,11 @@ export class ShippingService {
    * Price every method of the zone for a destination. A zone with no method
    * rows at all is priced from its legacy cost columns as one "Standard
    * shipping" method (id `zone:<id>`), so pre-migration data keeps working.
+   *
+   * With `hide_others_when_free` on, once at least one active method is free
+   * because its `free_threshold` is met, only those methods are returned:
+   * every other method (also one that is free by price, e.g. a 0 kr pickup)
+   * is hidden, like WooCommerce's "Hide shipping methods" in hide_all mode.
    */
   private quoteZone(
     zone: ZoneWithMethods,
@@ -485,15 +506,15 @@ export class ShippingService {
     subtotal: number,
     locale?: string | null,
   ): ProfileMethodQuote[] {
+    const thresholdMet = (m: { free_threshold: Prisma.Decimal | null }) =>
+      m.free_threshold != null && subtotal >= Number(m.free_threshold);
     const price = (m: {
       base_cost: Prisma.Decimal;
       per_item_cost: Prisma.Decimal;
       free_threshold: Prisma.Decimal | null;
     }) => {
       let cost = Number(m.base_cost) + Number(m.per_item_cost) * itemCount;
-      if (m.free_threshold != null && subtotal >= Number(m.free_threshold)) {
-        cost = 0;
-      }
+      if (thresholdMet(m)) cost = 0;
       return round2(cost);
     };
 
@@ -515,23 +536,27 @@ export class ShippingService {
       ];
     }
 
-    return zone.methods
-      .filter((m) => m.is_active)
-      .map((m) => {
-        const cost = price(m);
-        return {
-          id: m.id,
-          name: resolveShippingMethodName(m, locale),
-          matchKey: matchKeyOf(m.name),
-          type: m.type,
-          cost,
-          estimated_days: {
-            min: m.estimated_days_min,
-            max: m.estimated_days_max,
-          },
-          free_shipping: cost === 0,
-        };
-      });
+    let active = zone.methods.filter((m) => m.is_active);
+    if (zone.hide_others_when_free) {
+      const freeByThreshold = active.filter(thresholdMet);
+      if (freeByThreshold.length > 0) active = freeByThreshold;
+    }
+
+    return active.map((m) => {
+      const cost = price(m);
+      return {
+        id: m.id,
+        name: resolveShippingMethodName(m, locale),
+        matchKey: matchKeyOf(m.name),
+        type: m.type,
+        cost,
+        estimated_days: {
+          min: m.estimated_days_min,
+          max: m.estimated_days_max,
+        },
+        free_shipping: cost === 0,
+      };
+    });
   }
 
   private findZone(

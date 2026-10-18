@@ -193,6 +193,12 @@ export class CreateShippingZoneDto {
   @Type(() => Number)
   estimated_days_max?: number;
 
+  // Offer only the threshold-free method(s) once a free_threshold is met
+  // (hides every other method of the zone, pickup included).
+  @IsOptional()
+  @IsBoolean()
+  hide_others_when_free?: boolean;
+
   // Methods to create together with the zone.
   @IsOptional()
   @IsArray()
@@ -242,6 +248,12 @@ export class UpdateShippingZoneDto {
   @Min(0)
   @Type(() => Number)
   estimated_days_max?: number;
+
+  // Offer only the threshold-free method(s) once a free_threshold is met
+  // (hides every other method of the zone, pickup included).
+  @IsOptional()
+  @IsBoolean()
+  hide_others_when_free?: boolean;
 }
 
 // ── Profiles ────────────────────────────────────────────────────────────────
@@ -259,6 +271,14 @@ export class CreateShippingProfileDto {
   @ValidateNested({ each: true })
   @Type(() => CreateShippingZoneDto)
   zones?: CreateShippingZoneDto[];
+}
+
+export class UpdateShippingProfileDto {
+  @trim()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  name: string;
 }
 
 // ── Quotes ──────────────────────────────────────────────────────────────────

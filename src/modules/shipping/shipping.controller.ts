@@ -12,6 +12,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { ShippingService } from './shipping.service';
 import {
   CreateShippingProfileDto,
+  UpdateShippingProfileDto,
   CreateShippingZoneDto,
   UpdateShippingZoneDto,
   CreateShippingMethodDto,
@@ -109,6 +110,23 @@ export class ShippingController {
       role,
     );
     return this.shippingService.setDefaultProfile(id, ownerId, ownerType);
+  }
+
+  // Rename a profile (owner-scoped like the other profile routes).
+  @Put('profiles/:id')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.PROVIDER, UserRole.CREATOR)
+  async updateProfile(
+    @Param('id') id: string,
+    @Body() dto: UpdateShippingProfileDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    const { ownerId, ownerType } = await this.shippingService.requireOwner(
+      userId,
+      role,
+    );
+    return this.shippingService.updateProfile(id, dto, ownerId, ownerType);
   }
 
   @Delete('profiles/:id')
