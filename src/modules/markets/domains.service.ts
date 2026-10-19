@@ -86,20 +86,57 @@ export class DomainsService {
     @Optional() @Inject(DNS_RESOLVER) private readonly resolver?: DnsResolver,
   ) {}
 
-  /** What the creator must point their DNS at. */
-  dnsTarget(): { cname: string | null; a?: string } {
-    const cname = (
+  /**
+   * What the creator must point their DNS at: a CNAME to the store's own
+   * platform hostname (`<slug>.<storefront host>`), the same record every
+   * store uses for its custom domain. `CUSTOM_DOMAIN_CNAME_TARGET` overrides
+   * it platform-wide; `CUSTOM_DOMAIN_A_TARGET` is an optional extra for hosts
+   * that cannot carry a CNAME. Without a slug (no store yet) only the
+   * overrides are returned.
+   */
+  dnsTarget(storeSlug?: string | null): { cname: string | null; a?: string } {
+    const override = (
       this.config.get<string>('CUSTOM_DOMAIN_CNAME_TARGET') || ''
     ).trim();
     const a = (this.config.get<string>('CUSTOM_DOMAIN_A_TARGET') || '').trim();
+    const cname = override || (storeSlug ? this.platformHostname(storeSlug) : '');
     return { cname: cname || null, ...(a ? { a } : {}) };
+  }
+
+  /** `GET /markets/dns-target` for the creator's own store. */
+  async dnsTargetForUser(userId: string) {
+    const creator = await this.prisma.creator.findUnique({
+      where: { user_id: userId },
+      select: { store: { select: { slug: true } } },
+    });
+    return this.dnsTarget(creator?.store?.slug ?? null);
+  }
+
+  /** `<slug>.<storefront host>` from STOREFRONT_URL (the store's platform address). */
+  private platformHostname(slug: string): string {
+    const base =
+      this.config.get<string>('STOREFRONT_URL') || 'http://localhost:3003';
+    try {
+      return `${slug}.${new URL(base).host}`.toLowerCase();
+    } catch {
+      return `${slug}.localhost:3003`;
+    }
+  }
+
+  /** Slug of a store (for the expected CNAME in views). */
+  private async slugOf(storeId: string): Promise<string | null> {
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { slug: true },
+    });
+    return store?.slug ?? null;
   }
 
   /** Admin: every domain of a creator's store, across its markets. */
   async adminListByCreator(creatorId: string): Promise<DomainView[]> {
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creatorId },
-      select: { id: true },
+      select: { id: true, slug: true },
     });
     if (!store) {
       throw new NotFoundException({
@@ -111,7 +148,7 @@ export class DomainsService {
       where: { store_id: store.id },
       orderBy: { created_at: 'asc' },
     });
-    return rows.map((r) => this.toView(r));
+    return rows.map((r) => this.toView(r, null, store.slug));
   }
 
   async listForMarket(marketId: string): Promise<DomainView[]> {
@@ -119,7 +156,8 @@ export class DomainsService {
       where: { market_id: marketId },
       orderBy: { created_at: 'asc' },
     });
-    return rows.map((r) => this.toView(r));
+    const slug = rows.length ? await this.slugOf(rows[0].store_id) : null;
+    return rows.map((r) => this.toView(r, null, slug));
   }
 
   async add(
@@ -161,7 +199,7 @@ export class DomainsService {
       },
     });
     await this.afterMutation(storeId);
-    return this.toView(row);
+    return this.toView(row, null, await this.slugOf(storeId));
   }
 
   async remove(storeId: string, marketId: string, domainId: string) {
@@ -198,7 +236,8 @@ export class DomainsService {
     domainId: string,
   ): Promise<DomainView> {
     const row = await this.rowOf(marketId, domainId);
-    const target = this.dnsTarget();
+    const slug = await this.slugOf(storeId);
+    const target = this.dnsTarget(slug);
     const observed = await this.lookup(row.hostname);
     const seen = [...observed.cname, ...observed.a];
     const cnameTarget = target.cname;
@@ -238,7 +277,7 @@ export class DomainsService {
       },
     });
     await this.afterMutation(storeId);
-    return this.toView(updated, seen);
+    return this.toView(updated, seen, slug);
   }
 
   async setPrimary(
@@ -264,7 +303,7 @@ export class DomainsService {
       }),
     ]);
     await this.afterMutation(storeId);
-    return this.toView({ ...row, is_primary: true });
+    return this.toView({ ...row, is_primary: true }, null, await this.slugOf(storeId));
   }
 
   /** Admin: PENDING / VERIFIED / ACTIVE (L6 — ACTIVE after the CDN step). */
@@ -286,7 +325,7 @@ export class DomainsService {
       },
     });
     await this.afterMutation(row.store_id);
-    return this.toView(updated);
+    return this.toView(updated, null, await this.slugOf(row.store_id));
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -402,6 +441,7 @@ export class DomainsService {
       last_observed?: unknown;
     },
     observed: string[] | null = null,
+    storeSlug: string | null = null,
   ): DomainView {
     return {
       id: row.id,
@@ -411,7 +451,7 @@ export class DomainsService {
       status: row.status,
       verified_at: row.verified_at ? row.verified_at.toISOString() : null,
       dns: {
-        expected_cname: this.dnsTarget().cname,
+        expected_cname: this.dnsTarget(storeSlug).cname,
         // Fresh records from this call, else what the last verify saw.
         observed: observed ?? observedOf(row.last_observed),
       },

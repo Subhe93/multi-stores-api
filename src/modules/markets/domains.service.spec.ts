@@ -104,7 +104,7 @@ function makePrisma(seed: Partial<Row>[], legacyDomains: string[] = []) {
             : null,
         ),
     ),
-    findUnique: jest.fn(() => Promise.resolve({ id: STORE_ID })),
+    findUnique: jest.fn(() => Promise.resolve({ id: STORE_ID, slug: 'namez-se' })),
   };
   return {
     rows,
@@ -139,6 +139,7 @@ function build(
       // Keep the DNS timeout short for the hanging-resolver case.
       if (key === 'CUSTOM_DOMAIN_DNS_TIMEOUT_MS') return '30';
       if (key === 'CUSTOM_DOMAIN_HTTP_VERIFY') return opts.httpVerify;
+      if (key === 'STOREFRONT_URL') return 'https://iwings-digital.com';
       return undefined;
     },
   };
@@ -283,9 +284,15 @@ describe('DomainsService DNS target and observed records', () => {
       target: null,
     });
     expect(service.dnsTarget()).toEqual({ cname: null });
+    expect(service.dnsTarget('namez-se')).toEqual({
+      cname: 'namez-se.iwings-digital.com',
+    });
     const [view] = await service.listForMarket(MARKET_ID);
-    expect(view.dns).toEqual({ expected_cname: null, observed: null });
-    // Nothing to compare against: verify fails and reports what it saw.
+    expect(view.dns).toEqual({
+      expected_cname: 'namez-se.iwings-digital.com',
+      observed: null,
+    });
+    // The resolver answers nothing: verify fails and reports what it saw.
     await expect(
       service.verify(STORE_ID, MARKET_ID, 'd1'),
     ).rejects.toMatchObject({
@@ -418,5 +425,27 @@ describe('DomainsService.verify behind a proxy (HTTP probe)', () => {
     ).rejects.toMatchObject({
       response: { code: 'MARKET_DOMAIN_VERIFY_FAILED' },
     });
+  });
+});
+
+describe('DomainsService.verify against the store platform hostname', () => {
+  it('VERIFIED when the CNAME points at <slug>.<storefront host> (no override set)', async () => {
+    const { service } = build([{ id: 'd1', hostname: 'namez.shop' }], {
+      target: null,
+      dns: { resolveCname: () => Promise.resolve(['namez-se.iwings-digital.com']) },
+    });
+    const view = await service.verify(STORE_ID, MARKET_ID, 'd1');
+    expect(view.status).toBe('VERIFIED');
+    expect(view.dns.expected_cname).toBe('namez-se.iwings-digital.com');
+  });
+
+  it("another store's platform hostname does not verify", async () => {
+    const { service } = build([{ id: 'd1', hostname: 'namez.shop' }], {
+      target: null,
+      dns: { resolveCname: () => Promise.resolve(['other.iwings-digital.com']) },
+    });
+    await expect(
+      service.verify(STORE_ID, MARKET_ID, 'd1'),
+    ).rejects.toMatchObject({ response: { code: 'MARKET_DOMAIN_VERIFY_FAILED' } });
   });
 });

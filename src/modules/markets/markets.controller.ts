@@ -44,8 +44,8 @@ export class MarketsController {
 
   // What the creator must point a custom hostname at.
   @Get('dns-target')
-  dnsTarget() {
-    return this.domains.dnsTarget();
+  dnsTarget(@CurrentUser('id') userId: string) {
+    return this.domains.dnsTargetForUser(userId);
   }
 
   @Get('fx-preview')

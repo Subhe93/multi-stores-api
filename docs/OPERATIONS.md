@@ -19,7 +19,7 @@ Every variable, grouped. Defaults in brackets; `(prod)` = required in production
 | `STOREFRONT_URL`, `REVALIDATE_SECRET` | – | Storefront cache revalidation. |
 | `CORS_ALLOWED_ORIGINS` | reflect all (warns) | Exact origins or one-level wildcards. |
 | `TRUST_PROXY` | none | Hop count (`2` behind Cloudflare + nginx). Required for per-IP throttles and byte budgets. |
-| `CUSTOM_DOMAIN_CNAME_TARGET`, `CUSTOM_DOMAIN_A_TARGET`, `CUSTOM_DOMAIN_DNS_TIMEOUT_MS`, `CUSTOM_DOMAIN_HTTP_VERIFY` | –, –, `5000`, `on` | Markets custom hostnames. Verify passes on a CNAME/A match OR when `https://<host>/api/platform-probe` answers with the platform marker and that host (needed behind Cloudflare, whose public records never point at the origin). Set `A_TARGET` to the origin IP so unproxied hosts verify without the probe. |
+| `CUSTOM_DOMAIN_CNAME_TARGET`, `CUSTOM_DOMAIN_A_TARGET`, `CUSTOM_DOMAIN_DNS_TIMEOUT_MS`, `CUSTOM_DOMAIN_HTTP_VERIFY` | –, –, `5000`, `on` | Markets custom hostnames. The CNAME target shown to creators is the store's own platform hostname `<slug>.<STOREFRONT_URL host>` (the same record every custom domain uses); `CNAME_TARGET` overrides it platform-wide and `A_TARGET` is optional. Verify passes on a CNAME/A match OR when `https://<host>/api/platform-probe` answers with the platform marker and that host (needed behind Cloudflare, whose public records never point at the origin). |
 | `REDIRECTS_PROXY_KEY` | – | Same value in the web app; lifts the redirect-route throttle. |
 | `VIES_MODE`, `VIES_BASE_URL`, `VIES_TIMEOUT_MS`, `VIES_CACHE_TTL_HOURS`, `VIES_QUEUE_TIMEOUT_MS` | `live`, EC, `4000`, `24`, `2000` | B2B VAT checks. |
 
