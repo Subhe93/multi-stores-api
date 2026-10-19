@@ -827,7 +827,7 @@ export class MarketsService {
       price_rule: priceRuleOf(row.price_rule),
       payment_check: (row.payment_check as PaymentCheck | null) ?? null,
       effective_rate: effectiveRate,
-      domains: row.domains.map((d) => this.domains.toView(d)),
+      domains: row.domains.map((d) => this.domains.toView(d, null, store.slug)),
       platform_hostname: this.platformHostname(store.slug),
     };
   }
