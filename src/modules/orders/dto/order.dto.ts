@@ -271,6 +271,12 @@ export class QuoteOrderDto {
   @MaxLength(16)
   market_key?: string;
 
+  // Market-preview host: quote a DRAFT market too (display only; an order
+  // can never be created in a market that is not LIVE).
+  @IsOptional()
+  @IsBoolean()
+  preview?: boolean;
+
   // b2b app: quote for the company view (ignored while the app is off).
   @IsOptional()
   @IsBuyerType()

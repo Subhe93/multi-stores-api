@@ -125,7 +125,11 @@ export class PaymentsService {
    * for `marketKey` (the default market without a key; null when the app is
    * off, in which case the store currency decides as before).
    */
-  async getPublicConfig(storeSlug?: string, marketKey?: string) {
+  async getPublicConfig(
+    storeSlug?: string,
+    marketKey?: string,
+    preview?: boolean,
+  ) {
     const stripeConfigured = await this.isStripeConfigured();
     const publishableKey = await this.getPublishableKey();
 
@@ -181,7 +185,11 @@ export class PaymentsService {
               select: { default_currency: true },
             })
           )?.default_currency,
-          await this.markets.resolve(store.id, marketKey),
+          preview && marketKey
+            ? await this.markets.resolve(store.id, marketKey, {
+                preview: true,
+              })
+            : await this.markets.resolve(store.id, marketKey),
         ),
       }),
     };

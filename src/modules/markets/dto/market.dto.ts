@@ -14,9 +14,11 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
-const KEY_REGEX = /^[a-z0-9](?:[a-z0-9-]{0,14}[a-z0-9])?$/;
+// No "--" inside a key: the market-preview hostname is `<slug>--<key>` and
+// splits on that separator.
+const KEY_REGEX = /^(?!.*--)[a-z0-9](?:[a-z0-9-]{0,14}[a-z0-9])?$/;
 const KEY_MESSAGE =
-  'key must be 1-16 lowercase letters, digits or hyphens (no leading/trailing hyphen)';
+  'key must be 1-16 lowercase letters, digits or hyphens (no leading/trailing or doubled hyphen)';
 const COUNTRY_REGEX = /^[A-Za-z]{2}$/;
 const LOCALE_REGEX = /^[a-z]{2}(?:-[A-Za-z]{2})?$/;
 const HOSTNAME_REGEX =

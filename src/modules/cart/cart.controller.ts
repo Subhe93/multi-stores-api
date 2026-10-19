@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { CartService } from './cart.service';
+import { isPreview } from '../markets/preview-query';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -23,6 +24,7 @@ export class CartController {
   constructor(private cartService: CartService) {}
 
   // ?market= (markets app): prices are returned in that market's currency.
+  // ?preview=1 (market-preview host): a DRAFT market prices the cart too.
   // ?buyer=company (b2b app): the company view (net block, per-line rates).
   @Get()
   getCart(
@@ -30,8 +32,15 @@ export class CartController {
     @Query('locale') locale?: string,
     @Query('market') market?: string,
     @Query('buyer') buyer?: string,
+    @Query('preview') preview?: string,
   ) {
-    return this.cartService.getCart(userId, locale, market, buyer);
+    return this.cartService.getCart(
+      userId,
+      locale,
+      market,
+      buyer,
+      isPreview(preview),
+    );
   }
 
   @Post('items')
@@ -41,8 +50,16 @@ export class CartController {
     @Query('locale') locale?: string,
     @Query('market') market?: string,
     @Query('buyer') buyer?: string,
+    @Query('preview') preview?: string,
   ) {
-    return this.cartService.addItem(userId, dto, locale, market, buyer);
+    return this.cartService.addItem(
+      userId,
+      dto,
+      locale,
+      market,
+      buyer,
+      isPreview(preview),
+    );
   }
 
   @Put('items/:id')
@@ -53,6 +70,7 @@ export class CartController {
     @Query('locale') locale?: string,
     @Query('market') market?: string,
     @Query('buyer') buyer?: string,
+    @Query('preview') preview?: string,
   ) {
     return this.cartService.updateItem(
       userId,
@@ -61,6 +79,7 @@ export class CartController {
       locale,
       market,
       buyer,
+      isPreview(preview),
     );
   }
 
@@ -71,8 +90,16 @@ export class CartController {
     @Query('locale') locale?: string,
     @Query('market') market?: string,
     @Query('buyer') buyer?: string,
+    @Query('preview') preview?: string,
   ) {
-    return this.cartService.removeItem(userId, itemId, locale, market, buyer);
+    return this.cartService.removeItem(
+      userId,
+      itemId,
+      locale,
+      market,
+      buyer,
+      isPreview(preview),
+    );
   }
 
   @Delete()

@@ -293,6 +293,8 @@ export class CartService {
   private async resolveCartMarket(
     items: { product_id: string | null; custom_product_id: string | null }[],
     marketKey?: string,
+    /** Market-preview host: a DRAFT market resolves too (display only). */
+    preview?: boolean,
   ): Promise<MarketContext | null> {
     const first = items.find((i) => i.product_id || i.custom_product_id);
     if (!first) return null;
@@ -316,7 +318,9 @@ export class CartService {
       select: { id: true },
     });
     if (!store) return null;
-    return this.markets.resolve(store.id, marketKey);
+    return preview && marketKey
+      ? this.markets.resolve(store.id, marketKey, { preview: true })
+      : this.markets.resolve(store.id, marketKey);
   }
 
   private async getOrCreateCart(userId: string) {
@@ -1053,6 +1057,7 @@ export class CartService {
     locale?: string,
     marketKey?: string,
     buyer?: string,
+    preview?: boolean,
   ) {
     const cart = await this.getOrCreateCart(userId);
 
@@ -1067,6 +1072,7 @@ export class CartService {
     const market = await this.resolveCartMarket(
       cartWithItems?.items || [],
       marketKey,
+      preview,
     );
 
     const enrichedItems = await this.enrichCartItems(
@@ -1322,11 +1328,13 @@ export class CartService {
     },
     locale?: string,
     marketKey?: string,
+    preview?: boolean,
   ): Promise<void> {
     if (!line.product_id || line.custom_product_id) return;
     const market = await this.resolveCartMarket(
       [{ product_id: line.product_id, custom_product_id: null }],
       marketKey,
+      preview,
     );
     if (!market) return;
     const product = await this.prisma.product.findUnique({
@@ -1361,6 +1369,7 @@ export class CartService {
     locale?: string,
     marketKey?: string,
     buyer?: string,
+    preview?: boolean,
   ) {
     const cart = await this.getOrCreateCart(userId);
 
@@ -1376,7 +1385,7 @@ export class CartService {
       // query on the add path; loadContexts no longer looks it up, M5 A11).
       await this.assertVariantOfProduct(dto.product_id, dto.variant_id);
     }
-    await this.assertAvailableInMarket(dto, locale, marketKey);
+    await this.assertAvailableInMarket(dto, locale, marketKey, preview);
     // M4.2 designer (C29 step 2): a line with a design, or of a product the
     // designer is active for, is validated (and the design claimed for this
     // customer) here; it carries no field values, so the field rules are
@@ -1477,6 +1486,7 @@ export class CartService {
     locale?: string,
     marketKey?: string,
     buyer?: string,
+    preview?: boolean,
   ) {
     const cart = await this.getOrCreateCart(userId);
 
@@ -1488,7 +1498,7 @@ export class CartService {
         code: 'CART_ITEM_NOT_FOUND',
         message: 'Cart item not found',
       });
-    await this.assertAvailableInMarket(item, locale, marketKey);
+    await this.assertAvailableInMarket(item, locale, marketKey, preview);
 
     const data: {
       quantity?: number;
@@ -1585,6 +1595,7 @@ export class CartService {
     locale?: string,
     marketKey?: string,
     buyer?: string,
+    preview?: boolean,
   ) {
     const cart = await this.getOrCreateCart(userId);
 
@@ -1592,7 +1603,7 @@ export class CartService {
       where: { id: itemId, cart_id: cart.id },
     });
 
-    return this.getCart(userId, locale, marketKey, buyer);
+    return this.getCart(userId, locale, marketKey, buyer, preview);
   }
 
   async clearCart(userId: string) {

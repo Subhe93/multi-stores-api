@@ -829,6 +829,7 @@ export class MarketsService {
       effective_rate: effectiveRate,
       domains: row.domains.map((d) => this.domains.toView(d, null, store.slug)),
       platform_hostname: this.platformHostname(store.slug),
+      preview_url: row.is_default ? null : this.previewUrl(store.slug, row.key),
     };
   }
 
@@ -839,6 +840,22 @@ export class MarketsService {
       return `${slug}.${new URL(base).host}`;
     } catch {
       return `${slug}.localhost:3003`;
+    }
+  }
+
+  /**
+   * Market-preview URL: `<slug>--<key>` as ONE label under the platform
+   * host, so the existing wildcard DNS record and certificate cover it.
+   * The storefront proxy resolves it with `market-context?preview=1`.
+   */
+  private previewUrl(slug: string, key: string): string {
+    const base =
+      this.config.get<string>('STOREFRONT_URL') || 'http://localhost:3003';
+    try {
+      const url = new URL(base);
+      return `${url.protocol}//${slug}--${key}.${url.host}`;
+    } catch {
+      return `http://${slug}--${key}.localhost:3003`;
     }
   }
 

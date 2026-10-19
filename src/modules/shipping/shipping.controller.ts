@@ -234,7 +234,9 @@ export class ShippingController {
     // market so costs and the free threshold match POST /orders/quote.
     const market =
       dto.store_id && dto.market_key
-        ? await this.marketsContext.resolve(dto.store_id, dto.market_key)
+        ? await this.marketsContext.resolve(dto.store_id, dto.market_key, {
+            preview: dto.preview === true,
+          })
         : null;
     return this.shippingService.estimate(
       dto,

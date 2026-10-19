@@ -322,6 +322,11 @@ export class EstimateShippingDto {
   @IsString()
   @MaxLength(32)
   market_key?: string;
+
+  // Market-preview host: estimate for a DRAFT market too (display only).
+  @IsOptional()
+  @IsBoolean()
+  preview?: boolean;
 }
 
 export class CalculateShippingDto {

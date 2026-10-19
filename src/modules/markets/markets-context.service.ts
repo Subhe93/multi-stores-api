@@ -51,9 +51,15 @@ const marketSelect = {
   is_default: true,
   status: true,
   price_rule: true,
+  // Every status is read; `toContext` serves ACTIVE hosts only, except that
+  // a preview context may name a pending primary as its canonical host.
   domains: {
-    where: { status: 'ACTIVE' as const },
-    select: { hostname: true, is_primary: true, redirect_to: true },
+    select: {
+      hostname: true,
+      is_primary: true,
+      redirect_to: true,
+      status: true,
+    },
     orderBy: { created_at: 'asc' as const },
   },
 } satisfies Prisma.MarketSelect;
@@ -75,6 +81,16 @@ export const MARKET_NOT_LIVE = {
   message: 'This market is not live',
 };
 
+/**
+ * Options of `resolve()`. `preview` is the market-preview host
+ * (`<slug>--<key>.<platform host>`): a DRAFT market resolves too, so the
+ * storefront READ paths can render it before its domain is connected.
+ * Money-writing paths (order create, checkout sessions) never pass it.
+ */
+export interface ResolveMarketOptions {
+  preview?: boolean;
+}
+
 @Injectable()
 export class MarketsContextService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MarketsContextService.name);
@@ -95,26 +111,32 @@ export class MarketsContextService implements OnModuleInit, OnModuleDestroy {
   /**
    * The market context for a request. Null when the app is off. With a key:
    * 404 MARKET_NOT_FOUND for an unknown key, 404 MARKET_NOT_LIVE for a
-   * DRAFT market. Without a key: the default market.
+   * DRAFT market — unless `preview` is set, which lets a DRAFT market
+   * through (flagged `preview: true`; the app must still be on and an
+   * unknown key is still 404). Without a key: the default market.
    */
   async resolve(
     storeId: string,
     marketKey?: string | null,
+    options: ResolveMarketOptions = {},
   ): Promise<MarketContext | null> {
     if (!(await this.storeApps.isEnabled(storeId, 'markets'))) return null;
     const entry = await this.entryOf(storeId);
     if (!entry) return null;
     const key = marketKey?.trim().toLowerCase();
+    const preview = options.preview === true && Boolean(key);
     let row: MarketRow | undefined;
     if (key) {
       row = entry.markets.find((m) => m.key === key);
       if (!row) throw new NotFoundException(MARKET_NOT_FOUND);
-      if (row.status !== 'LIVE') throw new NotFoundException(MARKET_NOT_LIVE);
+      if (row.status !== 'LIVE' && !preview) {
+        throw new NotFoundException(MARKET_NOT_LIVE);
+      }
     } else {
       row = entry.markets.find((m) => m.is_default);
       if (!row) return null;
     }
-    return this.toContext(row, entry.storeCurrency);
+    return this.toContext(row, entry.storeCurrency, undefined, preview);
   }
 
   /**
@@ -252,6 +274,8 @@ export class MarketsContextService implements OnModuleInit, OnModuleDestroy {
     storeCurrency: string,
     /** When given, used instead of resolving the rate (never throws). */
     fixedRate?: number | null,
+    /** Preview resolution (see `resolve`): flags the context. */
+    preview = false,
   ): Promise<MarketContext> {
     // The default market is bound to the store currency: a later change of
     // the store (or platform default) is honoured without touching the row.
@@ -267,9 +291,16 @@ export class MarketsContextService implements OnModuleInit, OnModuleDestroy {
             storeCurrency,
           );
     // The canonical host: the ACTIVE primary, else the first ACTIVE host
-    // that does not itself redirect elsewhere.
-    const canonical = row.domains.filter((d) => !d.redirect_to);
-    const primary = canonical.find((d) => d.is_primary) ?? canonical[0];
+    // that does not itself redirect elsewhere. A preview context without an
+    // ACTIVE host names the configured primary (any status) instead, so the
+    // preview pages' canonical points at the market's real future hostname.
+    const active = row.domains.filter((d) => d.status === 'ACTIVE');
+    const canonical = active.filter((d) => !d.redirect_to);
+    let primary: (typeof row.domains)[number] | undefined =
+      canonical.find((d) => d.is_primary) ?? canonical[0];
+    if (!primary && preview) {
+      primary = row.domains.find((d) => d.is_primary && !d.redirect_to);
+    }
     return {
       id: row.id,
       key: row.key,
@@ -284,7 +315,8 @@ export class MarketsContextService implements OnModuleInit, OnModuleDestroy {
       isDefault: row.is_default,
       status: row.status,
       primaryHostname: primary?.hostname ?? null,
-      hostnames: row.domains.map((d) => d.hostname),
+      hostnames: active.map((d) => d.hostname),
+      ...(preview ? { preview: true as const } : {}),
     };
   }
 

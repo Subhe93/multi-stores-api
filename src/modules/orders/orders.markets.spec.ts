@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { NotFoundException } from '@nestjs/common';
 import { StoreType } from '@prisma/client';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -347,6 +348,64 @@ describe('OrdersService.quoteLines with and without a market', () => {
     });
     expect(quote.items.map((i) => i.unit_price)).toEqual([30, 35]);
     expect(quote.market?.rate).toBeNull();
+  });
+});
+
+describe('OrdersService market preview (DRAFT market, reads only)', () => {
+  // The context service is stubbed like the real one: the key resolves only
+  // with { preview: true }, else MARKET_NOT_LIVE.
+  function buildDraft() {
+    const built = build({ market: euMarket });
+    built.markets.resolve.mockImplementation((...args: unknown[]) =>
+      (args[2] as { preview?: boolean } | undefined)?.preview
+        ? Promise.resolve({ ...euMarket, status: 'DRAFT', preview: true })
+        : Promise.reject(
+            new NotFoundException({
+              code: 'MARKET_NOT_LIVE',
+              message: 'This market is not live',
+            }),
+          ),
+    );
+    return built;
+  }
+
+  it('quoteLines prices the draft market with preview, refuses it without', async () => {
+    const { service, markets } = buildDraft();
+    const quote = await service.quoteLines(STORE_ID, lines, {
+      countryCode: 'DE',
+      marketKey: 'eu',
+      preview: true,
+    });
+    expect(markets.resolve).toHaveBeenCalledWith(STORE_ID, 'eu', {
+      preview: true,
+    });
+    expect(quote.currency).toBe('EUR');
+    await expect(
+      service.quoteLines(STORE_ID, lines, {
+        countryCode: 'DE',
+        marketKey: 'eu',
+      }),
+    ).rejects.toMatchObject({ response: { code: 'MARKET_NOT_LIVE' } });
+  });
+
+  it('create never previews: an order in the draft market is MARKET_NOT_LIVE', async () => {
+    const { service, prisma, markets } = buildDraft();
+    (prisma as unknown as { customer: unknown }).customer = {
+      findUnique: jest.fn(() => Promise.resolve({ id: 'cust1' })),
+    };
+    await expect(
+      service.create(
+        'u1',
+        {
+          store_id: STORE_ID,
+          market_key: 'eu',
+          hostname: 'namez-se--eu.stores.platform.test',
+          // The DTO is otherwise irrelevant: the market gate runs first.
+        } as unknown as Parameters<typeof service.create>[1],
+        { lines },
+      ),
+    ).rejects.toMatchObject({ response: { code: 'MARKET_NOT_LIVE' } });
+    expect(markets.resolve).toHaveBeenLastCalledWith(STORE_ID, 'eu');
   });
 });
 

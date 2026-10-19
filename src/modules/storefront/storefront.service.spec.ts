@@ -143,6 +143,19 @@ describe('StorefrontService.getStore payload', () => {
     expect(payload.kustom_enabled).toBe(true);
   });
 
+  it('preview: the market is resolved with { preview: true } only when asked', async () => {
+    const { service, markets } = build(seMarket);
+    await service.getStore('namez', 'se');
+    expect(markets.resolve).toHaveBeenLastCalledWith('s1', 'se');
+    await service.getStore('namez', 'se', true);
+    expect(markets.resolve).toHaveBeenLastCalledWith('s1', 'se', {
+      preview: true,
+    });
+    // No key: nothing to preview, the default market answers as always.
+    await service.getStore('namez', undefined, true);
+    expect(markets.resolve).toHaveBeenLastCalledWith('s1', undefined);
+  });
+
   it('app off: the payload is identical with and without ?market=', async () => {
     const { service } = build(null);
     expect(await service.getStore('namez')).toEqual(

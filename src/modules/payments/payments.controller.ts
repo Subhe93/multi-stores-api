@@ -16,6 +16,7 @@ import type { Request } from 'express';
 import { AuthGuard } from '@nestjs/passport';
 import { SkipThrottle } from '@nestjs/throttler';
 import { PaymentsService } from './payments.service';
+import { isPreview } from '../markets/preview-query';
 import {
   CreatePaymentIntentDto,
   UpdateStripeSettingsDto,
@@ -32,9 +33,18 @@ export class PaymentsController {
   // config is store-aware: independent stores also return the connected
   // account Stripe.js must target for their direct charges. With the markets
   // app, ?market=<key> evaluates kustomEnabled against the market currency.
+  // ?preview=1 (market-preview host): evaluated against a DRAFT market too.
   @Get('config')
-  getConfig(@Query('store') store?: string, @Query('market') market?: string) {
-    return this.paymentsService.getPublicConfig(store, market);
+  getConfig(
+    @Query('store') store?: string,
+    @Query('market') market?: string,
+    @Query('preview') preview?: string,
+  ) {
+    return this.paymentsService.getPublicConfig(
+      store,
+      market,
+      isPreview(preview),
+    );
   }
 
   // ── Admin platform Stripe settings ──────────────────────────────────────────

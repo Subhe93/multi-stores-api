@@ -285,13 +285,17 @@ export class StorefrontService {
    * Market context of a storefront read (?market=): null when the app is
    * off (every caller then runs its pre-markets code), the default market
    * when the app is on and no key was given, 404 MARKET_NOT_FOUND /
-   * MARKET_NOT_LIVE for an unknown or draft key.
+   * MARKET_NOT_LIVE for an unknown or draft key. `preview` (market-preview
+   * host, `?preview=1`) lets a DRAFT market render; reads only.
    */
   private resolveMarket(
     storeId: string,
     marketKey?: string,
+    preview?: boolean,
   ): Promise<MarketContext | null> {
-    return this.markets.resolve(storeId, marketKey);
+    return preview && marketKey
+      ? this.markets.resolve(storeId, marketKey, { preview: true })
+      : this.markets.resolve(storeId, marketKey);
   }
 
   /**
@@ -405,7 +409,7 @@ export class StorefrontService {
     return { enabled: store?.cache_enabled ?? true };
   }
 
-  async getStore(slug: string, marketKey?: string) {
+  async getStore(slug: string, marketKey?: string, preview?: boolean) {
     const store = await this.prisma.store.findUnique({
       where: { slug, is_active: true },
       include: {
@@ -450,7 +454,7 @@ export class StorefrontService {
     // Markets app: null when off — the payload below is then byte-identical
     // to the pre-markets one (no market/markets keys, language_config and
     // currency untouched).
-    const market = await this.resolveMarket(store.id, marketKey);
+    const market = await this.resolveMarket(store.id, marketKey, preview);
     const markets = market
       ? ((await this.markets.listLive(store.id)) ?? [])
       : [];
@@ -595,6 +599,7 @@ export class StorefrontService {
       locale?: string;
     },
     marketKey?: string,
+    preview?: boolean,
   ) {
     const store = await this.prisma.store.findUnique({
       where: { slug },
@@ -606,7 +611,7 @@ export class StorefrontService {
         message: 'Store not found',
       });
 
-    const market = await this.resolveMarket(store.id, marketKey);
+    const market = await this.resolveMarket(store.id, marketKey, preview);
 
     // If a creator-category slug is requested, resolve it to an id + match rule
     // up front so we can apply the same filter to both own and custom queries.
@@ -937,6 +942,7 @@ export class StorefrontService {
     productSlug: string,
     _locale?: string,
     marketKey?: string,
+    preview?: boolean,
   ) {
     const store = await this.prisma.store.findUnique({
       where: { slug },
@@ -948,7 +954,7 @@ export class StorefrontService {
         message: 'Store not found',
       });
 
-    const market = await this.resolveMarket(store.id, marketKey);
+    const market = await this.resolveMarket(store.id, marketKey, preview);
 
     // Try creator's own product first. Order by updated_at so duplicate-slug
     // collisions resolve to the most recently edited product instead of an
@@ -1470,7 +1476,11 @@ export class StorefrontService {
    * - the store's locale set so the sitemap can render hreflang alternates
    * Server-side aggregation keeps the storefront route to a single fetch.
    */
-  async getSitemapData(storeSlug: string, marketKey?: string) {
+  async getSitemapData(
+    storeSlug: string,
+    marketKey?: string,
+    preview?: boolean,
+  ) {
     const store = await this.prisma.store.findUnique({
       where: { slug: storeSlug },
       include: {
@@ -1486,7 +1496,7 @@ export class StorefrontService {
 
     // With a market, its locales drive the sitemap and hidden products are
     // left out; without one (app off) the output is unchanged.
-    const market = await this.resolveMarket(store.id, marketKey);
+    const market = await this.resolveMarket(store.id, marketKey, preview);
     const hiddenIds = new Set<string>();
     if (market) {
       const hidden = await this.prisma.productMarketPrice.findMany({

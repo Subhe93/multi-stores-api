@@ -1,6 +1,7 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import { StorefrontService } from './storefront.service';
+import { isPreview } from '../markets/preview-query';
 
 // Read-only public catalogue data, fetched server-side by the Next.js
 // storefront — every request arrives from that one server IP, so a per-IP
@@ -19,9 +20,14 @@ export class StorefrontController {
   }
 
   // ?market= (markets app): the market key the proxy resolved for the host.
+  // ?preview=1 (market-preview host): the market may still be DRAFT.
   @Get(':slug')
-  getStore(@Param('slug') slug: string, @Query('market') market?: string) {
-    return this.storefrontService.getStore(slug, market);
+  getStore(
+    @Param('slug') slug: string,
+    @Query('market') market?: string,
+    @Query('preview') preview?: string,
+  ) {
+    return this.storefrontService.getStore(slug, market, isPreview(preview));
   }
 
   // Tiny endpoint the storefront reads to decide whether to cache this store.
@@ -40,6 +46,7 @@ export class StorefrontController {
     @Query('search') search?: string,
     @Query('locale') locale?: string,
     @Query('market') market?: string,
+    @Query('preview') preview?: string,
   ) {
     return this.storefrontService.getProducts(
       slug,
@@ -52,6 +59,7 @@ export class StorefrontController {
         locale,
       },
       market,
+      isPreview(preview),
     );
   }
 
@@ -61,8 +69,15 @@ export class StorefrontController {
     @Param('productSlug') productSlug: string,
     @Query('locale') locale?: string,
     @Query('market') market?: string,
+    @Query('preview') preview?: string,
   ) {
-    return this.storefrontService.getProduct(slug, productSlug, locale, market);
+    return this.storefrontService.getProduct(
+      slug,
+      productSlug,
+      locale,
+      market,
+      isPreview(preview),
+    );
   }
 
   @Get(':slug/categories')
@@ -154,7 +169,12 @@ export class StorefrontController {
   getSitemapData(
     @Param('slug') slug: string,
     @Query('market') market?: string,
+    @Query('preview') preview?: string,
   ) {
-    return this.storefrontService.getSitemapData(slug, market);
+    return this.storefrontService.getSitemapData(
+      slug,
+      market,
+      isPreview(preview),
+    );
   }
 }

@@ -61,7 +61,11 @@ export interface PaymentCheck {
   };
 }
 
-/** The public shape of a LIVE market (proxy + storefront payloads). */
+/**
+ * The public shape of a LIVE market (proxy + storefront payloads). On a
+ * market-preview host (`<slug>--<key>.<platform host>`) the route may be
+ * DRAFT and carries `preview: true`; it is never listed in `markets`.
+ */
 export interface MarketRoute {
   key: string;
   name: string;
@@ -71,7 +75,8 @@ export interface MarketRoute {
   currency: string;
   is_default: boolean;
   primary_hostname: string | null;
-  status: 'LIVE';
+  status: MarketStatus;
+  preview?: true;
 }
 
 /** `GET /stores/by-domain/:host` — `market`/`markets` only with the app on. */
@@ -87,7 +92,11 @@ export interface StoreByDomainResponse {
   redirects_version?: string;
 }
 
-/** `GET /stores/:slug/market-context` (proxy, platform subdomains). */
+/**
+ * `GET /stores/:slug/market-context` (proxy, platform subdomains). With
+ * `?market=<key>&preview=1` the named market answers (DRAFT too) and the
+ * response is flagged `preview: true`.
+ */
 export type MarketContextResponse =
   | { enabled: false; redirects_version?: string }
   | {
@@ -95,6 +104,7 @@ export type MarketContextResponse =
       market: MarketRoute;
       markets: MarketRoute[];
       redirects_version?: string;
+      preview?: true;
     };
 
 export interface DomainView {
@@ -126,6 +136,12 @@ export interface MarketView {
   domains: DomainView[];
   /** `${slug}.${platform domain}` — always serves the default market. */
   platform_hostname: string;
+  /**
+   * `https://${slug}--${key}.${platform domain}`: serves this market before
+   * its domain is connected (DRAFT included), checkout disabled. Null for
+   * the default market (the platform subdomain already serves it).
+   */
+  preview_url: string | null;
 }
 
 export interface ProductMarketVariantPriceView {

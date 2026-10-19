@@ -30,9 +30,30 @@ export interface MarketContext {
   primaryHostname: string | null;
   /** Every ACTIVE hostname of the market (what a client may claim to be on). */
   hostnames: string[];
+  /**
+   * Resolved for a market-preview host (`resolve(..., { preview: true })`):
+   * the market may be DRAFT and the checkout is view-only. Absent otherwise.
+   */
+  preview?: true;
 }
 
 export function toMarketRoute(ctx: MarketContext): MarketRoute {
+  // A preview route carries the real status plus the flag; every other
+  // route is LIVE by construction (resolve/listLive gate on it).
+  if (ctx.preview) {
+    return {
+      key: ctx.key,
+      name: ctx.name,
+      default_locale: ctx.defaultLocale,
+      locales: ctx.locales,
+      countries: ctx.countries,
+      currency: ctx.currency,
+      is_default: ctx.isDefault,
+      primary_hostname: ctx.primaryHostname,
+      status: ctx.status,
+      preview: true,
+    };
+  }
   return {
     key: ctx.key,
     name: ctx.name,

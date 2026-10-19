@@ -787,6 +787,12 @@ export class OrdersService {
     storeId: string,
     marketKey?: string | null,
     buyerType?: string | null,
+    /**
+     * Market-preview host, quotes only: a DRAFT market prices the quote.
+     * `create()` never passes it, so an order in a non-LIVE market is still
+     * refused with MARKET_NOT_LIVE.
+     */
+    preview?: boolean,
   ): Promise<OrderStoreContext> {
     const orderStore = await this.prisma.store.findUnique({
       where: { id: storeId },
@@ -815,8 +821,14 @@ export class OrdersService {
     }
     const { language_config, ...store } = orderStore;
     // Markets app: null when off (every pricing step below then runs the
-    // pre-markets code); 404 for an unknown or draft key.
-    const market = await this.markets.resolve(orderStore.id, marketKey);
+    // pre-markets code); 404 for an unknown or draft key (draft allowed for
+    // a preview quote).
+    const market =
+      preview && marketKey
+        ? await this.markets.resolve(orderStore.id, marketKey, {
+            preview: true,
+          })
+        : await this.markets.resolve(orderStore.id, marketKey);
     // b2b app: PERSON unless the request asked for COMPANY and the store
     // accepts it (D1); the flag decides whether the `b2b` block is emitted.
     const b2bEnabled = await this.b2b.isEnabled(orderStore.id);
@@ -1696,6 +1708,8 @@ export class OrdersService {
       locale?: string | null;
       /** Markets app: the market to price in (default market when omitted). */
       marketKey?: string | null;
+      /** Market-preview host: price a DRAFT market (quotes only). */
+      preview?: boolean;
       /** b2b app: 'COMPANY' for the company view (ignored while the app is off). */
       buyerType?: string | null;
       /** b2b app M2.5: the company's VAT number (COMPANY only). */
@@ -1724,6 +1738,7 @@ export class OrdersService {
       storeId,
       opts.marketKey,
       opts.buyerType,
+      opts.preview,
     );
     const exemptionInputs =
       opts.exemptionInputs !== undefined
@@ -1964,6 +1979,7 @@ export class OrdersService {
       coupon_code?: string | null;
       locale?: string | null;
       market_key?: string | null;
+      preview?: boolean;
       buyer_type?: string | null;
       vat_number?: string | null;
     },
@@ -1995,6 +2011,7 @@ export class OrdersService {
       shippingMethodId: dto.shipping_method_id ?? null,
       locale: dto.locale ?? null,
       marketKey: dto.market_key ?? null,
+      preview: dto.preview === true,
       buyerType: dto.buyer_type ?? null,
       vatNumber: dto.vat_number ?? null,
       userId,

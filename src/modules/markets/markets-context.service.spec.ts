@@ -3,6 +3,7 @@ import { MarketsContextService } from './markets-context.service';
 import { FxService } from './fx.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
+import { toMarketRoute } from './market-context';
 
 // resolve() is the one entry point every hook calls; what is pinned down
 // here is the contract its callers rely on: null while the app is off, the
@@ -18,7 +19,12 @@ type MarketSeed = {
   is_default?: boolean;
   status?: 'DRAFT' | 'LIVE';
   price_rule?: unknown;
-  domains?: { hostname: string; is_primary: boolean; redirect_to?: string }[];
+  domains?: {
+    hostname: string;
+    is_primary: boolean;
+    redirect_to?: string;
+    status?: 'PENDING' | 'VERIFIED' | 'ACTIVE';
+  }[];
   locales?: string[];
   default_locale?: string;
 };
@@ -42,6 +48,7 @@ function makePrisma(
       hostname: d.hostname,
       is_primary: d.is_primary,
       redirect_to: d.redirect_to ?? null,
+      status: d.status ?? 'ACTIVE',
     })),
   }));
   return {
@@ -132,6 +139,82 @@ describe('MarketsContextService.resolve', () => {
     await expect(service.resolve(STORE_ID, 'eu')).rejects.toMatchObject({
       response: { code: 'MARKET_NOT_LIVE' },
     });
+  });
+
+  it('preview: a DRAFT key resolves, flagged, with its pending primary as the canonical host', async () => {
+    const { service } = build([
+      defaultMarket,
+      {
+        id: 'm-eu',
+        key: 'eu',
+        currency: 'SEK',
+        status: 'DRAFT',
+        default_locale: 'en',
+        domains: [
+          { hostname: 'namez.shop', is_primary: true, status: 'PENDING' },
+          {
+            hostname: 'www.namez.shop',
+            is_primary: false,
+            redirect_to: 'namez.shop',
+            status: 'PENDING',
+          },
+        ],
+      },
+    ]);
+    const ctx = await service.resolve(STORE_ID, 'eu', { preview: true });
+    expect(ctx).toMatchObject({
+      key: 'eu',
+      status: 'DRAFT',
+      preview: true,
+      primaryHostname: 'namez.shop',
+      // Only ACTIVE hosts may be claimed by an order; none here.
+      hostnames: [],
+    });
+    expect(toMarketRoute(ctx!)).toMatchObject({
+      key: 'eu',
+      status: 'DRAFT',
+      preview: true,
+      primary_hostname: 'namez.shop',
+    });
+    // Without the option the same key is still refused (LIVE-only paths).
+    await expect(service.resolve(STORE_ID, 'eu')).rejects.toMatchObject({
+      response: { code: 'MARKET_NOT_LIVE' },
+    });
+    // A LIVE market resolved for a preview host is flagged as well.
+    const live = await service.resolve(STORE_ID, 'default', { preview: true });
+    expect(live).toMatchObject({ key: 'default', preview: true });
+    // And the preview market is never advertised as a route.
+    expect((await service.listLive(STORE_ID))?.map((r) => r.key)).toEqual(['default']);
+  });
+
+  it('preview: an unknown key is still 404, the app off still null, no key = default', async () => {
+    const { service } = build([defaultMarket]);
+    await expect(
+      service.resolve(STORE_ID, 'nope', { preview: true }),
+    ).rejects.toMatchObject({ response: { code: 'MARKET_NOT_FOUND' } });
+    expect(await service.resolve(STORE_ID, null, { preview: true })).toMatchObject({
+      key: 'default',
+    });
+    expect(
+      (await service.resolve(STORE_ID, null, { preview: true }))?.preview,
+    ).toBeUndefined();
+    const off = build([defaultMarket], { enabled: false });
+    expect(await off.service.resolve(STORE_ID, 'default', { preview: true })).toBeNull();
+  });
+
+  it('non-preview contexts ignore hosts that are not ACTIVE', async () => {
+    const { service } = build([
+      {
+        ...defaultMarket,
+        domains: [
+          { hostname: 'namez.se', is_primary: true, status: 'VERIFIED' },
+          { hostname: 'shop.namez.se', is_primary: false, status: 'ACTIVE' },
+        ],
+      },
+    ]);
+    const ctx = await service.resolve(STORE_ID);
+    expect(ctx?.primaryHostname).toBe('shop.namez.se');
+    expect(ctx?.hostnames).toEqual(['shop.namez.se']);
   });
 
   it('rate is 1 when the market prices in the store currency', async () => {
