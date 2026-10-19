@@ -13,8 +13,8 @@ import { RevalidationService } from '../../common/revalidation/revalidation.serv
 import {
   P_FIELD_TYPES,
   REPEATER_CHILD_TYPES,
-} from '../../common/personalization/types';
-import { isPlainObject } from '../../common/personalization/rules';
+} from '@multi-stores/core/personalization/types';
+import { isPlainObject } from '@multi-stores/core/personalization/rules';
 import {
   sanitizeLinkedValidation,
   sanitizeValidationRules,

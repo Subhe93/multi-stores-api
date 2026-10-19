@@ -19,7 +19,7 @@ import {
   DesignerChromiumHost,
   DesignerRenderUnavailableError,
 } from './render/designer-chromium.host';
-import type { DesignStateV1, TemplateSpecV1 } from './render/design-renderer';
+import type { DesignStateV1, TemplateSpecV1 } from '@multi-stores/core/designer';
 import { MM_TO_PT, printPdfGeometry, readPdfBoxes } from './render/print-pdf';
 
 jest.setTimeout(120_000);

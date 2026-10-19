@@ -20,7 +20,7 @@ import type {
   ImageSlotElement,
   TemplateSpecV1,
   TextElement,
-} from '../render/design-renderer';
+} from '@multi-stores/core/designer';
 
 /* ------------------------------------------------------------------ */
 /* Public types                                                        */

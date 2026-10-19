@@ -8,7 +8,7 @@ import type { DesignerAssetsService } from './designer-assets.service';
 import type { DesignerUrlsService } from './designer-urls';
 import type { StoreAppsService } from '../store-apps/store-apps.service';
 import { blankTemplateSpec } from './designs.util';
-import type { TemplateSpecV1 } from './render/design-renderer';
+import type { TemplateSpecV1 } from '@multi-stores/core/designer';
 import {
   emptyDb,
   fakeWp4Prisma,

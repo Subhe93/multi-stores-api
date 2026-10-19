@@ -6,7 +6,7 @@ import {
   PERSONALIZATION_LIMITS,
   type FieldDef,
   type PatternTester,
-} from './rules';
+} from '@multi-stores/core/personalization/rules';
 
 /**
  * Server-side tester for merchant `pattern` rules (M4.0 ReDoS guard, no

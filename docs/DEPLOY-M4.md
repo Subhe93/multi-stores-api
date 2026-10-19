@@ -112,3 +112,15 @@ The partial indexes `ImportRun_one_active_per_store`, `OrderItemDesign_queue_cla
 ## 9. Backups going forward
 
 Daily `pg_dump` plus a tarball of `PRIVATE_STORAGE_DIR` and `INVOICE_STORAGE_DIR` (enable `includeUploads` in the scheduled backup). 14-day rotation. Print files are about 14 MB each and customer originals up to 25 MB each. Privacy: erasure requests are fully effective only after the rotation window.
+
+## 10. Deploy note: shared package `@multi-stores/core` (M5.3)
+
+From M5.3 on, api, web and dashboard no longer carry copies of the personalization rules/evaluator and the designer renderer. They depend on `"@multi-stores/core": "file:../multi-stores-shared/packages/core"`, which `npm ci` installs as a symlink into the sibling checkout. The package ships its build (`packages/core/dist/`, committed), so nothing is built in multi-stores-shared on the server. Details: `multi-stores-shared/docs/SHARED-PACKAGE.md`.
+
+Build order change, every deploy:
+
+1. `cd multi-stores-shared && git pull` **first** (same branch as the apps). No `npm ci`/build is needed there.
+2. Then, as before, `npm ci && npm run build` (api) and `npm ci && npx next build` (web, dashboard). Without `../multi-stores-shared/packages/core` the link is dangling and the build cannot resolve `@multi-stores/core`, so the four repos must stay sibling directories.
+3. Restart the apps. The api reads the renderer from `node_modules/@multi-stores/core` (symlink) at runtime, so the shared checkout must stay in place and readable by the `multistores` user (it is, with the default umask; do not `chmod 700` the shared repo).
+
+Web and dashboard set `turbopack.root`/`outputFileTracingRoot` to the parent folder of the repos (needed to compile the linked package). Rollback: check out the previous commits of **all** changed repos together; a shared checkout older than M5.3 with apps at M5.3 cannot build, apps older than M5.3 do not use the package at all.

@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { isPlainObject } from '../../common/personalization/rules';
+import { isPlainObject } from '@multi-stores/core/personalization/rules';
 
 /**
  * JSON with object keys sorted (jsonb does not keep key order, so a value

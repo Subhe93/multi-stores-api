@@ -1,4 +1,4 @@
-import { isPlainObject } from '../../../common/personalization/rules';
+import { isPlainObject } from '@multi-stores/core/personalization/rules';
 import type { ConfigIssue } from '../personalization.errors';
 import { isSafeImageUrl } from '../personalization-config.validator';
 import { checkboxGroupPreset } from './checkbox-group';

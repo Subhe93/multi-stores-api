@@ -87,7 +87,7 @@ import {
   type Mode,
   type RenderReport,
   type TemplateSpecV1,
-} from './render/design-renderer';
+} from '@multi-stores/core/designer';
 import {
   DESIGNER_BROWSER,
   DESIGNER_MAX_CANVAS_SIDE,

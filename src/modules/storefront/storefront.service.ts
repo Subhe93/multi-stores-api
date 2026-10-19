@@ -31,7 +31,7 @@ import {
   usesAdvancedFields,
   usesAdvancedOptionConfig,
 } from '../personalization/personalization-runtime';
-import type { PFieldDef } from '../../common/personalization/types';
+import type { PFieldDef } from '@multi-stores/core/personalization/types';
 import { DesignerTemplatesService } from '../designer/designer-templates.service';
 import { countPublishedInCollections } from './collection-counts';
 import { publicCheckoutSettings } from '../stores/checkout-settings';

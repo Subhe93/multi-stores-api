@@ -8,7 +8,7 @@ import {
   isPatternSafe,
   patternProblem,
   validatePersonalization,
-} from './rules';
+} from '@multi-stores/core/personalization/rules';
 
 // M4.0 ReDoS guard: the server runs merchant patterns under a hard timeout
 // and fails closed; save time refuses the classic catastrophic shapes.

@@ -43,7 +43,7 @@ import {
   type SafeFetchResponse,
 } from '../../importer/media/safe-fetch';
 import { sniffImage } from '../../importer/media/sniff';
-import type { AssetRef, TemplateSpecV1 } from '../render/design-renderer';
+import type { AssetRef, TemplateSpecV1 } from '@multi-stores/core/designer';
 import {
   DesignerAssetsService,
   TEMPLATE_ASSET_MAX_BYTES,

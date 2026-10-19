@@ -79,7 +79,7 @@ import {
   type DesignStateV1,
   type I18n,
   type TemplateSpecV1,
-} from './render/design-renderer';
+} from '@multi-stores/core/designer';
 
 /**
  * Where a line is checked (an ORDERED design is locked in every mode):

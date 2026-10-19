@@ -1,13 +1,13 @@
 import { BadRequestException } from '@nestjs/common';
-import { isAdvancedField } from '../../common/personalization/evaluator';
-import { isPlainObject } from '../../common/personalization/rules';
+import { isAdvancedField } from '@multi-stores/core/personalization/evaluator';
+import { isPlainObject } from '@multi-stores/core/personalization/rules';
 import {
   APP_ONLY_TYPES,
   type PError,
   type PFieldDef,
   type PLine,
   type POptionConfig,
-} from '../../common/personalization/types';
+} from '@multi-stores/core/personalization/types';
 import { PERSONALIZATION_INVALID } from './personalization.errors';
 
 /**

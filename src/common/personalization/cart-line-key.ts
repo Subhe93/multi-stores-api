@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { isPlainObject, lineKey, type NormalizedValues } from './rules';
+import { isPlainObject, lineKey, type NormalizedValues } from '@multi-stores/core/personalization/rules';
 
 /**
  * Cart line identity (M4.0 §1.2, C11). Two cart rows of the same product,

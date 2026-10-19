@@ -25,7 +25,7 @@ import {
   type RenderInput,
   type TemplateSpecV1,
   type TextElement,
-} from './design-renderer';
+} from '@multi-stores/core/designer';
 import {
   caseInput,
   compactLog,

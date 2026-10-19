@@ -16,7 +16,7 @@ import {
   formatPaymentMethod,
   personalizationPrintLines,
 } from '../mail/order-mail.helpers';
-import { hasPersonalizationGroups } from '../../common/personalization/display';
+import { hasPersonalizationGroups } from '@multi-stores/core/personalization/display';
 import type { TaxExemptReason } from '../b2b/b2b.types';
 import {
   INVOICE_SNAPSHOT_VERSION,

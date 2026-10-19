@@ -6,8 +6,8 @@
  * canvas is never tainted); every other request is aborted by the host.
  *
  *   /render.html   this document
- *   /renderer.js   the shared renderer (`design-renderer.ts`, mirrored
- *                  byte-for-byte) wrapped in a CommonJS shim → window.DesignRenderer
+ *   /renderer.js   the shared renderer (`@multi-stores/core/designer`, CommonJS
+ *                  build) wrapped in a CommonJS shim → window.DesignRenderer
  *   /page.js       `window.__render(job)` below
  *   /f/<asset_id>  font bytes
  *   /a/<asset_id>  image bytes
@@ -15,8 +15,7 @@
  * Customer text only reaches the page as JSON arguments of `page.evaluate`
  * and is only ever drawn through canvas `fillText`; it never becomes HTML.
  */
-import { existsSync, readFileSync } from 'fs';
-import * as path from 'path';
+import { readFileSync } from 'fs';
 
 export const RENDER_ORIGIN = 'https://designer.invalid';
 export const RENDER_PAGE_URL = `${RENDER_ORIGIN}/render.html`;
@@ -328,32 +327,20 @@ let cachedBundle: string | null = null;
 
 /**
  * The renderer as a classic script defining `window.DesignRenderer`.
- * Production (`nest build`) has the compiled CommonJS `design-renderer.js`
- * next to this file; under ts-jest / ts-node only the `.ts` source exists and
- * is transpiled with the `typescript` dev dependency. The file has zero
- * imports, so a minimal CommonJS shim is enough.
+ * The code is the CommonJS build of `@multi-stores/core/designer`, resolved
+ * through the package `exports` (M5.3), so production, ts-jest and ts-node
+ * serve the same bytes; the web bundles the ESM build of the same source.
+ * The module has zero imports, so a minimal CommonJS shim is enough.
  */
-export function rendererBundle(dir: string = __dirname): string {
-  if (cachedBundle && dir === __dirname) return cachedBundle;
-  const js = path.join(dir, 'design-renderer.js');
-  let code: string;
-  if (existsSync(js)) {
-    code = readFileSync(js, 'utf8');
-  } else {
-    const source = readFileSync(path.join(dir, 'design-renderer.ts'), 'utf8');
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const ts = require('typescript') as typeof import('typescript');
-    code = ts.transpileModule(source, {
-      compilerOptions: {
-        module: ts.ModuleKind.CommonJS,
-        target: ts.ScriptTarget.ES2020,
-      },
-    }).outputText;
-  }
-  const bundle =
+export function rendererBundle(): string {
+  if (cachedBundle) return cachedBundle;
+  const code = readFileSync(
+    require.resolve('@multi-stores/core/designer'),
+    'utf8',
+  );
+  cachedBundle =
     '(function(){var module={exports:{}};var exports=module.exports;\n' +
     code +
     '\n;window.DesignRenderer=module.exports;})();';
-  if (dir === __dirname) cachedBundle = bundle;
-  return bundle;
+  return cachedBundle;
 }

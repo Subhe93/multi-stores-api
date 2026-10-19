@@ -1,4 +1,4 @@
-import { fileRefPath } from '../../common/personalization/rules';
+import { fileRefPath } from '@multi-stores/core/personalization/rules';
 
 /**
  * Customer uploads (M4.0 §8) — contract shared by WP-A (order write path)

@@ -13,7 +13,7 @@ import {
   plainFields,
   plainFieldsM40,
 } from './__fixtures__/app-fields';
-import type { PLine } from '../../common/personalization/types';
+import type { PLine } from '@multi-stores/core/personalization/types';
 
 // M4.1 WP-C pure helpers: the gate, the payload shaping that keeps stores
 // without the app byte-identical, and the cart display mapping.

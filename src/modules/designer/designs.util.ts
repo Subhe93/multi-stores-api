@@ -11,7 +11,7 @@ import {
   type I18n,
   type TemplateSpecV1,
   type TextElement,
-} from './render/design-renderer';
+} from '@multi-stores/core/designer';
 
 /** Lowercase RFC 4122 uuid (the one definition of the designer module). */
 export const UUID_RE =

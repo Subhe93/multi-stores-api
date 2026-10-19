@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { evaluatePersonalization } from '../../common/personalization/evaluator';
-import type { PFieldDef } from '../../common/personalization/types';
+import { evaluatePersonalization } from '@multi-stores/core/personalization/evaluator';
+import type { PFieldDef } from '@multi-stores/core/personalization/types';
 import { PersonalizationPresetsService } from './personalization-presets.service';
 import { PersonalizationLibraryService } from './personalization-library.service';
 import { presetSummaries } from './presets';

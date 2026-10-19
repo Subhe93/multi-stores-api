@@ -9,7 +9,7 @@ import {
   isOffFlag,
 } from './designer-chromium.host';
 import { RENDER_PAGE_SCRIPT, rendererBundle } from './render-page';
-import { RENDERER_VERSION } from './design-renderer';
+import { RENDERER_VERSION } from '@multi-stores/core/designer';
 
 describe('createDesignerRenderer (env)', () => {
   it('DESIGNER_RENDER_ENGINE=off → disabled, never launches', async () => {

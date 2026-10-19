@@ -24,7 +24,7 @@ import {
   TextElement,
   validateSpec,
   validateState,
-} from './design-renderer';
+} from '@multi-stores/core/designer';
 import {
   convertNpp,
   finalizeTemplateAssets,

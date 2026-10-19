@@ -1,6 +1,4 @@
-import { createHash } from 'crypto';
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync } from 'fs';
 import {
   evaluatePersonalization,
   formatMinorUnits,
@@ -9,51 +7,36 @@ import {
   splitFieldTree,
   toMinorUnits,
   truncateChars,
-} from './evaluator';
-import { evaluateConditions, optionCount } from './conditions';
+} from '@multi-stores/core/personalization/evaluator';
+import { evaluateConditions, optionCount } from '@multi-stores/core/personalization/conditions';
 import {
   buildPersonalizationGroups,
   groupValueText,
   hasPersonalizationGroups,
   snapshotGroupLabel,
-} from './display';
-import { APP_ONLY_TYPES, type PContext, type PFieldDef } from './types';
-import { lineKey, validatePersonalization, type FieldDef } from './rules';
+} from '@multi-stores/core/personalization/display';
+import { APP_ONLY_TYPES, type PContext, type PFieldDef } from '@multi-stores/core/personalization/types';
+import { lineKey, validatePersonalization, type FieldDef } from '@multi-stores/core/personalization/rules';
 
-// Runs every M4.1 evaluator case (personalization-cases.json) against the api
-// mirror, proves the M4.0 parity on every M4.0 validate vector, and checks
-// that the mirror is still a byte copy of the shared source when the shared
-// repo is checked out next to this one (contract C12).
+// Runs every M4.1 evaluator case (@multi-stores/core fixtures/
+// personalization-cases.json) against the package as the api loads it (CJS
+// build) and proves the M4.0 parity on every M4.0 validate vector (C12).
 
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
 type Json = any;
 
-const MIRRORED = ['types.ts', 'conditions.ts', 'evaluator.ts', 'display.ts'];
-const CASES_PATH = join(__dirname, 'personalization-cases.json');
 const cases: Record<string, Json> = JSON.parse(
-  readFileSync(CASES_PATH, 'utf8'),
+  readFileSync(
+    require.resolve('@multi-stores/core/fixtures/personalization-cases.json'),
+    'utf8',
+  ),
 );
 const m40: Record<string, Json> = JSON.parse(
-  readFileSync(join(__dirname, 'personalization.vectors.json'), 'utf8'),
+  readFileSync(
+    require.resolve('@multi-stores/core/fixtures/personalization.vectors.json'),
+    'utf8',
+  ),
 );
-
-const SHARED_DIR = join(
-  __dirname,
-  '..',
-  '..',
-  '..',
-  '..',
-  'multi-stores-shared',
-  'src',
-  'personalization',
-);
-
-const lf = (path: string): string =>
-  readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
-const sha256 = (s: string): string =>
-  createHash('sha256').update(s).digest('hex');
-const mirrorBody = (file: string): string =>
-  lf(join(__dirname, file)).split('\n').slice(3).join('\n');
 
 const defsOf = (c: Json): PFieldDef[] =>
   typeof c.defs === 'string' ? cases.defs[c.defs] : c.defs;
@@ -64,34 +47,7 @@ const withoutMessage = (errors: Json[]): Json[] =>
     return rest;
   });
 
-describe('personalization evaluator mirror parity', () => {
-  const sharedAvailable = existsSync(join(SHARED_DIR, 'evaluator.ts'));
-
-  it.each(MIRRORED)('%s carries the mirror header', (file) => {
-    const head = lf(join(__dirname, file)).split('\n').slice(0, 3);
-    expect(head[0]).toBe('/* eslint-disable */');
-    expect(head[1]).toContain('MIRROR');
-    expect(head[1]).toContain(
-      `multi-stores-shared/src/personalization/${file}`,
-    );
-  });
-
-  (sharedAvailable ? it.each(MIRRORED) : it.skip.each(MIRRORED))(
-    '%s body equals the shared source (sha256)',
-    (file) => {
-      expect(sha256(mirrorBody(file))).toBe(sha256(lf(join(SHARED_DIR, file))));
-    },
-  );
-
-  (sharedAvailable ? it : it.skip)(
-    'cases are a byte copy of the shared file (sha256)',
-    () => {
-      expect(sha256(lf(CASES_PATH))).toBe(
-        sha256(lf(join(SHARED_DIR, 'personalization-cases.json'))),
-      );
-    },
-  );
-
+describe('personalization evaluator cases', () => {
   it('has the price-guard cases', () => {
     expect((cases.evaluateGuards as Json[]).length).toBeGreaterThanOrEqual(8);
   });

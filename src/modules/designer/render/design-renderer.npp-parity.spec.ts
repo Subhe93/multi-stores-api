@@ -35,7 +35,7 @@ import {
   TEMPLATE_IDS,
   type LogEntry,
 } from '../__fixtures__/golden/golden-kit.mockspec';
-import { renderDesign, type TemplateSpecV1 } from './design-renderer';
+import { renderDesign, type TemplateSpecV1 } from '@multi-stores/core/designer';
 import {
   convertNpp,
   KNOWN_GOOGLE_WEIGHTS,

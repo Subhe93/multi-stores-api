@@ -9,8 +9,8 @@
  * createImageBitmap, canvas) → window.__render → renderDesign on a recording
  * Ctx2D.
  *
- * Web path: the web mirror (`multi-stores-web/src/lib/designer/design-renderer.ts`,
- * read from the sibling checkout and transpiled) called with the exact input
+ * Web path: the ESM build of `@multi-stores/core/designer` (what the web
+ * bundles), transpiled to CommonJS and evaluated in a vm, called with the exact input
  * shape of `DesignerCanvas.tsx` (no font lookup, `uiFontFamily: 'system-ui'`).
  *
  * Both must produce the same draw-call log as each other and as the stored
@@ -36,23 +36,24 @@ import {
   PHOTO_PORTRAIT,
   type GoldenRecord,
 } from '../__fixtures__/golden/golden-kit.mockspec';
-import * as apiRenderer from './design-renderer';
+import * as apiRenderer from '@multi-stores/core/designer';
 import type {
   Ctx2D,
   RenderInput,
   RenderReport,
   TemplateSpecV1,
-} from './design-renderer';
+} from '@multi-stores/core/designer';
 import { DesignerChromiumHost } from './designer-chromium.host';
 import { RENDER_ORIGIN } from './render-page';
 
 type RendererModule = typeof apiRenderer;
 
 const STORE = '11111111-1111-4111-8111-111111111111';
-const WEB_MIRROR = path.resolve(
-  __dirname,
-  '../../../../../multi-stores-web/src/lib/designer/design-renderer.ts',
-);
+// The web bundles the ESM build of @multi-stores/core/designer (M5.3); the
+// server serves the CommonJS build. Both are loaded from the package here.
+const CORE_DIR = path.dirname(require.resolve('@multi-stores/core/package.json'));
+const WEB_MIRROR = path.join(CORE_DIR, 'dist/esm/designer/design-renderer.js');
+const SERVER_BUILD = require.resolve('@multi-stores/core/designer');
 
 /** Transpiles a renderer source file and evaluates it in a fresh vm realm. */
 function loadRendererSource(file: string): RendererModule {
@@ -294,9 +295,10 @@ function record(
 }
 
 describe('renderer parity: web mirror ↔ server render path (draw-call logs)', () => {
-  const haveWeb = existsSync(WEB_MIRROR);
-  const web = haveWeb ? loadRendererSource(WEB_MIRROR) : null;
-  const apiInVm = loadRendererSource(path.join(__dirname, 'design-renderer.ts'));
+  // Always present (package dependency); a missing build must fail loudly.
+  expect(existsSync(WEB_MIRROR)).toBe(true);
+  const web: RendererModule | null = loadRendererSource(WEB_MIRROR);
+  const apiInVm = loadRendererSource(SERVER_BUILD);
 
   it('the web mirror is the same renderer version', () => {
     if (!web) return; // sibling repo not checked out

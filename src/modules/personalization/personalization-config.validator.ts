@@ -5,12 +5,12 @@ import {
   P_MESSAGE_KEYS,
   P_PRICING_MODES,
   REPEATER_CHILD_TYPES,
-} from '../../common/personalization/types';
+} from '@multi-stores/core/personalization/types';
 import {
   MAX_REPEAT_INSTANCES,
   optionValues,
-} from '../../common/personalization/evaluator';
-import { charCount, isPlainObject } from '../../common/personalization/rules';
+} from '@multi-stores/core/personalization/evaluator';
+import { charCount, isPlainObject } from '@multi-stores/core/personalization/rules';
 import type { ConfigIssue } from './personalization.errors';
 
 /**

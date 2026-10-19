@@ -6,7 +6,7 @@ import {
   type DesignerLineMode,
 } from './designer-cart.service';
 import { designerErrorCode } from './designer-errors';
-import { RENDERER_VERSION } from './render/design-renderer';
+import { RENDERER_VERSION } from '@multi-stores/core/designer';
 import { DesignsService } from './designs.service';
 import { designProofSha } from './designs.util';
 import type { DesignerRenderService } from './designer-render.service';

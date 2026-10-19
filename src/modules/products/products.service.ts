@@ -35,7 +35,7 @@ import {
   brokenOptionReferences,
   introducesCardConfig,
 } from '../personalization/personalization-option-refs';
-import { isPlainObject } from '../../common/personalization/rules';
+import { isPlainObject } from '@multi-stores/core/personalization/rules';
 import { isValidGtin } from '../feeds/gtin';
 
 /**

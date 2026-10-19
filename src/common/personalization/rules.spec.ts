@@ -1,6 +1,4 @@
-import { createHash } from 'crypto';
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync } from 'fs';
 import {
   charCount,
   isFileRefPath,
@@ -13,75 +11,20 @@ import {
   readLinkedValidation,
   validatePersonalization,
   type FieldDef,
-} from './rules';
+} from '@multi-stores/core/personalization/rules';
 
-// Runs every shared vector against the api mirror (M4.0 K6) and checks that
-// the mirror is still a byte copy of the shared source when the shared repo
-// is checked out next to this one.
+// Runs every M4.0 vector (@multi-stores/core fixtures/personalization.vectors.json)
+// against the package as the api loads it (CJS build), M4.0 K6.
 
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
 type Json = any;
 
-const VECTORS_PATH = join(__dirname, 'personalization.vectors.json');
 const vectors: Record<string, Json> = JSON.parse(
-  readFileSync(VECTORS_PATH, 'utf8'),
+  readFileSync(
+    require.resolve('@multi-stores/core/fixtures/personalization.vectors.json'),
+    'utf8',
+  ),
 );
-
-const SHARED_DIR = join(
-  __dirname,
-  '..',
-  '..',
-  '..',
-  '..',
-  'multi-stores-shared',
-  'src',
-  'personalization',
-);
-
-/** Lines of a text file with CRLF folded to LF (git autocrlf on Windows). */
-function lf(path: string): string {
-  return readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
-}
-
-function sha256(s: string): string {
-  return createHash('sha256').update(s).digest('hex');
-}
-
-/** The mirror minus its 3-line header. */
-function mirrorBody(): string {
-  return lf(join(__dirname, 'rules.ts')).split('\n').slice(3).join('\n');
-}
-
-describe('personalization rules mirror parity', () => {
-  const sharedAvailable = existsSync(join(SHARED_DIR, 'rules.ts'));
-
-  it('carries the mirror header', () => {
-    const head = lf(join(__dirname, 'rules.ts')).split('\n').slice(0, 3);
-    expect(head[0]).toBe('/* eslint-disable */');
-    expect(head[1]).toContain('MIRROR');
-    expect(head[1]).toContain(
-      'multi-stores-shared/src/personalization/rules.ts',
-    );
-  });
-
-  (sharedAvailable ? it : it.skip)(
-    'rules.ts body equals the shared source (sha256)',
-    () => {
-      expect(sha256(mirrorBody())).toBe(
-        sha256(lf(join(SHARED_DIR, 'rules.ts'))),
-      );
-    },
-  );
-
-  (sharedAvailable ? it : it.skip)(
-    'vectors are a byte copy of the shared file (sha256)',
-    () => {
-      expect(sha256(lf(VECTORS_PATH))).toBe(
-        sha256(lf(join(SHARED_DIR, 'personalization.vectors.json'))),
-      );
-    },
-  );
-});
 
 describe('personalization vectors', () => {
   it('has the expected version', () => {

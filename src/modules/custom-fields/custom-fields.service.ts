@@ -15,13 +15,13 @@ import {
   CustomFieldTranslationDto,
   UpdateCustomFieldDto,
 } from './dto/custom-field.dto';
-import { isPlainObject } from '../../common/personalization/rules';
+import { isPlainObject } from '@multi-stores/core/personalization/rules';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import {
   shapeFieldsForStorefront,
   usesAdvancedFields,
 } from '../personalization/personalization-runtime';
-import type { PFieldDef } from '../../common/personalization/types';
+import type { PFieldDef } from '@multi-stores/core/personalization/types';
 import { ProductStatus } from '@prisma/client';
 import {
   CUSTOM_FIELD_IN_USE,

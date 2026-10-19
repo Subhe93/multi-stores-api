@@ -44,7 +44,7 @@ import {
   type ImageSlotElement,
   type StateRule,
   type TemplateSpecV1,
-} from './render/design-renderer';
+} from '@multi-stores/core/designer';
 import { isUuid } from './designs.util';
 import {
   enabledAddons,

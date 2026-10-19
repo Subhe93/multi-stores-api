@@ -43,7 +43,7 @@ import {
 import {
   lineKey,
   type NormalizedValues,
-} from '../../common/personalization/rules';
+} from '@multi-stores/core/personalization/rules';
 import {
   assertAmountFits,
   assertPriceEvaluated,
@@ -56,7 +56,7 @@ import {
   linesToDisplay,
   personalizationInvalid,
 } from '../personalization/personalization-runtime';
-import type { PFieldDef, PResult } from '../../common/personalization/types';
+import type { PFieldDef, PResult } from '@multi-stores/core/personalization/types';
 import {
   DesignerCartService,
   type CartDesignAddon,

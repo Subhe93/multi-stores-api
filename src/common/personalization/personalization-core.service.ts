@@ -14,9 +14,9 @@ import {
   type Issue,
   type NormalizedValue,
   type NormalizedValues,
-} from './rules';
-import { lineSnapshotColumns } from './evaluator';
-import { APP_ONLY_TYPES, type PLine } from './types';
+} from '@multi-stores/core/personalization/rules';
+import { lineSnapshotColumns } from '@multi-stores/core/personalization/evaluator';
+import { APP_ONLY_TYPES, type PLine } from '@multi-stores/core/personalization/types';
 
 /**
  * Platform-wide personalization checks (M4.0 §4, contracts C13/C19/C29).

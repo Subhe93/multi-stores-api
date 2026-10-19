@@ -54,7 +54,7 @@ import {
   type Mode,
   type RenderReport,
   type TemplateSpecV1,
-} from './design-renderer';
+} from '@multi-stores/core/designer';
 import {
   RENDER_ORIGIN,
   RENDER_PAGE_HTML,

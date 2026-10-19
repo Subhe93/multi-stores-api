@@ -6,7 +6,7 @@ import {
   isValidAllowedChars,
   patternProblem,
   PERSONALIZATION_LIMITS,
-} from '../../common/personalization/rules';
+} from '@multi-stores/core/personalization/rules';
 
 /**
  * Save-time checks of a field definition's merchant rules (M4.0 §3.2, K3).

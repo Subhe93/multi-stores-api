@@ -6,7 +6,7 @@ import {
 } from './personalization-core.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CustomerUploadsService } from '../../modules/customer-uploads/customer-uploads.service';
-import type { PLine } from './types';
+import type { PLine } from '@multi-stores/core/personalization/types';
 import {
   appFields,
   plainFields,

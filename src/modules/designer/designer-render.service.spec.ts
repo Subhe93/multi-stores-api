@@ -29,7 +29,7 @@ import {
   type ImageSlotElement,
   type PhotoAdj,
   type TemplateSpecV1,
-} from './render/design-renderer';
+} from '@multi-stores/core/designer';
 import { designerErrors } from './designer-errors';
 
 const STORE = '11111111-1111-4111-8111-111111111111';

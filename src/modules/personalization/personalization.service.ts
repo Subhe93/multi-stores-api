@@ -7,12 +7,12 @@ import { createServerPatternTester } from '../../common/personalization/pattern-
 import {
   evaluatePersonalization,
   readUi,
-} from '../../common/personalization/evaluator';
+} from '@multi-stores/core/personalization/evaluator';
 import type {
   PContext,
   PFieldDef,
   PResult,
-} from '../../common/personalization/types';
+} from '@multi-stores/core/personalization/types';
 import {
   resolveStoreCurrency,
   roundMoney,

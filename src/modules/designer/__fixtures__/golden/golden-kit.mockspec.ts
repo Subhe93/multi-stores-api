@@ -24,7 +24,7 @@ import type {
   RenderInput,
   RenderReport,
   TemplateSpecV1,
-} from '../../render/design-renderer';
+} from '@multi-stores/core/designer';
 
 /* ------------------------------------------------------------------ */
 /* Paths                                                               */

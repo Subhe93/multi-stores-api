@@ -49,7 +49,7 @@ import {
   uncoveredCodePoints,
 } from './designer-fonts.cmap';
 import { designerFontPath } from './designer-urls';
-import { resolveText, type TemplateSpecV1 } from './render/design-renderer';
+import { resolveText, type TemplateSpecV1 } from '@multi-stores/core/designer';
 
 export const FONT_MAX_BYTES = 10 * 1024 * 1024;
 export const FONT_MIN_BYTES = 256;

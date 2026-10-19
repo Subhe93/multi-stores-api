@@ -21,7 +21,7 @@ import {
 import type { NTemplate } from '../../importer/model/normalized';
 import { StoreAppsService } from '../../store-apps/store-apps.service';
 import { DesignerAssetsService } from '../designer-assets.service';
-import type { TemplateSpecV1 } from '../render/design-renderer';
+import type { TemplateSpecV1 } from '@multi-stores/core/designer';
 import { NppImportService, type NppImportMedia } from './npp-import.service';
 
 const HOST_RE = /^woo:([^:]+):npp_template:/;

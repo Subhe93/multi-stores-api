@@ -91,7 +91,7 @@ import {
   type OrderValueRow,
   type UploadRef,
 } from '../../common/personalization/personalization-core.service';
-import type { NormalizedValues } from '../../common/personalization/rules';
+import type { NormalizedValues } from '@multi-stores/core/personalization/rules';
 import { CustomerUploadsService } from '../customer-uploads/customer-uploads.service';
 import {
   assertAmountFits,
@@ -104,7 +104,7 @@ import type {
   PFieldDef,
   PLine,
   PResult,
-} from '../../common/personalization/types';
+} from '@multi-stores/core/personalization/types';
 import { ProductionTriggersService } from '../production/production-triggers.service';
 import {
   isProductionFilter,

@@ -64,7 +64,7 @@ import {
   type AssetRef,
   type SpecIssue,
   type TemplateSpecV1,
-} from './render/design-renderer';
+} from '@multi-stores/core/designer';
 
 /** `preset_key` of the M4.4 launch fields that the designer replaces. */
 export const NPP_FALLBACK_PRESET_KEY = 'npp_fallback';

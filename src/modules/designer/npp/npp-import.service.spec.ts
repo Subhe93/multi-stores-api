@@ -24,7 +24,7 @@ import type { NTemplate } from '../../importer/model/normalized';
 import { SafeFetcher, type Transport } from '../../importer/media/safe-fetch';
 import { createFakePrisma } from '../../importer/__fixtures__/fake-prisma';
 import { rollbackRun } from '../../importer/apply/rollback';
-import type { TemplateSpecV1 } from '../render/design-renderer';
+import type { TemplateSpecV1 } from '@multi-stores/core/designer';
 import { DesignerAssetsService } from '../designer-assets.service';
 import { DesignerFontsService } from '../designer-fonts.service';
 import { DesignerUrlsService } from '../designer-urls';

@@ -1,4 +1,4 @@
-import { isPlainObject } from '../../common/personalization/rules';
+import { isPlainObject } from '@multi-stores/core/personalization/rules';
 import { jsonEqual } from './personalization-json';
 
 /**

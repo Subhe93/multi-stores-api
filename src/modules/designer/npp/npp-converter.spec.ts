@@ -12,11 +12,11 @@ import type {
   ImageElement,
   ImageSlotElement,
   TextElement,
-} from '../render/design-renderer';
+} from '@multi-stores/core/designer';
 import {
   compileDesignAllowedChars,
   sortElements,
-} from '../render/design-renderer';
+} from '@multi-stores/core/designer';
 import {
   convertNpp,
   IMPORTED_ALLOWED_CHARS,

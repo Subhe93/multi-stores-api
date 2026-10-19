@@ -14,7 +14,7 @@ import {
   buildPersonalizationGroups,
   hasPersonalizationGroups,
   type PDisplayRow,
-} from '../../common/personalization/display';
+} from '@multi-stores/core/personalization/display';
 import { SUPPORTED_LOCALES } from '../markets/market.types';
 
 // Per-locale phrasing used inside order emails. The admin can edit the
