@@ -2356,7 +2356,7 @@ model StoreLegalProfile {
   iban              String?  @db.VarChar(34)
   bic               String?  @db.VarChar(11)
   bank_name         String?
-  logo_url          String? // /uploads/... (public logo) or https; null = Store.logo_url
+  logo_url          String? // /uploads/... public logo path only (the DTO rejects other URLs); null = Store.logo_url
   f_tax_approved    Boolean  @default(false) // "Godkänd för F-skatt"
   due_days          Int      @default(30)
   footer_note       String?

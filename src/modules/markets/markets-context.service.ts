@@ -1,4 +1,10 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
@@ -6,6 +12,17 @@ import { resolveStoreCurrency } from '../../common/money/currency.util';
 import { FxService, priceRuleOf } from './fx.service';
 import { MarketContext, toMarketRoute } from './market-context';
 import type { MarketRoute } from './market.types';
+import { PgNotifyListener } from '../../common/ops/pg-listener';
+
+/**
+ * Cross-instance invalidation (same mechanism as StoreAppsService): a market
+ * mutation or an FX change runs `pg_notify('markets', storeId | '*')` and
+ * every instance's LISTEN connection drops its copy, so a second PM2
+ * instance never serves a stale market, price rule or domain for the TTL.
+ * `MARKETS_LISTEN=off` disables the listener (TTL fallback only).
+ */
+export const MARKETS_CHANNEL = 'markets';
+const ALL_STORES = '*';
 
 /**
  * The single entry point every market-aware hook calls:
@@ -59,9 +76,11 @@ export const MARKET_NOT_LIVE = {
 };
 
 @Injectable()
-export class MarketsContextService {
+export class MarketsContextService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MarketsContextService.name);
   private readonly cache = new Map<string, CacheEntry>();
+  /** Dedicated LISTEN connection; null when disabled. */
+  private listener: PgNotifyListener | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -160,14 +179,55 @@ export class MarketsContextService {
     });
   }
 
-  /** Drop the store's cached markets (called after every mutation). */
-  invalidate(storeId: string): void {
-    this.cache.delete(storeId);
+  onModuleInit(): void {
+    if ((process.env.MARKETS_LISTEN ?? '').toLowerCase() === 'off') {
+      this.logger.log('Markets LISTEN disabled (MARKETS_LISTEN=off)');
+      return;
+    }
+    this.listener = new PgNotifyListener(MARKETS_CHANNEL, (payload) =>
+      this.dropLocal(payload),
+    );
+    this.listener.start();
   }
 
-  /** Drop every store's cache (platform FX rates changed). */
+  async onModuleDestroy(): Promise<void> {
+    await this.listener?.stop();
+    this.listener = null;
+  }
+
+  /**
+   * Drop the store's cached markets (called after every mutation), here and
+   * on every other instance.
+   */
+  invalidate(storeId: string): void {
+    this.dropLocal(storeId);
+    void this.notifyInstances(storeId);
+  }
+
+  /** Drop every store's cache (platform FX rates changed), on every instance. */
   invalidateAll(): void {
-    this.cache.clear();
+    this.dropLocal(ALL_STORES);
+    void this.notifyInstances(ALL_STORES);
+  }
+
+  /** Local drop only: also what a notification from another instance does. */
+  private dropLocal(payload: string): void {
+    if (payload === ALL_STORES) this.cache.clear();
+    else this.cache.delete(payload);
+  }
+
+  /** Best effort: on failure other instances catch up within the TTL. */
+  private async notifyInstances(payload: string): Promise<void> {
+    try {
+      await this.prisma
+        .$executeRaw`SELECT pg_notify(${MARKETS_CHANNEL}, ${payload})`;
+    } catch (err) {
+      this.logger.warn(
+        `pg_notify(${MARKETS_CHANNEL}) failed for ${payload}; other instances fall back to the ${CACHE_TTL_MS / 1000} s TTL: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   /** toContext that never throws: a failed rate lookup yields rate null. */

@@ -1,6 +1,6 @@
 # Operating the API (M5 W1-C)
 
-How to run `multi-stores-api` on one or several PM2 instances: environment, which worker runs where, what to watch, disk, backups and the ops status endpoint. Deployment steps for the M4 milestones live in [DEPLOY-M4.md](./DEPLOY-M4.md); this file is the day-2 reference. Keep both updated when an env var, a worker flag or a migration changes.
+How to run `multi-stores-api` on one or several PM2 instances: environment, which worker runs where, what to watch, disk, backups and the ops status endpoint. Deployment steps for the M4 milestones live in [DEPLOY-M4.md](./DEPLOY-M4.md); this file is the day-2 reference. Keep both updated when an env var, a worker flag or a migration changes. What each store app does, its settings, routes, tables and per-app operational notes are in [apps/README.md](./apps/README.md) (one file per app).
 
 ## 1. Environment
 

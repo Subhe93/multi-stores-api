@@ -32,7 +32,7 @@ DESIGNER_RENDER_QUEUE=on            # one instance 'on' until RAM is measured; o
 DESIGNER_RENDER_CONCURRENCY=1
 IMPORTER_WORKER=on                  # one instance
 RETENTION_SCHEDULER=on              # safe on all instances (advisory lock)
-BACKUP_SCHEDULER=on                 # ONE instance only (no lock)
+BACKUP_SCHEDULER=on                 # safe on several instances since M5 (advisory lock, see OPERATIONS.md)
 IMPORTER_BUNDLE_DIR_ROOT=/var/lib/multi-stores/import-bundles   # admin from-directory imports only
 # IMPORTER_HTML_SANITIZER=plain     # emergency only: drop every tag of imported descriptions
 #                                   # (default: allowlist sanitizer, sanitize-html, D11). Switching
