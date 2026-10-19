@@ -195,6 +195,8 @@ const SIZE_OPTION_NAMES = [
 @Injectable()
 export class FeedsService {
   private readonly cache = new Map<string, CacheEntry>();
+  /** Builds in progress per cache key (de-duplicates concurrent misses). */
+  private readonly inFlight = new Map<string, Promise<BuiltFeed>>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -254,6 +256,27 @@ export class FeedsService {
     const hit = this.cache.get(cacheKey);
     if (hit && hit.expiresAt > now) return { ...hit.feed, cached: true };
 
+    // Cache miss: concurrent requests for the same feed share one build
+    // instead of each loading the whole catalogue.
+    const running = this.inFlight.get(cacheKey);
+    if (running) return { ...(await running), cached: true };
+    const build = this.build(store, settings, market, format, cacheKey, now);
+    this.inFlight.set(cacheKey, build);
+    try {
+      return await build;
+    } finally {
+      this.inFlight.delete(cacheKey);
+    }
+  }
+
+  private async build(
+    store: Parameters<FeedsService['collect']>[0],
+    settings: Parameters<FeedsService['collect']>[1],
+    market: Parameters<FeedsService['collect']>[2],
+    format: FeedFormat,
+    cacheKey: string,
+    now: number,
+  ): Promise<BuiltFeed> {
     const { items } = await this.collect(store, settings, market);
     const body =
       format === 'google'

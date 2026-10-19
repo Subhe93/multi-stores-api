@@ -19,7 +19,7 @@ Every variable, grouped. Defaults in brackets; `(prod)` = required in production
 | `STOREFRONT_URL`, `REVALIDATE_SECRET` | – | Storefront cache revalidation. |
 | `CORS_ALLOWED_ORIGINS` | reflect all (warns) | Exact origins or one-level wildcards. |
 | `TRUST_PROXY` | none | Hop count (`2` behind Cloudflare + nginx). Required for per-IP throttles and byte budgets. |
-| `CUSTOM_DOMAIN_CNAME_TARGET`, `CUSTOM_DOMAIN_A_TARGET`, `CUSTOM_DOMAIN_DNS_TIMEOUT_MS` | –, –, `5000` | Markets custom hostnames. |
+| `CUSTOM_DOMAIN_CNAME_TARGET`, `CUSTOM_DOMAIN_A_TARGET`, `CUSTOM_DOMAIN_DNS_TIMEOUT_MS`, `CUSTOM_DOMAIN_HTTP_VERIFY` | –, –, `5000`, `on` | Markets custom hostnames. Verify passes on a CNAME/A match OR when `https://<host>/api/platform-probe` answers with the platform marker and that host (needed behind Cloudflare, whose public records never point at the origin). Set `A_TARGET` to the origin IP so unproxied hosts verify without the probe. |
 | `REDIRECTS_PROXY_KEY` | – | Same value in the web app; lifts the redirect-route throttle. |
 | `VIES_MODE`, `VIES_BASE_URL`, `VIES_TIMEOUT_MS`, `VIES_CACHE_TTL_HOURS`, `VIES_QUEUE_TIMEOUT_MS` | `live`, EC, `4000`, `24`, `2000` | B2B VAT checks. |
 
@@ -167,3 +167,15 @@ A section that fails answers `{ "error": "…" }` in its place; the rest of the 
 - `ops.job-ticks` — deletes `OpsJobTick` rows older than 30 days (instances that are gone).
 
 Both run inside the hourly retention job; `POST /api/admin/retention/run?task=ops.quota-windows&dry_run=1` previews.
+
+## 8. Security headers
+
+- **API** (`src/common/security/security-headers.middleware.ts`, wired in `src/main.ts`, no helmet): `X-Powered-By` is disabled; every response gets `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Strict-Transport-Security: max-age=31536000; includeSubDomains` (only on HTTPS requests — `req.secure`, which honours `TRUST_PROXY` / `X-Forwarded-Proto`) and `X-Frame-Options: DENY`. `X-Frame-Options` is skipped on resource routes that are fetched or embedded cross-origin (`/uploads/*`, designer fonts/assets/files, order print files and originals, invoice PDFs, feeds, customer upload originals). A header a route already set is never overridden. CORS is unchanged.
+- **Dashboard** (`next.config.ts`): `poweredByHeader: false` plus the same four headers on `/(.*)`. The dashboard frames the storefront builder preview, nothing frames the dashboard, so `DENY` is safe.
+- **Storefront** (`multi-stores-web`): not covered here (it must stay frameable by the dashboard's builder preview).
+- Cloudflare may add more headers in front (its own HSTS, `cf-*`); the values above are the origin's minimum and are safe to duplicate.
+- **CSP is intentionally not set yet** on either app (inline scripts/styles, third-party embeds and the builder preview need an audit first).
+
+## 9. Creator HTML sanitizing
+
+Creator-authored HTML that the storefront renders as-is (product `description` / `short_description`, product FAQ answers, category and collection descriptions, the store description, legacy static page content) is sanitized **on write** by `src/common/html/creator-html.ts` (`sanitize-html`, Tiptap-compatible allowlist, `iframe` only for https YouTube / Vimeo, no `script` / `style` / `on*` / `javascript:` / `data:`). Existing rows are **not** rewritten by that change. To clean them once, run `npx ts-node prisma/scripts/sanitize-existing-html.ts` on the API host: it is a dry-run by default and prints, per table, how many rows would change; add `--apply` to write, and `--slug <store>` to limit it to one store (global categories are skipped in that mode). Take a DB backup first when applying; the importer's own sanitizer (`src/modules/importer/html/html-sanitizer.ts`) is unchanged, and page-builder section rich text (`PageSectionTranslation.content` JSON) is not covered.

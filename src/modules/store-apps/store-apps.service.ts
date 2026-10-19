@@ -291,10 +291,10 @@ export class StoreAppsService implements OnModuleInit, OnModuleDestroy {
     return store;
   }
 
-  /** Store id for a public slug, or null. */
+  /** Store id for a public slug, or null (inactive stores serve nothing). */
   async storeIdBySlug(slug: string): Promise<string | null> {
-    const store = await this.prisma.store.findUnique({
-      where: { slug },
+    const store = await this.prisma.store.findFirst({
+      where: { slug, is_active: true },
       select: { id: true },
     });
     return store?.id ?? null;

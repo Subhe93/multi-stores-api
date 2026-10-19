@@ -5,6 +5,16 @@ import {
   UpdateCategoryDto,
   LinkAttributesDto,
 } from './dto/category.dto';
+import { sanitizeCreatorHtml } from '../../common/html/creator-html';
+
+/** Category descriptions are rendered as HTML on the storefront. */
+function sanitizeTranslation<T extends { description?: string | null }>(
+  t: T,
+): T {
+  return t.description === undefined
+    ? t
+    : { ...t, description: sanitizeCreatorHtml(t.description) };
+}
 
 @Injectable()
 export class CategoriesService {
@@ -17,7 +27,7 @@ export class CategoriesService {
       data: {
         ...data,
         translations: {
-          create: translations,
+          create: translations.map(sanitizeTranslation),
         },
       },
       include: { translations: true },
@@ -101,7 +111,7 @@ export class CategoriesService {
       data: {
         ...data,
         ...(translations && {
-          translations: { create: translations },
+          translations: { create: translations.map(sanitizeTranslation) },
         }),
       },
       include: { translations: true },

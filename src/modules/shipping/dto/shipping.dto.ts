@@ -1,4 +1,5 @@
 import {
+  ArrayMaxSize,
   IsString,
   IsOptional,
   IsBoolean,
@@ -285,6 +286,7 @@ export class UpdateShippingProfileDto {
 
 export class EstimateShippingDto {
   @IsArray()
+  @ArrayMaxSize(200)
   @IsString({ each: true })
   product_ids: string[];
 

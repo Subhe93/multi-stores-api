@@ -116,6 +116,12 @@ export class BackupsService implements OnModuleInit {
 
   /** A backup run is in flight in this process. */
   private running = false;
+  /**
+   * `start()` is between its busy check and `running = true` (awaits on the
+   * row count, the disk guard and the insert). A second call in that window
+   * would pass the same checks and start a parallel dump; it is refused.
+   */
+  private starting = false;
   /** A restore is in flight in this process. */
   private restoring = false;
   private toolsCache: { at: number; tools: BackupTools } | null = null;
@@ -220,27 +226,37 @@ export class BackupsService implements OnModuleInit {
     options: CreateBackupOptions,
     fromRestore = false,
   ) {
-    if (await this.isBusy(fromRestore)) {
-      throw new ConflictException({
+    const busy = () =>
+      new ConflictException({
         code: 'BACKUP_ALREADY_RUNNING',
         message: 'Another backup or restore is already running',
       });
-    }
-    await this.assertDiskSpace();
+    // Synchronous claim: no await before it, so two concurrent calls cannot
+    // both pass the checks below (the row count sees neither insert yet).
+    if (this.starting) throw busy();
+    this.starting = true;
+    let created: Backup;
+    let includeUploads: boolean;
+    try {
+      if (await this.isBusy(fromRestore)) throw busy();
+      await this.assertDiskSpace();
 
-    const includeUploads = options.includeUploads ?? false;
-    const created = await this.prisma.backup.create({
-      data: {
-        kind,
-        status: BackupStatus.PENDING,
-        includes_uploads: includeUploads,
-        note: options.note ?? null,
-        created_by: options.createdBy ?? null,
-      },
-    });
-    // Claim the process-level slot before returning so a second request that
-    // arrives before the row flips to RUNNING is still refused.
-    this.running = true;
+      includeUploads = options.includeUploads ?? false;
+      created = await this.prisma.backup.create({
+        data: {
+          kind,
+          status: BackupStatus.PENDING,
+          includes_uploads: includeUploads,
+          note: options.note ?? null,
+          created_by: options.createdBy ?? null,
+        },
+      });
+      // Claim the process-level slot before returning so a second request
+      // that arrives before the row flips to RUNNING is still refused.
+      this.running = true;
+    } finally {
+      this.starting = false;
+    }
     const done = this.run(created, includeUploads);
     return { row: this.serialize(created), done };
   }

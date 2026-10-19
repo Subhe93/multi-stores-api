@@ -124,6 +124,7 @@ function build(
   opts: {
     legacy?: string[];
     dns?: Partial<DnsResolver>;
+    httpVerify?: string;
     target?: string | null;
   } = {},
 ) {
@@ -137,6 +138,7 @@ function build(
       }
       // Keep the DNS timeout short for the hanging-resolver case.
       if (key === 'CUSTOM_DOMAIN_DNS_TIMEOUT_MS') return '30';
+      if (key === 'CUSTOM_DOMAIN_HTTP_VERIFY') return opts.httpVerify;
       return undefined;
     },
   };
@@ -149,6 +151,7 @@ function build(
       opts.dns?.resolveCname ?? (() => Promise.reject(new Error('ENODATA'))),
     resolve4:
       opts.dns?.resolve4 ?? (() => Promise.reject(new Error('ENODATA'))),
+    probe: opts.dns?.probe ?? (() => Promise.resolve(null)),
   };
   const service = new DomainsService(
     prisma as unknown as PrismaService,
@@ -371,5 +374,49 @@ describe('DomainsService admin status', () => {
     expect(view.status).toBe('ACTIVE');
     expect(view.verified_at).not.toBeNull();
     expect(markets.invalidate).toHaveBeenCalledWith(STORE_ID);
+  });
+});
+
+describe('DomainsService.verify behind a proxy (HTTP probe)', () => {
+  it('VERIFIED when DNS points at the proxy but the host answers the probe', async () => {
+    const { service } = build([{ id: 'd1', hostname: 'namez.shop' }], {
+      dns: {
+        resolve4: () => Promise.resolve(['104.21.1.1']),
+        probe: (host) => Promise.resolve(host),
+      },
+    });
+    const view = await service.verify(STORE_ID, MARKET_ID, 'd1');
+    expect(view.status).toBe('VERIFIED');
+    expect(view.dns.observed).toEqual(['104.21.1.1', 'http:namez.shop']);
+  });
+
+  it('fails when the probe answers for another host, hangs, or is disabled', async () => {
+    const other = build([{ id: 'd1', hostname: 'namez.shop' }], {
+      dns: { probe: () => Promise.resolve('resumely.net') },
+    });
+    await expect(
+      other.service.verify(STORE_ID, MARKET_ID, 'd1'),
+    ).rejects.toMatchObject({
+      response: { code: 'MARKET_DOMAIN_VERIFY_FAILED' },
+    });
+
+    const hanging = build([{ id: 'd1', hostname: 'namez.shop' }], {
+      dns: { probe: () => new Promise(() => undefined) },
+    });
+    await expect(
+      hanging.service.verify(STORE_ID, MARKET_ID, 'd1'),
+    ).rejects.toMatchObject({
+      response: { code: 'MARKET_DOMAIN_VERIFY_FAILED' },
+    });
+
+    const off = build([{ id: 'd1', hostname: 'namez.shop' }], {
+      dns: { probe: (host) => Promise.resolve(host) },
+      httpVerify: 'off',
+    });
+    await expect(
+      off.service.verify(STORE_ID, MARKET_ID, 'd1'),
+    ).rejects.toMatchObject({
+      response: { code: 'MARKET_DOMAIN_VERIFY_FAILED' },
+    });
   });
 });

@@ -37,6 +37,24 @@ import {
 } from '../personalization/personalization-option-refs';
 import { isPlainObject } from '@multi-stores/core/personalization/rules';
 import { isValidGtin } from '../feeds/gtin';
+import { sanitizeCreatorHtml } from '../../common/html/creator-html';
+
+/**
+ * `description` / `short_description` are rendered on the storefront as
+ * HTML, so they are sanitized on every write (the importer has its own
+ * sanitizer). `description` is NOT NULL in the schema: empty becomes ''.
+ */
+function sanitizeTranslationHtml<
+  T extends { description: string; short_description?: string | null },
+>(t: T): T {
+  return {
+    ...t,
+    description: sanitizeCreatorHtml(t.description) ?? '',
+    ...(t.short_description !== undefined && {
+      short_description: sanitizeCreatorHtml(t.short_description),
+    }),
+  };
+}
 
 /**
  * Public projection of `GET /products` (anonymous callers and non-owners):
@@ -536,7 +554,7 @@ export class ProductsService {
 
     const productData: Prisma.ProductUncheckedCreateInput = {
       ...data,
-      translations: { create: translations },
+      translations: { create: translations.map(sanitizeTranslationHtml) },
     };
 
     // ربط المنتج بالـ Provider أو Creator
@@ -967,7 +985,10 @@ export class ProductsService {
         where: { product_id: id },
       });
       await this.prisma.productTranslation.createMany({
-        data: rows.map((t) => ({ ...t, product_id: id })),
+        data: rows.map((t) => ({
+          ...sanitizeTranslationHtml(t),
+          product_id: id,
+        })),
       });
     }
 

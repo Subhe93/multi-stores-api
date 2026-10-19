@@ -2,8 +2,15 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   CreateProductFaqDto,
+  FaqTranslationDto,
   UpdateProductFaqDto,
 } from './dto/product-faq.dto';
+import { sanitizeCreatorHtml } from '../../common/html/creator-html';
+
+/** The answer is rendered as HTML on the storefront; the question is text. */
+function sanitizeFaqTranslation(t: FaqTranslationDto): FaqTranslationDto {
+  return { ...t, answer: sanitizeCreatorHtml(t.answer) ?? '' };
+}
 
 @Injectable()
 export class ProductFaqsService {
@@ -14,7 +21,7 @@ export class ProductFaqsService {
       data: {
         product_id: productId,
         sort_order: dto.sort_order ?? 0,
-        translations: { create: dto.translations },
+        translations: { create: dto.translations.map(sanitizeFaqTranslation) },
       },
       include: { translations: true },
     });
@@ -48,7 +55,9 @@ export class ProductFaqsService {
         ...(dto.sort_order !== undefined && { sort_order: dto.sort_order }),
         ...(dto.translations &&
           dto.translations.length > 0 && {
-            translations: { create: dto.translations },
+            translations: {
+              create: dto.translations.map(sanitizeFaqTranslation),
+            },
           }),
       },
       include: { translations: true },

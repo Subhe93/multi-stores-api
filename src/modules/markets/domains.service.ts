@@ -23,7 +23,17 @@ import type { DomainView } from './market.types';
 export interface DnsResolver {
   resolveCname(host: string): Promise<string[]>;
   resolve4(host: string): Promise<string[]>;
+  /**
+   * HTTP ownership probe: fetches the storefront's platform-probe route on
+   * the hostname itself. Resolves to the answered host, or null when the
+   * host does not reach this platform. Optional: the default uses fetch.
+   */
+  probe?(host: string, timeoutMs: number): Promise<string | null>;
 }
+
+/** Path the storefront answers with `{platform:'multi-stores', host}`. */
+export const PLATFORM_PROBE_PATH = '/api/platform-probe';
+const PLATFORM_PROBE_MARKER = 'multi-stores';
 
 export const DNS_RESOLVER = 'MARKETS_DNS_RESOLVER';
 
@@ -40,6 +50,19 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 const nodeResolver: DnsResolver = {
   resolveCname: (host) => dns.resolveCname(host),
   resolve4: (host) => dns.resolve4(host),
+  probe: async (host, timeoutMs) => {
+    const res = await fetch(`https://${host}${PLATFORM_PROBE_PATH}`, {
+      signal: AbortSignal.timeout(timeoutMs),
+      redirect: 'manual',
+      headers: { accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { platform?: unknown; host?: unknown };
+    return body.platform === PLATFORM_PROBE_MARKER &&
+      typeof body.host === 'string'
+      ? body.host
+      : null;
+  },
 };
 
 const MARKET_DOMAIN_NOT_FOUND = {
@@ -179,9 +202,19 @@ export class DomainsService {
     const observed = await this.lookup(row.hostname);
     const seen = [...observed.cname, ...observed.a];
     const cnameTarget = target.cname;
-    const ok =
+    let ok =
       (cnameTarget && observed.cname.some((c) => sameHost(c, cnameTarget))) ||
       (target.a && observed.a.includes(target.a));
+    // Behind a proxy (Cloudflare) the public records point at the proxy, so
+    // the DNS match can never succeed; the HTTP probe proves the host already
+    // routes to this storefront. Off with CUSTOM_DOMAIN_HTTP_VERIFY=off.
+    if (!ok && this.httpVerifyEnabled()) {
+      const answered = await this.probe(row.hostname);
+      if (answered) {
+        ok = true;
+        seen.push(`http:${answered}`);
+      }
+    }
     if (!ok) {
       // Keep what was seen so the dashboard can show it on the next load.
       await this.prisma.storeDomain.update({
@@ -190,7 +223,7 @@ export class DomainsService {
       });
       throw new BadRequestException({
         code: 'MARKET_DOMAIN_VERIFY_FAILED',
-        message: `${row.hostname} does not point at ${cnameTarget || target.a || 'the platform'} yet.`,
+        message: `${row.hostname} does not point at ${cnameTarget || target.a || 'the platform'} yet (DNS record or proxied host).`,
         observed: seen,
       });
     }
@@ -313,6 +346,32 @@ export class DomainsService {
    * (default 5 s): a hanging resolver counts as "nothing observed", i.e. a
    * verify failure, never a hung request.
    */
+  private httpVerifyEnabled(): boolean {
+    return (
+      (this.config.get<string>('CUSTOM_DOMAIN_HTTP_VERIFY') || '')
+        .trim()
+        .toLowerCase() !== 'off'
+    );
+  }
+
+  /** The storefront's answer on the hostname, or null (timeout, error, other host). */
+  private async probe(host: string): Promise<string | null> {
+    const resolver = this.resolver ?? nodeResolver;
+    if (!resolver.probe) return null;
+    const timeoutMs =
+      Number(this.config.get<string>('CUSTOM_DOMAIN_DNS_TIMEOUT_MS')) ||
+      DNS_TIMEOUT_MS;
+    try {
+      const answered = await withTimeout(
+        resolver.probe(host, timeoutMs),
+        timeoutMs,
+      );
+      return answered && sameHost(answered, host) ? answered : null;
+    } catch {
+      return null;
+    }
+  }
+
   private async lookup(
     host: string,
   ): Promise<{ cname: string[]; a: string[] }> {

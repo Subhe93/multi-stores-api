@@ -12,6 +12,19 @@ import {
   CreatorCategoryTranslationDto,
 } from './dto/creator-category.dto';
 import { CreatorCategoryMatchRule } from '@prisma/client';
+import { sanitizeCreatorHtml } from '../../common/html/creator-html';
+
+/**
+ * Collection descriptions are rendered as HTML on the storefront. An
+ * `undefined` description is left alone so the X19 carry-over still works.
+ */
+function sanitizeTranslation<T extends { description?: string | null }>(
+  t: T,
+): T {
+  return t.description === undefined
+    ? t
+    : { ...t, description: sanitizeCreatorHtml(t.description) };
+}
 
 @Injectable()
 export class CreatorCategoriesService {
@@ -109,7 +122,7 @@ export class CreatorCategoriesService {
         match_tags: match_tags ?? [],
         parent_id: parent_id ?? null,
         creator_id: creatorId,
-        translations: { create: translations },
+        translations: { create: translations.map(sanitizeTranslation) },
       },
       include: { translations: true },
     });
@@ -257,7 +270,7 @@ export class CreatorCategoriesService {
         }),
         this.prisma.creatorCategoryTranslation.createMany({
           data: rows.map((t) => ({
-            ...t,
+            ...sanitizeTranslation(t),
             creator_category_id: id,
           })),
         }),

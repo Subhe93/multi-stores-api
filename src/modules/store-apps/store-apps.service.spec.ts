@@ -124,6 +124,15 @@ function makePrisma(
       ),
     },
     store: {
+      // Public slug lookups go through findFirst (slug + is_active).
+      findFirst: jest.fn(
+        ({ where }: { where: { slug?: string; is_active?: boolean } }) =>
+          Promise.resolve(
+            where.slug === 'my-shop' && where.is_active !== false
+              ? { id: STORE_ID }
+              : null,
+          ),
+      ),
       findUnique: jest.fn(
         ({ where }: { where: { creator_id?: string; slug?: string } }) =>
           Promise.resolve(
@@ -580,6 +589,10 @@ describe('StoreAppsService', () => {
       const { service } = build([]);
       await expect(service.storeIdBySlug('my-shop')).resolves.toBe(STORE_ID);
       await expect(service.storeIdBySlug('other')).resolves.toBeNull();
+      // Inactive stores serve no app route by slug.
+      const { service: inactive, prisma } = build([]);
+      prisma.store.findFirst.mockResolvedValueOnce(null);
+      await expect(inactive.storeIdBySlug('my-shop')).resolves.toBeNull();
       await expect(service.storeIdByUser(USER_ID)).resolves.toBe(STORE_ID);
       await expect(service.storeIdByUser('nobody')).resolves.toBeNull();
     });

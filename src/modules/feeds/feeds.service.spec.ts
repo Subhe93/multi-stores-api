@@ -674,3 +674,22 @@ describe('feed helpers', () => {
     });
   });
 });
+
+describe('FeedsService in-flight de-duplication', () => {
+  it('concurrent cache misses for the same feed share one catalogue load', async () => {
+    const { service, calls } = build();
+    const [a, b, c] = await Promise.all([
+      service.publicFeed('namz', TOKEN, 'google'),
+      service.publicFeed('namz', TOKEN, 'google'),
+      service.publicFeed('namz', TOKEN, 'google'),
+    ]);
+    expect(calls.productFindMany).toBe(1);
+    expect(a.body).toBe(b.body);
+    expect(b.body).toBe(c.body);
+    expect(a.cached).toBe(false);
+    expect(b.cached).toBe(true);
+    // A later request is served from the cache, still one load.
+    expect((await service.publicFeed('namz', TOKEN, 'google')).cached).toBe(true);
+    expect(calls.productFindMany).toBe(1);
+  });
+});

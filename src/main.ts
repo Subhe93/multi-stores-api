@@ -8,6 +8,7 @@ import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { CorsOriginService } from './common/cors/cors-origin.service';
+import { securityHeadersMiddleware } from './common/security/security-headers.middleware';
 import {
   matchesAllowedOrigin,
   parseAllowedOrigins,
@@ -35,6 +36,13 @@ async function bootstrap() {
   // default (no proxy trusted, req.ip = the proxy's address).
   const trustProxy = parseTrustProxy(process.env.TRUST_PROXY);
   if (trustProxy !== undefined) app.set('trust proxy', trustProxy);
+
+  // Baseline security headers (docs/OPERATIONS.md "Security headers"). The
+  // Express fingerprint header goes; nosniff / Referrer-Policy / HSTS (HTTPS
+  // only, via req.secure + trust proxy) / X-Frame-Options go on every
+  // response. Registered before the static handler so /uploads/* is covered.
+  app.getHttpAdapter().getInstance().disable('x-powered-by');
+  app.use(securityHeadersMiddleware);
 
   // Serve uploaded files as static. Filenames are UUIDs, so the content at any
   // given URL never changes — mark them long-lived + immutable so browsers

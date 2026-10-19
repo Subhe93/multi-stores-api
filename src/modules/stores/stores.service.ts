@@ -18,6 +18,7 @@ import { RedirectsService } from '../redirects/redirects.service';
 import { isReservedDomain } from '../../common/domains/reserved-hosts';
 import { stripBrandFromThemeConfig } from './theme-config';
 import { normalizeCheckoutSettingsInput } from './checkout-settings';
+import { sanitizeCreatorHtml } from '../../common/html/creator-html';
 import {
   CreateStoreDto,
   UpdateStoreDto,
@@ -74,6 +75,9 @@ export class StoresService {
       data: {
         creator_id: creator.id,
         ...storeData,
+        ...(storeData.description !== undefined && {
+          description: sanitizeCreatorHtml(storeData.description),
+        }),
         language_config: {
           create: {
             primary_locale: primary_locale || 'en',
@@ -723,6 +727,13 @@ function normalizeStoreUpdate(dto: UpdateStoreDto): StoreUpdateData {
   if (dto.currency !== undefined) {
     const raw = (dto.currency ?? '').trim().toUpperCase();
     out = { ...out, currency: raw || null } as StoreUpdateData;
+  }
+  // The description is rendered as HTML on the storefront home page.
+  if (dto.description !== undefined) {
+    out = {
+      ...out,
+      description: sanitizeCreatorHtml(dto.description),
+    } as StoreUpdateData;
   }
   // Checkout behaviour (M5.1): validated here so a bad body is a 400 with a
   // coded error; an all-default object is stored as NULL so the storefront

@@ -5,7 +5,19 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UserRole } from '@prisma/client';
-import { CreatePageDto, UpdatePageDto } from './dto/page.dto';
+import {
+  CreatePageDto,
+  PageTranslationDto,
+  UpdatePageDto,
+} from './dto/page.dto';
+import { sanitizeCreatorHtml } from '../../common/html/creator-html';
+
+/** Legacy page content is rendered as HTML on the storefront. */
+function sanitizeTranslation(t: PageTranslationDto): PageTranslationDto {
+  return t.content === undefined
+    ? t
+    : { ...t, content: sanitizeCreatorHtml(t.content) ?? undefined };
+}
 
 @Injectable()
 export class PagesService {
@@ -59,7 +71,9 @@ export class PagesService {
       data: {
         store_id: storeId,
         ...data,
-        ...(translations && { translations: { create: translations } }),
+        ...(translations && {
+          translations: { create: translations.map(sanitizeTranslation) },
+        }),
       },
       include: { translations: true },
     });
@@ -84,7 +98,9 @@ export class PagesService {
       where: { id },
       data: {
         ...data,
-        ...(translations && { translations: { create: translations } }),
+        ...(translations && {
+          translations: { create: translations.map(sanitizeTranslation) },
+        }),
       },
       include: { translations: true },
     });
