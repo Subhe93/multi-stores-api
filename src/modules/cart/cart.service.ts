@@ -59,8 +59,13 @@ import {
 import type { PFieldDef, PResult } from '../../common/personalization/types';
 import {
   DesignerCartService,
+  type CartDesignAddon,
   type CartDesignView,
 } from '../designer/designer-cart.service';
+import {
+  addonDetailText,
+  convertAddonLines,
+} from '../designer/designer-addons';
 
 // Shape of a product custom field as loaded with its translations.
 /** One cart line as GET /cart returns it (enrichCartItems output). */
@@ -731,6 +736,38 @@ export class CartService {
         }
       }
 
+      // Designer app (M5.5): the design's add-ons (base currency, priced by
+      // the server) are converted per unit for the market and added before
+      // the bundle, exactly as orders price them (priceLine).
+      let designAddons: CartDesignAddon[] | undefined;
+      const lineDesign = item.design_id
+        ? designViews?.get(item.design_id)
+        : undefined;
+      if (lineDesign?.addons?.length && !hiddenInMarket) {
+        try {
+          const conv = convertAddonLines(
+            lineDesign.addons.map((a) => ({ ...a, label: {} })),
+            market ? (a) => this.marketPricing.convertMoney(market, a) : null,
+          );
+          price = roundMoney(price + conv.total);
+          designAddons = lineDesign.addons.map((a, i) => {
+            const l = conv.lines[i];
+            return {
+              ...a,
+              unit_price: l.unit_price,
+              amount: l.amount,
+              text: addonDetailText(l, currency, locale),
+            };
+          });
+        } catch (e) {
+          // No rate to convert base amounts: checkout refuses the line.
+          this.logger.warn(
+            `Cart item ${item.id} (market ${market?.key ?? 'none'}): designer add-ons not convertible, line hidden: ${String(e)}`,
+          );
+          hiddenInMarket = true;
+        }
+      }
+
       // Apply bundle pricing if a bundle offer is attached
       let bundleOfferId: string | null = null;
       let bundleOriginalUnitPrice: number | null = null;
@@ -817,7 +854,13 @@ export class CartService {
         ...(personalizationInvalidLine
           ? { personalization_invalid: true as const }
           : {}),
-        ...(designView ? { design: designView } : {}),
+        ...(designView
+          ? {
+              design: designAddons
+                ? { ...designView, addons: designAddons }
+                : (({ addons: _base, ...rest }) => rest)(designView),
+            }
+          : {}),
       });
     }
 

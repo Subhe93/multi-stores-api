@@ -116,6 +116,10 @@ import {
   type DesignerLineMode,
 } from '../designer/designer-cart.service';
 import {
+  convertAddonLines,
+  type PricedAddon,
+} from '../designer/designer-addons';
+import {
   DESIGNER_TRIGGERS_PORT,
   type DesignerTriggersPort,
 } from '../../common/ports/designer-triggers.port';
@@ -213,6 +217,12 @@ interface PricedLine {
   /** Per-unit personalization delta in the order currency (0 = none). */
   personalizationAmount: number;
   /**
+   * Designer app (M5.5): the line's add-ons in the order currency (per
+   * unit) and their sum, already inside `unitPrice`. Empty / 0 without.
+   */
+  designerAddons: PricedAddon[];
+  designerAddonsAmount: number;
+  /**
    * Production app (M4.3): the variant's option map as sold, stored on the
    * line as `variant_options_snapshot` so the checklist never follows a
    * later edit of the ProductVariant row. Null for lines without a variant.
@@ -265,6 +275,11 @@ export interface OrderQuoteItem {
   tax_rate_bp: number;
   tax_amount: number;
   tax_class_key: string | null;
+  /**
+   * Designer app (M5.5): the add-ons priced into `unit_price` (order
+   * currency, per unit). Absent on lines without add-ons.
+   */
+  designer_addons?: PricedAddon[];
 }
 
 /** Everything an order from these lines would carry, without creating it. */
@@ -457,6 +472,24 @@ function fulfillmentStageToOrderStatus(rank: number): OrderStatus | null {
     default:
       return null; // 0 (PENDING): leave the pre-fulfillment status alone
   }
+}
+
+/**
+ * Markets app: the UI locale recorded on a market order. Only a locale the
+ * market serves is kept (emails, invoices and order pages read it); any
+ * other value, or none, falls back to the market's default locale.
+ */
+export function marketOrderLocale(
+  market: Pick<MarketContext, 'defaultLocale' | 'locales'>,
+  requested: string | null | undefined,
+): string {
+  const served = [market.defaultLocale, ...market.locales].map((l) =>
+    l.toLowerCase(),
+  );
+  const want = requested?.trim().toLowerCase().slice(0, 10);
+  return want && served.includes(want)
+    ? want
+    : market.defaultLocale.toLowerCase();
 }
 
 @Injectable()
@@ -865,6 +898,8 @@ export class OrdersService {
     marketRows: MarketPriceMap | null = null,
     /** M4.1: the line's personalization (evaluated for app lines only). */
     pz: LinePersonalizationInput | null = null,
+    /** M5.5: the validated designer line (its add-ons are priced here). */
+    designer: DesignerLine | null = null,
   ): Promise<PricedLine> {
     const isIndependentStore = orderStore.store_type === StoreType.INDEPENDENT;
     let unitPrice = 0;
@@ -1151,6 +1186,29 @@ export class OrdersService {
       }
     }
 
+    // Designer app (M5.5): the design's add-ons (base currency, per unit,
+    // priced by the server from the product's current config) are
+    // converted like every base amount - each unit price, so "× 2" stays
+    // exact - and added after the market price, before the bundle. They
+    // share the line, hence the product's tax class.
+    let designerAddons: PricedAddon[] = [];
+    let designerAddonsAmount = 0;
+    if (designer?.addons?.length) {
+      const market = orderStore.market;
+      const conv = convertAddonLines(
+        designer.addons,
+        market ? (a) => this.marketPricing.convertMoney(market, a) : null,
+      );
+      designerAddons = conv.lines;
+      designerAddonsAmount = conv.total;
+      unitPrice = roundMoney(unitPrice + designerAddonsAmount);
+      assertAmountFits(
+        designerAddonsAmount,
+        unitPrice,
+        this.lineTotal(unitPrice, item.quantity),
+      );
+    }
+
     // Apply bundle pricing if this cart line carries a bundle offer
     let originalUnitPrice: number | null = null;
     if (item.bundle_offer_id) {
@@ -1228,6 +1286,8 @@ export class OrdersService {
       taxExempt,
       personalization,
       personalizationAmount,
+      designerAddons,
+      designerAddonsAmount,
       variantOptions,
     };
   }
@@ -1732,7 +1792,7 @@ export class OrdersService {
         ? { line_id: lineId, line_index: index }
         : { line_index: index };
       // A designer line carries no field values (C29): no personalization
-      // input, no field rules; its designer delta is 0 (D9).
+      // input, no field rules; its add-ons are priced in priceLine (M5.5).
       const designer = designerLines[index];
       const priced = await this.priceLine(
         item,
@@ -1747,6 +1807,7 @@ export class OrdersService {
               ref,
               activeCache,
             },
+        designer,
       );
       quotedValues.push({
         ctx: fieldContexts[index],
@@ -1780,6 +1841,10 @@ export class OrdersService {
         unit_price: priced.unitPrice,
         original_unit_price: priced.originalUnitPrice,
         total_price: totalPrice,
+        // M5.5: key only on lines with add-ons (G0 quote shape).
+        ...(priced.designerAddons.length
+          ? { designer_addons: priced.designerAddons }
+          : {}),
       });
       taxLines.push({
         amount: totalPrice,
@@ -2083,6 +2148,10 @@ export class OrdersService {
     );
     // M4.1: active variants per product, one query per product per order.
     const activeCache: ActiveVariantsCache = new Map();
+    const designerAddonsAt = new Map<
+      number,
+      { lines: PricedAddon[]; total: number }
+    >();
     const lineValues: {
       ctx: LineContext;
       values: NormalizedValues;
@@ -2102,7 +2171,7 @@ export class OrdersService {
         : item.custom_fields;
       const lineRef = item.id ? { line_id: item.id } : { line_index: index };
       // M4.2: a designer line carries no field values (C29); its price is
-      // the product's (designer delta 0, D9).
+      // the product's plus its add-ons (M5.5, priced in priceLine).
       const designer = designerLines[index];
       const priced = await this.priceLine(
         item,
@@ -2117,6 +2186,7 @@ export class OrdersService {
               ref: lineRef,
               activeCache,
             },
+        designer,
       );
       const {
         unitPrice,
@@ -2126,6 +2196,14 @@ export class OrdersService {
         fulfillerType,
       } = priced;
       if (priced.stockOp) stockOps.push(priced.stockOp);
+      // M5.5: the add-ons priced into the line (order currency), frozen
+      // with its design below.
+      if (priced.designerAddons.length) {
+        designerAddonsAt.set(index, {
+          lines: priced.designerAddons,
+          total: priced.designerAddonsAmount,
+        });
+      }
 
       const totalPrice = this.lineTotal(unitPrice, item.quantity);
       // Defensive clamp kept for any non-bundle edge case; the bundle path is
@@ -2218,6 +2296,19 @@ export class OrdersService {
       number,
       Awaited<ReturnType<DesignerCartService['snapshot']>>
     >();
+    // M5.5: the order currency, resolved only when a line has add-ons
+    // (their detail rows show amounts).
+    const addonsCurrency = designerAddonsAt.size
+      ? resolveOrderCurrency(
+          orderStore,
+          (
+            await this.prisma.platformConfig.findFirst({
+              select: { default_currency: true },
+            })
+          )?.default_currency,
+          orderStore.market,
+        )
+      : null;
     for (const [index, designer] of designerLines.entries()) {
       if (!designer || !this.designerCart) continue;
       orderId ??= randomUUID();
@@ -2233,6 +2324,13 @@ export class OrdersService {
           storeId: orderStore.id,
           locale: dto.locale,
           primaryLocale: orderStore.primary_locale,
+          ...(designerAddonsAt.has(index)
+            ? {
+                addons: designerAddonsAt.get(index)!.lines,
+                addonsTotal: designerAddonsAt.get(index)!.total,
+                currency: addonsCurrency,
+              }
+            : {}),
         }),
       );
     }
@@ -2468,7 +2566,7 @@ export class OrdersService {
             orderStore.slug,
             dto.hostname,
           ),
-          locale: dto.locale?.trim().toLowerCase().slice(0, 10) || null,
+          locale: marketOrderLocale(market, dto.locale),
           fx_rate_snapshot: market.rate,
         }
       : {};

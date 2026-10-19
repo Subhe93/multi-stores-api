@@ -46,6 +46,7 @@ import {
   buildOrderUrl,
   buildStoreUrl,
   loadOrderForEmail,
+  customerEmailLocale,
   OrderForEmail,
   type MailAttachment,
   type OrderEmailEvent,
@@ -1098,7 +1099,13 @@ export class MailService {
       taxLines,
       logoUrl,
       extraVars,
-    } = await this.orderTemplateContext(order, event);
+    } = await this.orderTemplateContext(
+      order,
+      event,
+      // Markets app: customer emails in the order's storefront locale; the
+      // owner notification stays in the store's primary locale.
+      event === 'new_order_owner' ? undefined : customerEmailLocale(order),
+    );
 
     // Extension attachments (invoices app) for the customer emails that
     // carry documents; null for every other event or without extensions.

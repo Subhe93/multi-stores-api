@@ -184,6 +184,8 @@ export interface KustomCheckoutPayload {
   options?: KustomCheckoutOptions;
   /** Merchant-provided shipping options (omitted = none shown). */
   shipping_options?: KustomShippingOption[];
+  /** Countries the shopper may ship to (ISO alpha-2); absent = purchase_country only. */
+  shipping_countries?: string[];
 }
 
 /** Checkout API order (`/checkout/v3/orders/{id}`). */

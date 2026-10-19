@@ -46,6 +46,11 @@ import {
   type TemplateSpecV1,
 } from './render/design-renderer';
 import { isUuid } from './designs.util';
+import {
+  enabledAddons,
+  sanitizeSelection,
+  type AddonSelection,
+} from './designer-addons';
 import { canAccessDesign, hashDesignToken } from './designer-access';
 
 /** Hard cap of any customer text (code units), whatever the template says. */
@@ -86,6 +91,8 @@ export interface DesignView {
   photos: Record<string, DesignPhotoView>;
   /** Signed proof (1 h) when a proof of the current state exists. */
   proof_url: string | null;
+  /** M5.5 add-on selection `{key: qty}`; absent when none was chosen. */
+  addons?: AddonSelection;
   created_at: Date;
   updated_at: Date;
 }
@@ -364,6 +371,7 @@ export class DesignsService {
               ttlSec: DESIGNER_LINK_TTL.editor,
             })
           : null,
+      ...addonsViewOf(design.addons),
       created_at: design.created_at,
       updated_at: design.updated_at,
     };
@@ -454,7 +462,12 @@ export class DesignsService {
   /** `POST designer/s/:slug/designs`. The token is returned only here. */
   async create(
     storeId: string,
-    input: { product_id: string; template_version_id: string; state?: unknown },
+    input: {
+      product_id: string;
+      template_version_id: string;
+      state?: unknown;
+      addons?: unknown;
+    },
     customerId: string | null,
     locale?: string | null,
   ): Promise<DesignView & { token: string }> {
@@ -463,6 +476,10 @@ export class DesignsService {
       input.product_id,
       input.template_version_id,
     );
+    const addons =
+      input.addons === undefined
+        ? null
+        : await this.selectionFor(input.product_id, input.addons);
     const spec = version.spec as unknown as TemplateSpecV1;
     // A new design has no uploads yet: photos are added through the photo
     // route, so any photo in the initial state fails the ownership check.
@@ -482,6 +499,8 @@ export class DesignsService {
         state: state as unknown as Prisma.InputJsonValue,
         customer_id: customerId,
         access_token_hash: hashDesignToken(token),
+        // Key only when a selection was chosen (G0: same insert otherwise).
+        ...(addons ? { addons: addons as Prisma.InputJsonValue } : {}),
       },
     });
     const view = await this.view(
@@ -546,6 +565,13 @@ export class DesignsService {
         state: { v: 1, texts, photos: {} } as unknown as Prisma.InputJsonValue,
         customer_id: access.customerId,
         access_token_hash: hashDesignToken(token),
+        // M5.5: the copy keeps the add-on selection.
+        ...(addonsViewOf(source.addons).addons
+          ? {
+              addons: addonsViewOf(source.addons)
+                .addons as Prisma.InputJsonValue,
+            }
+          : {}),
       },
     });
     const slots = slotMap(spec);
@@ -639,7 +665,7 @@ export class DesignsService {
   async update(
     storeId: string,
     id: string,
-    input: { state: unknown; state_version: number },
+    input: { state: unknown; state_version: number; addons?: unknown },
     access: DesignAccess,
   ): Promise<DesignView> {
     const design = await this.loadAccessible(storeId, id, access);
@@ -652,6 +678,16 @@ export class DesignsService {
       input.state,
       { requireComplete: false },
     );
+    // M5.5: `addons` absent = selection kept; sent = replaced (an empty
+    // selection clears it). Add-ons never change the picture, so a PATCH
+    // whose state is unchanged keeps the proof.
+    const addons =
+      input.addons === undefined
+        ? undefined
+        : await this.selectionFor(design.product_id, input.addons);
+    const keepProof =
+      addons !== undefined &&
+      JSON.stringify(state) === JSON.stringify(design.state ?? null);
     const res = await this.prisma.design.updateMany({
       where: {
         id: design.id,
@@ -661,7 +697,14 @@ export class DesignsService {
       data: {
         state: state as unknown as Prisma.InputJsonValue,
         state_version: { increment: 1 },
-        proof_state_sha: null,
+        ...(keepProof ? {} : { proof_state_sha: null }),
+        ...(addons !== undefined
+          ? {
+              addons: addons
+                ? (addons as Prisma.InputJsonValue)
+                : Prisma.DbNull,
+            }
+          : {}),
       },
     });
     if (res.count === 0) throw this.stale();
@@ -670,12 +713,43 @@ export class DesignsService {
         ...design,
         state: state as unknown as Prisma.JsonValue,
         state_version: input.state_version + 1,
-        proof_state_sha: null,
+        proof_state_sha: keepProof ? design.proof_state_sha : null,
+        ...(addons !== undefined ? { addons } : {}),
         updated_at: new Date(),
       },
       photos,
       access.locale,
     );
+  }
+
+  /**
+   * A customer selection reduced to the product's ENABLED add-ons (unknown
+   * / disabled keys dropped, quantities clamped, toggles 1). Null when
+   * nothing is left. A malformed selection is 400 DESIGNER_ADDONS_INVALID.
+   */
+  async selectionFor(
+    productId: string,
+    raw: unknown,
+  ): Promise<AddonSelection | null> {
+    const sel = raw === null ? {} : sanitizeSelection(raw);
+    if (!sel) {
+      throw designerErrors.badRequest(
+        'DESIGNER_ADDONS_INVALID',
+        'The add-on selection is not valid.',
+      );
+    }
+    if (!Object.keys(sel).length) return null;
+    const link = await this.prisma.productDesigner.findUnique({
+      where: { product_id: productId },
+      select: { addons: true },
+    });
+    const out: AddonSelection = {};
+    for (const it of enabledAddons(link?.addons)) {
+      const want = sel[it.key];
+      if (!want) continue;
+      out[it.key] = it.type === 'toggle' ? 1 : Math.min(want, it.max_qty ?? 1);
+    }
+    return Object.keys(out).length ? out : null;
   }
 
   private stale() {
@@ -871,6 +945,12 @@ export class DesignsService {
 }
 
 /** Image slots of the front surface by id. */
+/** `{addons}` of a design view when a selection is stored, else `{}`. */
+export function addonsViewOf(raw: unknown): { addons?: AddonSelection } {
+  const sel = raw == null ? null : sanitizeSelection(raw);
+  return sel && Object.keys(sel).length ? { addons: sel } : {};
+}
+
 export function slotMap(spec: TemplateSpecV1): Map<string, ImageSlotElement> {
   const front = (spec?.surfaces ?? []).find((s) => s && s.key === 'front');
   const out = new Map<string, ImageSlotElement>();

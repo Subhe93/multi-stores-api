@@ -78,6 +78,8 @@ const sessionOrderInclude = {
         },
       },
       variant: { select: { sku: true, options: true } },
+      // M5.5: the frozen add-ons of a designed line (named on its line).
+      design: { select: { price_breakdown: true } },
     },
   },
   address: true,

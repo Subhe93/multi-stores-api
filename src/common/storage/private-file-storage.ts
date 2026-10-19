@@ -78,7 +78,7 @@ export const PRIVATE_STORAGE_KEY_PATTERNS: Readonly<Record<string, RegExp>> = {
   // (customer photos + previews, template backgrounds/decorations/thumbnails,
   // fonts, proofs and print files; built by modules/designer/designer-assets.keys.ts).
   designer:
-    /^designer\/[0-9a-f-]{36}\/\d{4}\/(photo|photo-preview|bg-web|bg-print|deco|thumb|font|proof|print)\/[0-9a-f-]{36}(-[a-z]{1,16})?\.(jpg|png|webp|woff2|ttf|otf)$/,
+    /^designer\/[0-9a-f-]{36}\/\d{4}\/(photo|photo-preview|bg-web|bg-print|deco|thumb|font|proof|print)\/[0-9a-f-]{36}(-[a-z]{1,16})?\.(jpg|png|webp|woff2|ttf|otf|pdf)$/,
   importer:
     /^importer\/[0-9a-f-]{36}\/(bundles\/[0-9a-f-]{36}\/[a-z_]{1,40}\.(tsv|json|csv|txt)|snapshots\/[0-9a-f-]{36}\.json\.gz|media\/[0-9a-f]{64}\.(jpg|png|webp|gif))$/,
 };

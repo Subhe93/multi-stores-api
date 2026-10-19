@@ -15,6 +15,7 @@ import {
   hasPersonalizationGroups,
   type PDisplayRow,
 } from '../../common/personalization/display';
+import { SUPPORTED_LOCALES } from '../markets/market.types';
 
 // Per-locale phrasing used inside order emails. The admin can edit the
 // surrounding template body in NotificationTemplate, but list headers/labels
@@ -1041,9 +1042,17 @@ export interface OrderStoreContext {
   ownerEmail?: string;
 }
 
+/** Markets app: the locales the order's market serves. */
+export interface OrderMarketLocales {
+  default_locale: string;
+  locales: string[];
+}
+
 export type OrderForEmail = OrderBasePayload & {
   // Store is attached separately because Order has no direct relation to Store.
   storeCtx: OrderStoreContext | null;
+  /** Markets app: absent / null for an order without a market. */
+  marketLocales?: OrderMarketLocales | null;
 };
 
 /**
@@ -1092,7 +1101,54 @@ export async function loadOrderForEmail(
     }
   }
 
-  return { ...order, storeCtx };
+  // Markets app: the market's locales bound the customer email locale
+  // (customerEmailLocale). No query for an order without a market.
+  const marketLocales = order.market_id
+    ? await prisma.market.findUnique({
+        where: { id: order.market_id },
+        select: { default_locale: true, locales: true },
+      })
+    : null;
+
+  return order.market_id
+    ? { ...order, storeCtx, marketLocales }
+    : { ...order, storeCtx };
+}
+
+/**
+ * Markets app: the locale a customer order email is rendered in. An order
+ * placed in a market carries the storefront locale it was placed in (e.g.
+ * `en` on namez.shop); that wins over the store's primary locale, like the
+ * invoice PDF (resolveInvoiceLocale). The order locale is only honoured when
+ * the market serves it (it comes from the storefront request); otherwise the
+ * market's default locale answers. Undefined (= store primary, today's
+ * behaviour) for orders without a market, or when neither is a supported
+ * locale.
+ */
+export function customerEmailLocale(order: {
+  market_id?: string | null;
+  locale?: string | null;
+  marketLocales?: OrderMarketLocales | null;
+}): string | undefined {
+  if (!order.market_id) return undefined;
+  const supported = (raw: string | null | undefined) => {
+    const lang = langOf(raw);
+    return (SUPPORTED_LOCALES as readonly string[]).includes(lang)
+      ? lang
+      : undefined;
+  };
+  const served = order.marketLocales
+    ? [order.marketLocales.default_locale, ...order.marketLocales.locales].map(
+        langOf,
+      )
+    : null;
+  const lang = supported(order.locale);
+  if (lang && (!served || served.includes(lang))) return lang;
+  return served ? supported(order.marketLocales?.default_locale) : undefined;
+}
+
+function langOf(raw: string | null | undefined): string {
+  return (raw ?? '').trim().toLowerCase().split(/[-_]/)[0];
 }
 
 /** The order events that send an email. */

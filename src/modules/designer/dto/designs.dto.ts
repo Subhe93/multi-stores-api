@@ -26,6 +26,11 @@ export class CreateDesignDto {
   @IsOptional()
   @IsObject()
   state?: Record<string, unknown>;
+
+  /** M5.5 add-on selection `{key: qty}` (checked against the product's add-ons). */
+  @IsOptional()
+  @IsObject()
+  addons?: Record<string, unknown> | null;
 }
 
 /** `PATCH designer/s/:slug/designs/:id`. */
@@ -37,6 +42,11 @@ export class UpdateDesignDto {
   @IsInt()
   @Min(1)
   state_version!: number;
+
+  /** M5.5: replaces the add-on selection when sent (`{}` / null clears it). */
+  @IsOptional()
+  @IsObject()
+  addons?: Record<string, unknown> | null;
 }
 
 /** Multipart fields of `POST designer/s/:slug/designs/:id/photos` (besides `file`). */
@@ -106,4 +116,10 @@ export class PutProductDesignerDto {
 
   @IsUUID()
   template_id!: string;
+}
+
+/** `PUT designer/my/products/:productId/addons` (validated by designer-addons.ts). */
+export class PutProductAddonsDto {
+  @IsObject()
+  addons!: Record<string, unknown>;
 }

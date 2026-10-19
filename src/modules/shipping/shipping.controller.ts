@@ -10,6 +10,8 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ShippingService } from './shipping.service';
+import { MarketsContextService } from '../markets/markets-context.service';
+import { MarketPricingService } from '../markets/market-pricing.service';
 import {
   CreateShippingProfileDto,
   UpdateShippingProfileDto,
@@ -30,7 +32,11 @@ import { UserRole } from '@prisma/client';
 // owner, which bypasses ownership checks in the service.
 @Controller('shipping')
 export class ShippingController {
-  constructor(private shippingService: ShippingService) {}
+  constructor(
+    private shippingService: ShippingService,
+    private marketsContext: MarketsContextService,
+    private marketPricing: MarketPricingService,
+  ) {}
 
   @Post('profiles')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -223,7 +229,21 @@ export class ShippingController {
   // Public: every shipping method for a set of products and a destination,
   // plus the legacy cost/estimated_days of the cheapest one.
   @Post('estimate')
-  estimate(@Body() dto: EstimateShippingDto) {
-    return this.shippingService.estimate(dto);
+  async estimate(@Body() dto: EstimateShippingDto) {
+    // Markets app: a storefront on a market domain sends its store and
+    // market so costs and the free threshold match POST /orders/quote.
+    const market =
+      dto.store_id && dto.market_key
+        ? await this.marketsContext.resolve(dto.store_id, dto.market_key)
+        : null;
+    return this.shippingService.estimate(
+      dto,
+      market
+        ? {
+            toBase: (a) => this.marketPricing.toBaseMoney(market, a),
+            fromBase: (a) => this.marketPricing.convertMoney(market, a),
+          }
+        : null,
+    );
   }
 }

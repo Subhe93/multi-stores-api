@@ -1,9 +1,12 @@
 import { readFileSync } from 'fs';
 import * as path from 'path';
+import { BadRequestException } from '@nestjs/common';
 import { DesignPrintStatus } from '@prisma/client';
+import { printFormatParam } from './designer-templates.controller';
 import {
   backoffMs,
   DesignerPrintQueueService,
+  isOwnPrintKey,
   PRINT_JOB_TIMEOUT_MS,
   PRINT_MAX_ATTEMPTS,
   PRINT_RENDER_PAUSE_MS,
@@ -16,6 +19,7 @@ import { DesignerRenderUnavailableError } from './render/designer-chromium.host'
 const STORE = '11111111-1111-4111-8111-111111111111';
 const LOCK = new Date('2026-10-16T10:00:00Z');
 const NOW = new Date('2026-10-16T10:00:05Z');
+const OID = 'cccccccc-0000-4000-8000-000000000001';
 
 const row = (over: Partial<ClaimedRow> = {}): ClaimedRow => ({
   id: 'oid1',
@@ -70,6 +74,11 @@ function build(env: NodeJS.ProcessEnv = {}) {
         }),
       ),
       findFirst: jest.fn(),
+      // The row as re-read after a lost fence (lists nothing by default).
+      findUnique: jest.fn(
+        (): Promise<{ print_files: unknown } | null> =>
+          Promise.resolve({ print_files: null }),
+      ),
       findMany: jest.fn(() => Promise.resolve([])),
       count: jest.fn(() => Promise.resolve(0)),
     },
@@ -265,6 +274,95 @@ describe('DesignerPrintQueueService — job lifecycle', () => {
     });
   });
 
+  it('READY deletes the previous files the new render no longer lists (PDF switched off)', async () => {
+    const b = build();
+    const png = `designer/${STORE}/2026/print/${OID}-front.png`;
+    const pdf = `designer/${STORE}/2026/print/${OID}-front.pdf`;
+    b.render.renderPrint.mockResolvedValueOnce({
+      files: [{ ...files[0], key: png }],
+      proof_key: null,
+      report: { fitted: {}, missing: [], elements: 1 },
+    });
+    await b.queue.process(
+      row({
+        id: OID,
+        print_files: [
+          { ...files[0], key: png },
+          { ...files[0], format: 'pdf', key: pdf },
+        ] as never,
+      }),
+      () => NOW,
+    );
+    expect(b.storage.delete).toHaveBeenCalledTimes(1);
+    expect(b.storage.delete).toHaveBeenCalledWith(pdf);
+  });
+
+  it("READY never deletes a listed key that is not this row's own print file", async () => {
+    const b = build();
+    const other = 'dddddddd-0000-4000-8000-000000000009';
+    await b.queue.process(
+      row({
+        id: OID,
+        print_files: [
+          {
+            ...files[0],
+            key: `designer/${STORE}/2026/print/${other}-front.png`,
+          },
+          { ...files[0], key: `designer/${other}/2026/print/${OID}-front.pdf` },
+          { ...files[0], key: `designer/${STORE}/2026/photo/${OID}.jpg` },
+        ] as never,
+      }),
+      () => NOW,
+    );
+    expect(b.storage.delete).not.toHaveBeenCalled();
+  });
+
+  it('a lost fence deletes the new files, never the previous ones', async () => {
+    const b = build();
+    b.prisma.orderItemDesign.updateMany.mockResolvedValueOnce({ count: 0 });
+    await b.queue.process(
+      row({ print_files: [{ ...files[0], key: 'designer/old.png' }] as never }),
+      () => NOW,
+    );
+    expect(b.storage.delete).toHaveBeenCalledWith('designer/k.png');
+    expect(b.storage.delete).not.toHaveBeenCalledWith('designer/old.png');
+  });
+
+  it('a lost fence keeps the files the row lists now (same per-row key, reclaimed render READY)', async () => {
+    const b = build();
+    b.prisma.orderItemDesign.updateMany.mockResolvedValueOnce({ count: 0 });
+    b.prisma.orderItemDesign.findUnique.mockResolvedValueOnce({
+      print_files: files,
+    });
+    await b.queue.process(row(), () => NOW);
+    expect(b.storage.delete).not.toHaveBeenCalledWith('designer/k.png');
+  });
+
+  it('a lost fence whose re-read fails keeps the files', async () => {
+    const b = build();
+    b.prisma.orderItemDesign.updateMany.mockResolvedValueOnce({ count: 0 });
+    b.prisma.orderItemDesign.findUnique.mockRejectedValueOnce(new Error('db'));
+    await b.queue.process(row(), () => NOW);
+    expect(b.storage.delete).not.toHaveBeenCalledWith('designer/k.png');
+  });
+
+  it("isOwnPrintKey: only this row's print keys", () => {
+    const r = { id: OID, store_id: STORE };
+    expect(
+      isOwnPrintKey(`designer/${STORE}/2025/print/${OID}-front.png`, r),
+    ).toBe(true);
+    expect(
+      isOwnPrintKey(`designer/${STORE}/2025/print/${OID}-front.pdf`, r),
+    ).toBe(true);
+    expect(
+      isOwnPrintKey(`designer/${STORE}/2025/print/../${OID}-front.pdf`, r),
+    ).toBe(false);
+    expect(isOwnPrintKey(`designer/${STORE}/2025/proof/${OID}.webp`, r)).toBe(
+      false,
+    );
+    expect(isOwnPrintKey('designer/k.png', r)).toBe(false);
+  });
+
   it('a retryable failure → FAILED with backoff 1 min, then 10 min', async () => {
     const b = build();
     b.render.renderPrint.mockRejectedValue(
@@ -441,6 +539,33 @@ describe('DesignerPrintQueueService — creator routes', () => {
     });
   });
 
+  it('printFile with format pdf streams the PDF; 409 when the render has none', async () => {
+    const b = build();
+    const pdf = {
+      ...files[0],
+      format: 'pdf' as const,
+      key: 'designer/k.pdf',
+      page_mm: { width: 506, height: 706 },
+    };
+    b.prisma.orderItemDesign.findFirst.mockResolvedValueOnce({
+      ...ready,
+      print_files: [...files, pdf],
+    });
+    b.prisma.orderItemDesign.findMany.mockResolvedValue([
+      { id: 'oid1', order_item: { order: { order_number: 'NZ-1001' } } },
+    ] as never);
+    const out = await b.queue.printFile(STORE, 'o1', 'i1', 'pdf');
+    expect(out).toMatchObject({
+      filename: 'NZ-1001-1-front.pdf',
+      mime: 'application/pdf',
+    });
+    expect(b.storage.read).toHaveBeenCalledWith('designer/k.pdf');
+    b.prisma.orderItemDesign.findFirst.mockResolvedValueOnce(ready);
+    await expect(
+      b.queue.printFile(STORE, 'o1', 'i1', 'pdf'),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
   it('printFile: 409 not ready, 410 purged, 404 for another store', async () => {
     const b = build();
     b.prisma.orderItemDesign.findFirst.mockResolvedValueOnce({
@@ -527,6 +652,48 @@ describe('DesignerPrintQueueService — creator routes', () => {
       max_attempts: PRINT_MAX_ATTEMPTS,
     });
     expect(res.items[0].print_files[0]).not.toHaveProperty('key');
+  });
+
+  it('list shows the PDF page geometry (never its key)', async () => {
+    const b = build();
+    b.prisma.orderItemDesign.count.mockResolvedValue(1);
+    b.prisma.orderItemDesign.findMany.mockResolvedValue([
+      {
+        ...ready,
+        print_files: [
+          ...files,
+          {
+            ...files[0],
+            format: 'pdf',
+            key: 'designer/k.pdf',
+            bytes: 2048,
+            page_mm: { width: 506, height: 706 },
+            trim_mm: { width: 500, height: 700 },
+            bleed_mm: 3,
+            crop_marks: false,
+          },
+        ],
+        order_item_id: 'i1',
+        assets: [],
+        created_at: NOW,
+        order_item: null,
+      },
+    ] as never);
+    const res = await b.queue.list(STORE);
+    const [png, pdf] = res.items[0].print_files;
+    expect(png).not.toHaveProperty('page_mm');
+    expect(pdf).toEqual({
+      surface: 'front',
+      format: 'pdf',
+      width_px: 3000,
+      height_px: 4200,
+      dpi: 152.4,
+      bytes: 2048,
+      page_mm: { width: 506, height: 706 },
+      trim_mm: { width: 500, height: 700 },
+      bleed_mm: 3,
+      crop_marks: false,
+    });
   });
 });
 
@@ -682,5 +849,16 @@ describe('DesignerPrintQueueService — lifecycle fixes (M4.2)', () => {
       /o\.payment_status = 'paid' OR o\.payment_method::text = 'COD'/,
     );
     expect(sql).toMatch(/sa\.available AND sa\.enabled/);
+  });
+});
+
+describe('print route ?format=', () => {
+  it('absent / png → png, pdf → pdf, anything else → 400', () => {
+    expect(printFormatParam(undefined)).toBe('png');
+    expect(printFormatParam('png')).toBe('png');
+    expect(printFormatParam('pdf')).toBe('pdf');
+    for (const bad of ['PDF', 'svg', '../x', ['pdf', 'pdf'], { a: 1 }]) {
+      expect(() => printFormatParam(bad)).toThrow(BadRequestException);
+    }
   });
 });

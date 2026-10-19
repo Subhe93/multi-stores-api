@@ -39,6 +39,15 @@ export interface QuotedShippingMethod {
   free_shipping: boolean;
 }
 
+/**
+ * Markets app: converts between the market currency of a storefront request
+ * and the base currency zones and methods are priced in.
+ */
+export interface ShippingMoney {
+  toBase(amount: number): number;
+  fromBase(amount: number): number;
+}
+
 /** What quoteForItems() returns: every method the customer may pick. */
 export interface ShippingItemsQuote {
   available: boolean;
@@ -802,10 +811,19 @@ export class ShippingService {
     };
   }
 
-  /** `POST /shipping/estimate`: the full quote plus the legacy cheapest cost. */
-  async estimate(dto: EstimateShippingDto) {
-    const quote = await this.quoteForItems(dto);
+  /**
+   * `POST /shipping/estimate`: the full quote plus the legacy cheapest cost.
+   * `money` (markets app) converts the market-currency subtotal to the base
+   * currency the zones are priced in, and the quoted costs back.
+   */
+  async estimate(dto: EstimateShippingDto, money?: ShippingMoney | null) {
+    const quote = await this.quoteForItems(
+      money ? { ...dto, subtotal: money.toBase(dto.subtotal) } : dto,
+    );
     if (!quote.available) return quote;
+    if (money) {
+      for (const m of quote.methods) m.cost = money.fromBase(m.cost);
+    }
     const cheapest = cheapestOf(quote.methods);
     return {
       ...quote,

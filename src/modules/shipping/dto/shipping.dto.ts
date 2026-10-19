@@ -306,6 +306,20 @@ export class EstimateShippingDto {
   @IsString()
   @MaxLength(10)
   locale?: string;
+
+  // Markets app: the storefront's store and market. With both set and the
+  // app on, `subtotal` is read in the market currency and the method costs
+  // come back converted (same math as POST /orders/quote). Absent = base
+  // currency, unchanged.
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  store_id?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  market_key?: string;
 }
 
 export class CalculateShippingDto {

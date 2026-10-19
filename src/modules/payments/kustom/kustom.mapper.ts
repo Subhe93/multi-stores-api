@@ -16,6 +16,11 @@ import type {
   KustomShippingOption,
 } from './kustom.client';
 import type { BuyerType, CompanySnapshot } from '../../b2b/b2b.types';
+import {
+  addonNamesText,
+  orderAddonsOf,
+  type PricedAddon,
+} from '../../designer/designer-addons';
 
 /**
  * Pure functions that turn one of our orders — or a not-yet-ordered checkout
@@ -43,6 +48,13 @@ export interface KustomOrderItemInput {
   product?: { translations?: Translation[] } | null;
   custom_product?: { translations?: Translation[] } | null;
   variant?: { sku?: string | null; options?: unknown } | null;
+  /**
+   * Designer app (M5.5): the line's add-ons, already inside `unit_price`;
+   * named in the line name. A quote item carries them directly, an order
+   * item through its frozen design.
+   */
+  designer_addons?: Pick<PricedAddon, 'label' | 'qty' | 'type'>[] | null;
+  design?: { price_breakdown?: unknown } | null;
 }
 
 export interface KustomAddressInput {
@@ -195,8 +207,15 @@ export function resolveItemName(
     pickTitle(item.product?.translations, locale) ||
     'Item';
   const variant = variantLabel(item.variant?.options);
+  const base = variant ? `${title} (${variant})` : title;
+  // M5.5: "Poster (A3) + Dubbelsidig, Poster × 2" for designed lines with
+  // add-ons; every other line keeps its name.
+  const addons = addonNamesText(
+    item.designer_addons ?? orderAddonsOf(item.design?.price_breakdown),
+    locale,
+  );
   // Kustom caps line names at 255 characters.
-  return (variant ? `${title} (${variant})` : title).slice(0, 255);
+  return (addons ? `${base} + ${addons}` : base).slice(0, 255);
 }
 
 /** Split "Anna Maria Svensson" into given/family the way Kustom expects. */
@@ -611,6 +630,12 @@ export interface KustomSessionMapperContext {
 export interface KustomSessionInput extends KustomLinesInput {
   /** ISO 3166-1 alpha-2 country the purchase is made in. */
   purchaseCountry: string;
+  /**
+   * Markets app: every country the market ships to. With more than one, the
+   * shopper may pick any of them inside the iframe (`shipping_countries`);
+   * absent outside a market so the payload stays unchanged.
+   */
+  shippingCountries?: string[];
   /** `merchant_reference1` — the session id until the order exists. */
   reference: string;
   reference2?: string;
@@ -738,6 +763,19 @@ export function buildKustomSessionPayload(
     },
   };
   if (input.reference2) payload.merchant_reference2 = input.reference2;
+  const shippingCountries = [
+    ...new Set(
+      (input.shippingCountries ?? [])
+        .map((c) => c.trim().toUpperCase())
+        .filter((c) => /^[A-Z]{2}$/.test(c)),
+    ),
+  ];
+  if (shippingCountries.length > 1) {
+    // The purchase country must be one of them.
+    if (!shippingCountries.includes(country))
+      shippingCountries.unshift(country);
+    payload.shipping_countries = shippingCountries;
+  }
   if (address) {
     payload.billing_address = address;
     payload.shipping_address = address;

@@ -50,6 +50,8 @@ export const DESIGNER_ERROR_CODES = [
   'DESIGNER_UPLOAD_QUOTA',
   'DESIGNER_STORAGE_FULL',
   'DESIGNER_UPLOAD_BUSY',
+  // M5.5 add-ons: invalid add-on config (creator) or selection (customer).
+  'DESIGNER_ADDONS_INVALID',
 ] as const;
 
 export type DesignerErrorCode = (typeof DESIGNER_ERROR_CODES)[number];

@@ -25,7 +25,8 @@
  *   Enabling needs a PUBLISHED, publishable template and deletes the
  *   product's M4.4 launch fields (`preset_key='npp_fallback'`, X28/C29) in
  *   the same transaction — order history keeps their snapshots (SetNull).
- *   `addons` is read-only. DELETE removes the link.
+ *   DELETE removes the link. `PUT …/:productId/addons` saves the M5.5
+ *   add-on config (designer-addons.ts); imported NPP data stays presets.
  */
 import {
   BadRequestException,
@@ -50,6 +51,14 @@ import { DesignerRenderService } from './designer-render.service';
 import { normalizeDesignerSettings } from './designer-settings';
 import { absoluteApiUrl, designerAssetPath } from './designer-urls';
 import { blankTemplateSpec, isUuid, specSha256 } from './designs.util';
+import {
+  enabledAddons,
+  legacyAddonPresets,
+  readAddonsConfig,
+  storedAddonsValue,
+  validateAddonsConfig,
+  type AddonType,
+} from './designer-addons';
 import {
   validateSpec,
   type AssetRef,
@@ -135,6 +144,20 @@ export interface StorefrontDesignerBlock {
   spec_public: Record<string, unknown>;
   fonts: { family: string; weight: number; style: string; url: string }[];
   settings: { max_upload_mb: number; min_effective_dpi_warning: number };
+  /**
+   * M5.5: the ENABLED add-ons in display order, prices in the store base
+   * currency (the storefront converts them for a market). Absent when the
+   * product has none, so the payload is unchanged (G0).
+   */
+  addons?: StorefrontAddon[];
+}
+
+export interface StorefrontAddon {
+  key: string;
+  type: AddonType;
+  label: Record<string, string>;
+  price: number;
+  max_qty?: number;
 }
 
 @Injectable()
@@ -752,7 +775,10 @@ export class DesignerTemplatesService {
               enabled: link.enabled,
               template_id: link.template_id,
               template: link.template,
-              addons: link.addons,
+              // M5.5: the v2 config (empty when none was saved yet) and the
+              // suggested disabled presets of imported NPP data.
+              addons: readAddonsConfig(link.addons) ?? { v: 2, items: [] },
+              addon_presets: legacyAddonPresets(link.addons),
               updated_at: link.updated_at,
             }
           : null,
@@ -764,7 +790,7 @@ export class DesignerTemplatesService {
   /**
    * Links a product to a template. Enabling: the template must be the
    * store's and PUBLISHED; the product's `npp_fallback` launch fields are
-   * deleted in the same transaction. `addons` are kept as imported.
+   * deleted in the same transaction. `addons` are left unchanged.
    */
   async putProductLink(
     storeId: string,
@@ -820,6 +846,45 @@ export class DesignerTemplatesService {
       ...(await this.getProductLink(storeId, productId)),
       removed_fallback_fields: removed,
     };
+  }
+
+  /**
+   * `PUT designer/my/products/:productId/addons` (M5.5): replaces the
+   * product's add-on config with a validated v2 config. The link must exist
+   * (pick a template first); imported NPP data is kept beside it so the
+   * presets stay available. Storefront pages are revalidated.
+   */
+  async putProductAddons(storeId: string, productId: string, raw: unknown) {
+    await this.ownProduct(storeId, productId);
+    const res = validateAddonsConfig(raw);
+    if (!res.ok) {
+      throw designerErrors.badRequest(
+        'DESIGNER_ADDONS_INVALID',
+        'The add-ons are not valid.',
+        { errors: res.errors },
+      );
+    }
+    const link = await this.prisma.productDesigner.findUnique({
+      where: { product_id: productId },
+      select: { store_id: true, addons: true },
+    });
+    if (!link || link.store_id !== storeId) {
+      throw designerErrors.notFound(
+        'DESIGNER_DESIGN_NOT_FOUND',
+        'Link the product to a template first.',
+      );
+    }
+    await this.prisma.productDesigner.update({
+      where: { product_id: productId },
+      data: {
+        addons: storedAddonsValue(
+          res.value,
+          link.addons,
+        ) as Prisma.InputJsonValue,
+      },
+    });
+    this.revalidate(storeId);
+    return this.getProductLink(storeId, productId);
   }
 
   /**
@@ -890,6 +955,13 @@ export class DesignerTemplatesService {
       this.storeApps.getSettings(storeId, 'designer'),
     ]);
     const settings = normalizeDesignerSettings(settingsRaw);
+    const addons: StorefrontAddon[] = enabledAddons(link.addons).map((a) => ({
+      key: a.key,
+      type: a.type,
+      label: a.label,
+      price: a.price,
+      ...(a.type === 'quantity' ? { max_qty: a.max_qty ?? 1 } : {}),
+    }));
     return {
       template_id: link.template_id,
       template_version_id: version.id,
@@ -904,6 +976,7 @@ export class DesignerTemplatesService {
         max_upload_mb: settings.max_upload_mb,
         min_effective_dpi_warning: settings.min_effective_dpi_warning,
       },
+      ...(addons.length ? { addons } : {}),
     };
   }
 }

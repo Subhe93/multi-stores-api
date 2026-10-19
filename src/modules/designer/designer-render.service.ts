@@ -16,6 +16,18 @@
  *   canvas runs at 6 px/mm (3000×4200 for 500×700), then sharp embeds the
  *   sRGB profile and 25.4×px/mm DPI (152.4) and the PNG is stored under
  *   `designer/<store>/<yyyy>/print/<oidId>-front.png`.
+ * - Print PDF (store setting `print_formats` lists 'pdf'; off by default):
+ *   rendered in the same job right after the PNG (same lifecycle: the job
+ *   is READY only when both exist) and stored as a second print file
+ *   `…/print/<oidId>-front.pdf`. Page = trim + 2 × bleed (plus a slug when
+ *   `print_crop_marks` is on), the background extended into the bleed and
+ *   the elements at their trim coordinates offset by the bleed
+ *   (`render/print-pdf.ts`). The page draws its canvases in `beforeprint`
+ *   so Chromium keeps them vector: text uses the template's own uploaded
+ *   font faces (embedded, subset), and every image (backgrounds,
+ *   decorations, customer photos) is served as its untouched ORIGINAL (no
+ *   crop, no downscale; JPEGs end up in the PDF byte-for-byte), except
+ *   photos over the pixel budget (`pdfImageNeeds`).
  * - Proof (`renderDesignProof`): web background, photo previews, scale 2,
  *   WebP q 0.85, stored under
  *   `designer/<store>/<yyyy>/proof/<designId>-<sha>.webp` (`<sha>` = the
@@ -90,6 +102,15 @@ import {
   Semaphore,
   SemaphoreBusyError,
 } from '../../common/chromium/browser-host';
+import {
+  finalizePrintPdf,
+  printPdfGeometry,
+  type PrintPdfGeometry,
+} from './render/print-pdf';
+import {
+  normalizeDesignerSettings,
+  type DesignerSettings,
+} from './designer-settings';
 
 /** Budget of an interactive proof (§4.1: 10 s). */
 export const PROOF_TIMEOUT_MS = 10_000;
@@ -111,13 +132,82 @@ export const PROOF_STORE_WAIT_MS = 5_000;
 
 export interface PrintFile {
   surface: 'front';
-  format: 'png';
+  format: 'png' | 'pdf';
   key: string;
+  /** PNG: the canvas. PDF: the page at the print scale (nominal). */
   width_px: number;
   height_px: number;
   dpi: number;
   bytes: number;
   sha256: string;
+  /** PDF only: page size (trim + 2 × bleed, plus the crop-mark slug). */
+  page_mm?: { width: number; height: number };
+  /** PDF only: trim size. */
+  trim_mm?: { width: number; height: number };
+  /** PDF only: bleed on every side. */
+  bleed_mm?: number;
+  /** PDF only: whether crop marks were drawn. */
+  crop_marks?: boolean;
+}
+
+/** PDF-only fields of a print file for the API views (empty for a PNG). */
+export function printFileExtras(f: PrintFile): {
+  page_mm?: { width: number; height: number };
+  trim_mm?: { width: number; height: number };
+  bleed_mm?: number;
+  crop_marks?: boolean;
+} {
+  if (f.format !== 'pdf') return {};
+  return {
+    ...(f.page_mm ? { page_mm: f.page_mm } : {}),
+    ...(f.trim_mm ? { trim_mm: f.trim_mm } : {}),
+    ...(typeof f.bleed_mm === 'number' ? { bleed_mm: f.bleed_mm } : {}),
+    ...(typeof f.crop_marks === 'boolean' ? { crop_marks: f.crop_marks } : {}),
+  };
+}
+
+/** Budget of a print PDF page (fonts, originals, layout and printing). */
+export const PRINT_PDF_TIMEOUT_MS = 90_000;
+/**
+ * A customer photo larger than this (pixels) is not embedded as its
+ * original in the print PDF but downscaled to PDF_PHOTO_OVERSAMPLE × its
+ * drawn size (~300 dpi at 6 px/mm): a 100 MP upload decodes to 400 MB in
+ * the browser.
+ */
+export const PDF_PHOTO_MAX_ORIGINAL_PIXELS = 40_000_000;
+/** Decoded pixels of all photo originals of one print PDF. */
+export const PDF_PHOTOS_MAX_TOTAL_PIXELS = 120_000_000;
+export const PDF_PHOTO_OVERSAMPLE = 2;
+
+/**
+ * Image inputs of the print PDF (pure): every image as its whole original
+ * (the PDF page never crops), except customer photos over the per-photo or
+ * the per-job pixel budget, which are downscaled (never upscaled) to
+ * PDF_PHOTO_OVERSAMPLE × their drawn size. Template images keep their
+ * original: the PNG render decodes those whole too.
+ */
+export function pdfImageNeeds(
+  drawn: ImageNeed[],
+  assets: Map<string, Pick<DesignAsset, 'width' | 'height'>>,
+): ImageNeed[] {
+  let budget = PDF_PHOTOS_MAX_TOTAL_PIXELS;
+  return drawn.map((n) => {
+    const a = assets.get(n.asset_id);
+    // Only photos carry a drawn size; an unknown asset fails later.
+    if (!n.fit || !a) return { asset_id: n.asset_id, variant: 'original' };
+    const px = Math.max(0, a.width) * Math.max(0, a.height);
+    if (px <= PDF_PHOTO_MAX_ORIGINAL_PIXELS && px <= budget) {
+      budget -= px;
+      return { asset_id: n.asset_id, variant: 'original' };
+    }
+    const fit = {
+      width: Math.ceil(n.fit.width * PDF_PHOTO_OVERSAMPLE),
+      height: Math.ceil(n.fit.height * PDF_PHOTO_OVERSAMPLE),
+    };
+    const k = Math.min(1, fit.width / a.width, fit.height / a.height);
+    budget -= Math.ceil(a.width * k) * Math.ceil(a.height * k);
+    return { asset_id: n.asset_id, variant: 'original', fit };
+  });
 }
 
 export interface PrintRenderResult {
@@ -144,7 +234,7 @@ export class DesignerRenderJobError extends Error {
 }
 
 const DETERMINISTIC_PAGE_ERRORS =
-  /(RENDER_MISSING|FONT_LOAD_FAILED|ASSET_LOAD_FAILED|RENDERER_MISSING|ENCODE_FAILED|CANVAS_TOO_LARGE)/;
+  /(RENDER_MISSING|FONT_LOAD_FAILED|ASSET_LOAD_FAILED|RENDERER_MISSING|ENCODE_FAILED|CANVAS_TOO_LARGE|PDF_FINALIZE_FAILED|PDF_DRAW_FAILED)/;
 
 /** Maps any error of a render job to a DesignerRenderJobError. */
 export function classifyRenderError(e: unknown): DesignerRenderJobError {
@@ -432,6 +522,52 @@ export class DesignerRenderService implements OnModuleDestroy {
           sha256: sha256(png),
         },
       ];
+      const settings = await this.printSettings(row.store_id);
+      if (settings.print_formats.includes('pdf')) {
+        const geometry = printPdfGeometry(spec, {
+          cropMarks: settings.print_crop_marks,
+        });
+        // The PDF canvases span the bleed box (the whole page with crop
+        // marks), which can exceed the canvas limits the PNG scale was
+        // clamped to; the output is vector, so only the coordinate scale
+        // drops (huge templates only).
+        const largest = geometry.crop_marks
+          ? geometry.page_mm
+          : geometry.bleed_box_mm;
+        const pdfScale = clampScale(
+          { width: largest.width, height: largest.height } as TemplateSpecV1,
+          scale,
+          PRINT_MAX_PIXELS,
+        );
+        const pdf = await this.renderPrintPdf(row.store_id, spec, state, {
+          scale: pdfScale,
+          locale,
+          geometry,
+          title: `Print file ${row.id}`,
+        });
+        const pdfKey = designerStorageKey(
+          row.store_id,
+          'print',
+          row.id,
+          'pdf',
+          { at: now, suffix: 'front' },
+        );
+        await this.storage.write(pdfKey, pdf);
+        files.push({
+          surface: 'front',
+          format: 'pdf',
+          key: pdfKey,
+          width_px: Math.round(geometry.page_mm.width * scale),
+          height_px: Math.round(geometry.page_mm.height * scale),
+          dpi,
+          bytes: pdf.length,
+          sha256: sha256(pdf),
+          page_mm: geometry.page_mm,
+          trim_mm: geometry.trim_mm,
+          bleed_mm: geometry.bleed_mm,
+          crop_marks: geometry.crop_marks,
+        });
+      }
       let proofKey: string | null = null;
       if (!row.proof_key) {
         const size = canvasSize(spec, proofScale(spec));
@@ -448,6 +584,81 @@ export class DesignerRenderService implements OnModuleDestroy {
     } catch (e) {
       throw classifyRenderError(e);
     }
+  }
+
+  /**
+   * The store's print settings (formats, crop marks), read from the app row
+   * whether the app is on or off. A DB error propagates (the job retries)
+   * rather than silently dropping the PDF.
+   */
+  async printSettings(storeId: string): Promise<DesignerSettings> {
+    const row = await this.prisma.storeApp.findUnique({
+      where: { store_id_app_key: { store_id: storeId, app_key: 'designer' } },
+      select: { settings: true },
+    });
+    return normalizeDesignerSettings(row?.settings ?? null);
+  }
+
+  /**
+   * Renders the print PDF of a design (vector, with bleed) and runs the PDF
+   * step (exact page boxes). Every image is served as its original bytes.
+   */
+  async renderPrintPdf(
+    storeId: string,
+    spec: TemplateSpecV1,
+    state: DesignStateV1,
+    o: {
+      scale: number;
+      locale?: string;
+      geometry: PrintPdfGeometry;
+      title: string;
+      timeoutMs?: number;
+    },
+  ): Promise<Buffer> {
+    if (!this.browser.enabled || !this.browser.renderPdf) {
+      throw new DesignerRenderUnavailableError(
+        'Print PDF rendering is unavailable on this instance',
+      );
+    }
+    const { files, fonts, needs } = await this.prepareInputs(
+      storeId,
+      spec,
+      state,
+      'print',
+      o.scale,
+      { originals: true },
+    );
+    const result = await this.browser.renderPdf(
+      {
+        spec,
+        state,
+        scale: o.scale,
+        locale: o.locale,
+        fonts,
+        assets: needs.map((n) => ({ id: n.asset_id })),
+        geometry: o.geometry,
+        title: o.title,
+      },
+      files,
+      o.timeoutMs ?? PRINT_PDF_TIMEOUT_MS,
+    );
+    if (result.report.missing.length) {
+      throw new DesignerRenderJobError(
+        `RENDER_MISSING:${result.report.missing.join(',')}`,
+        false,
+        'RENDER_MISSING',
+      );
+    }
+    const { pdf } = finalizePrintPdf(result.data, o.geometry);
+    if (
+      Object.keys(result.report.fitted).length > 0 &&
+      !/\/FontFile/.test(pdf.toString('latin1'))
+    ) {
+      this.logger.warn(
+        `store ${storeId}: the print PDF has text but no embedded font (rasterized canvas?)`,
+      );
+    }
+    return pdf;
   }
 
   // ── Proof (design draft / cart) ──────────────────────────────────────────
@@ -699,6 +910,56 @@ export class DesignerRenderService implements OnModuleDestroy {
         'Design rendering is disabled (DESIGNER_RENDER_ENGINE=off)',
       );
     }
+    const { files, fonts, jobAssets } = await this.prepareInputs(
+      storeId,
+      spec,
+      state,
+      o.mode,
+      o.scale,
+    );
+    const result = await this.browser.renderCanvas(
+      {
+        spec,
+        state,
+        mode: o.mode,
+        scale: o.scale,
+        locale: o.locale,
+        type: o.type,
+        quality: o.quality,
+        fonts,
+        assets: jobAssets,
+      },
+      files,
+      o.timeoutMs,
+    );
+    if (result.report.missing.length) {
+      throw new DesignerRenderJobError(
+        `RENDER_MISSING:${result.report.missing.join(',')}`,
+        false,
+        'RENDER_MISSING',
+      );
+    }
+    return result;
+  }
+
+  /**
+   * Reads the images and fonts of a render into the job's file map.
+   * `originals`: every image is served as its stored original, never cut or
+   * downscaled (print PDF).
+   */
+  private async prepareInputs(
+    storeId: string,
+    spec: TemplateSpecV1,
+    state: DesignStateV1,
+    mode: Exclude<Mode, 'edit'>,
+    scale: number,
+    opts: { originals?: boolean } = {},
+  ): Promise<{
+    files: Map<string, RenderFile>;
+    fonts: CanvasJob['fonts'];
+    jobAssets: CanvasAsset[];
+    needs: ImageNeed[];
+  }> {
     if (!spec || !frontSurface(spec)) {
       throw new DesignerRenderJobError(
         'The template has no front surface.',
@@ -707,11 +968,12 @@ export class DesignerRenderService implements OnModuleDestroy {
       );
     }
     const files = new Map<string, RenderFile>();
-    const needs = imageNeeds(spec, state, o.mode, o.scale);
+    const drawn = imageNeeds(spec, state, mode, scale);
     const rows = await this.loadAssets(
       storeId,
-      needs.map((n) => n.asset_id),
+      drawn.map((n) => n.asset_id),
     );
+    const needs = opts.originals ? pdfImageNeeds(drawn, rows) : drawn;
     const jobAssets: CanvasAsset[] = [];
     for (const n of needs) {
       const asset = rows.get(n.asset_id);
@@ -752,29 +1014,7 @@ export class DesignerRenderService implements OnModuleDestroy {
         asset_id: ref.asset_id,
       });
     }
-    const result = await this.browser.renderCanvas(
-      {
-        spec,
-        state,
-        mode: o.mode,
-        scale: o.scale,
-        locale: o.locale,
-        type: o.type,
-        quality: o.quality,
-        fonts,
-        assets: jobAssets,
-      },
-      files,
-      o.timeoutMs,
-    );
-    if (result.report.missing.length) {
-      throw new DesignerRenderJobError(
-        `RENDER_MISSING:${result.report.missing.join(',')}`,
-        false,
-        'RENDER_MISSING',
-      );
-    }
-    return result;
+    return { files, fonts, jobAssets, needs };
   }
 
   private async loadAssets(

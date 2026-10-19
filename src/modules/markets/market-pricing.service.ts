@@ -154,8 +154,13 @@ export class MarketPricingService {
     return {
       hidden: false,
       base_price: basePrice,
+      // A manual compare-at override shows even when the base product has
+      // none (the creator set it for this market only).
       compare_at_price:
-        product.compare_at_price && compareAt ? compareAt : undefined,
+        (productRow?.compare_at_price != null || product.compare_at_price) &&
+        compareAt
+          ? compareAt
+          : undefined,
       variants,
     };
   }

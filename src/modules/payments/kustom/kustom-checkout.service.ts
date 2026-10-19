@@ -544,6 +544,9 @@ export class KustomCheckoutService {
         opts.purchaseCountry ??
         opts.countryCode ??
         this.purchaseCountryFallback(ctx),
+      ...(ctx.market && ctx.market.countries.length > 1
+        ? { shippingCountries: ctx.market.countries }
+        : {}),
       reference: session.id,
       email: opts.prefill?.email ?? null,
       phone: opts.prefill?.phone ?? null,
@@ -625,6 +628,10 @@ export class KustomCheckoutService {
       variant: item.variant_id
         ? (variantMap.get(item.variant_id) ?? null)
         : null,
+      // M5.5: designed lines name their add-ons (key absent otherwise).
+      ...(item.designer_addons?.length
+        ? { designer_addons: item.designer_addons }
+        : {}),
     }));
   }
 

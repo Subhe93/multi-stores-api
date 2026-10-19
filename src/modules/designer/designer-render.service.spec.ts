@@ -8,17 +8,21 @@ import {
   DesignerRenderService,
   designProofKey,
   imageNeeds,
+  pdfImageNeeds,
   photoVisibleCrop,
   printScale,
   proofScale,
 } from './designer-render.service';
 import {
+  DESIGNER_MAX_CANVAS_SIDE,
   DesignerRenderUnavailableError,
   DisabledDesignerRenderer,
   type CanvasJob,
   type DesignerBrowserRenderer,
+  type PdfJob,
   type RenderFile,
 } from './render/designer-chromium.host';
+import { mmToPt, readPdfBoxes } from './render/print-pdf';
 import {
   DEFAULT_ADJ,
   type DesignStateV1,
@@ -119,7 +123,38 @@ async function png(w: number, h: number) {
 let bigPhotoBytes: Promise<Buffer> | null = null;
 const bigPhoto = () => (bigPhotoBytes ??= png(4000, 3000));
 
-function build(opts: { browser?: DesignerBrowserRenderer } = {}) {
+/** A one-page PDF shaped like Chromium's (classic xref), page in pt. */
+function fakeChromiumPdf(w: number, h: number): Buffer {
+  const content = 'q Q\n';
+  const objs = [
+    '',
+    '<</Producer (test)>>',
+    `<</Type /Page\n/MediaBox [0 0 ${w} ${h}]\n/Contents 3 0 R\n/Parent 4 0 R>>`,
+    `<</Length ${content.length}>> stream\n${content}endstream`,
+    '<</Type /Pages\n/Count 1\n/Kids [2 0 R]>>',
+    '<</Type /Catalog\n/Pages 4 0 R>>',
+  ];
+  let out = '%PDF-1.4\n';
+  const at: number[] = [];
+  for (let id = 1; id < objs.length; id++) {
+    at[id] = out.length;
+    out += `${id} 0 obj\n${objs[id]}\nendobj\n`;
+  }
+  const xref = out.length;
+  out += `xref\n0 ${objs.length}\n0000000000 65535 f \n`;
+  for (let id = 1; id < objs.length; id++) {
+    out += `${String(at[id]).padStart(10, '0')} 00000 n \n`;
+  }
+  out += `trailer\n<</Size ${objs.length}\n/Root 5 0 R>>\nstartxref\n${xref}\n%%EOF`;
+  return Buffer.from(out, 'latin1');
+}
+
+function build(
+  opts: {
+    browser?: DesignerBrowserRenderer;
+    settings?: Record<string, unknown>;
+  } = {},
+) {
   const rows: DesignAsset[] = [
     [BG_WEB, 1000, 1400, 'TEMPLATE_BG_WEB'],
     [BG_PRINT, 3000, 4200, 'TEMPLATE_BG_PRINT'],
@@ -156,6 +191,11 @@ function build(opts: { browser?: DesignerBrowserRenderer } = {}) {
     },
     order: {
       findUnique: jest.fn(() => Promise.resolve({ locale: 'en' })),
+    },
+    storeApp: {
+      findUnique: jest.fn(() =>
+        Promise.resolve(opts.settings ? { settings: opts.settings } : null),
+      ),
     },
   };
   const readAssetBytes = jest.fn(
@@ -206,6 +246,11 @@ function build(opts: { browser?: DesignerBrowserRenderer } = {}) {
   };
   const calls: { job: CanvasJob; files: Map<string, RenderFile>; t: number }[] =
     [];
+  const pdfCalls: {
+    job: PdfJob;
+    files: Map<string, RenderFile>;
+    t: number;
+  }[] = [];
   const browser: DesignerBrowserRenderer = opts.browser ?? {
     enabled: true,
     close: jest.fn(() => Promise.resolve()),
@@ -227,6 +272,19 @@ function build(opts: { browser?: DesignerBrowserRenderer } = {}) {
         report: { fitted: {}, missing: [], elements: 2 },
       };
     }),
+    renderPdf: jest.fn(
+      (job: PdfJob, files: Map<string, RenderFile>, t: number) => {
+        pdfCalls.push({ job, files, t });
+        // Chromium rounds the (padded) paper up a little.
+        return Promise.resolve({
+          data: fakeChromiumPdf(
+            job.geometry.page_pt.width + 4,
+            job.geometry.page_pt.height + 4,
+          ),
+          report: { fitted: {}, missing: [], elements: 2 },
+        });
+      },
+    ),
   };
   const service = new DesignerRenderService(
     prisma as never,
@@ -236,7 +294,17 @@ function build(opts: { browser?: DesignerBrowserRenderer } = {}) {
     urls as never,
     browser,
   );
-  return { service, prisma, assets, storage, written, calls, browser, urls };
+  return {
+    service,
+    prisma,
+    assets,
+    storage,
+    written,
+    calls,
+    pdfCalls,
+    browser,
+    urls,
+  };
 }
 
 const oid = (over: Record<string, unknown> = {}) => ({
@@ -393,6 +461,162 @@ describe('DesignerRenderService.renderPrint (mock browser)', () => {
       1000,
       1400,
     ]);
+  });
+
+  it('PNG only by default: no PDF render, one print file', async () => {
+    const b = build();
+    const res = await b.service.renderPrint(oid(), new Date('2026-10-16'));
+    expect(b.pdfCalls).toHaveLength(0);
+    expect(res.files.map((f) => f.format)).toEqual(['png']);
+    expect(b.prisma.storeApp.findUnique).toHaveBeenCalledWith({
+      where: { store_id_app_key: { store_id: STORE, app_key: 'designer' } },
+      select: { settings: true },
+    });
+  });
+
+  it('PDF on: second print file with bleed geometry, photo originals, crop marks', async () => {
+    const b = build({
+      settings: { print_formats: ['png', 'pdf'], print_crop_marks: true },
+    });
+    const s = spec();
+    s.bleed_mm = 3;
+    const res = await b.service.renderPrint(
+      oid({ template_spec: s as never }),
+      new Date('2026-10-16'),
+    );
+    expect(b.pdfCalls).toHaveLength(1);
+    const { job, files, t } = b.pdfCalls[0];
+    expect(t).toBe(90_000);
+    expect(job.scale).toBe(6);
+    expect(job.locale).toBe('en');
+    // 500×700 + 3 mm bleed + 8 mm crop-mark slug (offset 3 + length 5).
+    expect(job.geometry.page_mm).toEqual({ width: 516, height: 716 });
+    expect(job.geometry.bleed_box_mm).toEqual({
+      x: 5,
+      y: 5,
+      width: 506,
+      height: 706,
+    });
+    expect(job.geometry.crop_mark_lines_mm).toHaveLength(8);
+    // Originals: the photo is served whole (no crop, no downscale).
+    expect(job.assets).toEqual([{ id: BG_PRINT }, { id: PHOTO }, { id: DECO }]);
+    expect(files.get(`a/${PHOTO}`)!.body).toBe(await bigPhoto());
+    expect(files.has(`f/${FONT}`)).toBe(true);
+    expect(res.files.map((f) => f.format)).toEqual(['png', 'pdf']);
+    const pdf = res.files[1];
+    expect(pdf).toMatchObject({
+      surface: 'front',
+      format: 'pdf',
+      key: `designer/${STORE}/2026/print/${OID}-front.pdf`,
+      page_mm: { width: 516, height: 716 },
+      trim_mm: { width: 500, height: 700 },
+      bleed_mm: 3,
+      crop_marks: true,
+      width_px: 3096,
+      height_px: 4296,
+    });
+    const stored = b.written.get(pdf.key)!;
+    expect(pdf.bytes).toBe(stored.length);
+    // The PDF step wrote the exact page boxes.
+    const boxes = readPdfBoxes(stored);
+    expect(boxes.MediaBox).toEqual([0, 0, mmToPt(516), mmToPt(716)]);
+    expect(boxes.TrimBox).toEqual([
+      mmToPt(8),
+      mmToPt(8),
+      mmToPt(508),
+      mmToPt(708),
+    ]);
+  });
+
+  it('PDF of a huge template: the coordinate scale drops so the page layer fits the canvas limits', async () => {
+    const b = build({
+      settings: { print_formats: ['png', 'pdf'], print_crop_marks: true },
+    });
+    (b.browser.renderCanvas as jest.Mock).mockImplementationOnce(
+      async (job: CanvasJob) => {
+        const w = Math.round(job.spec.width * job.scale);
+        const h = Math.round(job.spec.height * job.scale);
+        return {
+          data: await sharp({
+            create: { width: 8, height: 8, channels: 4, background: '#fff' },
+          })
+            .png()
+            .toBuffer(),
+          width: w,
+          height: h,
+          report: { fitted: {}, missing: [], elements: 0 },
+        };
+      },
+    );
+    const s = spec();
+    s.width = 2725;
+    s.height = 400;
+    s.bleed_mm = 3;
+    s.surfaces[0].elements = [];
+    const res = await b.service.renderPrint(
+      oid({ template_spec: s as never }),
+      new Date('2026-10-16'),
+    );
+    const { job } = b.pdfCalls[0];
+    // The PNG keeps 6 px/mm (16 350 px wide, within the limits).
+    expect(res.files[0].width_px).toBe(16_350);
+    expect(job.scale).toBeLessThan(6);
+    expect(
+      Math.ceil(job.geometry.page_mm.width * job.scale),
+    ).toBeLessThanOrEqual(DESIGNER_MAX_CANVAS_SIDE);
+  });
+
+  it('pdfImageNeeds: originals, except photos over the per-photo / per-job pixel budget', () => {
+    const fit = { width: 600, height: 400 };
+    const assets = new Map([
+      ['bg', { width: 11000, height: 9000 }],
+      ['small', { width: 4000, height: 3000 }],
+      ['huge', { width: 12000, height: 8000 }],
+    ]);
+    const needs = pdfImageNeeds(
+      [
+        { asset_id: 'bg', variant: 'original' },
+        { asset_id: 'small', variant: 'original', fit, crop: undefined },
+        {
+          asset_id: 'huge',
+          variant: 'original',
+          fit,
+          crop: { left: 1, top: 1, width: 10, height: 10 },
+        },
+      ],
+      assets,
+    );
+    // Template images stay whole originals (the PNG decodes them too).
+    expect(needs[0]).toEqual({ asset_id: 'bg', variant: 'original' });
+    expect(needs[1]).toEqual({ asset_id: 'small', variant: 'original' });
+    // 96 MP photo: downscaled to 2 × its drawn size, never cropped.
+    expect(needs[2]).toEqual({
+      asset_id: 'huge',
+      variant: 'original',
+      fit: { width: 1200, height: 800 },
+    });
+    // The per-job budget: four 36 MP photos → the fourth is downscaled.
+    const many = new Map(
+      ['a', 'b', 'c', 'd'].map((id) => [id, { width: 6000, height: 6000 }]),
+    );
+    const out = pdfImageNeeds(
+      ['a', 'b', 'c', 'd'].map((id) => ({
+        asset_id: id,
+        variant: 'original' as const,
+        fit,
+      })),
+      many,
+    );
+    expect(out.map((n) => !!n.fit)).toEqual([false, false, false, true]);
+  });
+
+  it('PDF on but the engine has no PDF support: retryable unavailable', async () => {
+    const b = build({ settings: { print_formats: ['png', 'pdf'] } });
+    delete (b.browser as { renderPdf?: unknown }).renderPdf;
+    await expect(b.service.renderPrint(oid())).rejects.toMatchObject({
+      retryable: true,
+      code: 'DESIGNER_RENDER_UNAVAILABLE',
+    });
   });
 
   it('keeps an existing order proof', async () => {

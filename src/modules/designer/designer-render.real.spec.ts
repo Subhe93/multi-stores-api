@@ -150,6 +150,8 @@ describe('DesignerRenderService (REAL Chromium render)', () => {
           Promise.resolve(rows.filter((r) => where.id.in.includes(r.id))),
         ),
       },
+      // No app settings row: PNG only (the default print formats).
+      storeApp: { findUnique: jest.fn(() => Promise.resolve(null)) },
     };
     const assets = {
       readAssetBytes: jest.fn((a: DesignAsset) =>

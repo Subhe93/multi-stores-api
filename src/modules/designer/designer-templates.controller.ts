@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -39,9 +40,17 @@ import {
   CreateTemplateVersionDto,
   ListDesignTemplatesQueryDto,
   PublishTemplateDto,
+  PutProductAddonsDto,
   PutProductDesignerDto,
   UpdateDesignTemplateDto,
 } from './dto/designs.dto';
+
+/** `?format=` of the print download: absent → png; anything else → 400. */
+export function printFormatParam(format: unknown): 'png' | 'pdf' {
+  if (format === undefined || format === '' || format === 'png') return 'png';
+  if (format === 'pdf') return 'pdf';
+  throw new BadRequestException('format must be png or pdf');
+}
 
 /**
  * Creator template routes (M4.2 §4.3), mounted at `/api/designer/my/templates`.
@@ -156,6 +165,23 @@ export class DesignerProductsController {
     return this.templates.putProductLink(appStoreId(req), productId, dto);
   }
 
+  /**
+   * M5.5 add-ons `{addons: {v:2, items}}` of a linked product; 400
+   * DESIGNER_ADDONS_INVALID `{params:{errors}}` when the config is invalid.
+   */
+  @Put(':productId/addons')
+  putAddons(
+    @Req() req: RequestWithAppStore,
+    @Param('productId') productId: string,
+    @Body() dto: PutProductAddonsDto,
+  ) {
+    return this.templates.putProductAddons(
+      appStoreId(req),
+      productId,
+      dto.addons,
+    );
+  }
+
   /** Removes the product's link → `{deleted}`. */
   @Delete(':productId')
   remove(
@@ -204,13 +230,15 @@ export class DesignerOrderDesignsController {
   }
 
   /**
-   * The print PNG as an attachment `<order_number>-<n>-front.png`.
+   * The print PNG as an attachment `<order_number>-<n>-front.png`, or with
+   * `?format=pdf` the print-ready PDF (`…-front.pdf`).
    * 409 DESIGNER_PRINT_NOT_READY, 410 DESIGNER_FILES_PURGED.
    */
   @Get(':orderId/items/:itemId/print')
   async print(
     @Param('orderId', ParseUUIDPipe) orderId: string,
     @Param('itemId', ParseUUIDPipe) itemId: string,
+    @Query('format') format?: string,
     @CurrentUser() user?: RequestUser,
     @Res({ passthrough: true }) res?: Response,
   ) {
@@ -218,11 +246,12 @@ export class DesignerOrderDesignsController {
       await this.storeOf(user),
       orderId,
       itemId,
+      printFormatParam(format),
     );
     res?.setHeader('Cache-Control', 'private, no-store');
     res?.setHeader('X-Content-Type-Options', 'nosniff');
     return new StreamableFile(file.buffer, {
-      type: 'image/png',
+      type: file.mime,
       length: file.buffer.length,
       disposition: `attachment; filename="${file.filename}"`,
     });

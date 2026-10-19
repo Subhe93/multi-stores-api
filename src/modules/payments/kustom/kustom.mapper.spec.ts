@@ -626,6 +626,37 @@ describe('buildKustomSessionPayload', () => {
     );
     expect(payload.order_amount).toBe(25000);
   });
+
+  it('omits shipping_countries outside a market (payload unchanged)', () => {
+    const payload = buildKustomSessionPayload(input, sessionCtx);
+    expect('shipping_countries' in payload).toBe(false);
+  });
+
+  it('lets the shopper pick any market country (markets app)', () => {
+    const payload = buildKustomSessionPayload(
+      {
+        ...input,
+        purchaseCountry: 'de',
+        shippingCountries: ['de', 'fr', 'FR', ' nl ', 'x1'],
+      },
+      sessionCtx,
+    );
+    expect(payload.purchase_country).toBe('DE');
+    expect(payload.shipping_countries).toEqual(['DE', 'FR', 'NL']);
+  });
+
+  it('keeps the purchase country in the list and skips a single country', () => {
+    const one = buildKustomSessionPayload(
+      { ...input, shippingCountries: ['SE'] },
+      sessionCtx,
+    );
+    expect('shipping_countries' in one).toBe(false);
+    const other = buildKustomSessionPayload(
+      { ...input, purchaseCountry: 'at', shippingCountries: ['DE', 'FR'] },
+      sessionCtx,
+    );
+    expect(other.shipping_countries).toEqual(['AT', 'DE', 'FR']);
+  });
 });
 
 // Markets app: the storefront host the shopper was on (a market's

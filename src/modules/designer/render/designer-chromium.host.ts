@@ -26,6 +26,11 @@
  *   visible fraction of the original the server pre-cut and pre-scaled);
  *   the page remaps `drawImage` of that bitmap to the matching sub-rect, so
  *   the shared renderer still thinks in whole images.
+ * - Print PDF (`renderPdf`, print lane): the print page lays the design out
+ *   over the bleed box and draws it in `beforeprint`, so `page.pdf()` gets
+ *   vector canvas output (embedded font faces, images at their own
+ *   resolution). The paper is the geometry's page plus PDF_PAGE_PAD_MM;
+ *   the exact page is cut by `finalizePrintPdf` afterwards.
  *
  * Environment: DESIGNER_RENDER_ENGINE (chromium | off), DESIGNER_CHROMIUM_PATH,
  * DESIGNER_BROWSER_CHANNEL; the last two fall back to INVOICE_PDF_CHROMIUM_PATH
@@ -55,8 +60,16 @@ import {
   RENDER_PAGE_HTML,
   RENDER_PAGE_SCRIPT,
   RENDER_PAGE_URL,
+  RENDER_PDF_PAGE_SCRIPT,
+  RENDER_PDF_PAGE_URL,
+  renderPdfPageHtml,
   rendererBundle,
 } from './render-page';
+import {
+  CROP_MARK_WEIGHT_MM,
+  PDF_PAGE_PAD_MM,
+  type PrintPdfGeometry,
+} from './print-pdf';
 
 /** Nest injection token of the `DesignerBrowserRenderer`. */
 export const DESIGNER_BROWSER = Symbol('DESIGNER_BROWSER');
@@ -97,6 +110,27 @@ export interface CanvasJob {
   assets: CanvasAsset[];
 }
 
+/** One print PDF: the whole design over the geometry's page. */
+export interface PdfJob {
+  spec: TemplateSpecV1;
+  state: DesignStateV1;
+  /** Coordinate scale of the canvases (px per mm); output stays vector. */
+  scale: number;
+  locale?: string;
+  fonts: CanvasJob['fonts'];
+  /** Image ids; bytes in `files` under `a/<id>` (originals, never cropped). */
+  assets: { id: string }[];
+  geometry: PrintPdfGeometry;
+  /** Document title (/Title), ASCII. */
+  title: string;
+}
+
+export interface PdfResult {
+  /** Chromium's PDF (padded page); see finalizePrintPdf. */
+  data: Buffer;
+  report: RenderReport;
+}
+
 export interface CanvasResult {
   data: Buffer;
   width: number;
@@ -117,6 +151,16 @@ export interface DesignerBrowserRenderer {
     files: Map<string, RenderFile>,
     timeoutMs: number,
   ): Promise<CanvasResult>;
+  /**
+   * Renders the print PDF of one surface (print lane). Optional so
+   * renderers without PDF support (spec doubles) still type-check; the
+   * service treats a missing method as "engine unavailable".
+   */
+  renderPdf?(
+    job: PdfJob,
+    files: Map<string, RenderFile>,
+    timeoutMs: number,
+  ): Promise<PdfResult>;
   /**
    * Makes sure the engine can render (launches the browser when needed)
    * without rendering anything.
@@ -320,6 +364,113 @@ export class DesignerChromiumHost implements DesignerBrowserRenderer {
     }, lane);
   }
 
+  renderPdf(
+    job: PdfJob,
+    files: Map<string, RenderFile>,
+    timeoutMs: number,
+  ): Promise<PdfResult> {
+    // The largest layer: the crop-mark layer spans the whole page, the
+    // others the bleed box (the page's canvas density is at most `scale`).
+    const box = job.geometry.crop_mark_lines_mm.length
+      ? job.geometry.page_mm
+      : job.geometry.bleed_box_mm;
+    const w = Math.ceil(box.width * job.scale);
+    const h = Math.ceil(box.height * job.scale);
+    if (
+      !(w > 0 && h > 0) ||
+      w > DESIGNER_MAX_CANVAS_SIDE ||
+      h > DESIGNER_MAX_CANVAS_SIDE ||
+      w * h > DESIGNER_MAX_CANVAS_PIXELS
+    ) {
+      return Promise.reject(new Error(`CANVAS_TOO_LARGE:${w}x${h}`));
+    }
+    const served = new Map<string, RenderFile>(files);
+    served.set('print.html', {
+      body: Buffer.from(renderPdfPageHtml(job.title)),
+      contentType: 'text/html; charset=utf-8',
+    });
+    served.set('renderer.js', {
+      body: Buffer.from(rendererBundle()),
+      contentType: 'application/javascript; charset=utf-8',
+    });
+    served.set('pdf.js', {
+      body: Buffer.from(RENDER_PDF_PAGE_SCRIPT),
+      contentType: 'application/javascript; charset=utf-8',
+    });
+    const g = job.geometry;
+    const pageJob = {
+      spec: job.spec,
+      state: job.state,
+      scale: job.scale,
+      locale: job.locale,
+      fonts: job.fonts.map((f) => ({
+        family: f.family,
+        weight: f.weight,
+        style: f.style,
+        url: `${RENDER_ORIGIN}/f/${f.asset_id}`,
+      })),
+      assets: job.assets.map((a) => ({
+        id: a.id,
+        url: `${RENDER_ORIGIN}/a/${a.id}`,
+      })),
+      geometry: {
+        page_mm: g.page_mm,
+        bleed_mm: g.bleed_mm,
+        bleed_box_mm: g.bleed_box_mm,
+        crop_mark_lines_mm: g.crop_mark_lines_mm,
+        crop_mark_weight_mm: CROP_MARK_WEIGHT_MM,
+      },
+    };
+    const paper = (mm: number) =>
+      `${Math.round((mm + PDF_PAGE_PAD_MM) * 1000) / 1000}mm`;
+
+    return this.host.withBrowser(async (browser) => {
+      const context: BrowserContext = await browser.newContext({
+        javaScriptEnabled: true,
+        serviceWorkers: 'block',
+        acceptDownloads: false,
+        viewport: { width: 64, height: 64 },
+      });
+      try {
+        await context.route('**/*', (route: Route) =>
+          fulfilFromMemory(route, served),
+        );
+        const page = await context.newPage();
+        page.setDefaultTimeout(timeoutMs);
+        const work = (async () => {
+          await page.goto(RENDER_PDF_PAGE_URL, { waitUntil: 'load' });
+          await page.evaluate(
+            (j) =>
+              (
+                window as unknown as {
+                  __preparePdf: (x: unknown) => Promise<unknown>;
+                }
+              ).__preparePdf(j),
+            pageJob,
+          );
+          const data = await page.pdf({
+            width: paper(g.page_mm.width),
+            height: paper(g.page_mm.height),
+            printBackground: true,
+            preferCSSPageSize: false,
+            margin: { top: '0', right: '0', bottom: '0', left: '0' },
+          });
+          const outcome = (await page.evaluate(() =>
+            (
+              window as unknown as { __pdfOutcome: () => unknown }
+            ).__pdfOutcome(),
+          )) as { report?: RenderReport; error?: string } | null;
+          if (!outcome) throw new Error('PDF_DRAW_FAILED: beforeprint not run');
+          if (outcome.error) throw new Error(outcome.error);
+          return { data, report: outcome.report! };
+        })();
+        return await withTimeout(work, timeoutMs, 'Designer PDF render');
+      } finally {
+        await this.closeContext(context);
+      }
+    }, 'print');
+  }
+
   /**
    * Closes a job's context within CONTEXT_CLOSE_TIMEOUT_MS. A close that
    * hangs (renderer stuck after a timed-out job) takes the whole browser
@@ -376,6 +527,14 @@ export class DisabledDesignerRenderer implements DesignerBrowserRenderer {
   readonly enabled = false;
 
   renderCanvas(): Promise<CanvasResult> {
+    return Promise.reject(
+      new DesignerRenderUnavailableError(
+        'Design rendering is disabled (DESIGNER_RENDER_ENGINE=off)',
+      ),
+    );
+  }
+
+  renderPdf(): Promise<PdfResult> {
     return Promise.reject(
       new DesignerRenderUnavailableError(
         'Design rendering is disabled (DESIGNER_RENDER_ENGINE=off)',

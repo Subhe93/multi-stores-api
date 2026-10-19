@@ -2750,7 +2750,8 @@ model ProductDesigner {
   store_id    String
   template_id String
   enabled     Boolean  @default(false)
-  // Imported NPP add-ons, ALWAYS disabled in M4.2 (never read for pricing).
+  // M5.5 add-ons: v2 `{v:2, items:[...], imported?}` (designer-addons.ts) is
+  // priced for enabled items; the legacy NPP import shape is never priced.
   addons      Json     @default("{}")
   updated_at  DateTime @updatedAt
 
@@ -2799,6 +2800,7 @@ model Design {
   template_version_id String
   state               Json // DesignStateV1
   state_version       Int          @default(1) // optimistic concurrency
+  addons              Json? // M5.5 add-on selection {key: qty}; null = none
   status              DesignStatus @default(DRAFT)
   customer_id         String? // owner when logged in / claimed
   access_token_hash   String       @db.VarChar(64) // sha256(random 32B) for guests

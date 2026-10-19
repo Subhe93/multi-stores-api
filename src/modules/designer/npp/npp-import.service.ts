@@ -50,6 +50,7 @@ import {
   TEMPLATE_RASTER_LIMITS,
   type AssetWarningCode,
 } from '../designer-assets.service';
+import { isAddonsV2 } from '../designer-addons';
 import { DesignerFontsService, type FontFace } from '../designer-fonts.service';
 import {
   convertNpp,
@@ -1004,10 +1005,22 @@ export class NppImportService {
     templateId: string,
     src: { addons?: unknown; pricing?: unknown },
   ): Promise<NppLinkAction> {
-    const addons = normalizeNppAddons(src.addons, src.pricing);
+    const imported = normalizeNppAddons(src.addons, src.pricing);
     const cur = await db.productDesigner.findUnique({
       where: { product_id: productId },
     });
+    // M5.5: a link whose add-ons the merchant configured (v2) keeps its
+    // items; the re-imported NPP data only refreshes the kept presets.
+    const addons =
+      cur && isAddonsV2(cur.addons)
+        ? (() => {
+            const { imported: _old, ...rest } = cur.addons as Record<
+              string,
+              unknown
+            >;
+            return Object.keys(imported).length ? { ...rest, imported } : rest;
+          })()
+        : imported;
     if (!cur) {
       await db.productDesigner.create({
         data: {

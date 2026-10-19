@@ -16,6 +16,7 @@ describe('designer settings', () => {
       min_effective_dpi_warning: 100,
       print_px_per_mm: 6,
       print_formats: ['png'],
+      print_crop_marks: false,
       shop_button_text: { sv: 'Designa din skylt' },
     });
     expect(DEFAULT_DESIGNER_SETTINGS.retention_days).toBe(60);
@@ -65,14 +66,54 @@ describe('designer settings', () => {
     ).toBe(20);
   });
 
-  it('allows only 6 px/mm and PNG in M4.2', () => {
+  it('allows only 6 px/mm; PNG is mandatory, PDF optional', () => {
     expect(validateDesignerSettings({ print_px_per_mm: 11.811 }).ok).toBe(
       false,
     );
     expect(validateDesignerSettings({ print_formats: ['png', 'pdf'] }).ok).toBe(
-      false,
+      true,
     );
+    expect(validateDesignerSettings({ print_formats: ['png'] }).ok).toBe(true);
     expect(validateDesignerSettings({ print_formats: [] }).ok).toBe(false);
+    // PDF alone (no PNG), unknown formats and duplicates are rejected.
+    expect(validateDesignerSettings({ print_formats: ['pdf'] }).ok).toBe(false);
+    expect(
+      validateDesignerSettings({ print_formats: ['png', 'tiff'] }).ok,
+    ).toBe(false);
+    expect(
+      validateDesignerSettings({ print_formats: ['png', 'pdf', 'pdf'] }).ok,
+    ).toBe(false);
+    expect(validateDesignerSettings({ print_formats: 'png' }).ok).toBe(false);
+  });
+
+  it('validates crop marks as a boolean (default off)', () => {
+    expect(validateDesignerSettings({ print_crop_marks: true }).ok).toBe(true);
+    expect(validateDesignerSettings({ print_crop_marks: false }).ok).toBe(true);
+    expect(
+      validateDesignerSettings({ print_crop_marks: 'yes' }).errors,
+    ).toEqual(['print_crop_marks must be true or false.']);
+    expect(normalizeDesignerSettings({}).print_crop_marks).toBe(false);
+    expect(
+      normalizeDesignerSettings({ print_crop_marks: true }).print_crop_marks,
+    ).toBe(true);
+    expect(
+      normalizeDesignerSettings({ print_crop_marks: 1 }).print_crop_marks,
+    ).toBe(false);
+  });
+
+  it('normalizes formats to png first, pdf only when listed', () => {
+    expect(normalizeDesignerSettings({}).print_formats).toEqual(['png']);
+    expect(
+      normalizeDesignerSettings({ print_formats: ['pdf', 'png'] })
+        .print_formats,
+    ).toEqual(['png', 'pdf']);
+    // Even a stored list without png keeps the PNG (it is always rendered).
+    expect(
+      normalizeDesignerSettings({ print_formats: ['pdf'] }).print_formats,
+    ).toEqual(['png', 'pdf']);
+    expect(
+      normalizeDesignerSettings({ print_formats: 'pdf' }).print_formats,
+    ).toEqual(['png']);
   });
 
   it('validates the button text map (locale keys, ≤ 40 chars)', () => {

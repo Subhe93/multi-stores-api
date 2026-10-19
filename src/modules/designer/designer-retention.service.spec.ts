@@ -479,6 +479,32 @@ describe('DesignerRetentionService', () => {
       expect(t.assets.purgeAssetFiles).toHaveBeenCalledTimes(1);
     });
 
+    it('purges the print PDF together with the PNG', async () => {
+      const t = build();
+      const files = [
+        {
+          surface: 'front',
+          format: 'png',
+          key: 'designer/s1/2026/print/oid1-front.png',
+        },
+        {
+          surface: 'front',
+          format: 'pdf',
+          key: 'designer/s1/2026/print/oid1-front.pdf',
+        },
+      ];
+      t.prisma.$queryRaw.mockResolvedValueOnce([oid({ print_files: files })]);
+      t.prisma.designAsset.findMany.mockResolvedValueOnce([photo('p1')]);
+      const r = await t.service.runFiles(NOW, { dryRun: false });
+      expect(r.purged).toBe(1);
+      expect(t.storage.delete).toHaveBeenCalledWith(
+        'designer/s1/2026/print/oid1-front.png',
+      );
+      expect(t.storage.delete).toHaveBeenCalledWith(
+        'designer/s1/2026/print/oid1-front.pdf',
+      );
+    });
+
     it('deletes the ordered design proof and clears its proof fields', async () => {
       const t = build();
       t.prisma.$queryRaw.mockResolvedValueOnce([oid()]);
@@ -556,6 +582,29 @@ describe('DesignerRetentionService', () => {
       const again = await t.service.eraseOrderItem('s1', 'o1', 'i1', NOW);
       expect(again.erased).toBe(false);
       expect(again.kept).toEqual([]);
+    });
+
+    it('erasure deletes the print PDF too', async () => {
+      const t = build();
+      const pdfKey = 'designer/s1/2026/print/oid1-front.pdf';
+      t.prisma.$queryRaw.mockResolvedValueOnce([
+        {
+          ...oid({
+            print_files: [
+              {
+                surface: 'front',
+                format: 'png',
+                key: 'designer/s1/2026/print/oid1-front.png',
+              },
+              { surface: 'front', format: 'pdf', key: pdfKey },
+            ],
+          }),
+          files_purged_at: null,
+        },
+      ]);
+      const r = await t.service.eraseOrderItem('s1', 'o1', 'i1', NOW);
+      expect(r.erased).toBe(true);
+      expect(t.storage.delete).toHaveBeenCalledWith(pdfKey);
     });
 
     it('reports photos it had to keep for another live order', async () => {

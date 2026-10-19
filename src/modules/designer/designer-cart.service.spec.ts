@@ -421,7 +421,7 @@ describe('DesignerCartService (M4.2 WP4)', () => {
         },
       );
       expect(line?.priceDelta).toBe(0);
-      expect(b.cart.lineDelta()).toBe(0);
+      expect(b.cart.lineDelta()).toEqual({ priceDelta: 0, addons: [] });
     });
   });
 
@@ -851,5 +851,124 @@ describe('DesignerCartService (M4.2 WP4)', () => {
         }) as unknown,
       });
     });
+  });
+});
+
+// M5.5: add-ons priced from the link's current config, frozen with the order.
+describe('DesignerCartService add-ons (M5.5)', () => {
+  const CONFIG = {
+    v: 2,
+    items: [
+      {
+        key: 'double',
+        type: 'toggle',
+        label: { sv: 'Dubbelsidig' },
+        price: 149,
+        enabled: true,
+        sort: 0,
+      },
+      {
+        key: 'rain',
+        type: 'toggle',
+        label: { sv: 'Regnskydd' },
+        price: 29,
+        enabled: false,
+        sort: 1,
+      },
+      {
+        key: 'poster',
+        type: 'quantity',
+        label: { sv: 'Poster' },
+        price: 179,
+        max_qty: 10,
+        enabled: true,
+        sort: 2,
+      },
+    ],
+  };
+
+  it('planLines prices the selection; snapshot freezes it and adds DESIGN rows', async () => {
+    const b = build();
+    const d = await completeDesign(b, CUSTOMER);
+    b.db.productDesigner[0].addons = CONFIG;
+    b.db.design.find((x) => x.id === d.id)!.addons = {
+      double: 1,
+      rain: 1,
+      poster: 2,
+    };
+    const [line] = await b.cart.planLines(
+      STORE,
+      [{ product_id: PRODUCT, design_id: d.id }],
+      { mode: 'order', customerId: CUSTOMER },
+    );
+    // The disabled rain cover is ignored.
+    expect(line!.priceDelta).toBe(149 + 2 * 179);
+    expect(line!.addons.map((a) => a.key)).toEqual(['double', 'poster']);
+    const snap = await b.cart.snapshot(line!, {
+      orderId: 'o',
+      storeId: STORE,
+      locale: 'sv',
+      addons: line!.addons,
+      addonsTotal: line!.priceDelta,
+      currency: 'SEK',
+    });
+    expect(snap.create.price_breakdown).toMatchObject({
+      designer_delta: 507,
+      currency: 'SEK',
+      addons: [
+        expect.objectContaining({ key: 'double', qty: 1, amount: 149 }),
+        expect.objectContaining({ key: 'poster', qty: 2, amount: 358 }),
+      ],
+    });
+    const addonRows = snap.designTexts.filter((t) =>
+      t.element_id.startsWith('addon:'),
+    );
+    expect(addonRows.map((r) => [r.element_id, r.label.sv])).toEqual([
+      ['addon:double', 'Dubbelsidig'],
+      ['addon:poster', 'Poster'],
+    ]);
+    expect(addonRows[0].value).toMatch(/^\+149\s?kr$/);
+    expect(addonRows[1].value).toMatch(/^× 2 \(\+358\s?kr\)$/);
+  });
+
+  it('no config (legacy NPP data) or no selection → delta 0, unchanged breakdown', async () => {
+    const b = build();
+    const d = await completeDesign(b, CUSTOMER);
+    b.db.productDesigner[0].addons = {
+      double: { enabled: false, source_enabled: true, price: 149 },
+    };
+    b.db.design.find((x) => x.id === d.id)!.addons = { double: 1 };
+    const [line] = await b.cart.planLines(
+      STORE,
+      [{ product_id: PRODUCT, design_id: d.id }],
+      { mode: 'order', customerId: CUSTOMER },
+    );
+    expect(line!.priceDelta).toBe(0);
+    const snap = await b.cart.snapshot(line!, { orderId: 'o', storeId: STORE });
+    expect(snap.create.price_breakdown).toEqual({
+      designer_delta: 0,
+      addons: [],
+    });
+    expect(
+      snap.designTexts.some((t) => t.element_id.startsWith('addon:')),
+    ).toBe(false);
+  });
+
+  it('cartDesigns lists the priced add-ons (base currency, request locale)', async () => {
+    const b = build();
+    const d = await completeDesign(b, CUSTOMER);
+    b.db.productDesigner[0].addons = CONFIG;
+    b.db.design.find((x) => x.id === d.id)!.addons = { poster: 3 };
+    const views = await b.cart.cartDesigns([d.id], 'sv');
+    expect(views.get(d.id)?.addons).toEqual([
+      {
+        key: 'poster',
+        type: 'quantity',
+        label: 'Poster',
+        qty: 3,
+        unit_price: 179,
+        amount: 537,
+      },
+    ]);
   });
 });

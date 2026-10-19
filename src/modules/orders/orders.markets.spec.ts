@@ -431,3 +431,20 @@ describe('OrdersService hostname snapshot (D1)', () => {
     ).toBeNull();
   });
 });
+
+describe('marketOrderLocale', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { marketOrderLocale } = require('./orders.service') as typeof import('./orders.service');
+  const eu = { defaultLocale: 'en', locales: ['sv', 'ar'] };
+
+  it('keeps a locale the market serves', () => {
+    expect(marketOrderLocale(eu, 'SV')).toBe('sv');
+    expect(marketOrderLocale(eu, ' en ')).toBe('en');
+  });
+
+  it('falls back to the market default for anything else', () => {
+    expect(marketOrderLocale(eu, 'de')).toBe('en');
+    expect(marketOrderLocale(eu, null)).toBe('en');
+    expect(marketOrderLocale(eu, '')).toBe('en');
+  });
+});

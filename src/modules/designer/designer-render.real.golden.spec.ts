@@ -237,6 +237,8 @@ function serviceFor(
       findMany: ({ where }: { where: { id: { in: string[] } } }) =>
         Promise.resolve(rows.filter((r) => where.id.in.includes(r.id))),
     },
+    // No app settings row: PNG only (the default print formats).
+    storeApp: { findUnique: () => Promise.resolve(null) },
   };
   const assets = {
     readAssetBytes: (a: DesignAsset) =>

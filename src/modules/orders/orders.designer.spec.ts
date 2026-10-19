@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { BadRequestException } from '@nestjs/common';
 import { StoreType } from '@prisma/client';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -615,6 +616,197 @@ describe('OrdersService designer lines (M4.2 WP4)', () => {
         'CONFIRMED',
         'CANCELLED',
       );
+    });
+  });
+});
+
+// M5.5: paid add-ons of designed lines (server-priced, base currency in the
+// designer line, converted per unit for a market, frozen with the design).
+describe('OrdersService designer add-ons (M5.5)', () => {
+  const ADDONS = [
+    {
+      key: 'double',
+      type: 'toggle' as const,
+      label: { sv: 'Dubbelsidig' },
+      qty: 1,
+      unit_price: 149,
+      amount: 149,
+    },
+    {
+      key: 'poster',
+      type: 'quantity' as const,
+      label: { sv: 'Poster' },
+      qty: 2,
+      unit_price: 179,
+      amount: 358,
+    },
+  ];
+  function addonStub() {
+    const stub = designerStub();
+    const line = {
+      design: { id: DESIGN, state_version: 4 },
+      priceDelta: 507,
+      addons: ADDONS,
+    } as unknown as DesignerLine;
+    stub.planLines.mockImplementation(
+      (_s: string, lines: { design_id?: string | null }[]) =>
+        Promise.resolve(lines.map((l) => (l.design_id ? line : null))),
+    );
+    return stub;
+  }
+
+  it('order: unit = base + Σ add-ons, total = unit × qty, tax on the product class, add-ons frozen in SEK', async () => {
+    const designer = addonStub();
+    const { service, prisma } = build({ designer });
+    // A product with its own tax class: the add-ons must follow it.
+    const product = await prisma.product.findUnique();
+    (prisma.product.findUnique as jest.Mock).mockImplementation(() =>
+      Promise.resolve({ ...product, tax_class_id: 'tc-reduced' }),
+    );
+    await service.create('u1', DTO, {
+      lines: [{ product_id: 'p1', quantity: 2, design_id: DESIGN }],
+      verifiedDesignIds: [DESIGN],
+    });
+    const item = createdData(prisma).items.create[0];
+    expect(item.unit_price).toBe(299 + 149 + 358);
+    expect(item.total_price).toBe((299 + 507) * 2);
+    expect(designer.snapshot).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        addons: ADDONS,
+        addonsTotal: 507,
+        currency: 'SEK',
+      }),
+    );
+    // The add-ons ride on the product line: one tax line, product class.
+    const tax = (
+      service as unknown as { taxService: { computeTaxes: jest.Mock } }
+    ).taxService;
+    const calls = tax.computeTaxes.mock.calls as [
+      { lines: { amount: number; tax_class_id: string | null }[] },
+    ][];
+    const taxInput = calls[calls.length - 1][0];
+    expect(taxInput.lines).toEqual([
+      expect.objectContaining({ amount: 1612, tax_class_id: 'tc-reduced' }),
+    ]);
+  });
+
+  it('quote: same unit price and the add-ons on the item (Kustom names them)', async () => {
+    const designer = addonStub();
+    const { service } = build({ designer });
+    const quote = await service.quoteLines(
+      STORE_ID,
+      [{ product_id: 'p1', quantity: 1, design_id: DESIGN }],
+      { countryCode: null },
+    );
+    expect(quote.items[0]).toMatchObject({
+      unit_price: 806,
+      total_price: 806,
+      designer_addons: ADDONS,
+    });
+  });
+
+  it('quote without add-ons keeps the item shape (no designer_addons key)', async () => {
+    const designer = designerStub();
+    const { service } = build({ designer });
+    const quote = await service.quoteLines(
+      STORE_ID,
+      [{ product_id: 'p1', quantity: 1, design_id: DESIGN }],
+      { countryCode: null },
+    );
+    expect('designer_addons' in quote.items[0]).toBe(false);
+    expect(quote.items[0].unit_price).toBe(299);
+  });
+
+  it('market: each add-on unit price goes through MarketPricingService.convertMoney', async () => {
+    const designer = addonStub();
+    const { service } = build({ designer });
+    const svc = service as unknown as {
+      markets: { resolve: jest.Mock };
+      marketPricing: MarketPricingService;
+    };
+    svc.markets.resolve.mockResolvedValue({
+      id: 'm-eu',
+      key: 'eu',
+      name: 'EU',
+      countries: ['DE'],
+      defaultLocale: 'de',
+      locales: [],
+      currency: 'EUR',
+      storeCurrency: 'SEK',
+      rate: 0.1,
+      priceRule: { mode: 'convert', rate: 0.1 },
+      isDefault: false,
+      status: 'LIVE',
+      primaryHostname: null,
+      hostnames: [],
+    });
+    const spy = jest.spyOn(svc.marketPricing, 'convertMoney');
+    const quote = await service.quoteLines(
+      STORE_ID,
+      [{ product_id: 'p1', quantity: 1, design_id: DESIGN }],
+      { countryCode: null, marketKey: 'eu' },
+    );
+    const converted = spy.mock.calls.map((c) => c[1]);
+    expect(converted).toEqual(expect.arrayContaining([149, 179]));
+    const base = quote.items[0].unit_price - (14.9 + 2 * 17.9);
+    expect(quote.items[0].designer_addons).toEqual([
+      expect.objectContaining({
+        key: 'double',
+        unit_price: 14.9,
+        amount: 14.9,
+      }),
+      expect.objectContaining({
+        key: 'poster',
+        unit_price: 17.9,
+        amount: 35.8,
+      }),
+    ]);
+    expect(base).toBeGreaterThan(0);
+  });
+
+  it('market: an add-on that cannot be converted fails the quote (never priced in the base currency)', async () => {
+    const designer = addonStub();
+    const { service } = build({ designer });
+    const svc = service as unknown as {
+      markets: { resolve: jest.Mock };
+      marketPricing: MarketPricingService;
+    };
+    svc.markets.resolve.mockResolvedValue({
+      id: 'm-eu',
+      key: 'eu',
+      name: 'EU',
+      countries: ['DE'],
+      defaultLocale: 'de',
+      locales: [],
+      currency: 'EUR',
+      storeCurrency: 'SEK',
+      rate: 0.1,
+      priceRule: { mode: 'convert', rate: 0.1 },
+      isDefault: false,
+      status: 'LIVE',
+      primaryHostname: null,
+      hostnames: [],
+    });
+    // An unspied instance converts the base price (convertMoney is pure).
+    const real = new MarketPricingService({} as PrismaService);
+    // Only the add-on amounts lose their rate: the base price still converts.
+    jest
+      .spyOn(svc.marketPricing, 'convertMoney')
+      .mockImplementation((ctx, amount) => {
+        if (amount === 149 || amount === 179) {
+          throw new BadRequestException({ code: 'TEST_ADDON_RATE_MISSING' });
+        }
+        return real.convertMoney(ctx, amount);
+      });
+    await expect(
+      service.quoteLines(
+        STORE_ID,
+        [{ product_id: 'p1', quantity: 1, design_id: DESIGN }],
+        { countryCode: null, marketKey: 'eu' },
+      ),
+    ).rejects.toMatchObject({
+      response: { code: 'TEST_ADDON_RATE_MISSING' },
     });
   });
 });

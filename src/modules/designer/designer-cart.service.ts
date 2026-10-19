@@ -15,7 +15,10 @@
  *     the product's linked template (any version), the owner matches, and it
  *     is not ORDERED (see `DesignerLineMode` for where each check applies);
  *  4. `validateState(requireComplete:true)` + photo ownership.
- * The designer adds 0 to the price in M4.2 (D9); add-ons are never read.
+ * M5.5 add-ons: the line's per-unit `priceDelta` is the sum of the design's
+ * selected ENABLED add-ons, priced from the product's CURRENT config in the
+ * base currency (designer-addons.ts; callers convert it for a market).
+ * Products without enabled add-ons keep a delta of 0 (G0).
  *
  * Stores without the app: one cached `isEnabled` per quote/order, and on a
  * server-cart add one primary-key lookup of `ProductDesigner` — nothing else.
@@ -49,7 +52,19 @@ import {
   type DesignLineRef,
   type DesignVersionRow,
 } from './designs.service';
-import { DesignerRenderService } from './designer-render.service';
+import {
+  DesignerRenderService,
+  printFileExtras,
+  type PrintFile,
+} from './designer-render.service';
+import {
+  addonDetailText,
+  addonLabel,
+  orderAddonsCurrencyOf,
+  orderAddonsOf,
+  priceAddons,
+  type PricedAddon,
+} from './designer-addons';
 import {
   designProofSha,
   designTextValues,
@@ -100,8 +115,10 @@ export interface DesignerLine {
   state: DesignStateV1;
   /** Photo asset per slot id. */
   photos: Map<string, DesignAsset>;
-  /** Per-unit designer delta in the base currency: always 0 in M4.2 (D9). */
+  /** Per-unit designer delta in the base currency (M5.5 add-ons; 0 without). */
   priceDelta: number;
+  /** The priced add-ons behind `priceDelta` (base currency, per unit). */
+  addons: PricedAddon[];
 }
 
 /** One `source:'DESIGN'` value row input (C19). */
@@ -119,10 +136,27 @@ export interface CartDesignView {
   proof_url: string | null;
   /** Product slug in the request locale (link back to the editor). */
   product_slug: string | null;
+  /**
+   * M5.5: the selected add-ons, priced in the BASE currency per unit (the
+   * cart converts them for a market); absent without any.
+   */
+  addons?: CartDesignAddon[];
   /** Set when the design can no longer be ordered (checkout would fail). */
   invalid?: true;
   /** The error checkout would answer (`DESIGNER_*`), with `invalid`. */
   invalid_code?: DesignerErrorCode;
+}
+
+/** One add-on of a cart line's design (`label` resolved to the request locale). */
+export interface CartDesignAddon {
+  key: string;
+  type: 'toggle' | 'quantity';
+  label: string;
+  qty: number;
+  unit_price: number;
+  amount: number;
+  /** Readable detail ("+149 kr", "× 2 (+358 kr)"), set by the cart in its currency. */
+  text?: string;
 }
 
 /** Cart / quote reads refresh a design's `updated_at` at most this often. */
@@ -252,6 +286,7 @@ export class DesignerCartService {
             product_id: true,
             template_id: true,
             enabled: true,
+            addons: true,
             template: LINK_TEMPLATE_SELECT,
           },
         })
@@ -259,6 +294,7 @@ export class DesignerCartService {
     const linkOf = new Map(
       links.map((l) => [l.product_id, activeLinkTemplateId(l)]),
     );
+    const addonsOf = new Map(links.map((l) => [l.product_id, l.addons]));
     const verified =
       opts.verifiedDesignIds !== undefined && opts.verifiedDesignIds !== null
         ? new Set(opts.verifiedDesignIds)
@@ -290,6 +326,7 @@ export class DesignerCartService {
           customerId: opts.customerId ?? null,
           ref: refOf(i),
           verified,
+          linkAddons: productId ? addonsOf.get(productId) : null,
         }),
       );
     }
@@ -462,6 +499,7 @@ export class DesignerCartService {
               enabled: true,
               store_id: true,
               template_id: true,
+              addons: true,
               template: LINK_TEMPLATE_SELECT,
             },
           })
@@ -475,7 +513,11 @@ export class DesignerCartService {
       line,
       line.custom_product_id ? null : productId,
       templateId,
-      { mode: 'cart', customerId },
+      {
+        mode: 'cart',
+        customerId,
+        linkAddons: templateId ? link?.addons : null,
+      },
     );
     // Claim: the design now belongs to the customer and is in a cart.
     if (
@@ -543,6 +585,8 @@ export class DesignerCartService {
       ref?: DesignLineRef;
       /** Session-verified designs (snapshot; order-bound quote). */
       verified?: Set<string> | null;
+      /** M5.5: the product link's `addons` (current config). */
+      linkAddons?: unknown;
     },
   ): Promise<DesignerLine> {
     const ref = opts.ref ?? {};
@@ -611,13 +655,24 @@ export class DesignerCartService {
       spec,
       state,
       photos,
-      priceDelta: this.lineDelta(),
+      ...this.lineDelta(opts.linkAddons, row.addons),
     };
   }
 
-  /** Designer price delta per unit (D9): 0 in M4.2, add-ons never priced. */
-  lineDelta(): number {
-    return 0;
+  /**
+   * Designer price delta per unit (M5.5): the design's selection priced
+   * against the link's current add-ons (base currency). 0 and no lines
+   * when the product has no enabled add-on or nothing is selected.
+   */
+  lineDelta(
+    linkAddons?: unknown,
+    selection?: unknown,
+  ): { priceDelta: number; addons: PricedAddon[] } {
+    if (selection == null || linkAddons == null) {
+      return { priceDelta: 0, addons: [] };
+    }
+    const { lines, total } = priceAddons(linkAddons, selection);
+    return { priceDelta: total, addons: lines };
   }
 
   // ── Order snapshot ────────────────────────────────────────────────────────
@@ -634,6 +689,10 @@ export class DesignerCartService {
       storeId: string;
       locale?: string | null;
       primaryLocale?: string | null;
+      /** M5.5: the line's add-ons in the order currency (priceLine). */
+      addons?: PricedAddon[];
+      addonsTotal?: number;
+      currency?: string | null;
     },
   ): Promise<{
     create: Prisma.OrderItemDesignUncheckedCreateWithoutOrder_itemInput;
@@ -701,20 +760,42 @@ export class DesignerCartService {
           label: t.label,
           value: t.value,
         })) as unknown as Prisma.InputJsonValue,
+        // M5.5: per-unit add-ons in the ORDER currency (`o.addons`, the
+        // converted lines priceLine used), else the base-currency lines.
         price_breakdown: {
-          designer_delta: line.priceDelta,
-          addons: [],
+          designer_delta: o.addonsTotal ?? line.priceDelta,
+          addons: (o.addons ?? line.addons).map((a) => ({
+            key: a.key,
+            type: a.type,
+            label: a.label,
+            qty: a.qty,
+            unit_price: a.unit_price,
+            amount: a.amount,
+          })),
+          ...(o.currency ? { currency: o.currency } : {}),
         } as Prisma.InputJsonValue,
         renderer_version: RENDERER_VERSION,
         proof_key: proofKey,
         print_status: 'PENDING',
         print_requested_at: null,
       },
-      designTexts: textValues.map((t) => ({
-        element_id: t.element_id,
-        label: t.labels,
-        value: t.value,
-      })),
+      // M5.5: each chosen add-on becomes one more DESIGN row ("Dubbelsidig:
+      // +149 kr"), so emails, invoices and order views show it as a line
+      // detail. Lines without add-ons get exactly the text rows.
+      designTexts: [
+        ...textValues.map((t) => ({
+          element_id: t.element_id,
+          label: t.labels,
+          value: t.value,
+        })),
+        ...(o.addons?.length && o.currency
+          ? o.addons.map((a) => ({
+              element_id: `addon:${a.key}`,
+              label: { ...a.label },
+              value: addonDetailText(a, o.currency as string, locale),
+            }))
+          : []),
+      ],
       textValues,
     };
   }
@@ -804,6 +885,7 @@ export class DesignerCartService {
           store_id: true,
           enabled: true,
           template_id: true,
+          addons: true,
           template: LINK_TEMPLATE_SELECT,
         },
       }),
@@ -860,6 +942,10 @@ export class DesignerCartService {
       ) {
         invalid = 'DESIGNER_STATE_INVALID';
       }
+      const priced =
+        activeTemplate && d.addons != null
+          ? priceAddons(link?.addons, d.addons).lines
+          : [];
       out.set(d.id, {
         id: d.id,
         text_values: designTextValues(spec, state, locale).map((t) => ({
@@ -870,6 +956,18 @@ export class DesignerCartService {
         editable: d.status !== DesignStatus.ORDERED,
         proof_url: this.designProofUrl(d),
         product_slug: slugs.get(d.product_id) ?? null,
+        ...(priced.length
+          ? {
+              addons: priced.map((a) => ({
+                key: a.key,
+                type: a.type,
+                label: addonLabel(a.label, locale),
+                qty: a.qty,
+                unit_price: a.unit_price,
+                amount: a.amount,
+              })),
+            }
+          : {}),
         ...(invalid ? { invalid: true as const, invalid_code: invalid } : {}),
       });
     }
@@ -1015,6 +1113,9 @@ export class DesignerCartService {
                   ttlSec: DESIGNER_LINK_TTL.creator,
                 }),
           text_values: r.text_values,
+          /** M5.5: the add-ons sold with the line (order currency, per unit). */
+          addons: orderAddonsOf(r.price_breakdown),
+          addons_currency: orderAddonsCurrencyOf(r.price_breakdown),
           /** Frozen state (texts + photo refs) and template, for the dashboard preview. */
           state: r.state,
           template_spec: r.template_spec,
@@ -1033,10 +1134,17 @@ export class DesignerCartService {
               height_px: f.height_px,
               dpi: f.dpi,
               bytes: f.bytes,
+              ...printFileExtras(f as unknown as PrintFile),
             })),
             download_path:
               r.print_status === 'READY' && !r.files_purged_at
                 ? `/api/designer/my/orders/${order.id}/items/${r.order_item_id}/print`
+                : null,
+            pdf_download_path:
+              r.print_status === 'READY' &&
+              !r.files_purged_at &&
+              asList(r.print_files).some((f) => f.format === 'pdf')
+                ? `/api/designer/my/orders/${order.id}/items/${r.order_item_id}/print?format=pdf`
                 : null,
           },
           shipped_at: r.shipped_at,

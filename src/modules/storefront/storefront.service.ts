@@ -8,6 +8,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { MarketsContextService } from '../markets/markets-context.service';
 import { MarketPricingService } from '../markets/market-pricing.service';
+import { marketizeBundles, marketizePromotions } from './market-offers';
 import { toMarketRoute, type MarketContext } from '../markets/market-context';
 import { PricingType, Prisma, ProductVariant, StoreType } from '@prisma/client';
 import { resolveStoreCurrency } from '../../common/money/currency.util';
@@ -182,6 +183,31 @@ export class StorefrontService {
     if (!usesAdvancedFields(fields) && !usesAdvancedOptionConfig(optionConfig))
       return false;
     return this.personalization.isEnabled(storeId);
+  }
+
+  /**
+   * Designer app (M5.5): add-on prices of the `designer` block are base
+   * amounts; in a market they are converted like every base amount (the
+   * cart and orders convert them the same way). Without a rate the add-ons
+   * are left out (checkout could not price them). Unchanged without a
+   * market or without add-ons.
+   */
+  private marketizeDesignerAddons<
+    T extends { addons?: { price: number }[] } | null,
+  >(designer: T, market: MarketContext | null): T {
+    if (!designer || !market || !designer.addons?.length) return designer;
+    try {
+      return {
+        ...designer,
+        addons: designer.addons.map((a) => ({
+          ...a,
+          price: this.marketPricing.convertMoney(market, a.price),
+        })),
+      };
+    } catch {
+      const { addons: _dropped, ...rest } = designer;
+      return rest as T;
+    }
   }
 
   /**
@@ -994,13 +1020,23 @@ export class StorefrontService {
         if (defaultProfile) shippingProfile = defaultProfile;
       }
 
-      const promotions = await this.getActivePromotionsForProduct(
+      let promotions = await this.getActivePromotionsForProduct(
         store.creator.id,
         product.id,
       );
-      const bundles = await this.getBundlesForProduct(store.creator.id, {
+      let bundles = await this.getBundlesForProduct(store.creator.id, {
         productId: product.id,
       });
+      if (market) {
+        // Markets app: FIXED amounts are stored in the base currency; show
+        // them (and let the web bundle math use them) in the market's.
+        const convert = (amount: number) =>
+          market.rate == null
+            ? null
+            : this.marketPricing.convertMoney(market, amount);
+        promotions = marketizePromotions(promotions, convert);
+        bundles = marketizeBundles(bundles, convert);
+      }
 
       // Personalization app (M4.1 C36): tree + valueMeta + block when on;
       // otherwise the M4.0 rows (new columns removed, app rows dropped).
@@ -1020,9 +1056,12 @@ export class StorefrontService {
       const publicProduct = withoutFeedFields(ownerProduct);
       // Designer app (M4.2 §4.1): the editor block, only when the app is on
       // and the product's link is enabled; the key is absent otherwise.
-      const designer = this.designerTemplates
-        ? await this.designerTemplates.storefrontBlock(store.id, product.id)
-        : null;
+      const designer = this.marketizeDesignerAddons(
+        this.designerTemplates
+          ? await this.designerTemplates.storefrontBlock(store.id, product.id)
+          : null,
+        market,
+      );
       const shaped = {
         ...publicProduct,
         custom_fields: shapeFieldsForStorefront(product.custom_fields, appOn),

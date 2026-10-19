@@ -64,6 +64,7 @@ import { designerErrors } from './designer-errors';
 import {
   classifyRenderError,
   DesignerRenderService,
+  printFileExtras,
   printFilesJson,
   type PrintFile,
 } from './designer-render.service';
@@ -140,7 +141,10 @@ export type ClaimedRow = Pick<
   | 'originals_purged_at'
   | 'print_attempts'
   | 'print_locked_at'
->;
+> &
+  // The files of the previous render (RETURNING of the claim); a
+  // successful render deletes those it no longer lists.
+  Partial<Pick<OrderItemDesign, 'print_files'>>;
 
 @Injectable()
 export class DesignerPrintQueueService
@@ -547,6 +551,7 @@ export class DesignerPrintQueueService
           height_px: f.height_px,
           dpi: f.dpi,
           bytes: f.bytes,
+          ...printFileExtras(f),
         })),
         proof_url: this.render.orderProofPath(r),
         created_at: r.created_at,
@@ -568,12 +573,16 @@ export class DesignerPrintQueueService
     return row;
   }
 
-  /** Print PNG bytes + attachment name (409 not ready, 410 purged). */
+  /**
+   * Print file bytes + attachment name (409 not ready, 410 purged): the PNG,
+   * or the PDF when `format` is 'pdf' (409 when that render has no PDF).
+   */
   async printFile(
     storeId: string,
     orderId: string,
     itemId: string,
-  ): Promise<{ buffer: Buffer; filename: string }> {
+    format: 'png' | 'pdf' = 'png',
+  ): Promise<{ buffer: Buffer; filename: string; mime: string }> {
     const row = await this.ownedRow(storeId, orderId, itemId);
     if (row.files_purged_at || row.print_status === DesignPrintStatus.PURGED) {
       throw designerErrors.gone(
@@ -582,7 +591,7 @@ export class DesignerPrintQueueService
       );
     }
     const file = (asPrintFiles(row.print_files) ?? []).find(
-      (f) => f.surface === 'front' && f.format === 'png',
+      (f) => f.surface === 'front' && f.format === format,
     );
     if (row.print_status !== DesignPrintStatus.READY || !file) {
       throw designerErrors.conflict(
@@ -614,7 +623,11 @@ export class DesignerPrintQueueService
     const orderNumber =
       siblings[0]?.order_item?.order?.order_number ?? row.order_id.slice(0, 8);
     const safe = orderNumber.replace(/[^A-Za-z0-9_-]/g, '');
-    return { buffer, filename: `${safe}-${index}-front.png` };
+    return {
+      buffer,
+      filename: `${safe}-${index}-front.${format}`,
+      mime: format === 'pdf' ? 'application/pdf' : 'image/png',
+    };
   }
 
   /** `POST …/orders/:orderId/items/:itemId/regenerate`. */
@@ -763,7 +776,7 @@ export class DesignerPrintQueueService
        )
       RETURNING id, store_id, order_id, template_spec, state, proof_key,
                 files_purged_at, originals_purged_at, print_attempts,
-                print_locked_at`);
+                print_locked_at, print_files`);
     return rows[0] ?? null;
   }
 
@@ -850,8 +863,25 @@ export class DesignerPrintQueueService
         },
       });
       if (saved.count === 0) {
-        // Lost the fence (released on shutdown / reclaimed): drop the files.
+        // Lost the fence (released on shutdown / reclaimed): drop the files,
+        // except those the row lists now. Print keys are per row and year,
+        // so a READY row (the previous render, or the worker that reclaimed
+        // it) may list the very key this render overwrote.
+        // Unknown state (read failed): keep the files rather than risk it.
+        let listed: Set<string> | null = null;
+        try {
+          const current = await this.prisma.orderItemDesign.findUnique({
+            where: { id: row.id },
+            select: { print_files: true },
+          });
+          listed = new Set(
+            (asPrintFiles(current?.print_files) ?? []).map((f) => f.key),
+          );
+        } catch {
+          listed = null;
+        }
         for (const f of result.files) {
+          if (!listed || listed.has(f.key)) continue;
           await this.storage.delete(f.key).catch(() => undefined);
         }
         if (result.proof_key) {
@@ -860,6 +890,14 @@ export class DesignerPrintQueueService
           });
         }
       } else {
+        // Files of the previous render this one no longer lists (the PDF
+        // after the format was switched off, an older year's key).
+        // Only this row's own print files are ever deleted here.
+        const kept = new Set(result.files.map((f) => f.key));
+        for (const f of asPrintFiles(row.print_files) ?? []) {
+          if (kept.has(f.key) || !isOwnPrintKey(f.key, row)) continue;
+          await this.storage.delete(f.key).catch(() => undefined);
+        }
         for (const listener of this.readyListeners) {
           try {
             await listener({ order_id: row.order_id, store_id: row.store_id });
@@ -959,6 +997,21 @@ export function asPrintFiles(v: unknown): PrintFile[] | null {
           typeof (f as PrintFile).key === 'string',
       ) as PrintFile[])
     : null;
+}
+
+/**
+ * True for a print file key of this row (`designer/<store>/<yyyy>/print/
+ * <row id>-<suffix>.<ext>`): never another store's or another row's file.
+ */
+export function isOwnPrintKey(
+  key: string,
+  row: { id: string; store_id: string },
+): boolean {
+  const m =
+    /^designer\/([0-9a-f-]{36})\/\d{4}\/print\/([0-9a-f-]{36})(-[a-z]{1,16})?\.[a-z0-9]{2,5}$/.exec(
+      key,
+    );
+  return !!m && m[1] === row.store_id && m[2] === row.id;
 }
 
 /** True when the snapshot flags any asset as low resolution. */
