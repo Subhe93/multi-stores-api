@@ -12,3 +12,6 @@ dist
 # Private runtime files (rendered invoice PDFs); never served, never committed.
 # Anchored to the repo root so src/modules/invoices/storage/ (source) stays tracked.
 /storage/
+
+# Next.js trace files written when a Next build runs with this folder as cwd
+.next/
