@@ -47,10 +47,18 @@ import {
 } from '@multi-stores/core/designer';
 import { isUuid } from './designs.util';
 import {
+  backEnabledBy,
   enabledAddons,
   sanitizeSelection,
   type AddonSelection,
 } from './designer-addons';
+import {
+  allowedBackTemplateIds,
+  backPhotos,
+  readBack,
+  type DesignBack,
+  type DesignSide,
+} from './designer-back';
 import { canAccessDesign, hashDesignToken } from './designer-access';
 
 /** Hard cap of any customer text (code units), whatever the template says. */
@@ -93,6 +101,12 @@ export interface DesignView {
   proof_url: string | null;
   /** M5.5 add-on selection `{key: qty}`; absent when none was chosen. */
   addons?: AddonSelection;
+  /** M5.6 back side; absent on single-sided designs (G0). */
+  back?: DesignBack;
+  /** Photo views of the back state (with `back`, mode 'other'). */
+  back_photos?: Record<string, DesignPhotoView>;
+  /** Signed back proof (1 h) when one matches the current back; with `back` only. */
+  proof_back_url?: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -155,12 +169,25 @@ export class DesignsService {
     storeId: string,
     id: string,
     access: DesignAccess,
-  ): Promise<{ proof_url: string; reused: boolean }> {
+  ): Promise<{
+    proof_url: string;
+    reused: boolean;
+    /** M5.6: the back proof of a double-sided design (key only with a back). */
+    proof_back_url?: string;
+  }> {
     const design = await this.loadAccessible(storeId, id, access);
     if (design.status === DesignStatus.ORDERED) throw this.locked();
     if (!this.render) throw new DesignerRenderUnavailableError();
     const res = await this.render.renderDesignProof(design.id);
-    return { proof_url: res.proof_url, reused: res.reused };
+    if (!readBack(design.back)) {
+      return { proof_url: res.proof_url, reused: res.reused };
+    }
+    const back = await this.render.renderDesignBackProof(design.id);
+    return {
+      proof_url: res.proof_url,
+      reused: res.reused && (back?.reused ?? true),
+      ...(back ? { proof_back_url: back.proof_url } : {}),
+    };
   }
 
   // ── Access ────────────────────────────────────────────────────────────────
@@ -372,8 +399,220 @@ export class DesignsService {
             })
           : null,
       ...addonsViewOf(design.addons),
+      ...(await this.backView(design, settings.min_effective_dpi_warning)),
       created_at: design.created_at,
       updated_at: design.updated_at,
+    };
+  }
+
+  /**
+   * M5.6: the `back`, `back_photos` and `proof_back_url` keys of a view,
+   * only when a back is stored (single-sided designs keep their payload).
+   */
+  private async backView(
+    design: Pick<
+      Design,
+      'id' | 'store_id' | 'back' | 'proof_back_key' | 'proof_back_sha'
+    >,
+    minDpi: number,
+  ): Promise<Pick<DesignView, 'back' | 'back_photos' | 'proof_back_url'>> {
+    const back = readBack(design.back);
+    if (!back) return {};
+    const photos: Record<string, DesignPhotoView> = {};
+    if (back.mode === 'other') {
+      const version = await this.loadVersion(back.template_version_id);
+      const slots = version
+        ? slotMap(version.spec as unknown as TemplateSpecV1)
+        : new Map<string, ImageSlotElement>();
+      const entries = Object.entries(back.state.photos ?? {});
+      const found = entries.length
+        ? await this.assets.findOwnedAssets(
+            design.store_id,
+            entries.map(([, p]) => p.asset_id),
+            [DesignAssetKind.CUSTOMER_PHOTO],
+          )
+        : new Map<string, DesignAsset>();
+      for (const [slotId, p] of entries) {
+        const a = found.get(p.asset_id);
+        const slot = slots.get(slotId);
+        const dpi = slot ? effectiveDpi(slot, p.width, p.height, p.adj) : 0;
+        photos[slotId] = {
+          asset_id: p.asset_id,
+          width: p.width,
+          height: p.height,
+          preview_url: a
+            ? (this.assets.assetView(a).preview_url ?? null)
+            : null,
+          effective_dpi: Math.round(dpi * 10) / 10,
+          low_res: dpi > 0 && dpi < minDpi,
+        };
+      }
+    }
+    return {
+      back,
+      back_photos: photos,
+      proof_back_url:
+        design.proof_back_key && design.proof_back_sha
+          ? this.urls.signedPath('proof_back', design.id, design.store_id, {
+              ttlSec: DESIGNER_LINK_TTL.editor,
+            })
+          : null,
+    };
+  }
+
+  /** A template version row by id (null when unknown). */
+  async loadVersion(versionId: string): Promise<DesignVersionRow | null> {
+    if (!isUuid(versionId)) return null;
+    return this.prisma.designTemplateVersion.findUnique({
+      where: { id: versionId },
+      select: { id: true, template_id: true, version: true, spec: true },
+    });
+  }
+
+  // ── Back side (M5.6) ──────────────────────────────────────────────────────
+
+  private backInvalid(message: string, params?: Record<string, unknown>) {
+    return designerErrors.badRequest('DESIGNER_BACK_INVALID', message, params);
+  }
+
+  /**
+   * The version an 'other' back may use for a product: the template must be
+   * the product's own or one of the link's `back_template_ids`, the store's,
+   * PUBLISHED with a current version. `versionId` is kept while it is a
+   * version of that template not newer than the current one; otherwise the
+   * current version is used (the editor always sends the current one).
+   */
+  async backVersionFor(
+    storeId: string,
+    productId: string,
+    templateId: string,
+    versionId: string | null,
+  ): Promise<DesignVersionRow> {
+    const link = isUuid(productId)
+      ? await this.prisma.productDesigner.findUnique({
+          where: { product_id: productId },
+          select: {
+            store_id: true,
+            template_id: true,
+            back_template_ids: true,
+          },
+        })
+      : null;
+    if (
+      !link ||
+      link.store_id !== storeId ||
+      !isUuid(templateId) ||
+      !allowedBackTemplateIds(link).includes(templateId)
+    ) {
+      throw this.backInvalid(
+        'This template is not offered for the back side.',
+        { reason: 'template_not_allowed' },
+      );
+    }
+    const template = await this.prisma.designTemplate.findUnique({
+      where: { id: templateId },
+      select: { store_id: true, status: true, current_version_id: true },
+    });
+    if (
+      !template ||
+      template.store_id !== storeId ||
+      template.status !== DesignTemplateStatus.PUBLISHED ||
+      !template.current_version_id
+    ) {
+      throw this.backInvalid('This back template is not published.', {
+        reason: 'template_not_published',
+      });
+    }
+    const current = await this.loadVersion(template.current_version_id);
+    if (!current) {
+      throw this.backInvalid('This back template is not published.', {
+        reason: 'template_not_published',
+      });
+    }
+    if (versionId && versionId !== current.id) {
+      const wanted = await this.loadVersion(versionId);
+      if (
+        wanted &&
+        wanted.template_id === templateId &&
+        wanted.version <= current.version
+      ) {
+        return wanted;
+      }
+    }
+    return current;
+  }
+
+  /**
+   * Resolves the back of a design from a sent value (`undefined` = keep the
+   * stored one, `null` = clear): the gate is the add-on selection (a back
+   * without an enabling add-on is dropped, never refused, so a deselect
+   * clears it), 'other' needs an allowed PUBLISHED template of this store and
+   * a valid (incomplete allowed) state whose photos belong to this design.
+   * Returns the value to store (null = no back) and whether it changed.
+   */
+  async backFor(
+    storeId: string,
+    designId: string,
+    productId: string,
+    selection: AddonSelection | null,
+    raw: unknown,
+    current: unknown,
+  ): Promise<{
+    back: DesignBack | null;
+    photos: Map<string, DesignAsset>;
+    changed: boolean;
+  }> {
+    const stored = readBack(current) || null;
+    const sent = raw === undefined ? stored : readBack(raw);
+    if (sent === false) {
+      throw this.backInvalid('The back side is not valid.', {
+        reason: 'shape',
+      });
+    }
+    const link = isUuid(productId)
+      ? await this.prisma.productDesigner.findUnique({
+          where: { product_id: productId },
+          select: { addons: true },
+        })
+      : null;
+    const enabled = backEnabledBy(link?.addons, selection);
+    if (!sent || !enabled) {
+      return {
+        back: null,
+        photos: new Map(),
+        changed: stored !== null,
+      };
+    }
+    if (sent.mode === 'same') {
+      return {
+        back: { mode: 'same' },
+        photos: new Map(),
+        changed: stored?.mode !== 'same',
+      };
+    }
+    const version = await this.backVersionFor(
+      storeId,
+      productId,
+      sent.template_id,
+      sent.template_version_id || null,
+    );
+    const { state, photos } = await this.validateDesignState(
+      storeId,
+      designId,
+      version.spec as unknown as TemplateSpecV1,
+      sent.state,
+      { requireComplete: false },
+    );
+    const back: DesignBack = {
+      mode: 'other',
+      template_id: version.template_id,
+      template_version_id: version.id,
+      state,
+    };
+    return {
+      back,
+      photos,
+      changed: JSON.stringify(back) !== JSON.stringify(stored),
     };
   }
 
@@ -467,6 +706,7 @@ export class DesignsService {
       template_version_id: string;
       state?: unknown;
       addons?: unknown;
+      back?: unknown;
     },
     customerId: string | null,
     locale?: string | null,
@@ -490,6 +730,19 @@ export class DesignsService {
       input.state ?? { v: 1, texts: {}, photos: {} },
       { requireComplete: false },
     );
+    // M5.6: a back only with an enabling add-on; its photos (none yet on a
+    // new design) go through the photo route with `side=back`.
+    const { back } =
+      input.back === undefined || input.back === null
+        ? { back: null }
+        : await this.backFor(
+            storeId,
+            '00000000-0000-0000-0000-000000000000',
+            input.product_id,
+            addons,
+            input.back,
+            null,
+          );
     const token = randomBytes(32).toString('base64url');
     const design = await this.prisma.design.create({
       data: {
@@ -501,6 +754,7 @@ export class DesignsService {
         access_token_hash: hashDesignToken(token),
         // Key only when a selection was chosen (G0: same insert otherwise).
         ...(addons ? { addons: addons as Prisma.InputJsonValue } : {}),
+        ...(back ? { back: back as unknown as Prisma.InputJsonValue } : {}),
       },
     });
     const view = await this.view(
@@ -617,12 +871,36 @@ export class DesignsService {
       throw e;
     }
     const state: DesignStateV1 = { v: 1, texts, photos };
-    const saved = Object.keys(photos).length
-      ? await this.prisma.design.update({
-          where: { id: created.id },
-          data: { state: state as unknown as Prisma.InputJsonValue },
-        })
-      : created;
+    // M5.6: the back (mode, texts, photos) travels with the copy.
+    let back: DesignBack | null = null;
+    try {
+      back = await this.copyBack(
+        storeId,
+        source,
+        created,
+        addonsViewOf(source.addons).addons ?? null,
+        copied,
+        settings.max_upload_mb * 1024 * 1024,
+      );
+    } catch (e) {
+      for (const c of copied) await this.removeAsset(c);
+      await this.prisma.design
+        .delete({ where: { id: created.id } })
+        .catch(() => undefined);
+      throw e;
+    }
+    const saved =
+      Object.keys(photos).length || back
+        ? await this.prisma.design.update({
+            where: { id: created.id },
+            data: {
+              state: state as unknown as Prisma.InputJsonValue,
+              ...(back
+                ? { back: back as unknown as Prisma.InputJsonValue }
+                : {}),
+            },
+          })
+        : created;
     const rows = new Map<string, DesignAsset>();
     for (const c of copied) {
       const slot = Object.entries(photos).find(
@@ -665,7 +943,12 @@ export class DesignsService {
   async update(
     storeId: string,
     id: string,
-    input: { state: unknown; state_version: number; addons?: unknown },
+    input: {
+      state: unknown;
+      state_version: number;
+      addons?: unknown;
+      back?: unknown;
+    },
     access: DesignAccess,
   ): Promise<DesignView> {
     const design = await this.loadAccessible(storeId, id, access);
@@ -686,8 +969,26 @@ export class DesignsService {
         ? undefined
         : await this.selectionFor(design.product_id, input.addons);
     const keepProof =
-      addons !== undefined &&
+      (addons !== undefined || input.back !== undefined) &&
       JSON.stringify(state) === JSON.stringify(design.state ?? null);
+    // M5.6: the back follows the add-on gate on every save (a deselected
+    // enabling add-on clears it); sent = replaced, absent = kept (re-gated).
+    const effectiveSelection =
+      addons !== undefined
+        ? addons
+        : (addonsViewOf(design.addons).addons ?? null);
+    const backRes =
+      input.back !== undefined || design.back !== null
+        ? await this.backFor(
+            storeId,
+            design.id,
+            design.product_id,
+            effectiveSelection,
+            input.back,
+            design.back,
+          )
+        : null;
+    const backChanged = !!backRes?.changed;
     const res = await this.prisma.design.updateMany({
       where: {
         id: design.id,
@@ -705,6 +1006,14 @@ export class DesignsService {
                 : Prisma.DbNull,
             }
           : {}),
+        ...(backChanged
+          ? {
+              back: backRes?.back
+                ? (backRes.back as unknown as Prisma.InputJsonValue)
+                : Prisma.DbNull,
+              proof_back_sha: null,
+            }
+          : {}),
       },
     });
     if (res.count === 0) throw this.stale();
@@ -715,6 +1024,12 @@ export class DesignsService {
         state_version: input.state_version + 1,
         proof_state_sha: keepProof ? design.proof_state_sha : null,
         ...(addons !== undefined ? { addons } : {}),
+        ...(backChanged
+          ? {
+              back: (backRes?.back ?? null) as unknown as Prisma.JsonValue,
+              proof_back_sha: null,
+            }
+          : {}),
         updated_at: new Date(),
       },
       photos,
@@ -773,6 +1088,7 @@ export class DesignsService {
     elementId: string,
     buffer: Buffer,
     access: DesignAccess,
+    side: DesignSide = 'front',
   ): Promise<{
     asset_id: string;
     width: number;
@@ -784,8 +1100,12 @@ export class DesignsService {
   }> {
     const design = await this.loadAccessible(storeId, id, access);
     if (design.status === DesignStatus.ORDERED) throw this.locked();
-    const spec = design.template_version.spec as unknown as TemplateSpecV1;
-    const slot = slotMap(spec).get(String(elementId ?? ''));
+    // M5.6: a back photo goes into a slot of the back template ('other').
+    const spec =
+      side === 'back'
+        ? await this.backSpecOf(design)
+        : (design.template_version.spec as unknown as TemplateSpecV1);
+    const slot = spec ? slotMap(spec).get(String(elementId ?? '')) : undefined;
     if (!slot) {
       throw stateInvalid([
         { element_id: String(elementId ?? ''), rule: 'asset' },
@@ -805,7 +1125,15 @@ export class DesignsService {
     let current: typeof design = design;
     let previous: string | null = null;
     for (let attempt = 0; ; attempt++) {
-      const state = cloneState(current.state);
+      const back = readBack(current.back) || null;
+      if (side === 'back' && back?.mode !== 'other') {
+        // The back was switched off / to 'same' meanwhile.
+        await this.removeAsset(asset);
+        throw stateInvalid([{ element_id: slot.id, rule: 'asset' }]);
+      }
+      const state = cloneState(
+        side === 'back' && back?.mode === 'other' ? back.state : current.state,
+      );
       previous = state.photos[slot.id]?.asset_id ?? null;
       state.photos[slot.id] = {
         asset_id: asset.id,
@@ -813,6 +1141,8 @@ export class DesignsService {
         height: asset.height,
         adj,
       };
+      const nextBack: DesignBack | null =
+        side === 'back' && back?.mode === 'other' ? { ...back, state } : back;
       const res = await this.prisma.design.updateMany({
         where: {
           id: current.id,
@@ -820,17 +1150,31 @@ export class DesignsService {
           status: { not: DesignStatus.ORDERED },
         },
         data: {
-          state: state as unknown as Prisma.InputJsonValue,
           state_version: { increment: 1 },
-          proof_state_sha: null,
+          ...(side === 'back'
+            ? {
+                back: nextBack as unknown as Prisma.InputJsonValue,
+                proof_back_sha: null,
+              }
+            : {
+                state: state as unknown as Prisma.InputJsonValue,
+                proof_state_sha: null,
+              }),
         },
       });
       if (res.count === 1) {
         current = {
           ...current,
-          state: state as unknown as Prisma.JsonValue,
           state_version: current.state_version + 1,
-          proof_state_sha: null,
+          ...(side === 'back'
+            ? {
+                back: nextBack as unknown as Prisma.JsonValue,
+                proof_back_sha: null,
+              }
+            : {
+                state: state as unknown as Prisma.JsonValue,
+                proof_state_sha: null,
+              }),
         };
         break;
       }
@@ -879,7 +1223,22 @@ export class DesignsService {
           changed = true;
         }
       }
-      if (!changed) break;
+      // M5.6: the photo may be a back-side photo instead.
+      const back = readBack(design.back) || null;
+      let backChanged = false;
+      const nextBack: DesignBack | null =
+        back?.mode === 'other'
+          ? { ...back, state: cloneState(back.state) }
+          : back;
+      if (nextBack?.mode === 'other') {
+        for (const [slotId, p] of Object.entries(nextBack.state.photos)) {
+          if (p.asset_id === assetId) {
+            delete nextBack.state.photos[slotId];
+            backChanged = true;
+          }
+        }
+      }
+      if (!changed && !backChanged) break;
       inState = true;
       const res = await this.prisma.design.updateMany({
         where: {
@@ -888,17 +1247,37 @@ export class DesignsService {
           status: { not: DesignStatus.ORDERED },
         },
         data: {
-          state: state as unknown as Prisma.InputJsonValue,
           state_version: { increment: 1 },
-          proof_state_sha: null,
+          ...(changed
+            ? {
+                state: state as unknown as Prisma.InputJsonValue,
+                proof_state_sha: null,
+              }
+            : {}),
+          ...(backChanged
+            ? {
+                back: nextBack as unknown as Prisma.InputJsonValue,
+                proof_back_sha: null,
+              }
+            : {}),
         },
       });
       if (res.count === 1) {
         design = {
           ...design,
-          state: state as unknown as Prisma.JsonValue,
           state_version: design.state_version + 1,
-          proof_state_sha: null,
+          ...(changed
+            ? {
+                state: state as unknown as Prisma.JsonValue,
+                proof_state_sha: null,
+              }
+            : {}),
+          ...(backChanged
+            ? {
+                back: nextBack as unknown as Prisma.JsonValue,
+                proof_back_sha: null,
+              }
+            : {}),
         };
         break;
       }
@@ -941,6 +1320,94 @@ export class DesignsService {
     await this.prisma.designAsset
       .delete({ where: { id: a.id } })
       .catch(() => undefined);
+  }
+
+  /** M5.6: the spec of an 'other' back's template version (null without one). */
+  async backSpecOf(
+    design: Pick<Design, 'back'>,
+  ): Promise<TemplateSpecV1 | null> {
+    const back = readBack(design.back) || null;
+    if (back?.mode !== 'other') return null;
+    const v = await this.loadVersion(back.template_version_id);
+    return v ? (v.spec as unknown as TemplateSpecV1) : null;
+  }
+
+  /**
+   * M5.6 (duplicate): copies the back of `source` for the new design: the
+   * mode, and for 'other' the photos still on file (copied like the front
+   * ones) while the back template is still offered; otherwise the back is
+   * dropped (the customer picks it again).
+   */
+  private async copyBack(
+    storeId: string,
+    source: Design,
+    created: { id: string },
+    selection: AddonSelection | null,
+    copied: DesignAsset[],
+    maxBytes: number,
+  ): Promise<DesignBack | null> {
+    const back = readBack(source.back) || null;
+    if (!back) return null;
+    const link = await this.prisma.productDesigner.findUnique({
+      where: { product_id: source.product_id },
+      select: { addons: true },
+    });
+    if (!backEnabledBy(link?.addons, selection)) return null;
+    if (back.mode === 'same') return back;
+    let version: DesignVersionRow;
+    try {
+      version = await this.backVersionFor(
+        storeId,
+        source.product_id,
+        back.template_id,
+        back.template_version_id,
+      );
+    } catch {
+      return null;
+    }
+    const spec = version.spec as unknown as TemplateSpecV1;
+    const textIds = new Set(
+      (spec.surfaces ?? [])
+        .flatMap((s) => s.elements ?? [])
+        .filter((e) => e.type === 'text')
+        .map((e) => e.id),
+    );
+    const texts = Object.fromEntries(
+      Object.entries(back.state.texts ?? {}).filter(([k]) => textIds.has(k)),
+    );
+    const slots = slotMap(spec);
+    const photos: DesignStateV1['photos'] = {};
+    for (const [slotId, p] of Object.entries(backPhotos(back))) {
+      if (!slots.has(slotId)) continue;
+      const a = await this.prisma.designAsset.findFirst({
+        where: {
+          id: p.asset_id,
+          store_id: storeId,
+          design_id: source.id,
+          kind: DesignAssetKind.CUSTOMER_PHOTO,
+          purged_at: null,
+        },
+      });
+      if (!a) continue;
+      const bytes = await this.assets.readAssetBytes(a, 'original');
+      const copy = await this.assets.storePhoto(storeId, bytes, {
+        design_id: created.id,
+        max_bytes: Math.max(bytes.length, maxBytes),
+      });
+      copied.push(copy);
+      photos[slotId] = {
+        asset_id: copy.id,
+        width: copy.width,
+        height: copy.height,
+        adj: { ...p.adj },
+      };
+    }
+    return {
+      mode: 'other',
+      template_id: version.template_id,
+      template_version_id: version.id,
+      state: { v: 1, texts, photos },
+    };
   }
 }
 

@@ -65,9 +65,12 @@ import {
   classifyRenderError,
   DesignerRenderService,
   printFileExtras,
+  printFileSide,
   printFilesJson,
+  rowHasBack,
   type PrintFile,
 } from './designer-render.service';
+import type { DesignSide } from './designer-back';
 import { isOffFlag } from './render/designer-chromium.host';
 import { releaseProofKey } from './designer-proof-keys';
 import { logJobTick } from '../../common/ops/job-log';
@@ -81,6 +84,19 @@ export const PRINT_BACKOFF_MS = [60_000, 10 * 60_000, 60 * 60_000];
 export const PRINT_STALE_LOCK_MINUTES = 10;
 /** Whole-job budget (input preparation + canvas + encoding + storage). */
 export const PRINT_JOB_TIMEOUT_MS = 3 * 60_000;
+/**
+ * M5.6: a double-sided row renders two sides in one job (two PNG canvases
+ * and, with PDF on, two PDF pages), so its budget is doubled. Still well
+ * inside the stale-lock window (PRINT_STALE_LOCK_MINUTES).
+ */
+export const PRINT_JOB_TIMEOUT_DOUBLE_MS = 2 * PRINT_JOB_TIMEOUT_MS;
+
+/** The job budget of a claimed row (doubled for a double-sided one). */
+export function printJobTimeoutMs(
+  row: Pick<ClaimedRow, 'back_template_spec' | 'back_state'>,
+): number {
+  return rowHasBack(row) ? PRINT_JOB_TIMEOUT_DOUBLE_MS : PRINT_JOB_TIMEOUT_MS;
+}
 /** Jobs one tick processes at most (per worker lane). */
 export const PRINT_JOBS_PER_TICK = 20;
 /** The backfill of never-requested paid / COD rows runs at most this often. */
@@ -144,7 +160,14 @@ export type ClaimedRow = Pick<
 > &
   // The files of the previous render (RETURNING of the claim); a
   // successful render deletes those it no longer lists.
-  Partial<Pick<OrderItemDesign, 'print_files'>>;
+  Partial<Pick<OrderItemDesign, 'print_files'>> &
+  // M5.6: the frozen back of a double-sided row (null columns otherwise).
+  Partial<
+    Pick<
+      OrderItemDesign,
+      'back_mode' | 'back_template_spec' | 'back_state' | 'proof_back_key'
+    >
+  >;
 
 @Injectable()
 export class DesignerPrintQueueService
@@ -495,6 +518,8 @@ export class DesignerPrintQueueService
           print_next_attempt_at: true,
           files_purged_at: true,
           created_at: true,
+          back_mode: true,
+          proof_back_key: true,
           order_item: {
             select: {
               quantity: true,
@@ -547,6 +572,8 @@ export class DesignerPrintQueueService
         print_files: (asPrintFiles(r.print_files) ?? []).map((f) => ({
           surface: f.surface,
           format: f.format,
+          // M5.6: `side` only on the files of a double-sided row (G0).
+          ...(f.side ? { side: f.side } : {}),
           width_px: f.width_px,
           height_px: f.height_px,
           dpi: f.dpi,
@@ -554,6 +581,13 @@ export class DesignerPrintQueueService
           ...printFileExtras(f),
         })),
         proof_url: this.render.orderProofPath(r),
+        // M5.6: double-sided rows carry their mode and the back proof.
+        ...(r.back_mode
+          ? {
+              back_mode: r.back_mode,
+              proof_back_url: this.render.orderBackProofPath(r),
+            }
+          : {}),
         created_at: r.created_at,
       })),
     };
@@ -575,13 +609,16 @@ export class DesignerPrintQueueService
 
   /**
    * Print file bytes + attachment name (409 not ready, 410 purged): the PNG,
-   * or the PDF when `format` is 'pdf' (409 when that render has no PDF).
+   * or the PDF when `format` is 'pdf' (409 when that render has no PDF);
+   * `side` 'back' (M5.6) picks the back file of a double-sided row (409
+   * when the row has none).
    */
   async printFile(
     storeId: string,
     orderId: string,
     itemId: string,
     format: 'png' | 'pdf' = 'png',
+    side: DesignSide = 'front',
   ): Promise<{ buffer: Buffer; filename: string; mime: string }> {
     const row = await this.ownedRow(storeId, orderId, itemId);
     if (row.files_purged_at || row.print_status === DesignPrintStatus.PURGED) {
@@ -591,7 +628,10 @@ export class DesignerPrintQueueService
       );
     }
     const file = (asPrintFiles(row.print_files) ?? []).find(
-      (f) => f.surface === 'front' && f.format === format,
+      (f) =>
+        f.surface === 'front' &&
+        f.format === format &&
+        printFileSide(f) === side,
     );
     if (row.print_status !== DesignPrintStatus.READY || !file) {
       throw designerErrors.conflict(
@@ -625,7 +665,7 @@ export class DesignerPrintQueueService
     const safe = orderNumber.replace(/[^A-Za-z0-9_-]/g, '');
     return {
       buffer,
-      filename: `${safe}-${index}-front.${format}`,
+      filename: `${safe}-${index}-${side}.${format}`,
       mime: format === 'pdf' ? 'application/pdf' : 'image/png',
     };
   }
@@ -776,7 +816,8 @@ export class DesignerPrintQueueService
        )
       RETURNING id, store_id, order_id, template_spec, state, proof_key,
                 files_purged_at, originals_purged_at, print_attempts,
-                print_locked_at, print_files`);
+                print_locked_at, print_files, back_mode, back_template_spec,
+                back_state, proof_back_key`);
     return rows[0] ?? null;
   }
 
@@ -846,7 +887,7 @@ export class DesignerPrintQueueService
     try {
       const result = await withTimeout(
         this.render.renderPrint(row),
-        PRINT_JOB_TIMEOUT_MS,
+        printJobTimeoutMs(row),
         'Designer print job',
       );
       const done = now();
@@ -860,6 +901,9 @@ export class DesignerPrintQueueService
           print_next_attempt_at: null,
           print_locked_at: null,
           ...(result.proof_key ? { proof_key: result.proof_key } : {}),
+          ...(result.proof_back_key
+            ? { proof_back_key: result.proof_back_key }
+            : {}),
         },
       });
       if (saved.count === 0) {
@@ -888,6 +932,14 @@ export class DesignerPrintQueueService
           await releaseProofKey(this.prisma, this.storage, result.proof_key, {
             logger: this.logger,
           });
+        }
+        if (result.proof_back_key) {
+          await releaseProofKey(
+            this.prisma,
+            this.storage,
+            result.proof_back_key,
+            { logger: this.logger },
+          );
         }
       } else {
         // Files of the previous render this one no longer lists (the PDF

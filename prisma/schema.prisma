@@ -2746,14 +2746,18 @@ model DesignTemplateVersion {
 }
 
 model ProductDesigner {
-  product_id  String   @id
-  store_id    String
-  template_id String
-  enabled     Boolean  @default(false)
+  product_id        String   @id
+  store_id          String
+  template_id       String
+  enabled           Boolean  @default(false)
   // M5.5 add-ons: v2 `{v:2, items:[...], imported?}` (designer-addons.ts) is
   // priced for enabled items; the legacy NPP import shape is never priced.
-  addons      Json     @default("{}")
-  updated_at  DateTime @updatedAt
+  addons            Json     @default("{}")
+  // M5.6 double-sided: templates offered for the back besides the product's
+  // own template (empty = only the same template). Ids of the store's
+  // PUBLISHED templates; unpublished ones are skipped at read time.
+  back_template_ids String[] @default([])
+  updated_at        DateTime @updatedAt
 
   product  Product        @relation(fields: [product_id], references: [id], onDelete: Cascade)
   // NoAction (checked at the end of the statement): a template linked to a
@@ -2801,11 +2805,18 @@ model Design {
   state               Json // DesignStateV1
   state_version       Int          @default(1) // optimistic concurrency
   addons              Json? // M5.5 add-on selection {key: qty}; null = none
+  // Double-sided (M5.6): {mode:'same'} | {mode:'other', template_id,
+  // template_version_id, state}; null = single-sided. Valid only while an
+  // add-on that enables the back is selected (designer-back.ts).
+  back                Json?
   status              DesignStatus @default(DRAFT)
   customer_id         String? // owner when logged in / claimed
   access_token_hash   String       @db.VarChar(64) // sha256(random 32B) for guests
   proof_key           String? // private webp
   proof_state_sha     String?      @db.VarChar(64)
+  // M5.6: proof of the back side (same bookkeeping as the front proof).
+  proof_back_key      String?
+  proof_back_sha      String?      @db.VarChar(64)
   created_at          DateTime     @default(now())
   updated_at          DateTime     @updatedAt
 
@@ -2823,34 +2834,42 @@ model Design {
 
 // Frozen design of one order item + the print-render queue row.
 model OrderItemDesign {
-  id                    String            @id @default(uuid())
-  order_item_id         String            @unique
-  order_id              String
-  store_id              String
-  design_id             String? // no FK (the draft may be purged)
-  template_id           String
-  template_version_id   String
-  template_spec         Json // frozen copy
-  state                 Json // frozen copy (validated)
-  assets                Json // [{asset_id, role, element_id?, width, height, sha256, low_res?, effective_dpi?}]
-  text_values           Json // [{element_id, label, value}]
-  price_breakdown       Json // {designer_delta:0, addons:[]}
-  renderer_version      String            @db.VarChar(16)
-  proof_key             String?
-  print_status          DesignPrintStatus @default(PENDING)
-  print_attempts        Int               @default(0)
-  print_next_attempt_at DateTime?
-  print_locked_at       DateTime?
-  print_error           String?
-  print_files           Json? // [{surface, format, key, width_px, height_px, dpi, bytes, sha256}]
-  print_rendered_at     DateTime?
-  print_requested_at    DateTime? // set on paid/COD/regenerate; null = not yet payable
-  shipped_at            DateTime?
-  terminal_at           DateTime? // CANCELLED/REFUNDED
-  originals_purged_at   DateTime?
-  files_purged_at       DateTime?
-  created_at            DateTime          @default(now())
-  updated_at            DateTime          @updatedAt
+  id                       String            @id @default(uuid())
+  order_item_id            String            @unique
+  order_id                 String
+  store_id                 String
+  design_id                String? // no FK (the draft may be purged)
+  template_id              String
+  template_version_id      String
+  template_spec            Json // frozen copy
+  state                    Json // frozen copy (validated)
+  // M5.6 double-sided (all null on single-sided rows, G0): the back mode,
+  // the back template (own template for 'same'), its frozen spec and state.
+  back_mode                String?           @db.VarChar(8) // same | other
+  back_template_id         String?
+  back_template_version_id String?
+  back_template_spec       Json?
+  back_state               Json?
+  proof_back_key           String?
+  assets                   Json // [{asset_id, role, element_id?, side?, width, height, sha256, low_res?, effective_dpi?}]
+  text_values              Json // [{element_id, label, value}]
+  price_breakdown          Json // {designer_delta:0, addons:[]}
+  renderer_version         String            @db.VarChar(16)
+  proof_key                String?
+  print_status             DesignPrintStatus @default(PENDING)
+  print_attempts           Int               @default(0)
+  print_next_attempt_at    DateTime?
+  print_locked_at          DateTime?
+  print_error              String?
+  print_files              Json? // [{surface, format, key, width_px, height_px, dpi, bytes, sha256, side?}]
+  print_rendered_at        DateTime?
+  print_requested_at       DateTime? // set on paid/COD/regenerate; null = not yet payable
+  shipped_at               DateTime?
+  terminal_at              DateTime? // CANCELLED/REFUNDED
+  originals_purged_at      DateTime?
+  files_purged_at          DateTime?
+  created_at               DateTime          @default(now())
+  updated_at               DateTime          @updatedAt
 
   order_item OrderItem @relation(fields: [order_item_id], references: [id], onDelete: Cascade)
 

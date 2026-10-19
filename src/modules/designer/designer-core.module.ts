@@ -10,7 +10,10 @@ import {
 } from './designer-templates.controller';
 import { DesignerTemplatesService } from './designer-templates.service';
 import { DesignerTriggersService } from './designer-triggers.service';
-import { DesignsController } from './designs.controller';
+import {
+  DesignerBackTemplatesController,
+  DesignsController,
+} from './designs.controller';
 import { DesignsService } from './designs.service';
 
 /**
@@ -31,6 +34,7 @@ import { DesignsService } from './designs.service';
   imports: [DesignerAssetsModule, DesignerRenderModule],
   controllers: [
     DesignsController,
+    DesignerBackTemplatesController,
     DesignerTemplatesController,
     DesignerProductsController,
     DesignerOrderDesignsController,

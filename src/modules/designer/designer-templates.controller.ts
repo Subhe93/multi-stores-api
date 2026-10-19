@@ -52,6 +52,13 @@ export function printFormatParam(format: unknown): 'png' | 'pdf' {
   throw new BadRequestException('format must be png or pdf');
 }
 
+/** `?side=` of the print download (M5.6): absent → front; anything else → 400. */
+export function printSideParam(side: unknown): 'front' | 'back' {
+  if (side === undefined || side === '' || side === 'front') return 'front';
+  if (side === 'back') return 'back';
+  throw new BadRequestException('side must be front or back');
+}
+
 /**
  * Creator template routes (M4.2 §4.3), mounted at `/api/designer/my/templates`.
  * Store owner only, app enabled (403 STORE_APP_NOT_ENABLED otherwise).
@@ -179,6 +186,7 @@ export class DesignerProductsController {
       appStoreId(req),
       productId,
       dto.addons,
+      dto.back_template_ids,
     );
   }
 
@@ -231,7 +239,8 @@ export class DesignerOrderDesignsController {
 
   /**
    * The print PNG as an attachment `<order_number>-<n>-front.png`, or with
-   * `?format=pdf` the print-ready PDF (`…-front.pdf`).
+   * `?format=pdf` the print-ready PDF (`…-front.pdf`); `?side=back` (M5.6)
+   * the back file of a double-sided line (`…-back.png` / `…-back.pdf`).
    * 409 DESIGNER_PRINT_NOT_READY, 410 DESIGNER_FILES_PURGED.
    */
   @Get(':orderId/items/:itemId/print')
@@ -239,6 +248,7 @@ export class DesignerOrderDesignsController {
     @Param('orderId', ParseUUIDPipe) orderId: string,
     @Param('itemId', ParseUUIDPipe) itemId: string,
     @Query('format') format?: string,
+    @Query('side') side?: string,
     @CurrentUser() user?: RequestUser,
     @Res({ passthrough: true }) res?: Response,
   ) {
@@ -247,6 +257,7 @@ export class DesignerOrderDesignsController {
       orderId,
       itemId,
       printFormatParam(format),
+      printSideParam(side),
     );
     res?.setHeader('Cache-Control', 'private, no-store');
     res?.setHeader('X-Content-Type-Options', 'nosniff');

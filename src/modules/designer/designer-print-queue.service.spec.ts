@@ -10,6 +10,7 @@ import {
   PRINT_JOB_TIMEOUT_MS,
   PRINT_MAX_ATTEMPTS,
   PRINT_RENDER_PAUSE_MS,
+  printJobTimeoutMs,
   printQueueConfig,
   type ClaimedRow,
 } from './designer-print-queue.service';
@@ -693,6 +694,101 @@ describe('DesignerPrintQueueService — creator routes', () => {
       trim_mm: { width: 500, height: 700 },
       bleed_mm: 3,
       crop_marks: false,
+    });
+  });
+});
+
+describe('DesignerPrintQueueService — double-sided rows (M5.6)', () => {
+  const both = [
+    { ...files[0], side: 'front' as const, key: 'designer/k-front.png' },
+    { ...files[0], side: 'back' as const, key: 'designer/k-back.png' },
+  ];
+  const ready = {
+    id: 'oid1',
+    store_id: STORE,
+    order_id: 'o1',
+    print_status: DesignPrintStatus.READY,
+    print_files: both,
+    files_purged_at: null,
+    back_mode: 'same',
+    proof_back_key: 'designer/pb.webp',
+  };
+
+  it('printFile side=back streams the back file as <order>-<n>-back.png; 409 on a single-sided row', async () => {
+    const b = build();
+    b.prisma.orderItemDesign.findFirst.mockResolvedValueOnce(ready);
+    b.prisma.orderItemDesign.findMany.mockResolvedValue([
+      { id: 'oid1', order_item: { order: { order_number: 'NZ-7' } } },
+    ] as never);
+    const out = await b.queue.printFile(STORE, 'o1', 'i1', 'png', 'back');
+    expect(out.filename).toBe('NZ-7-1-back.png');
+    expect(b.storage.read).toHaveBeenCalledWith('designer/k-back.png');
+    b.prisma.orderItemDesign.findFirst.mockResolvedValueOnce({
+      ...ready,
+      print_files: files,
+      back_mode: null,
+    });
+    await expect(
+      b.queue.printFile(STORE, 'o1', 'i1', 'png', 'back'),
+    ).rejects.toMatchObject({ response: { code: 'DESIGNER_PRINT_NOT_READY' } });
+  });
+
+  it('list shows both files with their side, the back mode and the back proof', async () => {
+    const b = build();
+    (
+      b.render as unknown as { orderBackProofPath: unknown }
+    ).orderBackProofPath = jest.fn(() => '/api/designer/files/tb');
+    b.prisma.orderItemDesign.count.mockResolvedValue(1);
+    b.prisma.orderItemDesign.findMany.mockResolvedValue([
+      {
+        ...ready,
+        order_item_id: 'i1',
+        assets: [],
+        proof_key: 'designer/p.webp',
+        print_attempts: 1,
+        print_error: null,
+        print_requested_at: NOW,
+        print_rendered_at: NOW,
+        print_next_attempt_at: null,
+        created_at: NOW,
+        order_item: {
+          quantity: 1,
+          product_id: 'p1',
+          product: { translations: [] },
+          order: { order_number: 'NZ-7', status: 'PAID' },
+        },
+      },
+    ] as never);
+    const res = await b.queue.list(STORE);
+    expect(res.items[0]).toMatchObject({
+      back_mode: 'same',
+      proof_back_url: '/api/designer/files/tb',
+    });
+    expect(res.items[0].print_files.map((f) => f.side)).toEqual([
+      'front',
+      'back',
+    ]);
+    expect(res.items[0].print_files[1]).not.toHaveProperty('key');
+  });
+
+  it('a double-sided job gets twice the budget; READY stores proof_back_key', async () => {
+    const b = build();
+    expect(printJobTimeoutMs({ back_template_spec: {}, back_state: {} })).toBe(
+      2 * PRINT_JOB_TIMEOUT_MS,
+    );
+    expect(
+      printJobTimeoutMs({ back_template_spec: null, back_state: null }),
+    ).toBe(PRINT_JOB_TIMEOUT_MS);
+    b.render.renderPrint.mockResolvedValueOnce({
+      files: both,
+      proof_key: null,
+      proof_back_key: 'designer/pb.webp',
+      report: { fitted: {}, missing: [], elements: 1 },
+    } as never);
+    await b.queue.process(row({ back_mode: 'same' }));
+    expect(outcomeCalls(b)[0][0].data).toMatchObject({
+      print_status: DesignPrintStatus.READY,
+      proof_back_key: 'designer/pb.webp',
     });
   });
 });

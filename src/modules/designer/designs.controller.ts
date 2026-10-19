@@ -31,6 +31,7 @@ import { appStoreId, designerUploadLimit } from './designer-assets.controller';
 import { PHOTO_MAX_BYTES } from './designer-assets.service';
 import { DesignerPhotoAdmissionInterceptor } from './designer-upload-admission';
 import { DesignsService, type DesignAccess } from './designs.service';
+import { DesignerTemplatesService } from './designer-templates.service';
 import {
   CreateDesignDto,
   UpdateDesignDto,
@@ -165,7 +166,10 @@ export class DesignsController {
     );
   }
 
-  /** Multipart `file` + `element_id` (an image slot of the template). */
+  /**
+   * Multipart `file` + `element_id` (an image slot of the template) and
+   * optionally `side=back` (M5.6: a slot of the back template).
+   */
   @Post(':id/photos')
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @UseInterceptors(
@@ -189,6 +193,7 @@ export class DesignsController {
       dto.element_id,
       file?.buffer as Buffer,
       await this.access(user, token),
+      dto.side === 'back' ? 'back' : 'front',
     );
   }
 
@@ -206,6 +211,34 @@ export class DesignsController {
       id,
       assetId,
       await this.access(user, token),
+    );
+  }
+}
+
+/**
+ * M5.6: the back templates a product offers (storefront editor, "Annan
+ * mall"), mounted at `/api/designer/s/:slug/products/:productId/back-templates`.
+ * Public like the product payload; only templates the product's link allows
+ * (own template + `back_template_ids`, PUBLISHED, this store) are served.
+ */
+@Controller('designer/s/:slug/products')
+@UseGuards(RequireAppGuard)
+@RequireApp('designer')
+export class DesignerBackTemplatesController {
+  constructor(private readonly templates: DesignerTemplatesService) {}
+
+  /** `{template_id, template_version_id, name, thumbnail_url, spec_public, fonts}`. */
+  @Get(':productId/back-templates/:templateId')
+  @Throttle({ default: { limit: 60, ttl: 60000 } })
+  backTemplate(
+    @Req() req: RequestWithAppStore,
+    @Param('productId') productId: string,
+    @Param('templateId') templateId: string,
+  ) {
+    return this.templates.backTemplatePayload(
+      appStoreId(req),
+      productId,
+      templateId,
     );
   }
 }

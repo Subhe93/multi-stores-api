@@ -222,6 +222,10 @@ function designerStub() {
     orderItemProofUrl: jest.fn((d: { id: string } | null) =>
       d ? `https://api.test/proof-${d.id}` : null,
     ),
+    orderItemBackProofUrl: jest.fn(
+      (d: { id: string; proof_back_key?: string | null } | null) =>
+        d?.proof_back_key ? `https://api.test/proof-back-${d.id}` : null,
+    ),
   };
 }
 
@@ -376,6 +380,9 @@ describe('OrdersService designer lines (M4.2 WP4)', () => {
             store_id: true,
             proof_key: true,
             files_purged_at: true,
+            back_mode: true,
+            proof_back_key: true,
+            text_values: true,
           },
         },
       },
@@ -526,6 +533,91 @@ describe('OrdersService designer lines (M4.2 WP4)', () => {
     expect(shaped.items[1]).toMatchObject({
       image_url: 'https://api.test/proof-oid1',
       design: { id: 'oid1', proof_url: 'https://api.test/proof-oid1' },
+    });
+  });
+
+  it('M5.6 read paths: a double-sided line adds its back proof + back texts; single-sided lines keep the exact block', () => {
+    const { service } = build({ designer: designerStub() });
+    const shaped = (
+      service as unknown as {
+        withItemImages(o: unknown): { items: Record<string, unknown>[] };
+      }
+    ).withItemImages({
+      id: 'o1',
+      items: [
+        {
+          id: 'i1',
+          design: {
+            id: 'oid1',
+            store_id: STORE_ID,
+            proof_key: 'k',
+            files_purged_at: null,
+            back_mode: null,
+            proof_back_key: null,
+            text_values: [{ element_id: 'namn', label: 'Namn', value: 'Anna' }],
+          },
+        },
+        {
+          id: 'i2',
+          design: {
+            id: 'oid2',
+            store_id: STORE_ID,
+            proof_key: 'k',
+            files_purged_at: null,
+            back_mode: 'other',
+            proof_back_key: 'kb',
+            text_values: [
+              { element_id: 'namn', label: 'Namn', value: 'Anna' },
+              {
+                element_id: 'back:datum',
+                label: 'Datum',
+                value: '2026',
+                side: 'back',
+              },
+            ],
+          },
+        },
+        {
+          id: 'i3',
+          design: {
+            id: 'oid3',
+            store_id: STORE_ID,
+            proof_key: 'k',
+            files_purged_at: null,
+            back_mode: 'same',
+            proof_back_key: null,
+            text_values: [
+              { element_id: 'namn', label: 'Namn', value: 'Anna' },
+              {
+                element_id: 'back:namn',
+                label: 'Namn',
+                value: 'Anna',
+                side: 'back',
+              },
+            ],
+          },
+        },
+      ],
+    });
+    // Single-sided: no `back` key at all (G0).
+    expect(shaped.items[0].design).toEqual({
+      id: 'oid1',
+      proof_url: 'https://api.test/proof-oid1',
+    });
+    expect(shaped.items[1].design).toEqual({
+      id: 'oid2',
+      proof_url: 'https://api.test/proof-oid2',
+      back: {
+        mode: 'other',
+        proof_url: 'https://api.test/proof-back-oid2',
+        texts: [{ label: 'Datum', value: '2026' }],
+      },
+    });
+    // 'same' prints the front again: no duplicated texts, proof when rendered.
+    expect(shaped.items[2].design).toEqual({
+      id: 'oid3',
+      proof_url: 'https://api.test/proof-oid3',
+      back: { mode: 'same', proof_url: null, texts: [] },
     });
   });
 

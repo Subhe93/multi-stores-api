@@ -78,6 +78,7 @@ import { DesignerAssetsService } from './designer-assets.service';
 import { designerErrors } from './designer-errors';
 import { DesignerPrintQueueService } from './designer-print-queue.service';
 import { releaseProofKey } from './designer-proof-keys';
+import { readBack } from './designer-back';
 import {
   normalizeDesignerSettings,
   type DesignerSettings,
@@ -169,6 +170,8 @@ interface DraftRow {
   id: string;
   store_id: string;
   proof_key: string | null;
+  /** M5.6: the back proof (null on single-sided drafts). */
+  proof_back_key?: string | null;
 }
 
 /** The OrderItemDesign columns R3 / R4 read (raw SQL, joined with Order). */
@@ -180,6 +183,8 @@ export interface OrderDesignRetentionRow {
   assets: unknown;
   print_files: unknown;
   proof_key: string | null;
+  /** M5.6: the back proof (null on single-sided rows). */
+  proof_back_key?: string | null;
   print_status: string;
   print_requested_at: Date | null;
   print_next_attempt_at: Date | null;
@@ -320,7 +325,7 @@ export class DesignerRetentionService implements OnModuleInit {
       let cursor = '';
       while (result.purged < run.limit && !run.outOfTime()) {
         const page = await this.prisma.$queryRaw<DraftRow[]>`
-          SELECT d."id", d."store_id", d."proof_key"
+          SELECT d."id", d."store_id", d."proof_key", d."proof_back_key"
           FROM "Design" d
           WHERE d."store_id" = ${store_id}
             AND d."id" > ${cursor}
@@ -393,16 +398,18 @@ export class DesignerRetentionService implements OnModuleInit {
     });
     if (claimed === 0) return 'raced';
     let ok = true;
-    if (d.proof_key) {
+    // M5.6: the back proof is released like the front one.
+    for (const key of [d.proof_key, d.proof_back_key]) {
+      if (!key) continue;
       try {
         // A terminal order design may still share the file (R4 frees it).
-        await releaseProofKey(this.prisma, this.storage, d.proof_key, {
+        await releaseProofKey(this.prisma, this.storage, key, {
           strict: true,
         });
       } catch (err) {
         ok = false;
         this.logger.error(
-          `Designer draft ${d.id}: proof ${d.proof_key} not deleted: ${String(err)}`,
+          `Designer draft ${d.id}: proof ${key} not deleted: ${String(err)}`,
         );
       }
     }
@@ -585,7 +592,8 @@ export class DesignerRetentionService implements OnModuleInit {
   ): Promise<(OrderDesignRetentionRow & { order_created_at: Date })[]> {
     return this.prisma.$queryRaw`
       SELECT d."id", d."store_id", d."order_id", d."design_id", d."assets",
-             d."print_files", d."proof_key", d."print_status"::text AS "print_status",
+             d."print_files", d."proof_key", d."proof_back_key",
+             d."print_status"::text AS "print_status",
              d."print_requested_at", d."print_next_attempt_at", d."terminal_at",
              d."originals_purged_at", o."status"::text AS "order_status",
              o."created_at" AS "order_created_at"
@@ -708,7 +716,13 @@ export class DesignerRetentionService implements OnModuleInit {
     if (!row.design_id) return;
     const d = await this.prisma.design.findUnique({
       where: { id: row.design_id },
-      select: { id: true, status: true, proof_key: true },
+      select: {
+        id: true,
+        status: true,
+        proof_key: true,
+        proof_back_key: true,
+        back: true,
+      },
     });
     if (!d || d.status !== DesignStatus.ORDERED) return;
     if (opts.strip) {
@@ -721,21 +735,42 @@ export class DesignerRetentionService implements OnModuleInit {
         },
       });
       if (others === 0) {
+        // M5.6: the texts / photo refs of an 'other' back go the same way
+        // (mode and template kept; single-sided designs: the same update).
+        const back = readBack(d.back) || null;
         await this.prisma.design.update({
           where: { id: d.id },
-          data: { state: STRIPPED_STATE as Prisma.InputJsonValue },
+          data: {
+            state: STRIPPED_STATE as Prisma.InputJsonValue,
+            ...(back?.mode === 'other'
+              ? {
+                  back: {
+                    ...back,
+                    state: STRIPPED_STATE,
+                  } as unknown as Prisma.InputJsonValue,
+                }
+              : {}),
+          },
         });
       }
     }
-    if (opts.proof && d.proof_key) {
-      await releaseProofKey(this.prisma, this.storage, d.proof_key, {
-        exceptDesignId: d.id,
-        exceptOrderDesignId: row.id,
-        strict: true,
-      });
+    if (opts.proof && (d.proof_key || d.proof_back_key)) {
+      for (const key of [d.proof_key, d.proof_back_key]) {
+        if (!key) continue;
+        await releaseProofKey(this.prisma, this.storage, key, {
+          exceptDesignId: d.id,
+          exceptOrderDesignId: row.id,
+          strict: true,
+        });
+      }
       await this.prisma.design.update({
         where: { id: d.id },
-        data: { proof_key: null, proof_state_sha: null },
+        data: {
+          proof_key: null,
+          proof_state_sha: null,
+          proof_back_key: null,
+          proof_back_sha: null,
+        },
       });
     }
   }
@@ -856,6 +891,11 @@ export class DesignerRetentionService implements OnModuleInit {
         exceptOrderDesignId: row.id,
         strict: true,
       });
+      // M5.6: the back proof of a double-sided row.
+      await releaseProofKey(this.prisma, this.storage, row.proof_back_key, {
+        exceptOrderDesignId: row.id,
+        strict: true,
+      });
       if (!row.originals_purged_at || forceOriginals) {
         kept.push(...(await this.deleteOriginals(row, now)));
       }
@@ -902,7 +942,8 @@ export class DesignerRetentionService implements OnModuleInit {
   }> {
     const rows = await this.prisma.$queryRaw<OrderDesignRetentionRow[]>`
       SELECT d."id", d."store_id", d."order_id", d."design_id", d."assets",
-             d."print_files", d."proof_key", d."print_status"::text AS "print_status",
+             d."print_files", d."proof_key", d."proof_back_key",
+             d."print_status"::text AS "print_status",
              d."print_requested_at", d."print_next_attempt_at", d."terminal_at",
              d."originals_purged_at", o."status"::text AS "order_status",
              d."files_purged_at"

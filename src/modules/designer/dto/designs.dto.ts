@@ -1,5 +1,7 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsIn,
   IsInt,
@@ -31,6 +33,11 @@ export class CreateDesignDto {
   @IsOptional()
   @IsObject()
   addons?: Record<string, unknown> | null;
+
+  /** M5.6 back side `{mode:'same'} | {mode:'other', template_id, template_version_id?, state}`. */
+  @IsOptional()
+  @IsObject()
+  back?: Record<string, unknown> | null;
 }
 
 /** `PATCH designer/s/:slug/designs/:id`. */
@@ -47,6 +54,11 @@ export class UpdateDesignDto {
   @IsOptional()
   @IsObject()
   addons?: Record<string, unknown> | null;
+
+  /** M5.6: replaces the back side when sent (null clears it; absent = kept). */
+  @IsOptional()
+  @IsObject()
+  back?: Record<string, unknown> | null;
 }
 
 /** Multipart fields of `POST designer/s/:slug/designs/:id/photos` (besides `file`). */
@@ -54,6 +66,11 @@ export class UploadDesignPhotoDto {
   @IsString()
   @Matches(/^[a-z0-9_-]{1,32}$/)
   element_id!: string;
+
+  /** M5.6: `back` puts the photo into a slot of the back template (default front). */
+  @IsOptional()
+  @IsIn(['front', 'back'])
+  side?: 'front' | 'back';
 }
 
 // ── Creator templates (designer/my/...) ─────────────────────────────────────
@@ -122,4 +139,14 @@ export class PutProductDesignerDto {
 export class PutProductAddonsDto {
   @IsObject()
   addons!: Record<string, unknown>;
+
+  /**
+   * M5.6: templates offered for the back side besides the product's own
+   * (store's PUBLISHED templates). Absent = unchanged; `[]` = own only.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsUUID('all', { each: true })
+  back_template_ids?: string[];
 }

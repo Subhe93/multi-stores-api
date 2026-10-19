@@ -19,6 +19,10 @@
  * selected ENABLED add-ons, priced from the product's CURRENT config in the
  * base currency (designer-addons.ts; callers convert it for a market).
  * Products without enabled add-ons keep a delta of 0 (G0).
+ * M5.6 double-sided: a design's `back` counts only while an enabling add-on
+ * is selected; 'other' needs an allowed PUBLISHED template and a COMPLETE
+ * back state (errors carry `back:<element_id>`), and the order snapshot
+ * freezes the back template spec + state next to the front ones.
  *
  * Stores without the app: one cached `isEnabled` per quote/order, and on a
  * server-cart add one primary-key lookup of `ProductDesigner` — nothing else.
@@ -51,20 +55,33 @@ import {
   slotMap,
   type DesignLineRef,
   type DesignVersionRow,
+  type StateIssue,
 } from './designs.service';
 import {
   DesignerRenderService,
   printFileExtras,
+  printFileSide,
   type PrintFile,
 } from './designer-render.service';
 import {
   addonDetailText,
   addonLabel,
+  backEnabledBy,
   orderAddonsCurrencyOf,
   orderAddonsOf,
   priceAddons,
   type PricedAddon,
 } from './designer-addons';
+import {
+  allowedBackTemplateIds,
+  backElementId,
+  backLabels,
+  readBack,
+  sideOf,
+  type BackMode,
+  type DesignBack,
+} from './designer-back';
+import { designBackProofSha } from './designer-render.service';
 import {
   designProofSha,
   designTextValues,
@@ -119,6 +136,20 @@ export interface DesignerLine {
   priceDelta: number;
   /** The priced add-ons behind `priceDelta` (base currency, per unit). */
   addons: PricedAddon[];
+  /** M5.6: the validated back side; null / absent on single-sided lines. */
+  back?: DesignerLineBack | null;
+}
+
+/** The validated back of a designer line (M5.6). */
+export interface DesignerLineBack {
+  mode: BackMode;
+  /** The back template version ('same': the front's). */
+  version: DesignVersionRow;
+  spec: TemplateSpecV1;
+  /** Normalized, complete back state ('same': the front state). */
+  state: DesignStateV1;
+  /** Photo asset per back slot id ('same': the front photos). */
+  photos: Map<string, DesignAsset>;
 }
 
 /** One `source:'DESIGN'` value row input (C19). */
@@ -145,6 +176,10 @@ export interface CartDesignView {
   invalid?: true;
   /** The error checkout would answer (`DESIGNER_*`), with `invalid`. */
   invalid_code?: DesignerErrorCode;
+  /** M5.6: the line is double-sided (only sent when true). */
+  double_sided?: true;
+  /** M5.6: signed back proof (with `double_sided`; null until rendered). */
+  proof_back_url?: string | null;
 }
 
 /** One add-on of a cart line's design (`label` resolved to the request locale). */
@@ -186,6 +221,13 @@ const LINK_TEMPLATE_SELECT = {
   select: { status: true, current_version_id: true },
 } as const;
 
+/** The link columns the back-side check reads (M5.6). */
+interface LinkBackInfo {
+  template_id: string;
+  back_template_ids: string[];
+  addons: unknown;
+}
+
 type LoadedDesign = Design & { template_version: DesignVersionRow };
 
 @Injectable()
@@ -211,11 +253,16 @@ export class DesignerCartService {
    */
   ensureProof(designId: string): void {
     if (!this.render || !isUuid(designId)) return;
-    this.render.renderDesignProof(designId).catch((e: unknown) => {
-      this.logger.debug(
-        `proof for design ${designId} not rendered: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    });
+    const render = this.render;
+    render
+      .renderDesignProof(designId)
+      // M5.6: the back proof follows (a no-op for single-sided designs).
+      .then(() => render.renderDesignBackProof(designId))
+      .catch((e: unknown) => {
+        this.logger.debug(
+          `proof for design ${designId} not rendered: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      });
   }
 
   // ── Errors ────────────────────────────────────────────────────────────────
@@ -287,6 +334,7 @@ export class DesignerCartService {
             template_id: true,
             enabled: true,
             addons: true,
+            back_template_ids: true,
             template: LINK_TEMPLATE_SELECT,
           },
         })
@@ -295,6 +343,16 @@ export class DesignerCartService {
       links.map((l) => [l.product_id, activeLinkTemplateId(l)]),
     );
     const addonsOf = new Map(links.map((l) => [l.product_id, l.addons]));
+    const backOf = new Map<string, LinkBackInfo>(
+      links.map((l) => [
+        l.product_id,
+        {
+          template_id: l.template_id,
+          back_template_ids: l.back_template_ids,
+          addons: l.addons,
+        },
+      ]),
+    );
     const verified =
       opts.verifiedDesignIds !== undefined && opts.verifiedDesignIds !== null
         ? new Set(opts.verifiedDesignIds)
@@ -327,6 +385,7 @@ export class DesignerCartService {
           ref: refOf(i),
           verified,
           linkAddons: productId ? addonsOf.get(productId) : null,
+          linkBack: productId ? backOf.get(productId) : null,
         }),
       );
     }
@@ -500,6 +559,7 @@ export class DesignerCartService {
               store_id: true,
               template_id: true,
               addons: true,
+              back_template_ids: true,
               template: LINK_TEMPLATE_SELECT,
             },
           })
@@ -517,6 +577,7 @@ export class DesignerCartService {
         mode: 'cart',
         customerId,
         linkAddons: templateId ? link?.addons : null,
+        linkBack: templateId && link ? link : null,
       },
     );
     // Claim: the design now belongs to the customer and is in a cart.
@@ -587,6 +648,8 @@ export class DesignerCartService {
       verified?: Set<string> | null;
       /** M5.5: the product link's `addons` (current config). */
       linkAddons?: unknown;
+      /** M5.6: the link's template + back templates (back-side check). */
+      linkBack?: LinkBackInfo | null;
     },
   ): Promise<DesignerLine> {
     const ref = opts.ref ?? {};
@@ -649,6 +712,12 @@ export class DesignerCartService {
       { requireComplete: true, ref },
     );
     const { template_version: version, ...row } = design;
+    const back = await this.assertBack(
+      row,
+      { version, spec, state, photos },
+      opts.linkBack ?? null,
+      ref,
+    );
     return {
       design: row,
       version,
@@ -656,7 +725,98 @@ export class DesignerCartService {
       state,
       photos,
       ...this.lineDelta(opts.linkAddons, row.addons),
+      ...(back ? { back } : {}),
     };
+  }
+
+  /**
+   * M5.6: the validated back of a line, or null. A stored back without an
+   * enabling add-on in the CURRENT selection / config is ignored (the
+   * merchant may have switched the add-on off). 'same' reuses the front;
+   * 'other' needs an allowed PUBLISHED template of the store (else
+   * DESIGNER_TEMPLATE_MISMATCH) and a complete state whose photos belong to
+   * the design (DESIGNER_STATE_INVALID with `back:<element_id>` details).
+   */
+  private async assertBack(
+    design: Design,
+    front: {
+      version: DesignVersionRow;
+      spec: TemplateSpecV1;
+      state: DesignStateV1;
+      photos: Map<string, DesignAsset>;
+    },
+    link: LinkBackInfo | null,
+    ref: DesignLineRef,
+  ): Promise<DesignerLineBack | null> {
+    const back = readBack(design.back) || null;
+    if (!back || !link || !backEnabledBy(link.addons, design.addons)) {
+      return null;
+    }
+    if (back.mode === 'same') {
+      return {
+        mode: 'same',
+        version: front.version,
+        spec: front.spec,
+        state: front.state,
+        photos: front.photos,
+      };
+    }
+    const mismatch = () =>
+      this.err(
+        'badRequest',
+        'DESIGNER_TEMPLATE_MISMATCH',
+        'The back-side template is no longer available for this product.',
+        ref,
+      );
+    if (!allowedBackTemplateIds(link).includes(back.template_id)) {
+      throw mismatch();
+    }
+    const template = await this.prisma.designTemplate.findUnique({
+      where: { id: back.template_id },
+      select: { store_id: true, status: true, current_version_id: true },
+    });
+    if (
+      !template ||
+      template.store_id !== design.store_id ||
+      template.status !== 'PUBLISHED' ||
+      !template.current_version_id
+    ) {
+      throw mismatch();
+    }
+    const version = await this.designs.loadVersion(back.template_version_id);
+    if (!version || version.template_id !== back.template_id) throw mismatch();
+    const spec = version.spec as unknown as TemplateSpecV1;
+    try {
+      const { state, photos } = await this.designs.validateDesignState(
+        design.store_id,
+        design.id,
+        spec,
+        back.state,
+        { requireComplete: true, ref },
+      );
+      return { mode: 'other', version, spec, state, photos };
+    } catch (e) {
+      // Prefix the element ids so the editor points at the back fields.
+      if (e instanceof HttpException) {
+        const body = e.getResponse() as Record<string, unknown>;
+        if (
+          body?.code === 'DESIGNER_STATE_INVALID' &&
+          Array.isArray(body.details)
+        ) {
+          throw new HttpException(
+            {
+              ...body,
+              details: body.details.map((d: StateIssue) => ({
+                ...d,
+                element_id: backElementId(String(d.element_id)),
+              })),
+            },
+            e.getStatus(),
+          );
+        }
+      }
+      throw e;
+    }
   }
 
   /**
@@ -745,6 +905,74 @@ export class DesignerCartService {
         designProofSha(line.design.state, line.version.id)
         ? line.design.proof_key
         : null;
+    // M5.6: the back (frozen spec + state, photo assets tagged `side`, text
+    // rows as `back:<id>` labelled "Baksida: …", and the back proof when it
+    // matches the stored back).
+    const back = line.back ?? null;
+    const backTextValues = back
+      ? designTextValues(back.spec, back.state, locale)
+      : [];
+    if (back && back.mode === 'other') {
+      const backSlots = slotMap(back.spec);
+      for (const [slotId, p] of Object.entries(back.state.photos)) {
+        const a = back.photos.get(slotId);
+        const slot = backSlots.get(slotId);
+        const dpi = slot ? effectiveDpi(slot, p.width, p.height, p.adj) : 0;
+        assets.push({
+          asset_id: p.asset_id,
+          role: 'photo',
+          side: 'back',
+          element_id: slotId,
+          width: p.width,
+          height: p.height,
+          sha256: a?.sha256 ?? null,
+          effective_dpi: Math.round(dpi * 10) / 10,
+          low_res: dpi > 0 && dpi < settings.min_effective_dpi_warning,
+        });
+      }
+      const backUses = specAssetUses(back.spec);
+      const backRows = await this.assets.findOwnedAssets(
+        o.storeId,
+        backUses.map((u) => u.asset_id),
+      );
+      for (const u of backUses) {
+        const a = backRows.get(u.asset_id);
+        assets.push({
+          asset_id: u.asset_id,
+          role: u.role,
+          side: 'back',
+          ...(u.element_id ? { element_id: u.element_id } : {}),
+          width: a?.width ?? null,
+          height: a?.height ?? null,
+          sha256: a?.sha256 ?? null,
+        });
+      }
+    }
+    const storedBack = readBack(line.design.back) || null;
+    const proofBackKey =
+      back &&
+      storedBack &&
+      line.design.proof_back_key &&
+      line.design.proof_back_sha ===
+        designBackProofSha(
+          storedBack.mode === 'same'
+            ? { mode: 'same', state: line.design.state }
+            : storedBack,
+          back.version.id,
+        )
+        ? line.design.proof_back_key
+        : null;
+    const backCreate: Partial<Prisma.OrderItemDesignUncheckedCreateWithoutOrder_itemInput> =
+      back
+        ? {
+            back_mode: back.mode,
+            back_template_id: back.version.template_id,
+            back_template_version_id: back.version.id,
+            back_template_spec: back.spec as unknown as Prisma.InputJsonValue,
+            back_state: back.state as unknown as Prisma.InputJsonValue,
+            proof_back_key: proofBackKey,
+          }
+        : {};
     return {
       create: {
         order_id: o.orderId,
@@ -755,11 +983,19 @@ export class DesignerCartService {
         template_spec: line.spec as unknown as Prisma.InputJsonValue,
         state: line.state as unknown as Prisma.InputJsonValue,
         assets: assets as unknown as Prisma.InputJsonValue,
-        text_values: textValues.map((t) => ({
-          element_id: t.element_id,
-          label: t.label,
-          value: t.value,
-        })) as unknown as Prisma.InputJsonValue,
+        text_values: [
+          ...textValues.map((t) => ({
+            element_id: t.element_id,
+            label: t.label,
+            value: t.value,
+          })),
+          ...backTextValues.map((t) => ({
+            element_id: backElementId(t.element_id),
+            label: t.label,
+            value: t.value,
+            side: 'back',
+          })),
+        ] as unknown as Prisma.InputJsonValue,
         // M5.5: per-unit add-ons in the ORDER currency (`o.addons`, the
         // converted lines priceLine used), else the base-currency lines.
         price_breakdown: {
@@ -778,6 +1014,7 @@ export class DesignerCartService {
         proof_key: proofKey,
         print_status: 'PENDING',
         print_requested_at: null,
+        ...backCreate,
       },
       // M5.5: each chosen add-on becomes one more DESIGN row ("Dubbelsidig:
       // +149 kr"), so emails, invoices and order views show it as a line
@@ -788,6 +1025,15 @@ export class DesignerCartService {
           label: t.labels,
           value: t.value,
         })),
+        // M5.6: back texts as "Baksida: <label>" rows (mode 'other' only:
+        // 'same' prints the front texts again).
+        ...(back?.mode === 'other'
+          ? backTextValues.map((t) => ({
+              element_id: backElementId(t.element_id),
+              label: backLabels(t.labels),
+              value: t.value,
+            }))
+          : []),
         ...(o.addons?.length && o.currency
           ? o.addons.map((a) => ({
               element_id: `addon:${a.key}`,
@@ -872,11 +1118,18 @@ export class DesignerCartService {
     });
     if (!rows.length) return out;
     const productIds = [...new Set(rows.map((d) => d.product_id))];
-    const photoIds = rows.flatMap((d) =>
-      Object.values(
+    const photoIds = rows.flatMap((d) => [
+      ...Object.values(
         ((d.state ?? {}) as Partial<DesignStateV1>).photos ?? {},
       ).map((p) => p?.asset_id),
-    );
+      // M5.6: back photos are checked the same way.
+      ...Object.values(
+        (() => {
+          const b = readBack(d.back) || null;
+          return b?.mode === 'other' ? (b.state.photos ?? {}) : {};
+        })(),
+      ).map((p) => p?.asset_id),
+    ]);
     const [links, slugs, photos] = await Promise.all([
       this.prisma.productDesigner.findMany({
         where: { product_id: { in: productIds } },
@@ -886,6 +1139,7 @@ export class DesignerCartService {
           enabled: true,
           template_id: true,
           addons: true,
+          back_template_ids: true,
           template: LINK_TEMPLATE_SELECT,
         },
       }),
@@ -905,6 +1159,26 @@ export class DesignerCartService {
     ]);
     const linkOf = new Map(links.map((l) => [l.product_id, l]));
     const photoOf = new Map(photos.map((p) => [p.id, p]));
+    // M5.6: the back template versions of 'other' backs, one query.
+    const backVersionIds = [
+      ...new Set(
+        rows
+          .map((d) => readBack(d.back) || null)
+          .filter(
+            (b): b is Extract<DesignBack, { mode: 'other' }> =>
+              b?.mode === 'other',
+          )
+          .map((b) => b.template_version_id)
+          .filter(isUuid),
+      ),
+    ];
+    const backVersions = backVersionIds.length
+      ? await this.prisma.designTemplateVersion.findMany({
+          where: { id: { in: backVersionIds } },
+          select: { id: true, template_id: true, spec: true },
+        })
+      : [];
+    const backVersionOf = new Map(backVersions.map((v) => [v.id, v]));
     const enabledOf = new Map<string, boolean>();
     for (const storeId of new Set(rows.map((d) => d.store_id))) {
       enabledOf.set(
@@ -942,6 +1216,33 @@ export class DesignerCartService {
       ) {
         invalid = 'DESIGNER_STATE_INVALID';
       }
+      // M5.6: a double-sided line needs an allowed, complete back too.
+      const back = readBack(d.back) || null;
+      const doubleSided =
+        !!back &&
+        !!link &&
+        activeTemplate !== null &&
+        backEnabledBy(link.addons, d.addons);
+      if (doubleSided && !invalid && back.mode === 'other') {
+        const v = backVersionOf.get(back.template_version_id);
+        if (
+          !v ||
+          v.template_id !== back.template_id ||
+          !allowedBackTemplateIds(link).includes(back.template_id)
+        ) {
+          invalid = 'DESIGNER_TEMPLATE_MISMATCH';
+        } else if (
+          !validateState(v.spec as unknown as TemplateSpecV1, back.state, {
+            requireComplete: true,
+          }).ok ||
+          Object.values(back.state.photos ?? {}).some((p) => {
+            const a = photoOf.get(p?.asset_id);
+            return !a || a.purged_at || a.design_id !== d.id;
+          })
+        ) {
+          invalid = 'DESIGNER_STATE_INVALID';
+        }
+      }
       const priced =
         activeTemplate && d.addons != null
           ? priceAddons(link?.addons, d.addons).lines
@@ -969,6 +1270,19 @@ export class DesignerCartService {
             }
           : {}),
         ...(invalid ? { invalid: true as const, invalid_code: invalid } : {}),
+        ...(doubleSided
+          ? {
+              double_sided: true as const,
+              proof_back_url:
+                d.proof_back_key && d.proof_back_sha
+                  ? this.urls.absolute(
+                      this.urls.signedPath('proof_back', d.id, d.store_id, {
+                        ttlSec: DESIGNER_LINK_TTL.editor,
+                      }),
+                    )
+                  : null,
+            }
+          : {}),
       });
     }
     await this.touchDesigns(rows);
@@ -1069,6 +1383,21 @@ export class DesignerCartService {
         })
       : [];
     const photoById = new Map(photos.map((p) => [p.id, p]));
+    // M5.6: names of the back templates (one query for the order).
+    const backTemplateIds = [
+      ...new Set(
+        rows.map((r) => r.back_template_id).filter((id): id is string => !!id),
+      ),
+    ];
+    const backTemplateNames = new Map(
+      (backTemplateIds.length
+        ? await this.prisma.designTemplate.findMany({
+            where: { id: { in: backTemplateIds } },
+            select: { id: true, name: true },
+          })
+        : []
+      ).map((t) => [t.id, t.name]),
+    );
     const day = 24 * 60 * 60 * 1000;
     const plus = (d: Date | null, days: number) =>
       d ? new Date(d.getTime() + days * day) : null;
@@ -1095,6 +1424,15 @@ export class DesignerCartService {
         ]
           .filter((d): d is Date => !!d)
           .sort((a, b) => a.getTime() - b.getTime())[0];
+        const textRows = asList(r.text_values);
+        const frontTexts = textRows.filter((t) => sideOf(t) === 'front');
+        const backTexts = textRows.filter((t) => sideOf(t) === 'back');
+        const files = asList(r.print_files) as unknown as PrintFile[];
+        const hasFile = (side: 'front' | 'back', format: 'png' | 'pdf') =>
+          r.print_status === 'READY' &&
+          !r.files_purged_at &&
+          files.some((f) => f.format === format && printFileSide(f) === side);
+        const itemBase = `/api/designer/my/orders/${order.id}/items/${r.order_item_id}/print`;
         return {
           order_item_id: r.order_item_id,
           order_item_design_id: r.id,
@@ -1112,14 +1450,51 @@ export class DesignerCartService {
               : this.urls.signedPath('oid_proof', r.id, r.store_id, {
                   ttlSec: DESIGNER_LINK_TTL.creator,
                 }),
-          text_values: r.text_values,
+          // M5.6: single-sided rows keep the raw column; double-sided rows
+          // split the front rows from the `back:` rows.
+          text_values: r.back_mode ? frontTexts : r.text_values,
+          ...(r.back_mode
+            ? {
+                back: {
+                  mode: r.back_mode,
+                  template_id: r.back_template_id,
+                  template_version_id: r.back_template_version_id,
+                  template_name: r.back_template_id
+                    ? (backTemplateNames.get(r.back_template_id) ?? null)
+                    : null,
+                  template_spec: r.back_template_spec,
+                  state: r.back_state,
+                  text_values: backTexts,
+                  assets: assets.filter((a) => sideOf(a) === 'back'),
+                  proof_url:
+                    !r.proof_back_key || r.files_purged_at
+                      ? null
+                      : this.urls.signedPath(
+                          'oid_proof_back',
+                          r.id,
+                          r.store_id,
+                          {
+                            ttlSec: DESIGNER_LINK_TTL.creator,
+                          },
+                        ),
+                  download_path: hasFile('back', 'png')
+                    ? `${itemBase}?side=back`
+                    : null,
+                  pdf_download_path: hasFile('back', 'pdf')
+                    ? `${itemBase}?format=pdf&side=back`
+                    : null,
+                },
+              }
+            : {}),
           /** M5.5: the add-ons sold with the line (order currency, per unit). */
           addons: orderAddonsOf(r.price_breakdown),
           addons_currency: orderAddonsCurrencyOf(r.price_breakdown),
           /** Frozen state (texts + photo refs) and template, for the dashboard preview. */
           state: r.state,
           template_spec: r.template_spec,
-          assets,
+          assets: r.back_mode
+            ? assets.filter((a) => sideOf(a) === 'front')
+            : assets,
           low_res: assets.some((a) => a.low_res === true),
           print: {
             status: r.print_status,
@@ -1130,6 +1505,7 @@ export class DesignerCartService {
             files: asList(r.print_files).map((f) => ({
               surface: f.surface,
               format: f.format,
+              ...(f.side ? { side: f.side } : {}),
               width_px: f.width_px,
               height_px: f.height_px,
               dpi: f.dpi,
@@ -1272,6 +1648,26 @@ export class DesignerCartService {
     if (!d || !d.proof_key || d.files_purged_at) return null;
     return this.urls.absolute(
       this.urls.signedPath('oid_proof', d.id, d.store_id, {
+        ttlSec: 24 * 60 * 60,
+      }),
+    );
+  }
+
+  /** M5.6: the same for the back proof of a double-sided line (null without one). */
+  orderItemBackProofUrl(
+    d:
+      | {
+          id: string;
+          store_id: string;
+          proof_back_key?: string | null;
+          files_purged_at: Date | null;
+        }
+      | null
+      | undefined,
+  ): string | null {
+    if (!d || !d.proof_back_key || d.files_purged_at) return null;
+    return this.urls.absolute(
+      this.urls.signedPath('oid_proof_back', d.id, d.store_id, {
         ttlSec: 24 * 60 * 60,
       }),
     );

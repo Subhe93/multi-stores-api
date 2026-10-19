@@ -100,6 +100,44 @@ describe('DesignerMailExtension', () => {
     });
   });
 
+  it('M5.6: a double-sided line adds `<item>:back` (oid_proof_back, same expiry); no back proof: front key only', async () => {
+    const created = new Date(Date.now() - DAY);
+    const t = build([
+      {
+        id: OID,
+        order_item_id: 'i1',
+        store_id: STORE,
+        shipped_at: null,
+        terminal_at: null,
+        created_at: created,
+        back_mode: 'other',
+        proof_back_key: 'designer/s/proof/x-back.webp',
+      },
+      {
+        id: '33333333-3333-4333-8333-333333333333',
+        order_item_id: 'i2',
+        store_id: STORE,
+        shipped_at: null,
+        terminal_at: null,
+        created_at: created,
+        back_mode: 'same',
+        proof_back_key: null,
+      },
+    ]);
+    const out = await t.ext.itemImages(order(), 'order_confirmation');
+    expect(Object.keys(out).sort()).toEqual(['i1', 'i1:back', 'i2']);
+    const token = out['i1:back'].slice(
+      out['i1:back'].indexOf(DESIGNER_FILES_PATH) + DESIGNER_FILES_PATH.length,
+    );
+    const check = t.urls.verify(token);
+    expect(check.ok && check.payload).toMatchObject({
+      k: 'oid_proof_back',
+      id: OID,
+      s: STORE,
+    });
+    expect(expOf(t.urls, out['i1:back'])).toBe(expOf(t.urls, out.i1));
+  });
+
   it('shipped long ago: the link still lives at least 7 days', async () => {
     const t = build([
       {

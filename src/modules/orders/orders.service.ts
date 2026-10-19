@@ -119,6 +119,7 @@ import {
   convertAddonLines,
   type PricedAddon,
 } from '../designer/designer-addons';
+import { backTextRowsOf } from '../designer/designer-back';
 import {
   DESIGNER_TRIGGERS_PORT,
   type DesignerTriggersPort,
@@ -675,6 +676,11 @@ export class OrdersService {
           store_id: true,
           proof_key: true,
           files_purged_at: true,
+          // M5.6 double-sided: the back proof + the frozen text rows (the
+          // `back:` ones are shown); all null / unused on single-sided rows.
+          back_mode: true,
+          proof_back_key: true,
+          text_values: true,
         },
       },
     },
@@ -738,17 +744,35 @@ export class OrdersService {
             store_id: string;
             proof_key: string | null;
             files_purged_at: Date | null;
+            back_mode?: string | null;
+            proof_back_key?: string | null;
+            text_values?: unknown;
           } | null;
         };
         const proofUrl =
           design && this.designerCart
             ? this.designerCart.orderItemProofUrl(design)
             : null;
+        // M5.6: a double-sided line adds its back (mode, signed back proof,
+        // back texts); single-sided lines keep the exact `{id, proof_url}`.
+        const back = design?.back_mode
+          ? {
+              back: {
+                mode: design.back_mode,
+                proof_url: this.designerCart
+                  ? this.designerCart.orderItemBackProofUrl(design)
+                  : null,
+                texts: backTextRowsOf(design.back_mode, design.text_values),
+              },
+            }
+          : {};
         return {
           ...line,
           image_url:
             proofUrl ?? this.resolveOrderItemImage(it as OrderItemImageSource),
-          ...(design ? { design: { id: design.id, proof_url: proofUrl } } : {}),
+          ...(design
+            ? { design: { id: design.id, proof_url: proofUrl, ...back } }
+            : {}),
         };
       }),
     } as T;
@@ -2699,6 +2723,9 @@ export class OrdersService {
                           store_id: true,
                           proof_key: true,
                           files_purged_at: true,
+                          back_mode: true,
+                          proof_back_key: true,
+                          text_values: true,
                         },
                       },
                     },

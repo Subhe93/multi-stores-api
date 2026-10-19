@@ -30,13 +30,16 @@ export const DESIGNER_URL_SECRET_ENV = 'DESIGNER_URL_SECRET';
  *                   background; creator dashboard / editor preview);
  * - `photo_preview` the private WebP preview of a customer photo (editor);
  * - `proof`         the proof of a Design (draft / cart);
- * - `oid_proof`     the frozen proof of an OrderItemDesign (emails, account).
+ * - `oid_proof`     the frozen proof of an OrderItemDesign (emails, account);
+ * - `proof_back` / `oid_proof_back` the same for the back side (M5.6).
  */
 export const DESIGNER_LINK_KINDS = [
   'asset',
   'photo_preview',
   'proof',
   'oid_proof',
+  'proof_back',
+  'oid_proof_back',
 ] as const;
 export type DesignerLinkKind = (typeof DESIGNER_LINK_KINDS)[number];
 

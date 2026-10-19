@@ -52,6 +52,8 @@ export const DESIGNER_ERROR_CODES = [
   'DESIGNER_UPLOAD_BUSY',
   // M5.5 add-ons: invalid add-on config (creator) or selection (customer).
   'DESIGNER_ADDONS_INVALID',
+  // M5.6: the back side (shape, template not offered / not published).
+  'DESIGNER_BACK_INVALID',
 ] as const;
 
 export type DesignerErrorCode = (typeof DESIGNER_ERROR_CODES)[number];

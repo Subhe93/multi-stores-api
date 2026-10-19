@@ -52,6 +52,52 @@ describe('renderOrderItems item image overrides (M4.2 WP10)', () => {
     expect(sha(plain)).toBe(GOLDEN_SV);
   });
 
+  it('M5.6: a `<item>:back` override adds the back image under the front one; alone it is ignored', () => {
+    const items = [{ ...base, id: 'i1' }];
+    const front = renderOrderItems(
+      items as never,
+      'SEK',
+      'sv',
+      'http://api',
+      undefined,
+      { i1: '/api/designer/files/front' },
+    );
+    const both = renderOrderItems(
+      items as never,
+      'SEK',
+      'sv',
+      'http://api',
+      undefined,
+      {
+        i1: '/api/designer/files/front',
+        'i1:back': '/api/designer/files/back',
+      },
+    );
+    expect(front.items_html).not.toContain('files/back');
+    expect(both.items_html).toContain(
+      'src="http://api/api/designer/files/front"',
+    );
+    expect(both.items_html).toContain(
+      'src="http://api/api/designer/files/back" alt="Tröja (Baksida)"',
+    );
+    expect(both.items_html.indexOf('files/back')).toBeGreaterThan(
+      both.items_html.indexOf('files/front'),
+    );
+    expect(both.items_text).toEqual(front.items_text);
+    // Without the front override the back key changes nothing.
+    const backOnly = renderOrderItems(
+      items as never,
+      'SEK',
+      'sv',
+      'http://api',
+      undefined,
+      { 'i1:back': '/api/designer/files/back' },
+    );
+    expect(backOnly).toEqual(
+      renderOrderItems(items as never, 'SEK', 'sv', 'http://api'),
+    );
+  });
+
   it('an override replaces only its line image and keeps its aspect', () => {
     const items = [
       { ...base, id: 'i1' },

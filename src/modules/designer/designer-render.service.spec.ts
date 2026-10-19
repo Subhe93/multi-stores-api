@@ -872,6 +872,131 @@ describe('DesignerRenderService.renderDesignProof', () => {
   });
 });
 
+describe('DesignerRenderService.renderPrint double-sided (M5.6, mock browser)', () => {
+  const backSpec = (): TemplateSpecV1 => {
+    const s = spec();
+    // A back template without the photo slot: only the deco + background.
+    s.surfaces[0].elements = s.surfaces[0].elements.filter(
+      (e) => e.type !== 'image_slot',
+    );
+    return s;
+  };
+  const doubleRow = (over: Record<string, unknown> = {}) =>
+    oid({
+      back_mode: 'other',
+      back_template_spec: backSpec() as never,
+      back_state: { v: 1, texts: { name: 'Baksida' }, photos: {} } as never,
+      proof_back_key: null,
+      ...over,
+    });
+
+  it('renders a second PNG with the -back suffix, tags every file with side, derives both proofs', async () => {
+    const b = build();
+    const res = await b.service.renderPrint(
+      doubleRow(),
+      new Date('2026-10-16'),
+    );
+    expect(b.calls).toHaveLength(2);
+    expect(b.calls[1].job.state).toEqual({
+      v: 1,
+      texts: { name: 'Baksida' },
+      photos: {},
+    });
+    // The back job carries no customer photo (the back template has no slot).
+    expect([...b.calls[1].files.keys()].sort()).toEqual(
+      [`a/${BG_PRINT}`, `a/${DECO}`, `f/${FONT}`].sort(),
+    );
+    expect(res.files.map((f) => [f.side, f.format, f.key])).toEqual([
+      ['front', 'png', `designer/${STORE}/2026/print/${OID}-front.png`],
+      ['back', 'png', `designer/${STORE}/2026/print/${OID}-back.png`],
+    ]);
+    expect(res.proof_key).toBe(`designer/${STORE}/2026/proof/${OID}.webp`);
+    expect(res.proof_back_key).toBe(
+      `designer/${STORE}/2026/proof/${OID}-back.webp`,
+    );
+    expect(b.written.has(res.proof_back_key!)).toBe(true);
+  });
+
+  it('mode same renders the front state on the front template again as the back file', async () => {
+    const b = build();
+    const res = await b.service.renderPrint(
+      doubleRow({
+        back_mode: 'same',
+        back_template_spec: spec() as never,
+        back_state: state() as never,
+        proof_back_key: 'existing',
+      }),
+      new Date('2026-10-16'),
+    );
+    expect(b.calls).toHaveLength(2);
+    expect(b.calls[1].job.state).toEqual(state());
+    expect(b.calls[1].job.spec).toEqual(spec());
+    expect(res.files.map((f) => f.key)).toEqual([
+      `designer/${STORE}/2026/print/${OID}-front.png`,
+      `designer/${STORE}/2026/print/${OID}-back.png`,
+    ]);
+    // An existing back proof is kept.
+    expect(res.proof_back_key).toBeNull();
+  });
+
+  it('PDF on: one PDF per side (never a second page)', async () => {
+    const b = build({ settings: { print_formats: ['png', 'pdf'] } });
+    const res = await b.service.renderPrint(
+      doubleRow(),
+      new Date('2026-10-16'),
+    );
+    expect(b.pdfCalls).toHaveLength(2);
+    expect(b.pdfCalls[1].job.title).toBe(`Print file ${OID} (back)`);
+    expect(res.files.map((f) => `${f.side}:${f.format}`)).toEqual([
+      'front:png',
+      'front:pdf',
+      'back:png',
+      'back:pdf',
+    ]);
+    expect(res.files[3].key).toBe(
+      `designer/${STORE}/2026/print/${OID}-back.pdf`,
+    );
+  });
+
+  it('G0: a single-sided row has no side on its files and no proof_back_key', async () => {
+    const b = build();
+    const res = await b.service.renderPrint(oid(), new Date('2026-10-16'));
+    expect(res.files[0]).not.toHaveProperty('side');
+    expect(res).not.toHaveProperty('proof_back_key');
+    expect(b.calls).toHaveLength(1);
+  });
+
+  it('renderDesignBackProof: null without a back; mode same renders the front again under proof_back_key', async () => {
+    const b = build();
+    const row = {
+      id: DESIGN,
+      store_id: STORE,
+      state: state(),
+      back: null as unknown,
+      state_version: 2,
+      proof_back_key: null,
+      proof_back_sha: null,
+      template_version_id: 'v1',
+      template_version: { spec: spec() },
+    };
+    b.prisma.design.findUnique.mockResolvedValue(row);
+    expect(await b.service.renderDesignBackProof(DESIGN)).toBeNull();
+    row.back = { mode: 'same' };
+    const res = await b.service.renderDesignBackProof(DESIGN, {
+      now: new Date('2026-10-16'),
+    });
+    expect(res?.reused).toBe(false);
+    expect(res?.proof_url).toBe(`/api/designer/files/proof_back.${DESIGN}`);
+    expect(b.calls[0].job).toMatchObject({ mode: 'proof', state: state() });
+    expect(b.prisma.design.updateMany).toHaveBeenCalledWith({
+      where: { id: DESIGN, state_version: 2 },
+      data: expect.objectContaining({
+        proof_back_key: res!.proof_key,
+      }) as unknown,
+    });
+  });
+});
+
 describe('scale clamps', () => {
   it('a normal template keeps its scales (golden parity)', () => {
     expect(proofScale(spec())).toBe(2);

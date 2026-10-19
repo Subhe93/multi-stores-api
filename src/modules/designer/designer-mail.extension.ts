@@ -32,6 +32,10 @@ export const DESIGNER_MAIL_MIN_LINK_DAYS = 7;
  * `DESIGNER_MAIL_LINK_MAX_DAYS`), so a leaked email link does not live for a
  * year. After the purge the route answers 410, like the dashboard link.
  *
+ * Double-sided lines (M5.6) add a second override under `<item id>:back`
+ * (the signed `oid_proof_back` link) that the items block shows under the
+ * front proof; single-sided lines give the front key only, as before.
+ *
  * Orders without designs give no overrides, so their emails are unchanged.
  * A store that never had a designed order (and whose app is off) costs no
  * query per email: one cached isEnabled plus a cached existence probe
@@ -74,6 +78,8 @@ export class DesignerMailExtension implements OrderMailExtension, OnModuleInit {
         shipped_at: true,
         terminal_at: true,
         created_at: true,
+        back_mode: true,
+        proof_back_key: true,
       },
     });
     if (!rows.length) return out;
@@ -89,14 +95,23 @@ export class DesignerMailExtension implements OrderMailExtension, OnModuleInit {
           plus(r.created_at, DESIGNER_HARD_CAP_DAYS),
         ].filter((t): t is number => t !== null),
       );
+      const expiresAt = designerMailLinkExpiry(purgeAt, now, {
+        minDays: DESIGNER_MAIL_MIN_LINK_DAYS,
+      });
       out[r.order_item_id] = this.urls.absolute(
         this.urls.signedPath('oid_proof', r.id, r.store_id, {
-          expiresAt: designerMailLinkExpiry(purgeAt, now, {
-            minDays: DESIGNER_MAIL_MIN_LINK_DAYS,
-          }),
+          expiresAt,
           now,
         }),
       );
+      if (r.back_mode && r.proof_back_key) {
+        out[`${r.order_item_id}:back`] = this.urls.absolute(
+          this.urls.signedPath('oid_proof_back', r.id, r.store_id, {
+            expiresAt,
+            now,
+          }),
+        );
+      }
     }
     return out;
   }

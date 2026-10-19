@@ -47,6 +47,10 @@ export function matches(row: Row, where: Row | undefined): boolean {
   return Object.entries(where).every(([k, c]) => {
     // Nested relation filters are ignored by the double.
     if (k === 'template_version' || k === 'order_item') return true;
+    // `OR: [{...}, {...}]` (proof-key release checks both proof columns).
+    if (k === 'OR' && Array.isArray(c)) {
+      return c.some((w) => matches(row, w as Row));
+    }
     return cond(row[k], c);
   });
 }

@@ -5,7 +5,9 @@
  * Config (creator side, `PUT designer/my/products/:id/addons`):
  *   { v: 2, items: [{ key, type: 'toggle'|'quantity', label: {locale: text},
  *     price (store base currency, >= 0), max_qty? (quantity, 1..20),
- *     enabled, sort? }], imported?: <legacy NPP shape, server-kept> }
+ *     enabled, sort?, enables_back? }], imported?: <legacy NPP shape, server-kept> }
+ * `enables_back` (M5.6): choosing the add-on opens the "back side" block of
+ * the editor (designer-back.ts); the `double` key enables it by default.
  * The legacy NPP import shape `{double, raincover, poster, welcome}` (all
  * disabled, never priced) is still read: it only yields "suggested presets"
  * the dashboard can adopt in one click. Nothing is priced unless a v2 item
@@ -36,6 +38,8 @@ export interface DesignerAddonItem {
   max_qty?: number;
   enabled: boolean;
   sort?: number;
+  /** M5.6: selecting this add-on enables the back side (default: key `double`). */
+  enables_back?: boolean;
 }
 
 export interface DesignerAddonsV2 {
@@ -57,7 +61,8 @@ export interface AddonIssue {
     | 'price'
     | 'max_qty'
     | 'enabled'
-    | 'sort';
+    | 'sort'
+    | 'enables_back';
 }
 
 export type AddonSelection = Record<string, number>;
@@ -87,6 +92,7 @@ const ITEM_KEYS = new Set([
   'max_qty',
   'enabled',
   'sort',
+  'enables_back',
 ]);
 
 /**
@@ -180,6 +186,13 @@ export function validateAddonsConfig(
       errors.push({ path: `${p}.enabled`, rule: 'enabled' });
     }
     if (
+      it.enables_back !== undefined &&
+      it.enables_back !== null &&
+      typeof it.enables_back !== 'boolean'
+    ) {
+      errors.push({ path: `${p}.enables_back`, rule: 'enables_back' });
+    }
+    if (
       it.sort !== undefined &&
       it.sort !== null &&
       !(
@@ -198,6 +211,10 @@ export function validateAddonsConfig(
       ...(maxQty !== undefined ? { max_qty: maxQty } : {}),
       enabled: it.enabled === true,
       sort: Number.isInteger(it.sort) ? (it.sort as number) : i,
+      // Only an explicit flag is stored (G0: unchanged configs round-trip).
+      ...(typeof it.enables_back === 'boolean'
+        ? { enables_back: it.enables_back }
+        : {}),
       _i: i,
     });
   });
@@ -230,6 +247,27 @@ export function readAddonsConfig(stored: unknown): DesignerAddonsV2 | null {
 /** Enabled items of a stored value, in display order (empty when none). */
 export function enabledAddons(stored: unknown): DesignerAddonItem[] {
   return (readAddonsConfig(stored)?.items ?? []).filter((i) => i.enabled);
+}
+
+/**
+ * M5.6: whether choosing this add-on enables the back side. An explicit
+ * `enables_back` wins; otherwise only the NPP `double` preset key does.
+ */
+export function addonEnablesBack(
+  item: Pick<DesignerAddonItem, 'key' | 'enables_back'>,
+): boolean {
+  return item.enables_back ?? item.key === 'double';
+}
+
+/**
+ * M5.6: true when the selection holds an ENABLED add-on of the config that
+ * enables the back side (the gate of `Design.back`).
+ */
+export function backEnabledBy(stored: unknown, selection: unknown): boolean {
+  const sel = sanitizeSelection(selection) ?? {};
+  return enabledAddons(stored).some(
+    (it) => addonEnablesBack(it) && (sel[it.key] ?? 0) > 0,
+  );
 }
 
 /** The legacy NPP block of a stored value (top level, or kept under v2 `imported`). */
@@ -304,6 +342,8 @@ export function legacyAddonPresets(stored: unknown): DesignerAddonItem[] {
       ...(key === 'poster' ? { max_qty: 10 } : {}),
       enabled: false,
       sort: out.length,
+      // M5.6: the double-sided preset opens the back-side block.
+      ...(key === 'double' ? { enables_back: true } : {}),
     });
   }
   return out;

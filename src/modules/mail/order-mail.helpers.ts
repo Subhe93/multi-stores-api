@@ -24,6 +24,7 @@ const ITEMS_PHRASES = {
   en: {
     product: 'Product',
     qty: 'Qty',
+    back: 'Back',
     price: 'Price',
     subtotal: 'Subtotal',
     shipping: 'Shipping',
@@ -46,6 +47,7 @@ const ITEMS_PHRASES = {
   ar: {
     product: 'المنتج',
     qty: 'الكمية',
+    back: 'الوجه الخلفي',
     price: 'السعر',
     subtotal: 'المجموع الفرعي',
     shipping: 'الشحن',
@@ -68,6 +70,7 @@ const ITEMS_PHRASES = {
   tr: {
     product: 'Ürün',
     qty: 'Adet',
+    back: 'Arka yüz',
     price: 'Fiyat',
     subtotal: 'Ara toplam',
     shipping: 'Kargo',
@@ -90,6 +93,7 @@ const ITEMS_PHRASES = {
   de: {
     product: 'Produkt',
     qty: 'Menge',
+    back: 'Rückseite',
     price: 'Preis',
     subtotal: 'Zwischensumme',
     shipping: 'Versand',
@@ -112,6 +116,7 @@ const ITEMS_PHRASES = {
   fr: {
     product: 'Produit',
     qty: 'Qté',
+    back: 'Verso',
     price: 'Prix',
     subtotal: 'Sous-total',
     shipping: 'Livraison',
@@ -134,6 +139,7 @@ const ITEMS_PHRASES = {
   sv: {
     product: 'Produkt',
     qty: 'Antal',
+    back: 'Baksida',
     price: 'Pris',
     subtotal: 'Delsumma',
     shipping: 'Frakt',
@@ -526,7 +532,8 @@ export function renderOrderItems(
   /**
    * Per order item image that wins over the product images (an app's
    * `itemImages` hook, e.g. the designer proof). Absent or empty: the output
-   * is byte-identical to the renderer without overrides.
+   * is byte-identical to the renderer without overrides. A `<item id>:back`
+   * entry (M5.6 double-sided) shows that image under the line's image.
    */
   imageOverrides?: Readonly<Record<string, string>>,
 ): { items_html: string; items_text: string } {
@@ -557,6 +564,8 @@ export function renderOrderItems(
         item.custom_product?.product?.images?.[0]?.url ||
         item.product?.images?.[0]?.url;
       const override = item.id ? imageOverrides?.[item.id] : undefined;
+      const backOverride =
+        override && item.id ? imageOverrides?.[`${item.id}:back`] : undefined;
       const imgUrl = override
         ? absoluteUrl(override, publicBase)
         : imgPath
@@ -580,7 +589,11 @@ export function renderOrderItems(
     ${
       override
         ? // An override keeps its own aspect ratio (a portrait proof is never squashed).
-          `<img src="${esc(imgUrl)}" alt="${esc(title)}" width="64" style="display:block;width:64px;height:auto;border-radius:6px;border:1px solid #e4e4e7;" />`
+          `<img src="${esc(imgUrl)}" alt="${esc(title)}" width="64" style="display:block;width:64px;height:auto;border-radius:6px;border:1px solid #e4e4e7;" />${
+            backOverride
+              ? `<img src="${esc(absoluteUrl(backOverride, publicBase))}" alt="${esc(title)} (${phrases.back})" width="64" style="display:block;width:64px;height:auto;margin-top:4px;border-radius:6px;border:1px solid #e4e4e7;" />`
+              : ''
+          }`
         : imgUrl
           ? `<img src="${esc(imgUrl)}" alt="${esc(title)}" width="64" height="64" style="display:block;border-radius:6px;border:1px solid #e4e4e7;object-fit:cover;" />`
           : ''

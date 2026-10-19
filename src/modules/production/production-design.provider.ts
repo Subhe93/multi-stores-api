@@ -69,16 +69,30 @@ export class DesignProductionProvider implements ProductionSourceProvider {
         print_status: DesignPrintStatus.READY,
         files_purged_at: null,
       },
-      select: { order_item_id: true, store_id: true },
+      select: { order_item_id: true, store_id: true, back_mode: true },
       orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
     });
     if (rows.length === 0 || !(await this.enabled(rows[0].store_id))) {
       return [];
     }
-    return rows.map((r, i) => ({
-      order_item_id: r.order_item_id,
-      url: `/api/designer/my/orders/${orderId}/items/${r.order_item_id}/print`,
-      label: `${DESIGN_CHECK_LABEL} ${i + 1}`,
-    }));
+    // M5.6: a double-sided line lists its back file right after the front
+    // one ("Print file 2 (back)"); single-sided lines are unchanged.
+    return rows.flatMap((r, i) => {
+      const base = `/api/designer/my/orders/${orderId}/items/${r.order_item_id}/print`;
+      const front = {
+        order_item_id: r.order_item_id,
+        url: base,
+        label: `${DESIGN_CHECK_LABEL} ${i + 1}`,
+      };
+      if (!r.back_mode) return [front];
+      return [
+        front,
+        {
+          order_item_id: r.order_item_id,
+          url: `${base}?side=back`,
+          label: `${DESIGN_CHECK_LABEL} ${i + 1} (back)`,
+        },
+      ];
+    });
   }
 }

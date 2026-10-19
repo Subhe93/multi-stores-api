@@ -52,6 +52,7 @@ import { normalizeDesignerSettings } from './designer-settings';
 import { absoluteApiUrl, designerAssetPath } from './designer-urls';
 import { blankTemplateSpec, isUuid, specSha256 } from './designs.util';
 import {
+  addonEnablesBack,
   enabledAddons,
   legacyAddonPresets,
   readAddonsConfig,
@@ -59,6 +60,7 @@ import {
   validateAddonsConfig,
   type AddonType,
 } from './designer-addons';
+import { allowedBackTemplateIds } from './designer-back';
 import {
   validateSpec,
   type AssetRef,
@@ -150,6 +152,11 @@ export interface StorefrontDesignerBlock {
    * product has none, so the payload is unchanged (G0).
    */
   addons?: StorefrontAddon[];
+  /**
+   * M5.6: the templates offered for the back side (own template first),
+   * only when an enabled add-on enables the back; absent otherwise (G0).
+   */
+  back_templates?: StorefrontBackTemplate[];
 }
 
 export interface StorefrontAddon {
@@ -158,6 +165,21 @@ export interface StorefrontAddon {
   label: Record<string, string>;
   price: number;
   max_qty?: number;
+  /** M5.6: choosing it opens the back-side block (only sent when true). */
+  enables_back?: true;
+}
+
+export interface StorefrontBackTemplate {
+  template_id: string;
+  template_version_id: string;
+  name: string;
+  thumbnail_url: string | null;
+}
+
+/** `GET designer/s/:slug/products/:productId/back-templates/:templateId`. */
+export interface StorefrontBackTemplatePayload extends StorefrontBackTemplate {
+  spec_public: Record<string, unknown>;
+  fonts: { family: string; weight: number; style: string; url: string }[];
 }
 
 @Injectable()
@@ -779,6 +801,8 @@ export class DesignerTemplatesService {
               // suggested disabled presets of imported NPP data.
               addons: readAddonsConfig(link.addons) ?? { v: 2, items: [] },
               addon_presets: legacyAddonPresets(link.addons),
+              // M5.6: templates offered for the back besides the own one.
+              back_template_ids: link.back_template_ids ?? [],
               updated_at: link.updated_at,
             }
           : null,
@@ -854,7 +878,12 @@ export class DesignerTemplatesService {
    * (pick a template first); imported NPP data is kept beside it so the
    * presets stay available. Storefront pages are revalidated.
    */
-  async putProductAddons(storeId: string, productId: string, raw: unknown) {
+  async putProductAddons(
+    storeId: string,
+    productId: string,
+    raw: unknown,
+    backTemplateIds?: string[],
+  ) {
     await this.ownProduct(storeId, productId);
     const res = validateAddonsConfig(raw);
     if (!res.ok) {
@@ -866,13 +895,37 @@ export class DesignerTemplatesService {
     }
     const link = await this.prisma.productDesigner.findUnique({
       where: { product_id: productId },
-      select: { store_id: true, addons: true },
+      select: { store_id: true, addons: true, template_id: true },
     });
     if (!link || link.store_id !== storeId) {
       throw designerErrors.notFound(
         'DESIGNER_DESIGN_NOT_FOUND',
         'Link the product to a template first.',
       );
+    }
+    // M5.6: back templates must be the store's PUBLISHED templates (the own
+    // template is always offered and never listed twice).
+    let backIds: string[] | undefined;
+    if (backTemplateIds !== undefined) {
+      backIds = [
+        ...new Set(backTemplateIds.filter((id) => id !== link.template_id)),
+      ];
+      if (backIds.length) {
+        const ok = await this.prisma.designTemplate.count({
+          where: {
+            id: { in: backIds },
+            store_id: storeId,
+            status: DesignTemplateStatus.PUBLISHED,
+            current_version_id: { not: null },
+          },
+        });
+        if (ok !== backIds.length) {
+          throw designerErrors.badRequest(
+            'DESIGNER_TEMPLATE_MISMATCH',
+            'Back templates must be published templates of this store.',
+          );
+        }
+      }
     }
     await this.prisma.productDesigner.update({
       where: { product_id: productId },
@@ -881,6 +934,7 @@ export class DesignerTemplatesService {
           res.value,
           link.addons,
         ) as Prisma.InputJsonValue,
+        ...(backIds !== undefined ? { back_template_ids: backIds } : {}),
       },
     });
     this.revalidate(storeId);
@@ -961,7 +1015,12 @@ export class DesignerTemplatesService {
       label: a.label,
       price: a.price,
       ...(a.type === 'quantity' ? { max_qty: a.max_qty ?? 1 } : {}),
+      ...(addonEnablesBack(a) ? { enables_back: true as const } : {}),
     }));
+    // M5.6: the back templates only when some enabled add-on opens the back.
+    const backTemplates = addons.some((a) => a.enables_back)
+      ? await this.backTemplatesOf(storeId, link)
+      : [];
     return {
       template_id: link.template_id,
       template_version_id: version.id,
@@ -977,6 +1036,118 @@ export class DesignerTemplatesService {
         min_effective_dpi_warning: settings.min_effective_dpi_warning,
       },
       ...(addons.length ? { addons } : {}),
+      ...(backTemplates.length ? { back_templates: backTemplates } : {}),
+    };
+  }
+
+  /**
+   * M5.6: the templates a product offers for the back (own template first,
+   * then `back_template_ids`), each PUBLISHED with a current version and of
+   * this store; others are skipped silently.
+   */
+  private async backTemplatesOf(
+    storeId: string,
+    link: { template_id: string; back_template_ids?: string[] | null },
+  ): Promise<StorefrontBackTemplate[]> {
+    const ids = allowedBackTemplateIds(link);
+    const rows = await this.prisma.designTemplate.findMany({
+      where: {
+        id: { in: ids },
+        store_id: storeId,
+        status: DesignTemplateStatus.PUBLISHED,
+        current_version_id: { not: null },
+      },
+      select: { id: true, name: true, current_version_id: true },
+    });
+    const versions = await this.prisma.designTemplateVersion.findMany({
+      where: {
+        id: {
+          in: rows
+            .map((r) => r.current_version_id)
+            .filter((v): v is string => !!v),
+        },
+      },
+      select: { id: true, thumbnail_url: true },
+    });
+    const thumbOf = new Map(versions.map((v) => [v.id, v.thumbnail_url]));
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const out: StorefrontBackTemplate[] = [];
+    for (const id of ids) {
+      const r = byId.get(id);
+      if (!r || !r.current_version_id) continue;
+      const thumb = thumbOf.get(r.current_version_id) ?? null;
+      out.push({
+        template_id: r.id,
+        template_version_id: r.current_version_id,
+        name: r.name,
+        thumbnail_url: thumb ? absoluteApiUrl(thumb) : null,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * M5.6: `GET designer/s/:slug/products/:productId/back-templates/:id`:
+   * the public spec + fonts of one allowed back template (its current
+   * version), what the editor needs once the customer picked it. 404
+   * DESIGNER_TEMPLATE_NOT_FOUND when the product does not offer it.
+   */
+  async backTemplatePayload(
+    storeId: string,
+    productId: string,
+    templateId: string,
+  ): Promise<StorefrontBackTemplatePayload> {
+    const link = isUuid(productId)
+      ? await this.prisma.productDesigner.findUnique({
+          where: { product_id: productId },
+          select: {
+            store_id: true,
+            enabled: true,
+            template_id: true,
+            back_template_ids: true,
+          },
+        })
+      : null;
+    if (
+      !link ||
+      !link.enabled ||
+      link.store_id !== storeId ||
+      !isUuid(templateId) ||
+      !allowedBackTemplateIds(link).includes(templateId)
+    ) {
+      throw this.notFound();
+    }
+    const [entry] = await this.backTemplatesOf(storeId, {
+      template_id: templateId,
+    });
+    if (!entry) throw this.notFound();
+    const version = await this.prisma.designTemplateVersion.findUnique({
+      where: { id: entry.template_version_id },
+      select: { spec: true },
+    });
+    if (!version) throw this.notFound();
+    const spec = version.spec as unknown as TemplateSpecV1;
+    const ids: string[] = [];
+    for (const s of spec.surfaces ?? []) {
+      if (s.background?.web?.asset_id) ids.push(s.background.web.asset_id);
+      for (const el of s.elements ?? []) {
+        if (el.type === 'image' && el.asset?.asset_id)
+          ids.push(el.asset.asset_id);
+      }
+    }
+    const [rows, fonts] = await Promise.all([
+      this.assets.findOwnedAssets(storeId, ids),
+      this.fonts.fontsForSpec(storeId, spec),
+    ]);
+    return {
+      ...entry,
+      spec_public: publicSpec(spec, rows),
+      fonts: fonts.map((f) => ({
+        family: f.family,
+        weight: f.weight,
+        style: f.style,
+        url: absoluteApiUrl(f.url),
+      })),
     };
   }
 }

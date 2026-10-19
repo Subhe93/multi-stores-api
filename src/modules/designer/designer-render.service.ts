@@ -47,6 +47,12 @@
  *   store's primary locale (proof), falling back to the store's primary.
  * - The order proof is derived from the print PNG (sharp downscale) when the
  *   snapshot did not reuse the design's proof.
+ * - Double-sided (M5.6): a row with a frozen back (`back_template_spec` +
+ *   `back_state`, the front again for mode 'same') renders a second set of
+ *   files with the `-back` suffix (PNG, and the PDF as a separate file so
+ *   the per-file tooling is unchanged); every print file of such a row
+ *   carries `side`. The back proof is derived the same way
+ *   (`proof_back_key`). Single-sided rows are byte-identical to before.
  * - Determinism: inputs are byte-identical per job, prescaling and encoding
  *   are deterministic, and the canvas runs in software raster, so the same
  *   input gives the same pixels (verified by the real-browser spec).
@@ -76,7 +82,8 @@ import { designerErrorCode, designerErrors } from './designer-errors';
 import { DesignerFontsService } from './designer-fonts.service';
 import { releaseProofKey, replaceDesignProofKey } from './designer-proof-keys';
 import { DESIGNER_LINK_TTL, DesignerUrlsService } from './designer-urls';
-import { designProofSha } from './designs.util';
+import { canonicalJson, designProofSha, sha256Hex } from './designs.util';
+import { readBack, type DesignSide } from './designer-back';
 import {
   canvasSize,
   coverLayout,
@@ -133,6 +140,8 @@ export const PROOF_STORE_WAIT_MS = 5_000;
 export interface PrintFile {
   surface: 'front';
   format: 'png' | 'pdf';
+  /** M5.6: set on every file of a double-sided row; absent = front. */
+  side?: DesignSide;
   key: string;
   /** PNG: the canvas. PDF: the page at the print scale (nominal). */
   width_px: number;
@@ -214,7 +223,19 @@ export interface PrintRenderResult {
   files: PrintFile[];
   /** Set when the order proof was (re)created by this render. */
   proof_key: string | null;
+  /** M5.6: set when the back proof was (re)created by this render. */
+  proof_back_key?: string | null;
   report: RenderReport;
+}
+
+/** Side of a print file (absent on single-sided rows). */
+export function printFileSide(f: Pick<PrintFile, 'side'>): DesignSide {
+  return f.side === 'back' ? 'back' : 'front';
+}
+
+/** M5.6: sha of a design's back for proof reuse (mode + state + version). */
+export function designBackProofSha(back: unknown, versionId: string): string {
+  return sha256Hex(canonicalJson(back) + versionId + ':back');
 }
 
 /**
@@ -414,7 +435,7 @@ export function imageNeeds(
   return [...needs.values()];
 }
 
-/** The order snapshot fields a render reads. */
+/** The order snapshot fields a render reads (the back ones optional: M5.6). */
 export type OrderDesignRow = Pick<
   OrderItemDesign,
   | 'id'
@@ -425,7 +446,20 @@ export type OrderDesignRow = Pick<
   | 'proof_key'
   | 'files_purged_at'
   | 'originals_purged_at'
->;
+> &
+  Partial<
+    Pick<
+      OrderItemDesign,
+      'back_mode' | 'back_template_spec' | 'back_state' | 'proof_back_key'
+    >
+  >;
+
+/** True when the row carries a frozen back side to print. */
+export function rowHasBack(
+  row: Pick<OrderDesignRow, 'back_template_spec' | 'back_state'>,
+): boolean {
+  return !!row.back_template_spec && !!row.back_state;
+}
 
 @Injectable()
 export class DesignerRenderService implements OnModuleDestroy {
@@ -484,106 +518,165 @@ export class DesignerRenderService implements OnModuleDestroy {
       }
       const spec = row.template_spec as unknown as TemplateSpecV1;
       const state = row.state as unknown as DesignStateV1;
-      const scale = printScale(spec);
       const locale = await this.orderLocale(row.order_id, row.store_id);
-      const canvas = await this.renderCanvas(row.store_id, spec, state, {
-        mode: 'print',
-        scale,
-        type: 'image/png',
-        timeoutMs: PRINT_TIMEOUT_MS,
-        locale,
-      });
-      const expected = canvasSize(spec, scale);
-      if (
-        canvas.width !== expected.width ||
-        canvas.height !== expected.height
-      ) {
-        throw new DesignerRenderJobError(
-          `Unexpected canvas size ${canvas.width}x${canvas.height}`,
-          false,
-        );
-      }
-      const dpi = Math.round(25.4 * scale * 1000) / 1000;
-      const png = await finalizePrintPng(canvas.data, dpi);
-      const key = designerStorageKey(row.store_id, 'print', row.id, 'png', {
-        at: now,
-        suffix: 'front',
-      });
-      await this.storage.write(key, png);
-      const files: PrintFile[] = [
-        {
-          surface: 'front',
-          format: 'png',
-          key,
-          width_px: canvas.width,
-          height_px: canvas.height,
-          dpi,
-          bytes: png.length,
-          sha256: sha256(png),
-        },
-      ];
       const settings = await this.printSettings(row.store_id);
-      if (settings.print_formats.includes('pdf')) {
-        const geometry = printPdfGeometry(spec, {
-          cropMarks: settings.print_crop_marks,
-        });
-        // The PDF canvases span the bleed box (the whole page with crop
-        // marks), which can exceed the canvas limits the PNG scale was
-        // clamped to; the output is vector, so only the coordinate scale
-        // drops (huge templates only).
-        const largest = geometry.crop_marks
-          ? geometry.page_mm
-          : geometry.bleed_box_mm;
-        const pdfScale = clampScale(
-          { width: largest.width, height: largest.height } as TemplateSpecV1,
-          scale,
-          PRINT_MAX_PIXELS,
-        );
-        const pdf = await this.renderPrintPdf(row.store_id, spec, state, {
-          scale: pdfScale,
+      const double = rowHasBack(row);
+      const front = await this.renderPrintSide(row, spec, state, {
+        side: 'front',
+        tagged: double,
+        now,
+        locale,
+        settings,
+        proof: !row.proof_key,
+      });
+      if (!double) {
+        return {
+          files: front.files,
+          proof_key: front.proof_key,
+          report: front.report,
+        };
+      }
+      // M5.6: the back (the front again for mode 'same': the workshop always
+      // gets one file per side) as a second set of files.
+      const back = await this.renderPrintSide(
+        row,
+        row.back_template_spec as unknown as TemplateSpecV1,
+        row.back_state as unknown as DesignStateV1,
+        {
+          side: 'back',
+          tagged: true,
+          now,
           locale,
-          geometry,
-          title: `Print file ${row.id}`,
-        });
-        const pdfKey = designerStorageKey(
-          row.store_id,
-          'print',
-          row.id,
-          'pdf',
-          { at: now, suffix: 'front' },
-        );
-        await this.storage.write(pdfKey, pdf);
-        files.push({
-          surface: 'front',
-          format: 'pdf',
-          key: pdfKey,
-          width_px: Math.round(geometry.page_mm.width * scale),
-          height_px: Math.round(geometry.page_mm.height * scale),
-          dpi,
-          bytes: pdf.length,
-          sha256: sha256(pdf),
-          page_mm: geometry.page_mm,
-          trim_mm: geometry.trim_mm,
-          bleed_mm: geometry.bleed_mm,
-          crop_marks: geometry.crop_marks,
-        });
-      }
-      let proofKey: string | null = null;
-      if (!row.proof_key) {
-        const size = canvasSize(spec, proofScale(spec));
-        const webp = await sharp(canvas.data)
-          .resize(size.width, size.height, { fit: 'fill' })
-          .webp({ quality: Math.round(PROOF_WEBP_QUALITY * 100) })
-          .toBuffer();
-        proofKey = designerStorageKey(row.store_id, 'proof', row.id, 'webp', {
-          at: now,
-        });
-        await this.storage.write(proofKey, webp);
-      }
-      return { files, proof_key: proofKey, report: canvas.report };
+          settings,
+          proof: !row.proof_back_key,
+        },
+      );
+      return {
+        files: [...front.files, ...back.files],
+        proof_key: front.proof_key,
+        proof_back_key: back.proof_key,
+        report: front.report,
+      };
     } catch (e) {
       throw classifyRenderError(e);
     }
+  }
+
+  /**
+   * One side of a print job: the PNG (+ PDF when the store renders one) under
+   * the side's suffix and, when asked, a proof derived from the PNG canvas.
+   * `tagged` adds `side` to the files (double-sided rows only, G0).
+   */
+  private async renderPrintSide(
+    row: OrderDesignRow,
+    spec: TemplateSpecV1,
+    state: DesignStateV1,
+    o: {
+      side: DesignSide;
+      tagged: boolean;
+      now: Date;
+      locale: string | undefined;
+      settings: DesignerSettings;
+      proof: boolean;
+    },
+  ): Promise<{
+    files: PrintFile[];
+    proof_key: string | null;
+    report: RenderReport;
+  }> {
+    const scale = printScale(spec);
+    const canvas = await this.renderCanvas(row.store_id, spec, state, {
+      mode: 'print',
+      scale,
+      type: 'image/png',
+      timeoutMs: PRINT_TIMEOUT_MS,
+      locale: o.locale,
+    });
+    const expected = canvasSize(spec, scale);
+    if (canvas.width !== expected.width || canvas.height !== expected.height) {
+      throw new DesignerRenderJobError(
+        `Unexpected canvas size ${canvas.width}x${canvas.height}`,
+        false,
+      );
+    }
+    const tag = o.tagged ? { side: o.side } : {};
+    const dpi = Math.round(25.4 * scale * 1000) / 1000;
+    const png = await finalizePrintPng(canvas.data, dpi);
+    const key = designerStorageKey(row.store_id, 'print', row.id, 'png', {
+      at: o.now,
+      suffix: o.side,
+    });
+    await this.storage.write(key, png);
+    const files: PrintFile[] = [
+      {
+        surface: 'front',
+        format: 'png',
+        ...tag,
+        key,
+        width_px: canvas.width,
+        height_px: canvas.height,
+        dpi,
+        bytes: png.length,
+        sha256: sha256(png),
+      },
+    ];
+    if (o.settings.print_formats.includes('pdf')) {
+      const geometry = printPdfGeometry(spec, {
+        cropMarks: o.settings.print_crop_marks,
+      });
+      // The PDF canvases span the bleed box (the whole page with crop
+      // marks), which can exceed the canvas limits the PNG scale was
+      // clamped to; the output is vector, so only the coordinate scale
+      // drops (huge templates only).
+      const largest = geometry.crop_marks
+        ? geometry.page_mm
+        : geometry.bleed_box_mm;
+      const pdfScale = clampScale(
+        { width: largest.width, height: largest.height } as TemplateSpecV1,
+        scale,
+        PRINT_MAX_PIXELS,
+      );
+      const pdf = await this.renderPrintPdf(row.store_id, spec, state, {
+        scale: pdfScale,
+        locale: o.locale,
+        geometry,
+        title: `Print file ${row.id}${o.side === 'back' ? ' (back)' : ''}`,
+      });
+      const pdfKey = designerStorageKey(row.store_id, 'print', row.id, 'pdf', {
+        at: o.now,
+        suffix: o.side,
+      });
+      await this.storage.write(pdfKey, pdf);
+      files.push({
+        surface: 'front',
+        format: 'pdf',
+        ...tag,
+        key: pdfKey,
+        width_px: Math.round(geometry.page_mm.width * scale),
+        height_px: Math.round(geometry.page_mm.height * scale),
+        dpi,
+        bytes: pdf.length,
+        sha256: sha256(pdf),
+        page_mm: geometry.page_mm,
+        trim_mm: geometry.trim_mm,
+        bleed_mm: geometry.bleed_mm,
+        crop_marks: geometry.crop_marks,
+      });
+    }
+    let proofKey: string | null = null;
+    if (o.proof) {
+      const size = canvasSize(spec, proofScale(spec));
+      const webp = await sharp(canvas.data)
+        .resize(size.width, size.height, { fit: 'fill' })
+        .webp({ quality: Math.round(PROOF_WEBP_QUALITY * 100) })
+        .toBuffer();
+      proofKey = designerStorageKey(row.store_id, 'proof', row.id, 'webp', {
+        at: o.now,
+        ...(o.side === 'back' ? { suffix: 'back' } : {}),
+      });
+      await this.storage.write(proofKey, webp);
+    }
+    return { files, proof_key: proofKey, report: canvas.report };
   }
 
   /**
@@ -722,6 +815,99 @@ export class DesignerRenderService implements OnModuleDestroy {
     return flight;
   }
 
+  /**
+   * M5.6: proof of a design's BACK side (cart thumbnails). Null when the
+   * design has no back. Mode 'same' renders the front state again (its own
+   * file, so the cart always has two images); 'other' renders the back
+   * template with the back state. Reused while the back did not change.
+   */
+  async renderDesignBackProof(
+    designId: string,
+    opts: { now?: Date; force?: boolean } = {},
+  ): Promise<{ proof_key: string; proof_url: string; reused: boolean } | null> {
+    const design = await this.prisma.design.findUnique({
+      where: { id: designId },
+      select: {
+        id: true,
+        store_id: true,
+        state: true,
+        back: true,
+        state_version: true,
+        proof_back_key: true,
+        proof_back_sha: true,
+        template_version_id: true,
+        template_version: { select: { spec: true } },
+      },
+    });
+    if (!design) {
+      throw designerErrors.notFound(
+        'DESIGNER_DESIGN_NOT_FOUND',
+        'Design not found.',
+      );
+    }
+    const back = readBack(design.back) || null;
+    if (!back) return null;
+    let spec: TemplateSpecV1;
+    let state: DesignStateV1;
+    let versionId = design.template_version_id;
+    if (back.mode === 'same') {
+      spec = design.template_version.spec as unknown as TemplateSpecV1;
+      state = design.state as unknown as DesignStateV1;
+    } else {
+      const v = await this.prisma.designTemplateVersion.findUnique({
+        where: { id: back.template_version_id },
+        select: { spec: true },
+      });
+      if (!v) {
+        throw designerErrors.badRequest(
+          'DESIGNER_BACK_INVALID',
+          'The back template is no longer available.',
+        );
+      }
+      spec = v.spec as unknown as TemplateSpecV1;
+      state = back.state;
+      versionId = back.template_version_id;
+    }
+    const sha = designBackProofSha(
+      back.mode === 'same' ? { mode: 'same', state: design.state } : back,
+      versionId,
+    );
+    const url = () =>
+      this.urls.signedPath('proof_back', design.id, design.store_id, {
+        ttlSec: DESIGNER_LINK_TTL.editor,
+      });
+    if (
+      !opts.force &&
+      design.proof_back_key &&
+      design.proof_back_sha === sha &&
+      (await this.storage.exists(design.proof_back_key))
+    ) {
+      return {
+        proof_key: design.proof_back_key,
+        proof_url: url(),
+        reused: true,
+      };
+    }
+    const flightKey = `${design.id}:back:${sha}`;
+    const running = this.proofFlights.get(flightKey);
+    if (running) return running;
+    const flight = this.withStoreProofSlot(design.store_id, () =>
+      this.renderAndRecordProof(
+        {
+          ...design,
+          template_version: { spec: spec as unknown as Prisma.JsonValue },
+        },
+        sha,
+        opts.now ?? new Date(),
+        { side: 'back', state },
+      ),
+    )
+      .then((key) => ({ proof_key: key, proof_url: url(), reused: false }))
+      .finally(() => this.proofFlights.delete(flightKey));
+    this.proofFlights.set(flightKey, flight);
+    return flight;
+  }
+
   /** Runs `fn` in the store's single proof slot; 503 when too many wait. */
   private async withStoreProofSlot<T>(
     storeId: string,
@@ -761,15 +947,15 @@ export class DesignerRenderService implements OnModuleDestroy {
       store_id: string;
       state: Prisma.JsonValue;
       state_version: number;
-      proof_key: string | null;
-      proof_state_sha: string | null;
       template_version: { spec: Prisma.JsonValue };
     },
     sha: string,
     now: Date,
+    // M5.6: the back renders another state (and template) into its own key.
+    side: { side: DesignSide; state?: DesignStateV1 } = { side: 'front' },
   ): Promise<string> {
     const spec = design.template_version.spec as unknown as TemplateSpecV1;
-    const state = design.state as unknown as DesignStateV1;
+    const state = side.state ?? (design.state as unknown as DesignStateV1);
     let canvas: { data: Buffer };
     try {
       canvas = await this.renderCanvas(design.store_id, spec, state, {
@@ -802,14 +988,18 @@ export class DesignerRenderService implements OnModuleDestroy {
       stateVersion: design.state_version,
       newKey: key,
       stateSha: sha,
+      side: side.side,
       logger: this.logger,
     });
     if (recorded) return key;
     const current = await this.prisma.design.findUnique({
       where: { id: design.id },
-      select: { proof_key: true },
+      select: { proof_key: true, proof_back_key: true },
     });
-    return current?.proof_key ?? key;
+    return (
+      (side.side === 'back' ? current?.proof_back_key : current?.proof_key) ??
+      key
+    );
   }
 
   // ── Proof files (retention helpers) ──────────────────────────────────────
@@ -823,19 +1013,36 @@ export class DesignerRenderService implements OnModuleDestroy {
   async purgeDesignProof(designId: string): Promise<{ deleted: boolean }> {
     const d = await this.prisma.design.findUnique({
       where: { id: designId },
-      select: { proof_key: true },
+      select: { proof_key: true, proof_back_key: true },
     });
-    if (!d?.proof_key) return { deleted: false };
-    const res = await this.prisma.design.updateMany({
-      where: { id: designId, proof_key: d.proof_key },
-      data: { proof_key: null, proof_state_sha: null },
-    });
-    if (res.count === 0) return { deleted: false };
-    return {
-      deleted: await releaseProofKey(this.prisma, this.storage, d.proof_key, {
-        logger: this.logger,
-      }),
-    };
+    if (!d?.proof_key && !d?.proof_back_key) return { deleted: false };
+    let deleted = false;
+    if (d.proof_key) {
+      const res = await this.prisma.design.updateMany({
+        where: { id: designId, proof_key: d.proof_key },
+        data: { proof_key: null, proof_state_sha: null },
+      });
+      if (res.count > 0) {
+        deleted =
+          (await releaseProofKey(this.prisma, this.storage, d.proof_key, {
+            logger: this.logger,
+          })) || deleted;
+      }
+    }
+    // M5.6: the back proof goes the same way.
+    if (d.proof_back_key) {
+      const res = await this.prisma.design.updateMany({
+        where: { id: designId, proof_back_key: d.proof_back_key },
+        data: { proof_back_key: null, proof_back_sha: null },
+      });
+      if (res.count > 0) {
+        deleted =
+          (await releaseProofKey(this.prisma, this.storage, d.proof_back_key, {
+            logger: this.logger,
+          })) || deleted;
+      }
+    }
+    return { deleted };
   }
 
   // ── Locale ───────────────────────────────────────────────────────────────
@@ -887,6 +1094,18 @@ export class DesignerRenderService implements OnModuleDestroy {
   ): string | null {
     if (!row.proof_key || row.files_purged_at) return null;
     return this.urls.signedPath('oid_proof', row.id, row.store_id, { ttlSec });
+  }
+
+  /** M5.6: signed `oid_proof_back` path (null without a back proof). */
+  orderBackProofPath(
+    row: Pick<OrderItemDesign, 'id' | 'store_id' | 'files_purged_at'> &
+      Partial<Pick<OrderItemDesign, 'proof_back_key'>>,
+    ttlSec: number = DESIGNER_LINK_TTL.creator,
+  ): string | null {
+    if (!row.proof_back_key || row.files_purged_at) return null;
+    return this.urls.signedPath('oid_proof_back', row.id, row.store_id, {
+      ttlSec,
+    });
   }
 
   // ── Canvas ───────────────────────────────────────────────────────────────

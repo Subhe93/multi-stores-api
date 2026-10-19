@@ -432,6 +432,47 @@ describe('DesignerRetentionService', () => {
       });
     });
 
+    it('M5.6: the strip empties the texts / photos of an other back too (mode + template kept)', async () => {
+      const t = build();
+      t.prisma.$queryRaw.mockResolvedValueOnce([
+        oid({
+          order_status: 'PENDING',
+          print_status: 'PENDING',
+          terminal_at: NOW,
+        }),
+      ]);
+      t.prisma.designAsset.findMany.mockResolvedValueOnce([photo('p1')]);
+      t.prisma.design.findUnique.mockResolvedValueOnce({
+        id: 'd1',
+        status: 'ORDERED',
+        proof_key: null,
+        proof_back_key: null,
+        back: {
+          mode: 'other',
+          template_id: '44444444-4444-4444-8444-444444444444',
+          template_version_id: '55555555-5555-4555-8555-555555555555',
+          state: {
+            v: 1,
+            texts: { greeting: 'Hej' },
+            photos: { slot: { asset_id: 'p9', width: 1, height: 1 } },
+          },
+        },
+      });
+      await t.service.runOriginals(NOW, { dryRun: false });
+      expect(t.prisma.design.update).toHaveBeenCalledWith({
+        where: { id: 'd1' },
+        data: {
+          state: { v: 1, texts: {}, photos: {} },
+          back: {
+            mode: 'other',
+            template_id: '44444444-4444-4444-8444-444444444444',
+            template_version_id: '55555555-5555-4555-8555-555555555555',
+            state: { v: 1, texts: {}, photos: {} },
+          },
+        },
+      });
+    });
+
     it('honours limit and deadline', async () => {
       const t = build();
       t.prisma.$queryRaw.mockResolvedValueOnce([
@@ -520,7 +561,13 @@ describe('DesignerRetentionService', () => {
       );
       expect(t.prisma.design.update).toHaveBeenCalledWith({
         where: { id: 'd1' },
-        data: { proof_key: null, proof_state_sha: null },
+        // M5.6: the back proof columns are cleared with the front ones.
+        data: {
+          proof_key: null,
+          proof_state_sha: null,
+          proof_back_key: null,
+          proof_back_sha: null,
+        },
       });
     });
 
@@ -555,6 +602,47 @@ describe('DesignerRetentionService', () => {
         },
       });
     });
+  });
+
+  it('M5.6: purges the back print files and the back proof with the front ones', async () => {
+    const t = build();
+    const files = [
+      {
+        surface: 'front',
+        format: 'png',
+        key: 'designer/s1/2026/print/oid1-front.png',
+      },
+      {
+        surface: 'front',
+        format: 'png',
+        side: 'back',
+        key: 'designer/s1/2026/print/oid1-back.png',
+      },
+      {
+        surface: 'front',
+        format: 'pdf',
+        side: 'back',
+        key: 'designer/s1/2026/print/oid1-back.pdf',
+      },
+    ];
+    t.prisma.$queryRaw.mockResolvedValueOnce([
+      oid({
+        print_files: files,
+        proof_back_key: 'designer/s1/2026/proof/oid1-back.webp',
+      }),
+    ]);
+    t.prisma.designAsset.findMany.mockResolvedValueOnce([photo('p1')]);
+    const r = await t.service.runFiles(NOW, { dryRun: false });
+    expect(r.purged).toBe(1);
+    for (const key of [
+      'designer/s1/2026/print/oid1-front.png',
+      'designer/s1/2026/print/oid1-back.png',
+      'designer/s1/2026/print/oid1-back.pdf',
+      'designer/s1/2026/proof/oid1.webp',
+      'designer/s1/2026/proof/oid1-back.webp',
+    ]) {
+      expect(t.storage.delete).toHaveBeenCalledWith(key);
+    }
   });
 
   describe('R5 erasure', () => {

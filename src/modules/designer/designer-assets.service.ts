@@ -1070,7 +1070,11 @@ export class DesignerAssetsService {
     const { k, id, s } = check.payload;
     const notFound = () =>
       designerErrors.notFound('DESIGNER_FILE_NOT_FOUND', 'File not found.');
-    if (k !== 'oid_proof' && !(await this.storeApps.isEnabled(s, 'designer'))) {
+    if (
+      k !== 'oid_proof' &&
+      k !== 'oid_proof_back' &&
+      !(await this.storeApps.isEnabled(s, 'designer'))
+    ) {
       throw designerErrors.notFound(
         'DESIGNER_NOT_ENABLED',
         'The designer is not enabled for this store.',
@@ -1093,17 +1097,22 @@ export class DesignerAssetsService {
     }
 
     let key: string | null = null;
-    if (k === 'proof') {
+    if (k === 'proof' || k === 'proof_back') {
       const d = await this.prisma.design.findUnique({
         where: { id },
-        select: { store_id: true, proof_key: true },
+        select: { store_id: true, proof_key: true, proof_back_key: true },
       });
       if (!d || d.store_id !== s) throw notFound();
-      key = d.proof_key;
+      key = k === 'proof_back' ? d.proof_back_key : d.proof_key;
     } else {
       const o = await this.prisma.orderItemDesign.findUnique({
         where: { id },
-        select: { store_id: true, proof_key: true, files_purged_at: true },
+        select: {
+          store_id: true,
+          proof_key: true,
+          proof_back_key: true,
+          files_purged_at: true,
+        },
       });
       if (!o || o.store_id !== s) throw notFound();
       if (o.files_purged_at) {
@@ -1112,7 +1121,7 @@ export class DesignerAssetsService {
           'This file has been deleted.',
         );
       }
-      key = o.proof_key;
+      key = k === 'oid_proof_back' ? o.proof_back_key : o.proof_key;
     }
     const data = key ? await this.storage.read(key) : null;
     const ext = key ? extOfKey(key) : null;
