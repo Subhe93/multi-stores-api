@@ -311,11 +311,11 @@ wpx_scan_forbidden() {
     # posts.tsv: only catalog and content post types (column 21 = post_type);
     # content types (page, post) must be published (column 8 = post_status).
     if [ "$base" = posts.tsv ]; then
-      lines=$(awk -F '\t' 'NR > 1 && $21 !~ /^(product|product_variation|npp_template|acf-field-group|acf-field|page|post)$/ { print NR }' "$f" | head -n 5 || true)
+      lines=$(awk -F '\t' 'NR > 1 && NF > 1 && $21 !~ /^(product|product_variation|npp_template|acf-field-group|acf-field|page|post)$/ { print NR }' "$f" | head -n 5 || true)
       for n in $lines; do
         wpx_scan_hit "$base" "$n" "has a post type outside the catalog allowlist"
       done
-      lines=$(awk -F '\t' 'NR > 1 && $21 ~ /^(page|post)$/ && $8 != "publish" { print NR }' "$f" | head -n 5 || true)
+      lines=$(awk -F '\t' 'NR > 1 && NF > 1 && $21 ~ /^(page|post)$/ && $8 != "publish" { print NR }' "$f" | head -n 5 || true)
       for n in $lines; do
         wpx_scan_hit "$base" "$n" "is an unpublished page / post (only published content is exported)"
       done
