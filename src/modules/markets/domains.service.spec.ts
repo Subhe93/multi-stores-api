@@ -227,12 +227,12 @@ describe('DomainsService.add', () => {
 });
 
 describe('DomainsService.verify', () => {
-  it('VERIFIED when the CNAME points at the platform target', async () => {
+  it('ACTIVE when the CNAME points at the platform target', async () => {
     const { service } = build([{ id: 'd1', hostname: 'namez.se' }], {
       dns: { resolveCname: () => Promise.resolve(['Stores.Platform.Test.']) },
     });
     const view = await service.verify(STORE_ID, MARKET_ID, 'd1');
-    expect(view.status).toBe('VERIFIED');
+    expect(view.status).toBe('ACTIVE');
     expect(view.verified_at).not.toBeNull();
     expect(view.dns.observed).toEqual(['Stores.Platform.Test.']);
   });
@@ -385,7 +385,7 @@ describe('DomainsService admin status', () => {
 });
 
 describe('DomainsService.verify behind a proxy (HTTP probe)', () => {
-  it('VERIFIED when DNS points at the proxy but the host answers the probe', async () => {
+  it('ACTIVE when DNS points at the proxy but the host answers the probe', async () => {
     const { service } = build([{ id: 'd1', hostname: 'namez.shop' }], {
       dns: {
         resolve4: () => Promise.resolve(['104.21.1.1']),
@@ -393,7 +393,7 @@ describe('DomainsService.verify behind a proxy (HTTP probe)', () => {
       },
     });
     const view = await service.verify(STORE_ID, MARKET_ID, 'd1');
-    expect(view.status).toBe('VERIFIED');
+    expect(view.status).toBe('ACTIVE');
     expect(view.dns.observed).toEqual(['104.21.1.1', 'http:namez.shop']);
   });
 
@@ -429,13 +429,13 @@ describe('DomainsService.verify behind a proxy (HTTP probe)', () => {
 });
 
 describe('DomainsService.verify against the store platform hostname', () => {
-  it('VERIFIED when the CNAME points at <slug>.<storefront host> (no override set)', async () => {
+  it('ACTIVE when the CNAME points at <slug>.<storefront host> (no override set)', async () => {
     const { service } = build([{ id: 'd1', hostname: 'namez.shop' }], {
       target: null,
       dns: { resolveCname: () => Promise.resolve(['namez-se.iwings-digital.com']) },
     });
     const view = await service.verify(STORE_ID, MARKET_ID, 'd1');
-    expect(view.status).toBe('VERIFIED');
+    expect(view.status).toBe('ACTIVE');
     expect(view.dns.expected_cname).toBe('namez-se.iwings-digital.com');
   });
 

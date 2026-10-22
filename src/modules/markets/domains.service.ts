@@ -71,9 +71,12 @@ const MARKET_DOMAIN_NOT_FOUND = {
 };
 
 /**
- * Hostnames of a market. Lifecycle (M1-DESIGN L6): the creator adds a host
- * (PENDING), "Verify" checks its CNAME/A record against the platform's DNS
- * target (VERIFIED), and an admin sets ACTIVE after the CDN step. Only ACTIVE
+ * Hostnames of a market. Lifecycle: the creator adds a host (PENDING) and
+ * "Verify" checks that it points at the platform (CNAME/A record, or the
+ * HTTPS probe behind a proxy). A passing verify makes the host ACTIVE at
+ * once: the platform's catch-all origin already serves any hostname that
+ * reaches it, so there is no separate provisioning step. An admin can still
+ * set a host back to PENDING / VERIFIED (suspend) or ACTIVE. Only ACTIVE
  * hosts are served, matched by CORS or used as link origins.
  */
 @Injectable()
@@ -226,9 +229,9 @@ export class DomainsService {
 
   /**
    * DNS check: the host's CNAME must point at the platform target, or its A
-   * records must include the platform address. Success → VERIFIED (an ACTIVE
-   * host stays ACTIVE); failure → 400 MARKET_DOMAIN_VERIFY_FAILED with what
-   * was observed.
+   * records must include the platform address, or the HTTPS probe answers.
+   * Success → ACTIVE (served from now on); failure → 400
+   * MARKET_DOMAIN_VERIFY_FAILED with what was observed.
    */
   async verify(
     storeId: string,
@@ -271,9 +274,7 @@ export class DomainsService {
       data: {
         verified_at: new Date(),
         last_observed: seen,
-        ...(row.status === StoreDomainStatus.PENDING
-          ? { status: StoreDomainStatus.VERIFIED }
-          : {}),
+        status: StoreDomainStatus.ACTIVE,
       },
     });
     await this.afterMutation(storeId);
@@ -306,7 +307,7 @@ export class DomainsService {
     return this.toView({ ...row, is_primary: true }, null, await this.slugOf(storeId));
   }
 
-  /** Admin: PENDING / VERIFIED / ACTIVE (L6 — ACTIVE after the CDN step). */
+  /** Admin override: PENDING / VERIFIED (suspend a host) or ACTIVE. */
   async adminSetStatus(
     domainId: string,
     status: StoreDomainStatus,

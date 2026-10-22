@@ -109,8 +109,9 @@ LIVE market re-runs the check and is refused when it fails.
 
 **Domains**: `POST /markets/:id/domains {hostname, redirect_to?}` →
 PENDING; the creator's **Verify** reads DNS (CNAME to
-`CUSTOM_DOMAIN_CNAME_TARGET` or A to `CUSTOM_DOMAIN_A_TARGET`) → VERIFIED;
-an **admin** sets ACTIVE after nginx/TLS are in place. Only ACTIVE hosts are
+`CUSTOM_DOMAIN_CNAME_TARGET` or A to `CUSTOM_DOMAIN_A_TARGET`, or the HTTPS
+probe behind a proxy) → ACTIVE at once (the catch-all origin serves any host
+that reaches it); an admin can suspend a host (back to PENDING/VERIFIED). Only ACTIVE hosts are
 served. `redirect_to` makes a host 301 to another host (www → apex).
 
 ### Worked example — Namez (from `plans/namez-store-apps/NAMEZ-SHOP-MARKET-SETUP.md`)
@@ -230,7 +231,7 @@ Creator (`AuthGuard('jwt')`, `CREATOR`, `@RequireApp('markets')`, prefix `/api/m
 | `PUT /markets/:id/status` | `{status: DRAFT \| LIVE}` |
 | `POST /markets/:id/payment-check` | re-run the provider check |
 | `POST /markets/:id/domains`, `DELETE /markets/:id/domains/:domainId` | add / remove a host |
-| `POST /markets/:id/domains/:domainId/verify` | DNS check → VERIFIED |
+| `POST /markets/:id/domains/:domainId/verify` | DNS/HTTPS check → ACTIVE |
 | `PUT /markets/:id/domains/:domainId/primary` | mark canonical host |
 
 Admin (`ADMIN`, prefix `/api/markets/admin`): `GET/PUT fx-rates`,
