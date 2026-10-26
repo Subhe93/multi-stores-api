@@ -262,6 +262,8 @@ model CreatorCategoryTranslation {
   locale              String  @db.VarChar(5)
   name                String
   description         String?
+  /// M6.2: long SEO HTML rendered below the products (sanitised on write).
+  long_description    String? @db.Text
   meta_title          String?
   meta_desc           String?
 

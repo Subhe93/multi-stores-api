@@ -202,7 +202,7 @@ describe('CreatorCategoriesService.update SEO carry-over (X19)', () => {
     ]);
   });
 
-  it('no read when every row carries every carried-over column (description + meta)', async () => {
+  it('no read when every row carries every carried-over column (description + long_description + meta)', async () => {
     const { svc, findManyTr } = setup([]);
     await svc.update('cat1', 'u1', {
       translations: [
@@ -210,6 +210,7 @@ describe('CreatorCategoriesService.update SEO carry-over (X19)', () => {
           locale: 'sv',
           name: 'Barn',
           description: '',
+          long_description: '',
           meta_title: null,
           meta_desc: 'x',
         },

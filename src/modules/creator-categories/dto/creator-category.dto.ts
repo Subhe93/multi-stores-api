@@ -8,6 +8,7 @@ import {
   ValidateNested,
   Min,
   ArrayUnique,
+  MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CreatorCategoryMatchRule } from '@prisma/client';
@@ -19,9 +20,18 @@ export class CreatorCategoryTranslationDto {
   @IsString()
   name: string;
 
+  // Short description: shown in the hero under the collection title.
   @IsOptional()
   @IsString()
   description?: string;
+
+  // M6.2: long SEO description (HTML, sanitised on write) rendered below the
+  // products on the collection page. Same carry-over semantics as the SEO
+  // fields: `undefined` keeps the stored value, `null`/'' clears it.
+  @IsOptional()
+  @IsString()
+  @MaxLength(20000)
+  long_description?: string | null;
 
   // SEO overrides (M4.4). On update, `undefined` keeps the stored value of
   // this locale (X19 carry-over); `null` or '' clears it.

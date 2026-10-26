@@ -10,6 +10,7 @@ type Translation = {
   locale: string;
   name: string;
   description: string | null;
+  long_description: string | null;
   meta_title: string | null;
   meta_desc: string | null;
 };
@@ -61,6 +62,7 @@ const STORED: Translation[] = [
     locale: 'sv',
     name: 'Namnskyltar',
     description: 'Svensk text',
+    long_description: '<h2>Lång sv</h2>',
     meta_title: 'Namnskyltar | Namez',
     meta_desc: 'SEO sv',
   },
@@ -68,6 +70,7 @@ const STORED: Translation[] = [
     locale: 'en',
     name: 'Name tags',
     description: 'English text',
+    long_description: '<h2>Long en</h2>',
     meta_title: 'Name tags | Namez',
     meta_desc: 'SEO en',
   },
@@ -83,6 +86,7 @@ describe('CreatorCategoriesService.update translations (M5 A-X carry-over)', () 
     expect(byLocale.get('en')).toMatchObject({
       name: 'Name tags',
       description: 'English text',
+      long_description: '<h2>Long en</h2>',
       meta_title: 'Name tags | Namez',
     });
     expect(byLocale.get('sv')).toMatchObject({ name: 'Skyltar' });
@@ -107,6 +111,7 @@ describe('CreatorCategoriesService.update translations (M5 A-X carry-over)', () 
       locale: 'sv',
       name: 'Skyltar',
       description: 'Svensk text',
+      long_description: '<h2>Lång sv</h2>',
       meta_title: 'Namnskyltar | Namez',
       meta_desc: null,
     });
@@ -115,8 +120,29 @@ describe('CreatorCategoriesService.update translations (M5 A-X carry-over)', () 
       locale: 'en',
       name: 'Tags',
       description: null,
+      long_description: '<h2>Long en</h2>',
       meta_title: null,
       meta_desc: 'SEO en',
+    });
+  });
+
+  // M6.2: the long SEO description follows the same carry-over rules.
+  it('long_description: undefined keeps the stored text, "" clears, a value replaces', async () => {
+    const { service, rows } = build(STORED);
+    await service.update('cat1', 'u1', {
+      translations: [
+        { locale: 'sv', name: 'Skyltar', long_description: '' },
+        { locale: 'en', name: 'Tags', long_description: '<p>New long</p>' },
+      ],
+    });
+    const byLocale = new Map(rows.map((r) => [r.locale, r]));
+    expect(byLocale.get('sv')).toMatchObject({
+      description: 'Svensk text',
+      long_description: null,
+    });
+    expect(byLocale.get('en')).toMatchObject({
+      description: 'English text',
+      long_description: '<p>New long</p>',
     });
   });
 

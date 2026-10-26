@@ -3,7 +3,8 @@
  * (`src/common/html/creator-html.ts`) over HTML that was stored before the
  * write-time sanitizing existed — product translations (description,
  * short_description), product FAQ answers, category and creator-collection
- * descriptions, store descriptions and legacy static page content.
+ * descriptions (short + M6.2 long_description), store descriptions and
+ * legacy static page content.
  *
  * Dry-run by default: prints, per table, how many rows would change and
  * writes nothing. `--apply` writes the sanitized values. `--slug <store>`
@@ -136,12 +137,23 @@ async function main(): Promise<void> {
 
   const collectionRows = await prisma.creatorCategoryTranslation.findMany({
     where: creatorId ? { creator_category: { creator_id: creatorId } } : {},
-    select: { id: true, description: true },
+    select: { id: true, description: true, long_description: true },
   });
   await run(
     'CreatorCategoryTranslation.description',
     collectionRows,
     ['description'],
+    true,
+    (c) =>
+      prisma.creatorCategoryTranslation.update({
+        where: { id: c.id },
+        data: c.data,
+      }),
+  );
+  await run(
+    'CreatorCategoryTranslation.long_description',
+    collectionRows,
+    ['long_description'],
     true,
     (c) =>
       prisma.creatorCategoryTranslation.update({

@@ -1465,7 +1465,9 @@ export class StorefrontService {
 
   /**
    * Public tree of the creator's active collections for this store
-   * (root -> child -> grandchild, three levels at most since M6).
+   * (root -> child -> grandchild, three levels at most since M6). Every
+   * translation row is served whole, so it carries the short `description`
+   * (hero) and the M6.2 `long_description` (below the products).
    */
   async getCreatorCategories(slug: string) {
     const store = await this.prisma.store.findUnique({

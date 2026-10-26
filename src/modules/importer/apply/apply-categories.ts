@@ -101,6 +101,8 @@ async function writeOne(
     noindex_when_empty: m.noindex_when_empty,
     thumbnail_url,
   };
+  // M6.2 `long_description` is never written by the importer: it stays null
+  // on CREATE and the creator-written SEO text survives an UPDATE.
   const tr = {
     name: m.name,
     description: m.description,

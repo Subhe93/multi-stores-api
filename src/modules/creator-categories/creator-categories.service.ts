@@ -16,15 +16,19 @@ import { sanitizeCreatorHtml } from '../../common/html/creator-html';
 import { CREATOR_CATEGORY_MAX_DEPTH } from './primary-collection';
 
 /**
- * Collection descriptions are rendered as HTML on the storefront. An
- * `undefined` description is left alone so the X19 carry-over still works.
+ * Collection descriptions (short `description`, M6.2 `long_description`) are
+ * rendered as HTML on the storefront. An `undefined` field is left alone so
+ * the X19 carry-over still works.
  */
-function sanitizeTranslation<T extends { description?: string | null }>(
-  t: T,
-): T {
-  return t.description === undefined
-    ? t
-    : { ...t, description: sanitizeCreatorHtml(t.description) };
+function sanitizeTranslation<
+  T extends { description?: string | null; long_description?: string | null },
+>(t: T): T {
+  const out = { ...t };
+  if (t.description !== undefined)
+    out.description = sanitizeCreatorHtml(t.description);
+  if (t.long_description !== undefined)
+    out.long_description = sanitizeCreatorHtml(t.long_description);
+  return out;
 }
 
 @Injectable()
@@ -354,22 +358,24 @@ export class CreatorCategoriesService {
   }
 
   /**
-   * X19 carry-over for the sent rows: `description`, `meta_title` and
-   * `meta_desc` left `undefined` keep the value stored for the same locale;
-   * `null`/'' clears. Reads only when a row omits one of them. Locales not
-   * sent are not touched by the caller at all.
+   * X19 carry-over for the sent rows: `description`, `long_description`
+   * (M6.2), `meta_title` and `meta_desc` left `undefined` keep the value
+   * stored for the same locale; `null`/'' clears. Reads only when a row
+   * omits one of them. Locales not sent are not touched by the caller at all.
    */
   private async withTranslationCarryOver(
     categoryId: string,
     translations: CreatorCategoryTranslationDto[],
   ): Promise<
-    (Omit<CreatorCategoryTranslationDto, 'description'> & {
+    (Omit<CreatorCategoryTranslationDto, 'description' | 'long_description'> & {
       description: string | null;
+      long_description: string | null;
     })[]
   > {
     const omits = translations.some(
       (t) =>
         t.description === undefined ||
+        t.long_description === undefined ||
         t.meta_title === undefined ||
         t.meta_desc === undefined,
     );
@@ -377,6 +383,7 @@ export class CreatorCategoriesService {
       string,
       {
         description: string | null;
+        long_description: string | null;
         meta_title: string | null;
         meta_desc: string | null;
       }
@@ -390,6 +397,7 @@ export class CreatorCategoriesService {
         select: {
           locale: true,
           description: true,
+          long_description: true,
           meta_title: true,
           meta_desc: true,
         },
@@ -405,6 +413,7 @@ export class CreatorCategoriesService {
       return {
         ...t,
         description: keep(t.description, prev?.description),
+        long_description: keep(t.long_description, prev?.long_description),
         meta_title: keep(t.meta_title, prev?.meta_title),
         meta_desc: keep(t.meta_desc, prev?.meta_desc),
       };
