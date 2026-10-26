@@ -1,6 +1,12 @@
 // Mirror of multi-stores-shared/src/types/market.ts — keep in sync.
 
 export type MarketStatus = 'DRAFT' | 'LIVE';
+/**
+ * M6.1: search indexing mode. AUTO = indexable on a custom domain, platform
+ * subdomain redirects to the primary domain (else noindex); ALWAYS / NEVER
+ * override on any host. The web proxy computes the effective result.
+ */
+export type MarketIndexing = 'AUTO' | 'ALWAYS' | 'NEVER';
 export type StoreDomainStatus = 'PENDING' | 'VERIFIED' | 'ACTIVE';
 
 /** Locales the storefront can render (its `locales` list). */
@@ -76,8 +82,8 @@ export interface MarketRoute {
   is_default: boolean;
   primary_hostname: string | null;
   status: MarketStatus;
-  /** M6: served with robots noindex and left out of other markets' hreflang. */
-  noindex: boolean;
+  /** M6.1: search indexing mode; the web proxy derives noindex / redirect. */
+  indexing: MarketIndexing;
   preview?: true;
 }
 
@@ -87,6 +93,13 @@ export interface StoreByDomainResponse {
   redirect_to?: string;
   market?: MarketRoute;
   markets?: MarketRoute[];
+  /**
+   * Legacy `Store.custom_domain` (M6.1): the public host of the DEFAULT
+   * market when it has no StoreDomain row of its own. Present (null when
+   * unset) only with the app on; the web proxy / hreflang treat a default
+   * AUTO market on it exactly like one with a `primary_hostname`.
+   */
+  custom_domain?: string | null;
   /**
    * Present only when the store has active redirects (M4.4 D17): the proxy
    * then loads `GET /stores/:slug/redirects?v=<version>` once per version.
@@ -105,6 +118,8 @@ export type MarketContextResponse =
       enabled: true;
       market: MarketRoute;
       markets: MarketRoute[];
+      /** Legacy `Store.custom_domain` (see `StoreByDomainResponse`). */
+      custom_domain: string | null;
       redirects_version?: string;
       preview?: true;
     };
@@ -131,8 +146,8 @@ export interface MarketView {
   currency: string;
   is_default: boolean;
   status: MarketStatus;
-  /** M6: keep the market out of search engines (still routed and listed). */
-  noindex: boolean;
+  /** M6.1: search indexing mode (AUTO | ALWAYS | NEVER). */
+  indexing: MarketIndexing;
   price_rule: PriceRule;
   payment_check: PaymentCheck | null;
   /** Base → market rate in effect (null when it cannot be determined). */

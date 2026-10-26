@@ -91,7 +91,7 @@ const SE_MARKET: MarketContext = {
   rate: 1,
   priceRule: { mode: 'convert' },
   isDefault: true,
-  noindex: false,
+  indexing: 'AUTO',
   status: 'LIVE',
   primaryHostname: 'namz.se',
   hostnames: ['namz.se'],
@@ -108,7 +108,7 @@ const EU_MARKET: MarketContext = {
   currency: 'EUR',
   rate: 0.1,
   isDefault: false,
-  noindex: false,
+  indexing: 'AUTO',
   primaryHostname: 'namz.shop',
   hostnames: ['namz.shop'],
 };

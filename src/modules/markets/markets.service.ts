@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { MarketStatus, Prisma } from '@prisma/client';
+import { MarketIndexing, MarketStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import {
@@ -217,7 +217,7 @@ export class MarketsService {
           priceRuleOf({})) as unknown as Prisma.InputJsonObject,
         payment_check: check as unknown as Prisma.InputJsonObject,
         status: MarketStatus.DRAFT,
-        noindex: data.noindex ?? false,
+        indexing: data.indexing ?? MarketIndexing.AUTO,
       },
       include: marketInclude,
     });
@@ -302,7 +302,7 @@ export class MarketsService {
               price_rule: data.price_rule as unknown as Prisma.InputJsonObject,
             }
           : {}),
-        ...(data.noindex !== undefined ? { noindex: data.noindex } : {}),
+        ...(data.indexing !== undefined ? { indexing: data.indexing } : {}),
         ...(check
           ? { payment_check: check as unknown as Prisma.InputJsonObject }
           : {}),
@@ -734,10 +734,12 @@ export class MarketsService {
     locales: string[];
     currency: string;
     price_rule: PriceRule;
-    noindex: boolean;
+    indexing: MarketIndexing;
   }> {
     const out: ReturnType<MarketsService['normalize']> = {};
-    if (dto.noindex !== undefined) out.noindex = dto.noindex === true;
+    // `@IsOptional()` lets null through; treat it as "unchanged" (the column
+    // is NOT NULL).
+    if (dto.indexing != null) out.indexing = dto.indexing;
     if (dto.key !== undefined) out.key = dto.key.trim().toLowerCase();
     if (dto.name !== undefined) out.name = dto.name.trim();
     if (dto.countries !== undefined) {
@@ -828,7 +830,7 @@ export class MarketsService {
       currency: row.is_default ? storeCurrency : row.currency.toUpperCase(),
       is_default: row.is_default,
       status: row.status,
-      noindex: row.noindex,
+      indexing: row.indexing,
       price_rule: priceRuleOf(row.price_rule),
       payment_check: (row.payment_check as PaymentCheck | null) ?? null,
       effective_rate: effectiveRate,

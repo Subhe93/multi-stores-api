@@ -35,7 +35,7 @@ export class MarketsPublicController {
   ): Promise<MarketContextResponse> {
     const store = await this.prisma.store.findUnique({
       where: { slug },
-      select: { id: true, is_active: true },
+      select: { id: true, is_active: true, custom_domain: true },
     });
     if (!store || !store.is_active) {
       throw new NotFoundException({
@@ -57,6 +57,8 @@ export class MarketsPublicController {
       enabled: true,
       market: toMarketRoute(ctx),
       markets,
+      // M6.1: public host of a default market without a StoreDomain row.
+      custom_domain: store.custom_domain ?? null,
       ...extra,
       ...(previewKey ? { preview: true as const } : {}),
     };

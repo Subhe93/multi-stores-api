@@ -24,7 +24,7 @@ const seMarket: MarketContext = {
   rate: 11,
   priceRule: { mode: 'convert', source: 'manual', rate: 11 },
   isDefault: true,
-  noindex: false,
+  indexing: 'AUTO',
   status: 'LIVE',
   primaryHostname: 'namez.se',
   hostnames: ['namez.se'],
@@ -111,7 +111,7 @@ function build(
                 is_default: true,
                 primary_hostname: 'namez.se',
                 status: 'LIVE' as const,
-                noindex: false,
+                indexing: 'AUTO',
               },
             ]
           : null,
@@ -188,7 +188,7 @@ describe('StorefrontService.getStore payload', () => {
       is_default: true,
       primary_hostname: 'namez.se',
       status: 'LIVE',
-      noindex: false,
+      indexing: 'AUTO',
     });
     expect(payload.markets).toHaveLength(1);
     // Kustom availability is judged against the market currency.

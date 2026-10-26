@@ -2,6 +2,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsEnum,
   IsIn,
   IsNumber,
   IsOptional,
@@ -13,6 +14,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { MarketIndexing } from '@prisma/client';
 
 // No "--" inside a key: the market-preview hostname is `<slug>--<key>` and
 // splits on that separator.
@@ -87,10 +89,10 @@ export class CreateMarketDto {
   @Type(() => PriceRuleDto)
   price_rule?: PriceRuleDto;
 
-  // M6: keep the market out of search engines (still routed and listed).
+  // M6.1: search indexing mode (AUTO | ALWAYS | NEVER); default AUTO.
   @IsOptional()
-  @IsBoolean()
-  noindex?: boolean;
+  @IsEnum(MarketIndexing)
+  indexing?: MarketIndexing;
 }
 
 export class UpdateMarketDto {
@@ -133,8 +135,8 @@ export class UpdateMarketDto {
   price_rule?: PriceRuleDto;
 
   @IsOptional()
-  @IsBoolean()
-  noindex?: boolean;
+  @IsEnum(MarketIndexing)
+  indexing?: MarketIndexing;
 }
 
 export class SetMarketStatusDto {

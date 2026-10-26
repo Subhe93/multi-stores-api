@@ -36,7 +36,7 @@ const euMarket: MarketContext = {
   rate: 0.1,
   priceRule: { mode: 'convert', source: 'manual', rate: 0.1 },
   isDefault: false,
-  noindex: false,
+  indexing: 'AUTO',
   status: 'LIVE',
   primaryHostname: 'namez.shop',
   hostnames: ['namez.shop', 'www.namez.shop'],

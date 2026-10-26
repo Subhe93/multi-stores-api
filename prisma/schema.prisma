@@ -1284,6 +1284,15 @@ enum MarketStatus {
   LIVE
 }
 
+// M6.1: search indexing mode. AUTO = indexable on a custom domain, the
+// platform subdomain redirects to the primary domain (else noindex);
+// ALWAYS / NEVER override on any host.
+enum MarketIndexing {
+  AUTO
+  ALWAYS
+  NEVER
+}
+
 enum StoreDomainStatus {
   PENDING
   VERIFIED
@@ -1291,30 +1300,30 @@ enum StoreDomainStatus {
 }
 
 model Market {
-  id              String       @id @default(uuid())
+  id              String         @id @default(uuid())
   store_id        String
   // URL/API handle ('se', 'eu'); 'default' for the default market.
-  key             String       @db.VarChar(16)
+  key             String         @db.VarChar(16)
   name            String
   // ISO2, upper-case.
   countries       String[]
-  default_locale  String       @db.VarChar(5)
+  default_locale  String         @db.VarChar(5)
   // Served with a /xx/ prefix; never contains default_locale.
   locales         String[]
-  currency        String       @db.VarChar(3)
-  is_default      Boolean      @default(false)
-  status          MarketStatus @default(DRAFT)
+  currency        String         @db.VarChar(3)
+  is_default      Boolean        @default(false)
+  status          MarketStatus   @default(DRAFT)
   // {mode:'convert'|'fixed', source:'manual'|'platform', rate?, rounding:{increment?, ending?}}
-  price_rule      Json         @default("{}")
+  price_rule      Json           @default("{}")
   // {stripe:'ok'|'missing'|'unknown', kustom:..., checked_at, details:{...}}
   payment_check   Json?
   // Reserved for a later milestone (per-market legal entity).
   legal_entity_id String?
-  // M6: keep the market out of search engines (robots meta + X-Robots-Tag,
-  // empty sitemap, excluded from other markets' hreflang). Still routed.
-  noindex         Boolean      @default(false)
-  created_at      DateTime     @default(now())
-  updated_at      DateTime     @updatedAt
+  // M6.1: search indexing mode (the web proxy computes the effective
+  // noindex / redirect per request). Still routed whatever the value.
+  indexing        MarketIndexing @default(AUTO)
+  created_at      DateTime       @default(now())
+  updated_at      DateTime       @updatedAt
 
   store   Store                @relation(fields: [store_id], references: [id], onDelete: Cascade)
   domains StoreDomain[]

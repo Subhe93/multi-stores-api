@@ -22,7 +22,7 @@ const eu: MarketContext = {
     rounding: { ending: '.99' },
   },
   isDefault: false,
-  noindex: false,
+  indexing: 'AUTO',
   status: 'LIVE',
   primaryHostname: 'namez.shop',
   hostnames: ['namez.shop'],

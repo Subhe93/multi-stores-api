@@ -31,7 +31,7 @@ const MARKET: MarketContext = {
   rate: 0.1,
   priceRule: { kind: 'convert' } as unknown as MarketContext['priceRule'],
   isDefault: false,
-  noindex: false,
+  indexing: 'AUTO',
   status: 'LIVE',
   primaryHostname: null,
   hostnames: [],

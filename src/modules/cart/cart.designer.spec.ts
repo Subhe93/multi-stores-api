@@ -225,7 +225,7 @@ describe('CartService designer add-ons (M5.5, cart read)', () => {
     rate: 0.1,
     priceRule: { mode: 'convert', source: 'manual', rate: 0.1 },
     isDefault: false,
-    noindex: false,
+    indexing: 'AUTO',
     status: 'LIVE',
     primaryHostname: null,
     hostnames: [],

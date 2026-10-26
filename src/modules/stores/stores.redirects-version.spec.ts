@@ -71,7 +71,11 @@ describe('MarketsPublicController.marketContext redirects_version', () => {
     const prisma = {
       store: {
         findUnique: jest.fn(() =>
-          Promise.resolve({ id: 's1', is_active: true }),
+          Promise.resolve({
+            id: 's1',
+            is_active: true,
+            custom_domain: 'resumely.net',
+          }),
         ),
       },
     };
@@ -91,7 +95,7 @@ describe('MarketsPublicController.marketContext redirects_version', () => {
                 rate: 1,
                 priceRule: { mode: 'convert', source: 'manual', rate: 1 },
                 isDefault: true,
-                noindex: false,
+                indexing: 'AUTO',
                 status: 'LIVE',
                 primaryHostname: null,
                 hostnames: [],
@@ -130,5 +134,12 @@ describe('MarketsPublicController.marketContext redirects_version', () => {
     const res = await ctrl(null, true).marketContext('namez');
     expect(res.enabled).toBe(true);
     expect('redirects_version' in res).toBe(false);
+  });
+
+  it('app on: the legacy custom_domain rides along (M6.1); app off: not present', async () => {
+    const on = await ctrl(null, true).marketContext('namez');
+    expect(on).toMatchObject({ enabled: true, custom_domain: 'resumely.net' });
+    const off = await ctrl(null, false).marketContext('namez');
+    expect('custom_domain' in off).toBe(false);
   });
 });

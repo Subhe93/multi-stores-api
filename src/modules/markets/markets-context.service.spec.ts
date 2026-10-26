@@ -18,7 +18,7 @@ type MarketSeed = {
   currency: string;
   is_default?: boolean;
   status?: 'DRAFT' | 'LIVE';
-  noindex?: boolean;
+  indexing?: 'AUTO' | 'ALWAYS' | 'NEVER';
   price_rule?: unknown;
   domains?: {
     hostname: string;
@@ -44,7 +44,7 @@ function makePrisma(
     currency: m.currency,
     is_default: m.is_default ?? false,
     status: m.status ?? 'LIVE',
-    noindex: m.noindex ?? false,
+    indexing: m.indexing ?? 'AUTO',
     price_rule: m.price_rule ?? { mode: 'convert', source: 'manual', rate: 1 },
     domains: (m.domains ?? []).map((d) => ({
       hostname: d.hostname,
@@ -120,7 +120,7 @@ describe('MarketsContextService.resolve', () => {
     expect(ctx).toMatchObject({
       key: 'default',
       isDefault: true,
-      noindex: false,
+      indexing: 'AUTO',
       currency: 'SEK',
       storeCurrency: 'SEK',
       rate: 1,
@@ -317,9 +317,28 @@ describe('MarketsContextService.resolve', () => {
       is_default: true,
       primary_hostname: 'namez.se',
       status: 'LIVE',
-      noindex: false,
+      indexing: 'AUTO',
     });
     expect(routes?.[1].primary_hostname).toBe('namez.shop');
+  });
+
+  it('still lists a LIVE market set to NEVER (routed; the web applies noindex)', async () => {
+    const { service } = build([
+      defaultMarket,
+      {
+        id: 'm-eu',
+        key: 'eu',
+        currency: 'EUR',
+        status: 'LIVE',
+        indexing: 'NEVER',
+        domains: [{ hostname: 'namez.shop', is_primary: true }],
+      },
+    ]);
+    const routes = await service.listLive(STORE_ID);
+    expect(routes?.map((r) => [r.key, r.indexing])).toEqual([
+      ['default', 'AUTO'],
+      ['eu', 'NEVER'],
+    ]);
   });
 
   it('never advertises a LIVE non-default market without an ACTIVE canonical host', async () => {

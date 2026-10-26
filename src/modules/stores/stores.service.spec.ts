@@ -28,7 +28,7 @@ const ctx = (
   priceRule: { mode: 'convert', source: 'manual', rate: 1 },
   isDefault: key === 'default',
   status: 'LIVE',
-  noindex: false,
+  indexing: 'AUTO',
   primaryHostname: 'namez.se',
   hostnames: ['namez.se'],
   ...over,
@@ -167,6 +167,8 @@ describe('StoresService.findSlugByCustomDomain', () => {
     });
     expect(res.markets).toHaveLength(1);
     expect('redirect_to' in res).toBe(false);
+    // M6.1: the legacy custom_domain rides along for the default market's host.
+    expect(res.custom_domain).toBe('namez.se');
   });
 
   it('app on, PENDING/VERIFIED row or DRAFT market: not served by the market, legacy lookup decides', async () => {

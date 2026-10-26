@@ -249,6 +249,8 @@ export class StoresService {
                 : {}),
               market: toMarketRoute(market ?? defaultMarket),
               markets,
+              // M6.1: public host of a default market without its own row.
+              custom_domain: domain.store.custom_domain ?? null,
             },
           };
         }
