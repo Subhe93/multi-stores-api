@@ -28,6 +28,7 @@ const ctx = (
   priceRule: { mode: 'convert', source: 'manual', rate: 1 },
   isDefault: key === 'default',
   status: 'LIVE',
+  noindex: false,
   primaryHostname: 'namez.se',
   hostnames: ['namez.se'],
   ...over,
@@ -92,7 +93,9 @@ function build(opts: {
     {} as MarketsService,
     marketsContext as unknown as MarketsContextService,
     // M5 B18: the redirects service is required; no active redirects here.
-    { versionFor: jest.fn(() => Promise.resolve(null)) } as unknown as RedirectsService,
+    {
+      versionFor: jest.fn(() => Promise.resolve(null)),
+    } as unknown as RedirectsService,
   );
   return { service, prisma, marketsContext };
 }

@@ -225,6 +225,8 @@ enum CreatorCategoryMatchRule {
 model CreatorCategory {
   id                 String                   @id @default(uuid())
   creator_id         String
+  // Tree of at most three levels (root = depth 0, grandchild = depth 2);
+  // enforced by CreatorCategoriesService (CREATOR_CATEGORY_MAX_DEPTH).
   parent_id          String?
   slug               String
   thumbnail_url      String?
@@ -239,12 +241,15 @@ model CreatorCategory {
   created_at         DateTime                 @default(now())
   updated_at         DateTime                 @updatedAt
 
-  creator         Creator                        @relation(fields: [creator_id], references: [id], onDelete: Cascade)
-  parent          CreatorCategory?               @relation("CreatorCategoryTree", fields: [parent_id], references: [id], onDelete: SetNull)
-  children        CreatorCategory[]              @relation("CreatorCategoryTree")
-  translations    CreatorCategoryTranslation[]
-  products        ProductCreatorCategory[]
-  custom_products CustomProductCreatorCategory[]
+  creator                 Creator                        @relation(fields: [creator_id], references: [id], onDelete: Cascade)
+  parent                  CreatorCategory?               @relation("CreatorCategoryTree", fields: [parent_id], references: [id], onDelete: SetNull)
+  children                CreatorCategory[]              @relation("CreatorCategoryTree")
+  translations            CreatorCategoryTranslation[]
+  products                ProductCreatorCategory[]
+  custom_products         CustomProductCreatorCategory[]
+  // M6: products/custom products that use this collection as their primary one.
+  primary_products        Product[]                      @relation("ProductPrimaryCreatorCategory")
+  primary_custom_products CustomProduct[]                @relation("CustomProductPrimaryCreatorCategory")
 
   @@unique([creator_id, slug])
   @@unique([creator_id, external_ref])
@@ -334,64 +339,69 @@ model CategoryAttributeTemplate {
 // ==========================================
 
 model Product {
-  id                    String             @id @default(uuid())
-  provider_id           String?
-  creator_id            String?
-  category_id           String
-  product_type          ProductType
-  customization_type    CustomizationType?
-  base_price            Decimal            @db.Decimal(10, 2)
-  compare_at_price      Decimal?           @db.Decimal(10, 2)
-  cost_price            Decimal?           @db.Decimal(10, 2)
-  sku                   String?
-  track_inventory       Boolean            @default(false)
-  stock_quantity        Int?
-  weight                Decimal?           @db.Decimal(8, 2)
-  weight_unit           String?            @default("kg")
-  variant_option_config Json?
-  shipping_profile_id   String?
+  id                          String             @id @default(uuid())
+  provider_id                 String?
+  creator_id                  String?
+  category_id                 String
+  product_type                ProductType
+  customization_type          CustomizationType?
+  base_price                  Decimal            @db.Decimal(10, 2)
+  compare_at_price            Decimal?           @db.Decimal(10, 2)
+  cost_price                  Decimal?           @db.Decimal(10, 2)
+  sku                         String?
+  track_inventory             Boolean            @default(false)
+  stock_quantity              Int?
+  weight                      Decimal?           @db.Decimal(8, 2)
+  weight_unit                 String?            @default("kg")
+  variant_option_config       Json?
+  shipping_profile_id         String?
   // Tax class of the product (platform or the owning store's own class);
   // null = the default class of the scope. tax_exempt short-circuits every
   // rate lookup to 0 %.
-  tax_class_id          String?
-  tax_exempt            Boolean            @default(false)
-  status                ProductStatus      @default(DRAFT)
-  is_featured           Boolean            @default(false)
+  tax_class_id                String?
+  tax_exempt                  Boolean            @default(false)
+  status                      ProductStatus      @default(DRAFT)
+  is_featured                 Boolean            @default(false)
   // Importer identity "woo:<site_host>:product:<id>" (M4.4); never copied by duplicate().
-  external_ref          String?            @db.VarChar(191)
+  external_ref                String?            @db.VarChar(191)
   // Feed data (M5.6, feeds app): Google Merchant / Meta catalog identifiers.
   // All nullable; `condition` null = "new"; feed_excluded keeps the product
   // out of every feed. Served only on the owner/creator endpoints (the
   // storefront exposes `brand` alone, and only when set).
-  gtin                    String?          @db.VarChar(14)
-  mpn                     String?          @db.VarChar(70)
-  brand                   String?          @db.VarChar(70)
-  google_product_category String?          @db.VarChar(191)
-  condition               String?          @db.VarChar(16)
-  feed_excluded           Boolean          @default(false)
-  created_at            DateTime           @default(now())
-  updated_at            DateTime           @updatedAt
+  gtin                        String?            @db.VarChar(14)
+  mpn                         String?            @db.VarChar(70)
+  brand                       String?            @db.VarChar(70)
+  google_product_category     String?            @db.VarChar(191)
+  condition                   String?            @db.VarChar(16)
+  feed_excluded               Boolean            @default(false)
+  // M6: the collection used for the breadcrumb / feed category path. Always
+  // one of the linked `creator_categories`; null when none are linked.
+  primary_creator_category_id String?
+  created_at                  DateTime           @default(now())
+  updated_at                  DateTime           @updatedAt
 
-  provider           Provider?                @relation(fields: [provider_id], references: [id])
-  tax_class          TaxClass?                @relation(fields: [tax_class_id], references: [id], onDelete: SetNull)
-  creator            Creator?                 @relation(fields: [creator_id], references: [id])
-  category           Category                 @relation(fields: [category_id], references: [id])
-  shipping_profile   ShippingProfile?         @relation(fields: [shipping_profile_id], references: [id], onDelete: SetNull)
-  translations       ProductTranslation[]
-  images             ProductImage[]
-  attributes         ProductAttribute[]
-  variants           ProductVariant[]
-  tags               ProductTag[]
-  custom_fields      ProductCustomField[]
-  faqs               ProductFaq[]
-  custom_products    CustomProduct[]
-  order_items        OrderItem[]
-  bundles            BundleProduct[]
-  creator_categories ProductCreatorCategory[]
-  market_prices      ProductMarketPrice[]
-  designer           ProductDesigner?
+  primary_creator_category CreatorCategory?         @relation("ProductPrimaryCreatorCategory", fields: [primary_creator_category_id], references: [id], onDelete: SetNull)
+  provider                 Provider?                @relation(fields: [provider_id], references: [id])
+  tax_class                TaxClass?                @relation(fields: [tax_class_id], references: [id], onDelete: SetNull)
+  creator                  Creator?                 @relation(fields: [creator_id], references: [id])
+  category                 Category                 @relation(fields: [category_id], references: [id])
+  shipping_profile         ShippingProfile?         @relation(fields: [shipping_profile_id], references: [id], onDelete: SetNull)
+  translations             ProductTranslation[]
+  images                   ProductImage[]
+  attributes               ProductAttribute[]
+  variants                 ProductVariant[]
+  tags                     ProductTag[]
+  custom_fields            ProductCustomField[]
+  faqs                     ProductFaq[]
+  custom_products          CustomProduct[]
+  order_items              OrderItem[]
+  bundles                  BundleProduct[]
+  creator_categories       ProductCreatorCategory[]
+  market_prices            ProductMarketPrice[]
+  designer                 ProductDesigner?
 
   @@unique([creator_id, external_ref])
+  @@index([primary_creator_category_id])
   @@index([provider_id])
   @@index([creator_id])
   @@index([category_id])
@@ -1300,6 +1310,9 @@ model Market {
   payment_check   Json?
   // Reserved for a later milestone (per-market legal entity).
   legal_entity_id String?
+  // M6: keep the market out of search engines (robots meta + X-Robots-Tag,
+  // empty sitemap, excluded from other markets' hreflang). Still routed.
+  noindex         Boolean      @default(false)
   created_at      DateTime     @default(now())
   updated_at      DateTime     @updatedAt
 
@@ -1662,21 +1675,34 @@ model Menu {
   @@index([store_id])
 }
 
+// What a menu item points at. `url` is always the rendered link (resolved
+// when the item is picked in the editor); `resource_id` keeps the picked
+// page / collection / product id so the editor can show what it was.
+enum MenuItemKind {
+  CUSTOM
+  PAGE
+  COLLECTION
+  PRODUCT
+}
+
 model MenuItem {
-  id              String   @id @default(uuid())
+  id              String       @id @default(uuid())
   menu_id         String
-  // Self-reference for nested items (mega-menu groups, dropdowns). v1
-  // editors only expose top-level items; v2 will surface nesting.
+  // Self-reference for nested items (dropdowns, mega-menu groups). The
+  // editor nests up to three levels (MenusService enforces MENU_MAX_DEPTH).
   parent_id       String?
-  sort_order      Int      @default(0)
+  sort_order      Int          @default(0)
+  kind            MenuItemKind @default(CUSTOM)
+  // Id of the picked Page / CreatorCategory / Product (null for CUSTOM).
+  resource_id     String?
   label           String
   // Per-locale label overrides keyed by locale code, e.g. { "ar": "الرئيسية" }.
   // `label` is the primary-locale value + fallback when a locale is missing.
-  label_i18n      Json     @default("{}")
+  label_i18n      Json         @default("{}")
   url             String
-  open_in_new_tab Boolean  @default(false)
-  created_at      DateTime @default(now())
-  updated_at      DateTime @updatedAt
+  open_in_new_tab Boolean      @default(false)
+  created_at      DateTime     @default(now())
+  updated_at      DateTime     @updatedAt
 
   menu     Menu       @relation(fields: [menu_id], references: [id], onDelete: Cascade)
   parent   MenuItem?  @relation("MenuItemNesting", fields: [parent_id], references: [id], onDelete: Cascade)
@@ -1746,31 +1772,37 @@ model PageVersion {
 // ==========================================
 
 model CustomProduct {
-  id               String        @id @default(uuid())
-  product_id       String
-  creator_id       String
-  import_mode      ImportMode    @default(CUSTOMIZE)
-  pricing_type     PricingType   @default(SINGLE)
-  final_price      Decimal       @default(0) @db.Decimal(10, 2)
-  margin_amount    Decimal?      @db.Decimal(10, 2)
-  status           ProductStatus @default(DRAFT)
-  rejection_reason String?
-  submitted_at     DateTime?
-  reviewed_at      DateTime?
-  reviewed_by      String?
-  created_at       DateTime      @default(now())
-  updated_at       DateTime      @updatedAt
+  id                          String        @id @default(uuid())
+  product_id                  String
+  creator_id                  String
+  import_mode                 ImportMode    @default(CUSTOMIZE)
+  pricing_type                PricingType   @default(SINGLE)
+  final_price                 Decimal       @default(0) @db.Decimal(10, 2)
+  margin_amount               Decimal?      @db.Decimal(10, 2)
+  status                      ProductStatus @default(DRAFT)
+  rejection_reason            String?
+  submitted_at                DateTime?
+  reviewed_at                 DateTime?
+  reviewed_by                 String?
+  // M6: the collection used for the breadcrumb / feed category path. Always
+  // one of the linked `creator_categories`; null when none are linked.
+  primary_creator_category_id String?
+  created_at                  DateTime      @default(now())
+  updated_at                  DateTime      @updatedAt
 
-  product            Product                        @relation(fields: [product_id], references: [id])
-  creator            Creator                        @relation(fields: [creator_id], references: [id])
-  mockup_images      CustomProductImage[]
-  translations       CustomProductTranslation[]
-  selected_variants  CustomProductVariant[]
-  field_values       CustomProductFieldValue[]
-  faqs               CustomProductFaq[]
-  order_items        OrderItem[]
-  bundles            BundleCustomProduct[]
-  creator_categories CustomProductCreatorCategory[]
+  product                  Product                        @relation(fields: [product_id], references: [id])
+  creator                  Creator                        @relation(fields: [creator_id], references: [id])
+  primary_creator_category CreatorCategory?               @relation("CustomProductPrimaryCreatorCategory", fields: [primary_creator_category_id], references: [id], onDelete: SetNull)
+  mockup_images            CustomProductImage[]
+  translations             CustomProductTranslation[]
+  selected_variants        CustomProductVariant[]
+  field_values             CustomProductFieldValue[]
+  faqs                     CustomProductFaq[]
+  order_items              OrderItem[]
+  bundles                  BundleCustomProduct[]
+  creator_categories       CustomProductCreatorCategory[]
+
+  @@index([primary_creator_category_id])
 }
 
 model CustomProductCreatorCategory {

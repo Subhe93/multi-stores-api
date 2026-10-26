@@ -5,6 +5,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { resolvePrimaryCreatorCategory } from '../creator-categories/primary-collection';
 import {
   ImportMode,
   PricingType,
@@ -172,31 +173,91 @@ export class CustomProductsService {
   };
 
   /**
-   * Attach a custom product to one or more of the creator's own collections.
+   * Replace a custom product's collection links with `categoryIds`.
    * Silently skips any collection id that doesn't belong to this creator
-   * (defense-in-depth — DTO can't enforce ownership).
+   * (defense-in-depth — DTO can't enforce ownership). Links that stay keep
+   * their row (and so their `sort_order`, M6); only the removed ones are
+   * deleted and the new ones created, appended after the kept ones.
+   * Returns the linked ids in the order they were sent.
    */
-  private async attachCreatorCategories(
+  private async syncCreatorCategories(
     customProductId: string,
     creatorId: string,
     categoryIds: string[],
-  ) {
-    if (!categoryIds.length) return;
-    const owned = await this.prisma.creatorCategory.findMany({
-      where: { id: { in: categoryIds }, creator_id: creatorId },
-      select: { id: true },
-    });
+  ): Promise<string[]> {
+    const owned = categoryIds.length
+      ? await this.prisma.creatorCategory.findMany({
+          where: { id: { in: categoryIds }, creator_id: creatorId },
+          select: { id: true },
+        })
+      : [];
     const ownedIds = new Set(owned.map((c) => c.id));
-    const toAttach = categoryIds.filter((id) => ownedIds.has(id));
-    if (!toAttach.length) return;
-    await this.prisma.customProductCreatorCategory.createMany({
-      data: toAttach.map((creator_category_id, sort_order) => ({
+    const linked = Array.from(
+      new Set(categoryIds.filter((id) => ownedIds.has(id))),
+    );
+    const kept = await this.prisma.customProductCreatorCategory.findMany({
+      where: {
         custom_product_id: customProductId,
-        creator_category_id,
-        sort_order,
-      })),
-      skipDuplicates: true,
+        creator_category_id: { in: linked },
+      },
+      select: { creator_category_id: true, sort_order: true },
     });
+    await this.prisma.customProductCreatorCategory.deleteMany({
+      where: {
+        custom_product_id: customProductId,
+        creator_category_id: { notIn: linked },
+      },
+    });
+    const keptIds = new Set(kept.map((k) => k.creator_category_id));
+    const next = kept.reduce((m, k) => Math.max(m, k.sort_order + 1), 0);
+    const toAttach = linked.filter((id) => !keptIds.has(id));
+    if (toAttach.length) {
+      await this.prisma.customProductCreatorCategory.createMany({
+        data: toAttach.map((creator_category_id, i) => ({
+          custom_product_id: customProductId,
+          creator_category_id,
+          sort_order: next + i,
+        })),
+        skipDuplicates: true,
+      });
+    }
+    return linked;
+  }
+
+  /**
+   * M6: store the primary collection of a custom product. `linked` is the
+   * current link list (request order when it was just replaced, stored
+   * order otherwise); the rules live in resolvePrimaryCreatorCategory.
+   */
+  private async applyPrimaryCreatorCategory(
+    customProductId: string,
+    linked: string[],
+    requested: string | null | undefined,
+    current: string | null,
+  ) {
+    const primary = resolvePrimaryCreatorCategory({
+      requested,
+      linked,
+      current,
+    });
+    if (primary !== current) {
+      await this.prisma.customProduct.update({
+        where: { id: customProductId },
+        data: { primary_creator_category_id: primary },
+      });
+    }
+  }
+
+  /** Stored link ids of a custom product, by position then id. */
+  private async linkedCreatorCategoryIds(
+    customProductId: string,
+  ): Promise<string[]> {
+    const rows = await this.prisma.customProductCreatorCategory.findMany({
+      where: { custom_product_id: customProductId },
+      select: { creator_category_id: true },
+      orderBy: [{ sort_order: 'asc' }, { creator_category_id: 'asc' }],
+    });
+    return rows.map((r) => r.creator_category_id);
   }
 
   /**
@@ -369,8 +430,18 @@ export class CustomProductsService {
       mockup_image_urls,
       bundle_ids,
       creator_category_ids,
+      primary_creator_category_id,
       ...data
     } = dto;
+
+    // M6: a requested primary that is not among the sent links fails before
+    // anything is written (the ownership-filtered check runs again after the
+    // links are created, so this only avoids an orphan custom product row).
+    resolvePrimaryCreatorCategory({
+      requested: primary_creator_category_id,
+      linked: creator_category_ids ?? [],
+      current: null,
+    });
 
     if (bundle_ids && bundle_ids.length > 0) {
       await this.assertBundlesOwnedByCreator(bundle_ids, creator.id);
@@ -505,13 +576,26 @@ export class CustomProductsService {
     });
 
     if (creator_category_ids?.length) {
-      await this.attachCreatorCategories(
+      const linked = await this.syncCreatorCategories(
         created.id,
         creator.id,
         creator_category_ids,
       );
+      await this.applyPrimaryCreatorCategory(
+        created.id,
+        linked,
+        primary_creator_category_id,
+        null,
+      );
       return this.loadById(created.id);
     }
+    // No links: a requested primary cannot be honoured (throws).
+    await this.applyPrimaryCreatorCategory(
+      created.id,
+      [],
+      primary_creator_category_id,
+      null,
+    );
 
     return created;
   }
@@ -708,6 +792,7 @@ export class CustomProductsService {
       mockup_image_urls,
       bundle_ids,
       creator_category_ids,
+      primary_creator_category_id,
       ...data
     } = dto;
 
@@ -851,18 +936,27 @@ export class CustomProductsService {
       include: this.includes,
     });
 
-    // Replace creator collection links if provided. Empty array → detach all.
-    if (creator_category_ids !== undefined) {
-      await this.prisma.customProductCreatorCategory.deleteMany({
-        where: { custom_product_id: id },
-      });
-      if (creator_category_ids.length > 0) {
-        await this.attachCreatorCategories(
-          id,
-          existing.creator_id,
-          creator_category_ids,
-        );
-      }
+    // Replace creator collection links if provided. Empty array → detach all;
+    // kept links keep their sort_order. The primary is re-resolved whenever
+    // the links or the requested primary change (M6).
+    const linksTouched =
+      creator_category_ids !== undefined ||
+      primary_creator_category_id !== undefined;
+    if (linksTouched) {
+      const linked =
+        creator_category_ids !== undefined
+          ? await this.syncCreatorCategories(
+              id,
+              existing.creator_id,
+              creator_category_ids,
+            )
+          : await this.linkedCreatorCategoryIds(id);
+      await this.applyPrimaryCreatorCategory(
+        id,
+        linked,
+        primary_creator_category_id,
+        existing.primary_creator_category_id,
+      );
     }
 
     // Notify provider if product was auto-reverted to PENDING_REVIEW after edit
@@ -873,7 +967,7 @@ export class CustomProductsService {
       );
     }
 
-    return creator_category_ids !== undefined ? this.loadById(id) : updated;
+    return linksTouched ? this.loadById(id) : updated;
   }
 
   async delete(id: string, userId?: string) {

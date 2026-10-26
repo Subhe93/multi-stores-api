@@ -45,7 +45,9 @@ function build(stored: Row[]) {
       fn(prisma),
     ),
   };
-  const revalidation = { revalidateStoreById: jest.fn(() => Promise.resolve()) };
+  const revalidation = {
+    revalidateStoreById: jest.fn(() => Promise.resolve()),
+  };
   const service = new MenusService(
     prisma as unknown as PrismaService,
     revalidation as unknown as RevalidationService,
@@ -120,5 +122,72 @@ describe('MenusService.setItems (M5 A-X label_i18n carry-over)', () => {
     expect(items().map((r) => r.id)).toEqual(['new-1', 'new-2']);
     expect(items()[0].label_i18n).toEqual({ en: 'Shop' });
     expect(items()[1].label_i18n).toEqual({});
+  });
+});
+
+// M6: typed items and a depth cap of three levels.
+describe('MenusService.setItems (M6 kind / resource_id / MENU_MAX_DEPTH)', () => {
+  it('persists kind and resource_id; a CUSTOM item never keeps a resource_id', async () => {
+    const { service, items } = build([]);
+    await service.setItems('u1', 'm1', {
+      items: [
+        {
+          label: 'Shop',
+          url: '/collections/shop',
+          kind: 'COLLECTION',
+          resource_id: 'cat-1',
+        },
+        { label: 'Blog', url: 'https://x', resource_id: 'ignored' },
+      ],
+    });
+    expect(items()[0]).toMatchObject({
+      kind: 'COLLECTION',
+      resource_id: 'cat-1',
+    });
+    expect(items()[1]).toMatchObject({ kind: 'CUSTOM', resource_id: null });
+  });
+
+  it('accepts three levels and rejects a fourth before touching the rows', async () => {
+    const three = build([HOME]);
+    await three.service.setItems('u1', 'm1', {
+      items: [
+        {
+          label: 'L1',
+          url: '/1',
+          children: [
+            { label: 'L2', url: '/2', children: [{ label: 'L3', url: '/3' }] },
+          ],
+        },
+      ],
+    });
+    expect(three.items().map((r) => r.label)).toEqual(['L1', 'L2', 'L3']);
+
+    const four = build([HOME]);
+    await expect(
+      four.service.setItems('u1', 'm1', {
+        items: [
+          {
+            label: 'L1',
+            url: '/1',
+            children: [
+              {
+                label: 'L2',
+                url: '/2',
+                children: [
+                  {
+                    label: 'L3',
+                    url: '/3',
+                    children: [{ label: 'L4', url: '/4' }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ response: { code: 'MENU_MAX_DEPTH' } });
+    const fourPrisma = four.prisma as { menuItem: { deleteMany: jest.Mock } };
+    expect(fourPrisma.menuItem.deleteMany).not.toHaveBeenCalled();
+    expect(four.items()).toEqual([HOME]);
   });
 });

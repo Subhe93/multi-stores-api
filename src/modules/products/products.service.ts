@@ -38,6 +38,7 @@ import {
 import { isPlainObject } from '@multi-stores/core/personalization/rules';
 import { isValidGtin } from '../feeds/gtin';
 import { sanitizeCreatorHtml } from '../../common/html/creator-html';
+import { resolvePrimaryCreatorCategory } from '../creator-categories/primary-collection';
 
 /**
  * `description` / `short_description` are rendered on the storefront as
@@ -389,29 +390,75 @@ export class ProductsService {
   };
 
   /**
-   * Attach a creator's product to one or more of their own collections.
+   * Replace a creator product's collection links with `categoryIds`.
    * Silently skips any collection id that doesn't belong to this creator
-   * (defense-in-depth — DTO can't enforce ownership).
+   * (defense-in-depth — DTO can't enforce ownership). Links that stay keep
+   * their row (and so their `sort_order` = position in the collection, M6);
+   * only the removed ones are deleted and the new ones created.
+   * Returns the linked ids in the order they were sent.
    */
-  private async attachCreatorCategories(
+  private async syncCreatorCategories(
     productId: string,
     creatorId: string,
     categoryIds: string[],
-  ) {
-    const owned = await this.prisma.creatorCategory.findMany({
-      where: { id: { in: categoryIds }, creator_id: creatorId },
-      select: { id: true },
-    });
+  ): Promise<string[]> {
+    const owned = categoryIds.length
+      ? await this.prisma.creatorCategory.findMany({
+          where: { id: { in: categoryIds }, creator_id: creatorId },
+          select: { id: true },
+        })
+      : [];
     const ownedIds = new Set(owned.map((c) => c.id));
-    const toAttach = categoryIds.filter((id) => ownedIds.has(id));
-    if (!toAttach.length) return;
-    await this.prisma.productCreatorCategory.createMany({
-      data: toAttach.map((creator_category_id) => ({
-        product_id: productId,
-        creator_category_id,
-      })),
-      skipDuplicates: true,
+    const linked = Array.from(
+      new Set(categoryIds.filter((id) => ownedIds.has(id))),
+    );
+    await this.prisma.productCreatorCategory.deleteMany({
+      where: { product_id: productId, creator_category_id: { notIn: linked } },
     });
+    if (linked.length) {
+      await this.prisma.productCreatorCategory.createMany({
+        data: linked.map((creator_category_id) => ({
+          product_id: productId,
+          creator_category_id,
+        })),
+        skipDuplicates: true,
+      });
+    }
+    return linked;
+  }
+
+  /**
+   * M6: store the primary collection of a creator product. `linked` is the
+   * current link list (request order when it was just replaced, stored
+   * order otherwise); the rules live in resolvePrimaryCreatorCategory.
+   */
+  private async applyPrimaryCreatorCategory(
+    productId: string,
+    linked: string[],
+    requested: string | null | undefined,
+    current: string | null,
+  ) {
+    const primary = resolvePrimaryCreatorCategory({
+      requested,
+      linked,
+      current,
+    });
+    if (primary !== current) {
+      await this.prisma.product.update({
+        where: { id: productId },
+        data: { primary_creator_category_id: primary },
+      });
+    }
+  }
+
+  /** Stored link ids of a product, by position in the collection then id. */
+  private async linkedCreatorCategoryIds(productId: string): Promise<string[]> {
+    const rows = await this.prisma.productCreatorCategory.findMany({
+      where: { product_id: productId },
+      select: { creator_category_id: true },
+      orderBy: [{ sort_order: 'asc' }, { creator_category_id: 'asc' }],
+    });
+    return rows.map((r) => r.creator_category_id);
   }
 
   private async assertBundlesOwnedByCreator(
@@ -547,6 +594,7 @@ export class ProductsService {
       tags,
       bundle_ids,
       creator_category_ids,
+      primary_creator_category_id,
       variants,
       images,
       ...data
@@ -578,6 +626,17 @@ export class ProductsService {
           message: 'Creator profile not found',
         });
       productData.creator_id = creator.id;
+    }
+
+    // M6: a requested primary that is not among the sent links fails before
+    // anything is written (the ownership-filtered check runs again after the
+    // links are created, so this only avoids an orphan product row).
+    if (userRole === UserRole.CREATOR) {
+      resolvePrimaryCreatorCategory({
+        requested: primary_creator_category_id,
+        linked: creator_category_ids ?? [],
+        current: null,
+      });
     }
 
     normalizeFeedFields(data);
@@ -623,15 +682,19 @@ export class ProductsService {
     }
 
     // Attach creator collections (creator-only — collections are creator-scoped)
-    if (
-      creator_category_ids?.length &&
-      userRole === UserRole.CREATOR &&
-      productData.creator_id
-    ) {
-      await this.attachCreatorCategories(
+    if (userRole === UserRole.CREATOR && productData.creator_id) {
+      const linked = creator_category_ids?.length
+        ? await this.syncCreatorCategories(
+            product.id,
+            productData.creator_id,
+            creator_category_ids,
+          )
+        : [];
+      await this.applyPrimaryCreatorCategory(
         product.id,
-        productData.creator_id,
-        creator_category_ids,
+        linked,
+        primary_creator_category_id,
+        null,
       );
     }
 
@@ -815,7 +878,9 @@ export class ProductsService {
           message: 'Creator profile not found',
         });
 
-      return this.findAll({ ...filters, creator_id: creator.id });
+      return this.withSlug(
+        await this.findAll({ ...filters, creator_id: creator.id }),
+      );
     }
 
     const provider = await this.prisma.provider.findUnique({
@@ -827,7 +892,25 @@ export class ProductsService {
         message: 'Provider profile not found',
       });
 
-    return this.findAll({ ...filters, provider_id: provider.id });
+    return this.withSlug(
+      await this.findAll({ ...filters, provider_id: provider.id }),
+    );
+  }
+
+  /**
+   * M6: `/products/mine` rows carry a top-level `slug` (the menu editor's
+   * product picker links to it): the first translation that has one.
+   */
+  private withSlug<
+    T extends { data: Array<{ translations: Array<{ slug: string }> }> },
+  >(page: T): T & { data: Array<T['data'][number] & { slug: string | null }> } {
+    return {
+      ...page,
+      data: page.data.map((p) => ({
+        ...p,
+        slug: p.translations.find((t) => !!t.slug)?.slug ?? null,
+      })),
+    };
   }
 
   async findById(id: string, userId?: string, userRole?: UserRole) {
@@ -897,6 +980,7 @@ export class ProductsService {
       tags,
       bundle_ids,
       creator_category_ids,
+      primary_creator_category_id,
       variants,
       images,
       ...data
@@ -924,22 +1008,29 @@ export class ProductsService {
 
     await this.syncVariantsAndImages(id, variants, images);
 
-    // Replace creator-collection attachments (creator-owned products only)
+    // Replace creator-collection attachments (creator-owned products only);
+    // kept links keep their sort_order. The primary is re-resolved whenever
+    // the links or the requested primary change (M6).
     if (
-      creator_category_ids !== undefined &&
+      (creator_category_ids !== undefined ||
+        primary_creator_category_id !== undefined) &&
       userRole === UserRole.CREATOR &&
       product.creator_id
     ) {
-      await this.prisma.productCreatorCategory.deleteMany({
-        where: { product_id: id },
-      });
-      if (creator_category_ids.length > 0) {
-        await this.attachCreatorCategories(
-          id,
-          product.creator_id,
-          creator_category_ids,
-        );
-      }
+      const linked =
+        creator_category_ids !== undefined
+          ? await this.syncCreatorCategories(
+              id,
+              product.creator_id,
+              creator_category_ids,
+            )
+          : await this.linkedCreatorCategoryIds(id);
+      await this.applyPrimaryCreatorCategory(
+        id,
+        linked,
+        primary_creator_category_id,
+        product.primary_creator_category_id,
+      );
     }
 
     // Replace bundle attachments — only for creator-owned products.

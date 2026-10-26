@@ -86,6 +86,11 @@ export class CreateMarketDto {
   @ValidateNested()
   @Type(() => PriceRuleDto)
   price_rule?: PriceRuleDto;
+
+  // M6: keep the market out of search engines (still routed and listed).
+  @IsOptional()
+  @IsBoolean()
+  noindex?: boolean;
 }
 
 export class UpdateMarketDto {
@@ -126,6 +131,10 @@ export class UpdateMarketDto {
   @ValidateNested()
   @Type(() => PriceRuleDto)
   price_rule?: PriceRuleDto;
+
+  @IsOptional()
+  @IsBoolean()
+  noindex?: boolean;
 }
 
 export class SetMarketStatusDto {

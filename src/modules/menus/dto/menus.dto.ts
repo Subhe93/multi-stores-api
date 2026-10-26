@@ -1,6 +1,7 @@
 import {
   IsArray,
   IsBoolean,
+  IsEnum,
   IsObject,
   IsOptional,
   IsString,
@@ -10,6 +11,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { MenuItemKind } from '@prisma/client';
 
 const KEY_REGEX = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
@@ -52,6 +54,17 @@ export class MenuItemInputDto {
   @IsString()
   parent_id?: string | null;
 
+  // M6: what the item points at (CUSTOM when absent). `url` is always the
+  // rendered link; `resource_id` is the picked page / collection / product.
+  @IsOptional()
+  @IsEnum(MenuItemKind)
+  kind?: MenuItemKind;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  resource_id?: string | null;
+
   @IsString()
   @MinLength(1)
   @MaxLength(120)
@@ -82,7 +95,7 @@ export class MenuItemInputDto {
 
 // Full replace of a menu's items in one call. The editor sends the entire
 // ordered list; the service diffs against existing rows. Order is implied
-// by array position (sort_order = index).
+// by array position (sort_order = index). At most three levels (MENU_MAX_DEPTH).
 export class SetMenuItemsDto {
   @IsArray()
   @ValidateNested({ each: true })

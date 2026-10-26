@@ -5,6 +5,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CREATOR_CATEGORY_MAX_DEPTH } from '../creator-categories/primary-collection';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { MarketsContextService } from '../markets/markets-context.service';
 import { MarketPricingService } from '../markets/market-pricing.service';
@@ -134,6 +135,18 @@ export function publicCreatorCategory<
   void _rule;
   void _tags;
   return rest;
+}
+
+/** A linked collection row as the product queries include it (M6). */
+export type PublicCollectionRow = Prisma.CreatorCategoryGetPayload<{
+  include: { translations: true };
+}>;
+
+/** One node of `primary_collection_path` (root -> leaf). */
+export interface PublicCollectionPathNode {
+  id: string;
+  slug: string;
+  translations: PublicCollectionRow['translations'];
 }
 
 /** What the custom-product price helpers read; every query includes more. */
@@ -1088,10 +1101,11 @@ export class StorefrontService {
             : undefined,
           stock: v.stock_quantity ?? 999,
         })),
-        creator_categories: (product.creator_categories || [])
-          .map((pcc) => pcc.creator_category)
-          .filter((cc) => cc && cc.is_active !== false)
-          .map(publicCreatorCategory),
+        ...(await this.primaryCollectionFields(
+          product.creator_id,
+          product.primary_creator_category_id,
+          (product.creator_categories || []).map((pcc) => pcc.creator_category),
+        )),
         promotions,
         bundles,
         // b2b app: estimated rate (variants share the product's class).
@@ -1276,10 +1290,13 @@ export class StorefrontService {
       variants,
       tags: baseProduct.tags,
       category: baseProduct.category,
-      creator_categories: (customProduct.creator_categories || [])
-        .map((cpcc) => cpcc.creator_category)
-        .filter((cc) => cc && cc.is_active !== false)
-        .map(publicCreatorCategory),
+      ...(await this.primaryCollectionFields(
+        customProduct.creator_id,
+        customProduct.primary_creator_category_id,
+        (customProduct.creator_categories || []).map(
+          (cpcc) => cpcc.creator_category,
+        ),
+      )),
       custom_fields: customerFields,
       faqs: [...(customProduct.faqs || []), ...baseProduct.faqs],
       field_values: customProduct.field_values.map((fv) =>
@@ -1380,8 +1397,75 @@ export class StorefrontService {
   }
 
   /**
-   * Public tree of the creator's active collections for this store.
-   * Returns only root → child nodes (one level of nesting today).
+   * M6: the collection fields of a product payload. `creator_categories`
+   * is the active linked collections with the primary first;
+   * `primary_creator_category_id` is null when the primary is missing or
+   * inactive; `primary_collection_path` is root -> leaf (active ancestors,
+   * then the primary), `[]` when there is no primary. Ancestors are read by
+   * parent_id, scoped to the creator, at most CREATOR_CATEGORY_MAX_DEPTH hops.
+   */
+  private async primaryCollectionFields(
+    creatorId: string | null,
+    primaryId: string | null,
+    linked: PublicCollectionRow[],
+  ) {
+    const active = linked.filter((cc) => cc && cc.is_active !== false);
+    const primary = primaryId
+      ? active.find((cc) => cc.id === primaryId)
+      : undefined;
+    const ordered = primary
+      ? [primary, ...active.filter((cc) => cc !== primary)]
+      : active;
+    const path: PublicCollectionPathNode[] = [];
+    if (primary) {
+      const ancestors: PublicCollectionPathNode[] = [];
+      let cursor = primary.parent_id;
+      const seen = new Set<string>([primary.id]);
+      for (
+        let hop = 0;
+        cursor && !seen.has(cursor) && hop < CREATOR_CATEGORY_MAX_DEPTH;
+        hop++
+      ) {
+        seen.add(cursor);
+        const row = await this.prisma.creatorCategory.findFirst({
+          where: {
+            id: cursor,
+            ...(creatorId ? { creator_id: creatorId } : {}),
+          },
+          select: {
+            id: true,
+            slug: true,
+            parent_id: true,
+            is_active: true,
+            translations: true,
+          },
+        });
+        if (!row) break;
+        if (row.is_active) {
+          ancestors.unshift({
+            id: row.id,
+            slug: row.slug,
+            translations: row.translations,
+          });
+        }
+        cursor = row.parent_id;
+      }
+      path.push(...ancestors, {
+        id: primary.id,
+        slug: primary.slug,
+        translations: primary.translations,
+      });
+    }
+    return {
+      creator_categories: ordered.map(publicCreatorCategory),
+      primary_creator_category_id: primary ? primary.id : null,
+      primary_collection_path: path,
+    };
+  }
+
+  /**
+   * Public tree of the creator's active collections for this store
+   * (root -> child -> grandchild, three levels at most since M6).
    */
   async getCreatorCategories(slug: string) {
     const store = await this.prisma.store.findUnique({
@@ -1738,6 +1822,8 @@ export class StorefrontService {
           select: {
             id: true,
             parent_id: true,
+            kind: true,
+            resource_id: true,
             label: true,
             label_i18n: true,
             url: true,

@@ -229,6 +229,7 @@ const eu: MarketContext = {
   rate: 0.1,
   priceRule: { mode: 'convert', rounding: { increment: 0, ending: 'none' } },
   isDefault: false,
+  noindex: false,
   status: 'LIVE',
   primaryHostname: null,
   hostnames: [],

@@ -26,6 +26,8 @@ export interface MarketContext {
   priceRule: PriceRule;
   isDefault: boolean;
   status: 'DRAFT' | 'LIVE';
+  /** M6: robots noindex for this market (the web applies it; still routed). */
+  noindex: boolean;
   /** The ACTIVE primary StoreDomain host, else null (platform subdomain). */
   primaryHostname: string | null;
   /** Every ACTIVE hostname of the market (what a client may claim to be on). */
@@ -51,6 +53,7 @@ export function toMarketRoute(ctx: MarketContext): MarketRoute {
       is_default: ctx.isDefault,
       primary_hostname: ctx.primaryHostname,
       status: ctx.status,
+      noindex: ctx.noindex,
       preview: true,
     };
   }
@@ -64,5 +67,6 @@ export function toMarketRoute(ctx: MarketContext): MarketRoute {
     is_default: ctx.isDefault,
     primary_hostname: ctx.primaryHostname,
     status: 'LIVE',
+    noindex: ctx.noindex,
   };
 }

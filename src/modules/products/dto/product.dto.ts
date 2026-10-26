@@ -253,6 +253,13 @@ export class CreateProductDto {
   @IsString({ each: true })
   creator_category_ids?: string[];
 
+  // M6: the primary collection (breadcrumb / feed path). Must be one of
+  // creator_category_ids; null/absent = auto (see resolvePrimaryCreatorCategory).
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  primary_creator_category_id?: string | null;
+
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
@@ -409,6 +416,11 @@ export class UpdateProductDto {
   @IsArray()
   @IsString({ each: true })
   creator_category_ids?: string[];
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  primary_creator_category_id?: string | null;
 
   @IsOptional()
   @IsArray()

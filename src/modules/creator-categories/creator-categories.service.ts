@@ -13,6 +13,7 @@ import {
 } from './dto/creator-category.dto';
 import { CreatorCategoryMatchRule } from '@prisma/client';
 import { sanitizeCreatorHtml } from '../../common/html/creator-html';
+import { CREATOR_CATEGORY_MAX_DEPTH } from './primary-collection';
 
 /**
  * Collection descriptions are rendered as HTML on the storefront. An
@@ -92,6 +93,58 @@ export class CreatorCategoriesService {
     }
   }
 
+  /** Depth of a collection: root = 0, child = 1, ... (walks parent_id). */
+  private async depthOf(id: string): Promise<number> {
+    let depth = 0;
+    let cursor: string | null = id;
+    const seen = new Set<string>();
+    while (cursor && !seen.has(cursor)) {
+      seen.add(cursor);
+      const row: { parent_id: string | null } | null =
+        await this.prisma.creatorCategory.findUnique({
+          where: { id: cursor },
+          select: { parent_id: true },
+        });
+      cursor = row?.parent_id ?? null;
+      if (cursor) depth++;
+    }
+    return depth;
+  }
+
+  /** Height of the subtree under `id`: 0 = no children, 1 = children only, ... */
+  private async subtreeHeight(id: string): Promise<number> {
+    const children = await this.prisma.creatorCategory.findMany({
+      where: { parent_id: id },
+      select: { id: true },
+    });
+    if (!children.length) return 0;
+    let max = 0;
+    for (const c of children) {
+      max = Math.max(max, await this.subtreeHeight(c.id));
+    }
+    return max + 1;
+  }
+
+  /**
+   * M6: three levels at most (root = 0, grandchild = 2). On create the
+   * parent must be at depth <= 1; on a move, the node's new depth plus the
+   * height of the subtree it carries must stay <= 2.
+   */
+  private async assertDepthAllowed(
+    parentId: string | null | undefined,
+    movedId?: string,
+  ) {
+    if (!parentId) return;
+    const depth = (await this.depthOf(parentId)) + 1;
+    const height = movedId ? await this.subtreeHeight(movedId) : 0;
+    if (depth + height > CREATOR_CATEGORY_MAX_DEPTH) {
+      throw new BadRequestException({
+        code: 'CREATOR_CATEGORY_MAX_DEPTH',
+        message: `Collections can be nested at most ${CREATOR_CATEGORY_MAX_DEPTH + 1} levels deep`,
+      });
+    }
+  }
+
   async create(userId: string, dto: CreateCreatorCategoryDto) {
     const creatorId = await this.getCreatorIdOrThrow(userId);
     const {
@@ -114,6 +167,7 @@ export class CreatorCategoriesService {
           message: 'Invalid parent collection',
         });
       }
+      await this.assertDepthAllowed(parent_id);
     }
 
     const created = await this.prisma.creatorCategory.create({
@@ -243,6 +297,7 @@ export class CreatorCategoriesService {
           });
         }
         await this.assertNoCycle(id, parent_id);
+        await this.assertDepthAllowed(parent_id, id);
       }
     }
 

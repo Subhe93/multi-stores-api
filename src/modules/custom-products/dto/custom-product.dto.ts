@@ -1,6 +1,7 @@
 import {
   IsString,
   IsOptional,
+  ValidateIf,
   IsNumber,
   IsEnum,
   IsArray,
@@ -106,6 +107,13 @@ export class CreateCustomProductDto {
   @IsArray()
   @IsString({ each: true })
   creator_category_ids?: string[];
+
+  // M6: the primary collection (breadcrumb / feed path). Must be one of
+  // creator_category_ids; null/absent = auto (see resolvePrimaryCreatorCategory).
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  primary_creator_category_id?: string | null;
 }
 
 // ── Update DTO ────────────────────────────────────────────
@@ -163,4 +171,11 @@ export class UpdateCustomProductDto {
   @IsArray()
   @IsString({ each: true })
   creator_category_ids?: string[];
+
+  // M6: the primary collection (breadcrumb / feed path). Must be one of
+  // creator_category_ids; null/absent = auto (see resolvePrimaryCreatorCategory).
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  primary_creator_category_id?: string | null;
 }

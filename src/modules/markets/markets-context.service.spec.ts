@@ -18,6 +18,7 @@ type MarketSeed = {
   currency: string;
   is_default?: boolean;
   status?: 'DRAFT' | 'LIVE';
+  noindex?: boolean;
   price_rule?: unknown;
   domains?: {
     hostname: string;
@@ -43,6 +44,7 @@ function makePrisma(
     currency: m.currency,
     is_default: m.is_default ?? false,
     status: m.status ?? 'LIVE',
+    noindex: m.noindex ?? false,
     price_rule: m.price_rule ?? { mode: 'convert', source: 'manual', rate: 1 },
     domains: (m.domains ?? []).map((d) => ({
       hostname: d.hostname,
@@ -118,6 +120,7 @@ describe('MarketsContextService.resolve', () => {
     expect(ctx).toMatchObject({
       key: 'default',
       isDefault: true,
+      noindex: false,
       currency: 'SEK',
       storeCurrency: 'SEK',
       rate: 1,
@@ -314,6 +317,7 @@ describe('MarketsContextService.resolve', () => {
       is_default: true,
       primary_hostname: 'namez.se',
       status: 'LIVE',
+      noindex: false,
     });
     expect(routes?.[1].primary_hostname).toBe('namez.shop');
   });

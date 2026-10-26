@@ -131,8 +131,13 @@ const feedProductSelect = {
     },
     orderBy: { id: 'asc' as const },
   },
+  primary_creator_category_id: true,
   creator_categories: {
     select: { creator_category_id: true },
+    orderBy: [
+      { sort_order: 'asc' as const },
+      { creator_category_id: 'asc' as const },
+    ],
   },
 } satisfies Prisma.ProductSelect;
 
@@ -560,7 +565,12 @@ export class FeedsService {
       const orderedImages = featured
         ? [featured, ...productImages.filter((i) => i !== featured)]
         : productImages;
-      const path = collectionPath(p.creator_categories, collections, locale);
+      const path = collectionPath(
+        p.creator_categories,
+        collections,
+        locale,
+        p.primary_creator_category_id,
+      );
       const base = {
         title: tr.title,
         description: tr.description || '',
@@ -817,15 +827,22 @@ export function optionsOf(options: unknown): {
   return out;
 }
 
-/** "Parent > Child" of the product's first collection, plus the leaf name. */
+/**
+ * "Parent > Child" of the product's primary collection (M6; falls back to
+ * the first linked one when no primary is set or it is unknown), plus the
+ * leaf name.
+ */
 export function collectionPath(
   links: { creator_category_id: string }[],
   collections: Map<string, CollectionNode>,
   locale: string,
+  primaryId: string | null = null,
 ): { path: string | null; leaf: string | null } {
-  const first = links
-    .map((l) => collections.get(l.creator_category_id))
-    .find((n): n is CollectionNode => Boolean(n));
+  const first =
+    (primaryId ? collections.get(primaryId) : undefined) ??
+    links
+      .map((l) => collections.get(l.creator_category_id))
+      .find((n): n is CollectionNode => Boolean(n));
   if (!first) return { path: null, leaf: null };
   const nameOf = (n: CollectionNode) =>
     n.names.get(locale) ??

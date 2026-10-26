@@ -91,6 +91,7 @@ const SE_MARKET: MarketContext = {
   rate: 1,
   priceRule: { mode: 'convert' },
   isDefault: true,
+  noindex: false,
   status: 'LIVE',
   primaryHostname: 'namz.se',
   hostnames: ['namz.se'],
@@ -107,6 +108,7 @@ const EU_MARKET: MarketContext = {
   currency: 'EUR',
   rate: 0.1,
   isDefault: false,
+  noindex: false,
   primaryHostname: 'namz.shop',
   hostnames: ['namz.shop'],
 };
@@ -689,7 +691,43 @@ describe('FeedsService in-flight de-duplication', () => {
     expect(a.cached).toBe(false);
     expect(b.cached).toBe(true);
     // A later request is served from the cache, still one load.
-    expect((await service.publicFeed('namz', TOKEN, 'google')).cached).toBe(true);
+    expect((await service.publicFeed('namz', TOKEN, 'google')).cached).toBe(
+      true,
+    );
     expect(calls.productFindMany).toBe(1);
+  });
+});
+
+// M6: the feed category path follows the primary collection.
+describe('collectionPath primary collection (M6)', () => {
+  const map = new Map([
+    ['root', { id: 'root', parent_id: null, names: new Map([['en', 'Root']]) }],
+    ['kid', { id: 'kid', parent_id: 'root', names: new Map([['en', 'Kid']]) }],
+    [
+      'other',
+      { id: 'other', parent_id: null, names: new Map([['en', 'Other']]) },
+    ],
+  ]);
+  const links = [
+    { creator_category_id: 'other' },
+    { creator_category_id: 'kid' },
+  ];
+
+  it('uses the primary when set', () => {
+    expect(collectionPath(links, map, 'en', 'kid')).toEqual({
+      path: 'Root > Kid',
+      leaf: 'Kid',
+    });
+  });
+
+  it('falls back to the first link when the primary is null or unknown', () => {
+    expect(collectionPath(links, map, 'en', null)).toEqual({
+      path: 'Other',
+      leaf: 'Other',
+    });
+    expect(collectionPath(links, map, 'en', 'gone')).toEqual({
+      path: 'Other',
+      leaf: 'Other',
+    });
   });
 });

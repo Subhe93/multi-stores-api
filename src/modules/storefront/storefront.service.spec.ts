@@ -24,12 +24,16 @@ const seMarket: MarketContext = {
   rate: 11,
   priceRule: { mode: 'convert', source: 'manual', rate: 11 },
   isDefault: true,
+  noindex: false,
   status: 'LIVE',
   primaryHostname: 'namez.se',
   hostnames: ['namez.se'],
 };
 
-function build(market: MarketContext | null, storeOver: Record<string, unknown> = {}) {
+function build(
+  market: MarketContext | null,
+  storeOver: Record<string, unknown> = {},
+) {
   const store = {
     ...storeOver,
     id: 's1',
@@ -107,6 +111,7 @@ function build(market: MarketContext | null, storeOver: Record<string, unknown> 
                 is_default: true,
                 primary_hostname: 'namez.se',
                 status: 'LIVE' as const,
+                noindex: false,
               },
             ]
           : null,
@@ -183,6 +188,7 @@ describe('StorefrontService.getStore payload', () => {
       is_default: true,
       primary_hostname: 'namez.se',
       status: 'LIVE',
+      noindex: false,
     });
     expect(payload.markets).toHaveLength(1);
     // Kustom availability is judged against the market currency.
@@ -226,7 +232,10 @@ describe('StorefrontService.getStore checkout settings (M5.1)', () => {
         coupon_autoapply: true,
       },
     });
-    const payload = (await service.getStore('namez')) as Record<string, unknown>;
+    const payload = (await service.getStore('namez')) as Record<
+      string,
+      unknown
+    >;
     expect(payload.checkout).toEqual({
       after_add_to_cart: 'checkout',
       phone_required: false,

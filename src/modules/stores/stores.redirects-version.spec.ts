@@ -91,6 +91,7 @@ describe('MarketsPublicController.marketContext redirects_version', () => {
                 rate: 1,
                 priceRule: { mode: 'convert', source: 'manual', rate: 1 },
                 isDefault: true,
+                noindex: false,
                 status: 'LIVE',
                 primaryHostname: null,
                 hostnames: [],

@@ -1,13 +1,33 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { MenuItemKind, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { CreateMenuDto, SetMenuItemsDto, UpdateMenuDto } from './dto/menus.dto';
+import { MENU_MAX_DEPTH } from '../creator-categories/primary-collection';
+
+/**
+ * M6: the editor nests at most three levels. Throws `MENU_MAX_DEPTH` when
+ * any branch of the sent tree is deeper.
+ */
+export function assertMenuDepth(
+  nodes: SetMenuItemsDto['items'] | undefined,
+  level = 1,
+): void {
+  if (!nodes?.length) return;
+  if (level > MENU_MAX_DEPTH) {
+    throw new BadRequestException({
+      code: 'MENU_MAX_DEPTH',
+      message: `Menu items can be nested at most ${MENU_MAX_DEPTH} levels deep`,
+    });
+  }
+  for (const n of nodes) assertMenuDepth(n.children, level + 1);
+}
 
 /** A stored `label_i18n` JSON as a locale → label map (anything else = empty). */
 function asLocaleMap(raw: unknown): Record<string, string> {
@@ -182,6 +202,7 @@ export class MenusService {
    * is recreated under the same id, so the next save still matches it.
    */
   async setItems(userId: string, menuId: string, dto: SetMenuItemsDto) {
+    assertMenuDepth(dto.items);
     const storeId = await this.resolveCreatorStoreId(userId);
     await this.assertMenuBelongsToStore(menuId, storeId);
 
@@ -212,6 +233,11 @@ export class MenusService {
               menu_id: menuId,
               parent_id: parentId,
               sort_order: i,
+              kind: item.kind ?? MenuItemKind.CUSTOM,
+              resource_id:
+                (item.kind ?? MenuItemKind.CUSTOM) === MenuItemKind.CUSTOM
+                  ? null
+                  : (item.resource_id ?? null),
               label: item.label,
               label_i18n: mergeLabelI18n(
                 previous,

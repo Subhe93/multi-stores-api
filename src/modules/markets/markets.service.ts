@@ -217,6 +217,7 @@ export class MarketsService {
           priceRuleOf({})) as unknown as Prisma.InputJsonObject,
         payment_check: check as unknown as Prisma.InputJsonObject,
         status: MarketStatus.DRAFT,
+        noindex: data.noindex ?? false,
       },
       include: marketInclude,
     });
@@ -301,6 +302,7 @@ export class MarketsService {
               price_rule: data.price_rule as unknown as Prisma.InputJsonObject,
             }
           : {}),
+        ...(data.noindex !== undefined ? { noindex: data.noindex } : {}),
         ...(check
           ? { payment_check: check as unknown as Prisma.InputJsonObject }
           : {}),
@@ -732,8 +734,10 @@ export class MarketsService {
     locales: string[];
     currency: string;
     price_rule: PriceRule;
+    noindex: boolean;
   }> {
     const out: ReturnType<MarketsService['normalize']> = {};
+    if (dto.noindex !== undefined) out.noindex = dto.noindex === true;
     if (dto.key !== undefined) out.key = dto.key.trim().toLowerCase();
     if (dto.name !== undefined) out.name = dto.name.trim();
     if (dto.countries !== undefined) {
@@ -824,6 +828,7 @@ export class MarketsService {
       currency: row.is_default ? storeCurrency : row.currency.toUpperCase(),
       is_default: row.is_default,
       status: row.status,
+      noindex: row.noindex,
       price_rule: priceRuleOf(row.price_rule),
       payment_check: (row.payment_check as PaymentCheck | null) ?? null,
       effective_rate: effectiveRate,
