@@ -1986,7 +1986,9 @@ export class StorefrontService {
             | 'CATALOG_TEMPLATE'
             | 'COLLECTION_TEMPLATE';
         }
-      | { type: 'STATIC' | 'LANDING'; slug: string },
+      | { type: 'STATIC' | 'LANDING'; slug: string }
+      // Either slugged type (M6.6: landing pages are served at the root too).
+      | { type: 'SLUG'; slug: string },
   ) {
     const store = await this.prisma.store.findUnique({
       where: { slug: storeSlug },
@@ -2002,10 +2004,14 @@ export class StorefrontService {
     // exists (e.g. two concurrent ensures) the published one still wins.
     const whereType: Prisma.PageWhereInput = {
       store_id: store.id,
-      type: opts.type,
+      type: opts.type === 'SLUG' ? { in: ['STATIC', 'LANDING'] } : opts.type,
       published_version_id: { not: null },
     };
-    if (opts.type === 'STATIC' || opts.type === 'LANDING')
+    if (
+      opts.type === 'STATIC' ||
+      opts.type === 'LANDING' ||
+      opts.type === 'SLUG'
+    )
       whereType.slug = opts.slug;
 
     const page = await this.prisma.page.findFirst({

@@ -39,6 +39,38 @@ const PRODUCT_LISTING_DEFAULT_SETTINGS = {
   columns_mobile: 2,
 };
 
+/**
+ * M6.6: STATIC and LANDING pages are both served at the store root
+ * (`/<slug>`), so a slug must not shadow a storefront route segment.
+ * Mirrors RESERVED_SLUGS in the web's `[pageSlug]` route plus the root
+ * files the proxy serves.
+ */
+export const RESERVED_PAGE_SLUGS: ReadonlySet<string> = new Set([
+  'products',
+  'collections',
+  'cart',
+  'checkout',
+  'auth',
+  'account',
+  'legal',
+  'p',
+  'api',
+  'market-not-found',
+  'builder-preview',
+  'robots.txt',
+  'sitemap.xml',
+  'favicon.ico',
+]);
+
+export function assertSlugNotReserved(slug: string): void {
+  if (RESERVED_PAGE_SLUGS.has(slug.toLowerCase())) {
+    throw new BadRequestException({
+      code: 'PAGE_SLUG_RESERVED',
+      message: `"${slug}" is reserved for a storefront route`,
+    });
+  }
+}
+
 @Injectable()
 export class PagesV2Service {
   constructor(
@@ -238,6 +270,7 @@ export class PagesV2Service {
         message: 'slug is required for this page type',
       });
     }
+    if (dto.slug) assertSlugNotReserved(dto.slug);
     if (dto.type === PageType.STATIC && !dto.static_kind) {
       throw new BadRequestException({
         code: 'PAGE_STATIC_KIND_REQUIRED',
@@ -288,7 +321,10 @@ export class PagesV2Service {
     await this.assertPageBelongsToStore(pageId, storeId);
 
     const data: Prisma.PageUpdateInput = {};
-    if (dto.slug !== undefined) data.slug = dto.slug;
+    if (dto.slug !== undefined) {
+      if (dto.slug) assertSlugNotReserved(dto.slug);
+      data.slug = dto.slug;
+    }
     if (dto.status !== undefined) data.status = dto.status;
     if (dto.sort_order !== undefined) data.sort_order = dto.sort_order;
     if (dto.seo !== undefined) data.seo = dto.seo as Prisma.InputJsonValue;

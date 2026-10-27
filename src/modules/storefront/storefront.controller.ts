@@ -160,8 +160,10 @@ export class StorefrontController {
     @Param('pageSlug') pageSlug: string,
     @Query('type') type?: 'STATIC' | 'LANDING',
   ) {
+    // M6.6: without `type`, a slug resolves to a STATIC or a LANDING page —
+    // both live at the store root now (slugs are unique per store).
     return this.storefrontService.getPublishedPage(slug, {
-      type: type ?? 'STATIC',
+      type: type === 'STATIC' || type === 'LANDING' ? type : 'SLUG',
       slug: pageSlug,
     });
   }
