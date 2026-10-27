@@ -159,6 +159,41 @@ export function dropMenuItemsWithDescendants<
   return items.filter((it) => !gone.has(it.id));
 }
 
+/** Shape check for `creator_category_id` (M6.4) before it reaches Prisma. */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Product-list collection filter, shared by the slug and id resolvers. */
+export interface CollectionFilter {
+  id: string;
+  match_rule: 'MANUAL' | 'TAGS';
+  match_tags: string[];
+}
+
+/**
+ * Turn a looked-up collection row into the product-list filter, or null when
+ * the list must be empty: missing, inactive, or INTERNAL unless the caller
+ * allows internal labels (the id filter of the builder section, M6.4).
+ */
+export function collectionFilterFrom(
+  cc: {
+    id: string;
+    match_rule: string;
+    match_tags: string[];
+    is_active: boolean;
+    visibility: string;
+  } | null,
+  opts: { allowInternal: boolean },
+): CollectionFilter | null {
+  if (!cc || !cc.is_active) return null;
+  if (cc.visibility === 'INTERNAL' && !opts.allowInternal) return null;
+  return {
+    id: cc.id,
+    match_rule: cc.match_rule as 'MANUAL' | 'TAGS',
+    match_tags: cc.match_tags,
+  };
+}
+
 /** A linked collection row as the product queries include it (M6). */
 export type PublicCollectionRow = Prisma.CreatorCategoryGetPayload<{
   include: { translations: true };
@@ -623,6 +658,48 @@ export class StorefrontService {
     };
   }
 
+  /**
+   * Resolve the collection filter of the product list to `{ id, match_rule,
+   * match_tags }`, or null when nothing should match. `creator_category_id`
+   * (M6.4) looks the collection up by id within the store's creator and
+   * accepts PUBLIC and INTERNAL rows; it wins over the slug. The slug form is
+   * what storefront URLs use, so it refuses INTERNAL labels (M6.3).
+   */
+  private async resolveCollectionFilter(
+    creatorId: string,
+    filters: { creator_category?: string; creator_category_id?: string },
+  ): Promise<CollectionFilter | null> {
+    const select = {
+      id: true,
+      match_rule: true,
+      match_tags: true,
+      is_active: true,
+      visibility: true,
+    } as const;
+    // Query values arrive unvalidated (a repeated key is an array): anything
+    // that is not a plain string — or, for the id, not uuid-shaped — matches
+    // nothing instead of reaching Prisma and failing the request.
+    if (filters.creator_category_id) {
+      const id = filters.creator_category_id;
+      if (typeof id !== 'string' || !UUID_RE.test(id)) return null;
+      const cc = await this.prisma.creatorCategory.findFirst({
+        where: { id, creator_id: creatorId },
+        select,
+      });
+      return collectionFilterFrom(cc, { allowInternal: true });
+    }
+    if (filters.creator_category) {
+      const slug = filters.creator_category;
+      if (typeof slug !== 'string') return null;
+      const cc = await this.prisma.creatorCategory.findUnique({
+        where: { creator_id_slug: { creator_id: creatorId, slug } },
+        select,
+      });
+      return collectionFilterFrom(cc, { allowInternal: false });
+    }
+    return null;
+  }
+
   async getProducts(
     slug: string,
     filters: {
@@ -630,6 +707,10 @@ export class StorefrontService {
       limit?: number;
       category_id?: string;
       creator_category?: string;
+      // M6.4: collection id (uuid). Reached only from the builder
+      // "collection products" section, so INTERNAL labels are allowed here.
+      // When both are sent the id wins.
+      creator_category_id?: string;
       search?: string;
       locale?: string;
     },
@@ -648,40 +729,17 @@ export class StorefrontService {
 
     const market = await this.resolveMarket(store.id, marketKey, preview);
 
-    // If a creator-category slug is requested, resolve it to an id + match rule
-    // up front so we can apply the same filter to both own and custom queries.
-    let creatorCategory: {
-      id: string;
-      match_rule: 'MANUAL' | 'TAGS';
-      match_tags: string[];
-    } | null = null;
-    if (filters.creator_category) {
-      const cc = await this.prisma.creatorCategory.findUnique({
-        where: {
-          creator_id_slug: {
-            creator_id: store.creator.id,
-            slug: filters.creator_category,
-          },
-        },
-        select: {
-          id: true,
-          match_rule: true,
-          match_tags: true,
-          is_active: true,
-          visibility: true,
-        },
-      });
-      if (cc && cc.is_active && cc.visibility !== 'INTERNAL') {
-        creatorCategory = {
-          id: cc.id,
-          match_rule: cc.match_rule as 'MANUAL' | 'TAGS',
-          match_tags: cc.match_tags,
-        };
-      } else {
-        // Unknown, inactive or INTERNAL (M6.3) collection — return nothing.
-        return [];
-      }
-    }
+    // Resolve the requested collection (by id or slug) up front so the same
+    // filter applies to both the own-products and custom-products queries.
+    const requested = Boolean(
+      filters.creator_category_id || filters.creator_category,
+    );
+    const creatorCategory = requested
+      ? await this.resolveCollectionFilter(store.creator.id, filters)
+      : null;
+    // Unknown, inactive or (for the slug filter) INTERNAL collection —
+    // return nothing, like an inactive one.
+    if (requested && !creatorCategory) return [];
 
     // Creator's own products (creator_id set on Product)
     const ownWhere: Prisma.ProductWhereInput = {
