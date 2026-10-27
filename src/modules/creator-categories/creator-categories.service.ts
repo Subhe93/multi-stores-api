@@ -11,7 +11,10 @@ import {
   ReorderCreatorCategoriesDto,
   CreatorCategoryTranslationDto,
 } from './dto/creator-category.dto';
-import { CreatorCategoryMatchRule } from '@prisma/client';
+import {
+  CreatorCategoryMatchRule,
+  CreatorCategoryVisibility,
+} from '@prisma/client';
 import { sanitizeCreatorHtml } from '../../common/html/creator-html';
 import { CREATOR_CATEGORY_MAX_DEPTH } from './primary-collection';
 
@@ -48,10 +51,11 @@ export class CreatorCategoriesService {
     return creator.id;
   }
 
+  /** Ownership check; returns the stored visibility and parent (M6.3). */
   private async assertOwnership(id: string, creatorId: string) {
     const found = await this.prisma.creatorCategory.findUnique({
       where: { id },
-      select: { creator_id: true },
+      select: { creator_id: true, visibility: true, parent_id: true },
     });
     if (!found)
       throw new NotFoundException({
@@ -62,6 +66,34 @@ export class CreatorCategoriesService {
       throw new ForbiddenException({
         code: 'CREATOR_CATEGORY_NOT_OWNED',
         message: 'Not your collection',
+      });
+    }
+    return found;
+  }
+
+  /**
+   * M6.3: INTERNAL collections are flat labels. A parent may not be chosen
+   * for an INTERNAL collection (CREATOR_CATEGORY_INTERNAL_NO_PARENT) and an
+   * INTERNAL collection may not be a parent
+   * (CREATOR_CATEGORY_PARENT_INTERNAL). `parent` is the parent row when
+   * one is being set.
+   */
+  private assertVisibilityAllowsParent(
+    visibility: CreatorCategoryVisibility,
+    parentId: string | null | undefined,
+    parent: { visibility: CreatorCategoryVisibility } | null,
+  ) {
+    if (!parentId) return;
+    if (visibility === CreatorCategoryVisibility.INTERNAL) {
+      throw new BadRequestException({
+        code: 'CREATOR_CATEGORY_INTERNAL_NO_PARENT',
+        message: 'An internal label cannot have a parent collection',
+      });
+    }
+    if (parent?.visibility === CreatorCategoryVisibility.INTERNAL) {
+      throw new BadRequestException({
+        code: 'CREATOR_CATEGORY_PARENT_INTERNAL',
+        message: 'An internal label cannot be a parent collection',
       });
     }
   }
@@ -163,7 +195,7 @@ export class CreatorCategoriesService {
     if (parent_id) {
       const parent = await this.prisma.creatorCategory.findUnique({
         where: { id: parent_id },
-        select: { creator_id: true },
+        select: { creator_id: true, visibility: true },
       });
       if (!parent || parent.creator_id !== creatorId) {
         throw new BadRequestException({
@@ -171,6 +203,11 @@ export class CreatorCategoriesService {
           message: 'Invalid parent collection',
         });
       }
+      this.assertVisibilityAllowsParent(
+        data.visibility ?? CreatorCategoryVisibility.PUBLIC,
+        parent_id,
+        parent,
+      );
       await this.assertDepthAllowed(parent_id);
     }
 
@@ -277,7 +314,7 @@ export class CreatorCategoriesService {
 
   async update(id: string, userId: string, dto: UpdateCreatorCategoryDto) {
     const creatorId = await this.getCreatorIdOrThrow(userId);
-    await this.assertOwnership(id, creatorId);
+    const current = await this.assertOwnership(id, creatorId);
 
     const {
       translations,
@@ -288,11 +325,21 @@ export class CreatorCategoriesService {
       ...data
     } = dto;
 
+    // M6.3: the visibility the row will have after this update, and the
+    // parent it will end up with (`undefined` = unchanged).
+    const visibility =
+      data.visibility ?? current.visibility ?? CreatorCategoryVisibility.PUBLIC;
+    const effectiveParentId =
+      parent_id !== undefined ? parent_id : (current.parent_id ?? null);
+    const becomesInternal =
+      data.visibility === CreatorCategoryVisibility.INTERNAL &&
+      current.visibility !== CreatorCategoryVisibility.INTERNAL;
+
     if (parent_id !== undefined) {
       if (parent_id) {
         const parent = await this.prisma.creatorCategory.findUnique({
           where: { id: parent_id },
-          select: { creator_id: true },
+          select: { creator_id: true, visibility: true },
         });
         if (!parent || parent.creator_id !== creatorId) {
           throw new BadRequestException({
@@ -300,19 +347,54 @@ export class CreatorCategoriesService {
             message: 'Invalid parent collection',
           });
         }
+        this.assertVisibilityAllowsParent(visibility, parent_id, parent);
         await this.assertNoCycle(id, parent_id);
         await this.assertDepthAllowed(parent_id, id);
       }
+    } else if (visibility === CreatorCategoryVisibility.INTERNAL) {
+      // Switching to INTERNAL while keeping a stored parent: the dashboard
+      // sends `parent_id: null` together with the switch.
+      this.assertVisibilityAllowsParent(visibility, effectiveParentId, null);
     }
 
-    await this.prisma.creatorCategory.update({
-      where: { id },
-      data: {
-        ...data,
-        ...(parent_id !== undefined ? { parent_id } : {}),
-        ...(match_tags !== undefined ? { match_tags } : {}),
-      },
-    });
+    if (data.visibility === CreatorCategoryVisibility.INTERNAL) {
+      const children = await this.prisma.creatorCategory.count({
+        where: { parent_id: id },
+      });
+      if (children > 0) {
+        throw new BadRequestException({
+          code: 'CREATOR_CATEGORY_INTERNAL_HAS_CHILDREN',
+          message:
+            'A collection with sub-collections cannot become an internal label',
+        });
+      }
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.creatorCategory.update({
+        where: { id },
+        data: {
+          ...data,
+          ...(parent_id !== undefined ? { parent_id } : {}),
+          ...(match_tags !== undefined ? { match_tags } : {}),
+        },
+      }),
+      // M6.3: an INTERNAL collection is never a product's primary one, so
+      // the primaries that pointed at it are cleared in the same transaction
+      // (the product editors re-pick the first PUBLIC link on their next save).
+      ...(becomesInternal
+        ? [
+            this.prisma.product.updateMany({
+              where: { primary_creator_category_id: id },
+              data: { primary_creator_category_id: null },
+            }),
+            this.prisma.customProduct.updateMany({
+              where: { primary_creator_category_id: id },
+              data: { primary_creator_category_id: null },
+            }),
+          ]
+        : []),
+    ]);
 
     if (translations) {
       // X19 carry-over (M5 A-X, same semantics as ProductsService): only the

@@ -137,6 +137,28 @@ export function publicCreatorCategory<
   return rest;
 }
 
+/**
+ * M6.3: remove the menu items matched by `drop` together with every item
+ * under them (by parent_id), keeping the order of the rest.
+ */
+export function dropMenuItemsWithDescendants<
+  T extends { id: string; parent_id: string | null },
+>(items: T[], drop: (item: T) => boolean): T[] {
+  const gone = new Set(items.filter(drop).map((it) => it.id));
+  if (!gone.size) return items;
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const it of items) {
+      if (!gone.has(it.id) && it.parent_id && gone.has(it.parent_id)) {
+        gone.add(it.id);
+        grew = true;
+      }
+    }
+  }
+  return items.filter((it) => !gone.has(it.id));
+}
+
 /** A linked collection row as the product queries include it (M6). */
 export type PublicCollectionRow = Prisma.CreatorCategoryGetPayload<{
   include: { translations: true };
@@ -646,16 +668,17 @@ export class StorefrontService {
           match_rule: true,
           match_tags: true,
           is_active: true,
+          visibility: true,
         },
       });
-      if (cc && cc.is_active) {
+      if (cc && cc.is_active && cc.visibility !== 'INTERNAL') {
         creatorCategory = {
           id: cc.id,
           match_rule: cc.match_rule as 'MANUAL' | 'TAGS',
           match_tags: cc.match_tags,
         };
       } else {
-        // Unknown or inactive collection — return nothing.
+        // Unknown, inactive or INTERNAL (M6.3) collection — return nothing.
         return [];
       }
     }
@@ -1398,10 +1421,11 @@ export class StorefrontService {
 
   /**
    * M6: the collection fields of a product payload. `creator_categories`
-   * is the active linked collections with the primary first;
-   * `primary_creator_category_id` is null when the primary is missing or
-   * inactive; `primary_collection_path` is root -> leaf (active ancestors,
-   * then the primary), `[]` when there is no primary. Ancestors are read by
+   * is the active PUBLIC linked collections with the primary first (M6.3:
+   * INTERNAL labels are never served); `primary_creator_category_id` is
+   * null when the primary is missing, inactive or INTERNAL;
+   * `primary_collection_path` is root -> leaf (active ancestors, then the
+   * primary), `[]` when there is no primary. Ancestors are read by
    * parent_id, scoped to the creator, at most CREATOR_CATEGORY_MAX_DEPTH hops.
    */
   private async primaryCollectionFields(
@@ -1409,7 +1433,9 @@ export class StorefrontService {
     primaryId: string | null,
     linked: PublicCollectionRow[],
   ) {
-    const active = linked.filter((cc) => cc && cc.is_active !== false);
+    const active = linked.filter(
+      (cc) => cc && cc.is_active !== false && cc.visibility !== 'INTERNAL',
+    );
     const primary = primaryId
       ? active.find((cc) => cc.id === primaryId)
       : undefined;
@@ -1437,11 +1463,13 @@ export class StorefrontService {
             slug: true,
             parent_id: true,
             is_active: true,
+            visibility: true,
             translations: true,
           },
         });
         if (!row) break;
-        if (row.is_active) {
+        // An INTERNAL ancestor cannot exist (M6.3 rules); skipped defensively.
+        if (row.is_active && row.visibility !== 'INTERNAL') {
           ancestors.unshift({
             id: row.id,
             slug: row.slug,
@@ -1464,10 +1492,11 @@ export class StorefrontService {
   }
 
   /**
-   * Public tree of the creator's active collections for this store
-   * (root -> child -> grandchild, three levels at most since M6). Every
-   * translation row is served whole, so it carries the short `description`
-   * (hero) and the M6.2 `long_description` (below the products).
+   * Public tree of the creator's active PUBLIC collections for this store
+   * (root -> child -> grandchild, three levels at most since M6; INTERNAL
+   * labels are left out, M6.3). Every translation row is served whole, so
+   * it carries the short `description` (hero) and the M6.2
+   * `long_description` (below the products).
    */
   async getCreatorCategories(slug: string) {
     const store = await this.prisma.store.findUnique({
@@ -1481,7 +1510,11 @@ export class StorefrontService {
       });
 
     const rows = await this.prisma.creatorCategory.findMany({
-      where: { creator_id: store.creator.id, is_active: true },
+      where: {
+        creator_id: store.creator.id,
+        is_active: true,
+        visibility: 'PUBLIC',
+      },
       include: { translations: true },
       orderBy: [{ parent_id: 'asc' }, { sort_order: 'asc' }],
     });
@@ -1642,9 +1675,13 @@ export class StorefrontService {
               },
             }),
         // Collections are linkable, indexable storefront pages but were missing
-        // from the sitemap entirely.
+        // from the sitemap entirely. INTERNAL labels have no page (M6.3).
         this.prisma.creatorCategory.findMany({
-          where: { creator_id: store.creator.id, is_active: true },
+          where: {
+            creator_id: store.creator.id,
+            is_active: true,
+            visibility: 'PUBLIC',
+          },
           select: {
             id: true,
             slug: true,
@@ -1804,12 +1841,14 @@ export class StorefrontService {
 
   /**
    * Navigation menus for a store, with items ordered. Public read used by the
-   * storefront chrome (header/footer) to resolve a menu key → items.
+   * storefront chrome (header/footer) to resolve a menu key → items. M6.3:
+   * an item that links an INTERNAL collection is dropped together with its
+   * descendants (one extra query, only when some item is a COLLECTION).
    */
   async getMenus(storeSlug: string) {
     const store = await this.prisma.store.findUnique({
       where: { slug: storeSlug },
-      select: { id: true },
+      select: { id: true, creator_id: true },
     });
     if (!store)
       throw new NotFoundException({
@@ -1836,11 +1875,34 @@ export class StorefrontService {
       },
       orderBy: { created_at: 'asc' },
     });
+
+    const linksCollection = menus.some((m) =>
+      m.items.some((it) => it.kind === 'COLLECTION' && it.resource_id),
+    );
+    const internalIds = linksCollection
+      ? new Set(
+          (
+            await this.prisma.creatorCategory.findMany({
+              where: { creator_id: store.creator_id, visibility: 'INTERNAL' },
+              select: { id: true },
+            })
+          ).map((c) => c.id),
+        )
+      : new Set<string>();
+
     return menus.map((m) => ({
       id: m.id,
       key: m.key,
       name: m.name,
-      items: m.items,
+      items: internalIds.size
+        ? dropMenuItemsWithDescendants(
+            m.items,
+            (it) =>
+              it.kind === 'COLLECTION' &&
+              !!it.resource_id &&
+              internalIds.has(it.resource_id),
+          )
+        : m.items,
     }));
   }
 

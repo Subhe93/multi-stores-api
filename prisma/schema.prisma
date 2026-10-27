@@ -222,24 +222,35 @@ enum CreatorCategoryMatchRule {
   TAGS
 }
 
+// M6.3: PUBLIC = storefront collection (own page, menus, breadcrumbs, sitemap).
+// INTERNAL = flat label that only groups products for builder pages; it has
+// no parent, no children and is never a product's primary collection
+// (enforced by CreatorCategoriesService).
+enum CreatorCategoryVisibility {
+  PUBLIC
+  INTERNAL
+}
+
 model CreatorCategory {
-  id                 String                   @id @default(uuid())
+  id                 String                    @id @default(uuid())
   creator_id         String
   // Tree of at most three levels (root = depth 0, grandchild = depth 2);
   // enforced by CreatorCategoriesService (CREATOR_CATEGORY_MAX_DEPTH).
   parent_id          String?
   slug               String
   thumbnail_url      String?
-  match_rule         CreatorCategoryMatchRule @default(MANUAL)
+  match_rule         CreatorCategoryMatchRule  @default(MANUAL)
   match_tags         String[]
-  sort_order         Int                      @default(0)
-  is_active          Boolean                  @default(true)
+  sort_order         Int                       @default(0)
+  is_active          Boolean                   @default(true)
   // Importer identity "woo:<site_host>:product_cat:<id>" (M4.4); null = not imported.
-  external_ref       String?                  @db.VarChar(191)
+  external_ref       String?                   @db.VarChar(191)
   // Leave the collection out of the sitemap / noindex it while it has no published products.
-  noindex_when_empty Boolean                  @default(false)
-  created_at         DateTime                 @default(now())
-  updated_at         DateTime                 @updatedAt
+  noindex_when_empty Boolean                   @default(false)
+  // M6.3: INTERNAL collections are labels, never storefront pages.
+  visibility         CreatorCategoryVisibility @default(PUBLIC)
+  created_at         DateTime                  @default(now())
+  updated_at         DateTime                  @updatedAt
 
   creator                 Creator                        @relation(fields: [creator_id], references: [id], onDelete: Cascade)
   parent                  CreatorCategory?               @relation("CreatorCategoryTree", fields: [parent_id], references: [id], onDelete: SetNull)

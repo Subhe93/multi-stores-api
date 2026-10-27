@@ -49,7 +49,12 @@ function build(opts: {
     },
     productCreatorCategory: {
       findMany: jest.fn(() =>
-        Promise.resolve([...links].sort((x, y) => x.sort_order - y.sort_order)),
+        Promise.resolve(
+          [...links]
+            .sort((x, y) => x.sort_order - y.sort_order)
+            // M6.3: the stored-link read also carries the visibility.
+            .map((l) => ({ ...l, creator_category: { visibility: 'PUBLIC' } })),
+        ),
       ),
       deleteMany: jest.fn(
         ({

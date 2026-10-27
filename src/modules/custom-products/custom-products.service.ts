@@ -5,8 +5,12 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { resolvePrimaryCreatorCategory } from '../creator-categories/primary-collection';
 import {
+  CreatorCategoryLinks,
+  resolvePrimaryCreatorCategory,
+} from '../creator-categories/primary-collection';
+import {
+  CreatorCategoryVisibility,
   ImportMode,
   PricingType,
   ProductStatus,
@@ -178,17 +182,18 @@ export class CustomProductsService {
    * (defense-in-depth — DTO can't enforce ownership). Links that stay keep
    * their row (and so their `sort_order`, M6); only the removed ones are
    * deleted and the new ones created, appended after the kept ones.
-   * Returns the linked ids in the order they were sent.
+   * Returns the linked ids in the order they were sent, with the INTERNAL
+   * ones listed separately (M6.3: labels are linkable, never the primary).
    */
   private async syncCreatorCategories(
     customProductId: string,
     creatorId: string,
     categoryIds: string[],
-  ): Promise<string[]> {
+  ): Promise<CreatorCategoryLinks> {
     const owned = categoryIds.length
       ? await this.prisma.creatorCategory.findMany({
           where: { id: { in: categoryIds }, creator_id: creatorId },
-          select: { id: true },
+          select: { id: true, visibility: true },
         })
       : [];
     const ownedIds = new Set(owned.map((c) => c.id));
@@ -221,23 +226,44 @@ export class CustomProductsService {
         skipDuplicates: true,
       });
     }
-    return linked;
+    return {
+      linked,
+      internal: owned
+        .filter((c) => c.visibility === CreatorCategoryVisibility.INTERNAL)
+        .map((c) => c.id),
+    };
+  }
+
+  /** M6.3: the INTERNAL ids among `categoryIds` owned by `creatorId`. */
+  private async internalCreatorCategoryIds(
+    categoryIds: string[],
+    creatorId: string,
+  ): Promise<string[]> {
+    if (!categoryIds.length) return [];
+    const rows = await this.prisma.creatorCategory.findMany({
+      where: { id: { in: categoryIds }, creator_id: creatorId },
+      select: { id: true, visibility: true },
+    });
+    return rows
+      .filter((c) => c.visibility === CreatorCategoryVisibility.INTERNAL)
+      .map((c) => c.id);
   }
 
   /**
-   * M6: store the primary collection of a custom product. `linked` is the
+   * M6: store the primary collection of a custom product. `links` is the
    * current link list (request order when it was just replaced, stored
    * order otherwise); the rules live in resolvePrimaryCreatorCategory.
    */
   private async applyPrimaryCreatorCategory(
     customProductId: string,
-    linked: string[],
+    links: CreatorCategoryLinks,
     requested: string | null | undefined,
     current: string | null,
   ) {
     const primary = resolvePrimaryCreatorCategory({
       requested,
-      linked,
+      linked: links.linked,
+      internal: links.internal,
       current,
     });
     if (primary !== current) {
@@ -248,16 +274,28 @@ export class CustomProductsService {
     }
   }
 
-  /** Stored link ids of a custom product, by position then id. */
+  /** Stored links of a custom product, by position then id. */
   private async linkedCreatorCategoryIds(
     customProductId: string,
-  ): Promise<string[]> {
+  ): Promise<CreatorCategoryLinks> {
     const rows = await this.prisma.customProductCreatorCategory.findMany({
       where: { custom_product_id: customProductId },
-      select: { creator_category_id: true },
+      select: {
+        creator_category_id: true,
+        creator_category: { select: { visibility: true } },
+      },
       orderBy: [{ sort_order: 'asc' }, { creator_category_id: 'asc' }],
     });
-    return rows.map((r) => r.creator_category_id);
+    return {
+      linked: rows.map((r) => r.creator_category_id),
+      internal: rows
+        .filter(
+          (r) =>
+            r.creator_category.visibility ===
+            CreatorCategoryVisibility.INTERNAL,
+        )
+        .map((r) => r.creator_category_id),
+    };
   }
 
   /**
@@ -440,6 +478,13 @@ export class CustomProductsService {
     resolvePrimaryCreatorCategory({
       requested: primary_creator_category_id,
       linked: creator_category_ids ?? [],
+      // M6.3: only read when a primary is requested (the check needs it).
+      internal: primary_creator_category_id
+        ? await this.internalCreatorCategoryIds(
+            creator_category_ids ?? [],
+            creator.id,
+          )
+        : [],
       current: null,
     });
 
@@ -576,14 +621,14 @@ export class CustomProductsService {
     });
 
     if (creator_category_ids?.length) {
-      const linked = await this.syncCreatorCategories(
+      const links = await this.syncCreatorCategories(
         created.id,
         creator.id,
         creator_category_ids,
       );
       await this.applyPrimaryCreatorCategory(
         created.id,
-        linked,
+        links,
         primary_creator_category_id,
         null,
       );
@@ -592,7 +637,7 @@ export class CustomProductsService {
     // No links: a requested primary cannot be honoured (throws).
     await this.applyPrimaryCreatorCategory(
       created.id,
-      [],
+      { linked: [], internal: [] },
       primary_creator_category_id,
       null,
     );
@@ -943,7 +988,7 @@ export class CustomProductsService {
       creator_category_ids !== undefined ||
       primary_creator_category_id !== undefined;
     if (linksTouched) {
-      const linked =
+      const links =
         creator_category_ids !== undefined
           ? await this.syncCreatorCategories(
               id,
@@ -953,7 +998,7 @@ export class CustomProductsService {
           : await this.linkedCreatorCategoryIds(id);
       await this.applyPrimaryCreatorCategory(
         id,
-        linked,
+        links,
         primary_creator_category_id,
         existing.primary_creator_category_id,
       );

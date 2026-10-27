@@ -11,7 +11,10 @@ import {
   MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { CreatorCategoryMatchRule } from '@prisma/client';
+import {
+  CreatorCategoryMatchRule,
+  CreatorCategoryVisibility,
+} from '@prisma/client';
 
 export class CreatorCategoryTranslationDto {
   @IsString()
@@ -80,6 +83,12 @@ export class CreateCreatorCategoryDto {
   @IsBoolean()
   noindex_when_empty?: boolean;
 
+  // M6.3: PUBLIC (default) = storefront collection; INTERNAL = flat label
+  // that never becomes a storefront page, a parent, a child or a primary.
+  @IsOptional()
+  @IsEnum(CreatorCategoryVisibility)
+  visibility?: CreatorCategoryVisibility;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => CreatorCategoryTranslationDto)
@@ -133,6 +142,12 @@ export class UpdateCreatorCategoryDto {
   @IsOptional()
   @IsBoolean()
   noindex_when_empty?: boolean;
+
+  // M6.3: switching to INTERNAL requires no children; the collection's
+  // parent is cleared and any product primary pointing at it is reset.
+  @IsOptional()
+  @IsEnum(CreatorCategoryVisibility)
+  visibility?: CreatorCategoryVisibility;
 
   @IsOptional()
   @IsArray()
