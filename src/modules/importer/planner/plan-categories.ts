@@ -41,6 +41,22 @@ export function planCategories(ctx: PlanContext): CategoryPlan {
         incomplete: thumbMissing,
       });
       let action = d.action;
+      // Namez Phase 1: a live INTERNAL label (a converted occasion page) is
+      // never rewritten, whatever the conflict policy: an UPDATE would give
+      // it back its parent and make it PUBLIC again.
+      if (byRef.visibility === 'INTERNAL' && action !== 'UNCHANGED') {
+        action = 'SKIP';
+        // One warning per row: the "edited on the platform" message of
+        // decide() is implied by the label's state.
+        d.message = undefined;
+        warn({
+          code: 'W_CATEGORY_INTERNAL_SKIPPED',
+          external_ref: m.ref,
+          title: m.name,
+          message:
+            'collection is an internal label on the platform; not updated',
+        });
+      }
       // Fix 3: the UPDATE writes `m.slug`; it must be free like on CREATE.
       if (
         action === 'UPDATE' &&
@@ -136,6 +152,21 @@ export function planCategories(ctx: PlanContext): CategoryPlan {
         assignedCatSlugs.set(m.slug, m.ref);
         if (scopes.categories) categorySlug.set(m.ref, m.slug);
       }
+    }
+    // A category whose live parent is an INTERNAL label cannot be written:
+    // an internal label never has children (Namez Phase 1).
+    if (
+      (planned.action === 'CREATE' || planned.action === 'UPDATE') &&
+      m.parent_ref &&
+      snapshot.categoriesByRef.get(m.parent_ref)?.visibility === 'INTERNAL'
+    ) {
+      planned = { ...planned, action: 'CONFLICT', adopt: false };
+      warn({
+        code: 'W_CATEGORY_PARENT_INTERNAL',
+        external_ref: m.ref,
+        title: m.name,
+        message: `parent ${m.parent_ref} is an internal label on the platform; not imported`,
+      });
     }
     plannedCategories.push(planned);
     if (scopes.categories)

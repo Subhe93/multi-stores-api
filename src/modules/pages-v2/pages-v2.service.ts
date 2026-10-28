@@ -71,6 +71,67 @@ export function assertSlugNotReserved(slug: string): void {
   }
 }
 
+/** A page with the rows a publish snapshot is built from. */
+export type PublishablePage = Prisma.PageGetPayload<{
+  include: {
+    translations: true;
+    sections: { include: { translations: true } };
+  };
+}>;
+
+/**
+ * The published snapshot of a page: its SEO/translations and the visible
+ * sections in order. Hidden sections are left out so the storefront never
+ * renders them. Shared by `publish()` and the occasion conversion, which
+ * publishes inside its own transaction.
+ */
+export function buildPublishSnapshot(page: PublishablePage) {
+  return {
+    page: {
+      type: page.type,
+      static_kind: page.static_kind,
+      slug: page.slug,
+      seo: page.seo,
+      translations: page.translations,
+    },
+    sections: page.sections
+      .filter((s) => !s.is_hidden)
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map((s) => ({
+        id: s.id,
+        section_key: s.section_key,
+        settings: s.settings,
+        sort_order: s.sort_order,
+        translations: s.translations.map((t) => ({
+          locale: t.locale,
+          content: t.content,
+        })),
+      })),
+  };
+}
+
+/** Writes the version row and points the page at it (status PUBLISHED). */
+export async function publishPageTx(
+  tx: Prisma.TransactionClient,
+  pageId: string,
+  snapshot: ReturnType<typeof buildPublishSnapshot>,
+  label?: string | null,
+) {
+  const version = await tx.pageVersion.create({
+    data: {
+      page_id: pageId,
+      label: label ?? null,
+      snapshot: snapshot as Prisma.InputJsonValue,
+      published_at: new Date(),
+    },
+  });
+  await tx.page.update({
+    where: { id: pageId },
+    data: { status: 'PUBLISHED', published_version_id: version.id },
+  });
+  return version;
+}
+
 @Injectable()
 export class PagesV2Service {
   constructor(
@@ -772,41 +833,12 @@ export class PagesV2Service {
         message: 'Page not found',
       });
 
-    const snapshot = {
-      page: {
-        type: page.type,
-        static_kind: page.static_kind,
-        slug: page.slug,
-        seo: page.seo,
-        translations: page.translations,
-      },
-      sections: page.sections.map((s) => ({
-        id: s.id,
-        section_key: s.section_key,
-        settings: s.settings,
-        sort_order: s.sort_order,
-        translations: s.translations.map((t) => ({
-          locale: t.locale,
-          content: t.content,
-        })),
-      })),
-    };
+    const snapshot = buildPublishSnapshot(page);
 
     const result = await this.prisma.$transaction(async (tx) => {
-      const version = await tx.pageVersion.create({
-        data: {
-          page_id: pageId,
-          label: dto.label ?? null,
-          snapshot: snapshot as Prisma.InputJsonValue,
-          published_at: new Date(),
-        },
-      });
-      return tx.page.update({
-        where: { id: pageId },
-        data: {
-          status: 'PUBLISHED',
-          published_version_id: version.id,
-        },
+      const version = await publishPageTx(tx, pageId, snapshot, dto.label);
+      return tx.page.findUniqueOrThrow({
+        where: { id: version.page_id },
         include: { published_version: true, translations: true },
       });
     });

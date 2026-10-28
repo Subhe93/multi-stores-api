@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument -- in-memory Prisma fake rows are untyped in tests */
+import type { SnapshotCategory } from './target-snapshot';
 import { WpBundleAdapter } from '../adapters/wp-bundle/wp-bundle.adapter';
 import { v1Sample } from '../adapters/wp-bundle/__fixtures__/fixtures';
 import { PlainTextHtmlSanitizer } from '../html/html-sanitizer';
@@ -193,7 +194,7 @@ describe('planner on the hand-made v1 bundle', () => {
       state_hash: '',
     };
     const p = plan(await v1Catalog(), {
-      categoriesBySlug: new Map([
+      categoriesBySlug: new Map<string, SnapshotCategory>([
         ['present', parent],
         ['muggar', live],
       ]),
@@ -214,6 +215,77 @@ describe('planner on the hand-made v1 bundle', () => {
       false,
     );
     expect(rows.some(([, to]) => to === '/collections/muggar')).toBe(false);
+  });
+
+  it('Namez Phase 1: a live INTERNAL label is never rewritten and has no collection path', async () => {
+    const live = {
+      id: 'm',
+      slug: 'muggar',
+      parent_id: null,
+      external_ref: 'woo:shop.example:product_cat:50',
+      is_active: true,
+      visibility: 'INTERNAL' as const,
+      state_hash: '',
+    };
+    const p = plan(
+      await v1Catalog(),
+      {
+        categoriesBySlug: new Map<string, SnapshotCategory>([['muggar', live]]),
+        categoriesByRef: new Map([[live.external_ref, live]]),
+      },
+      { conflict_policy: 'OVERWRITE' },
+    );
+    const cat = p.items.find((i) => i.entity_type === 'CATEGORY')!;
+    expect(cat.action).toBe('SKIP');
+    expect(p.summary.warnings.W_CATEGORY_INTERNAL_SKIPPED.count).toBe(1);
+    const rows = p.work.redirects!.plan.items.map((r) => [
+      r.from_path,
+      r.to_path,
+    ]);
+    // No row may send the old category URL to a collection path that is
+    // not served, and nothing treats /collections/muggar as live.
+    expect(rows.some(([, to]) => to === '/collections/muggar')).toBe(false);
+    expect(rows.some(([from]) => from === '/kategori/muggar')).toBe(false);
+  });
+
+  it('Namez Phase 1: a converted occasion collection redirects to its root page', async () => {
+    const live = {
+      id: 'm',
+      slug: 'muggar',
+      parent_id: null,
+      external_ref: 'woo:shop.example:product_cat:50',
+      is_active: true,
+      visibility: 'INTERNAL' as const,
+      state_hash: '',
+    };
+    const ledger = new Map([
+      [
+        'OCCASION_PAGE|woo:shop.example:product_cat:50',
+        {
+          id: 'l1',
+          entity_type: 'OCCASION_PAGE',
+          external_ref: live.external_ref,
+          target_id: 'page-1',
+          source_hash: 'x',
+          applied_hash: 'y',
+          created_by_import: true,
+          status: 'ACTIVE' as const,
+          first_run_id: 'conv',
+          last_run_id: 'conv',
+        },
+      ],
+    ]);
+    const p = plan(await v1Catalog(), {
+      categoriesBySlug: new Map<string, SnapshotCategory>([['muggar', live]]),
+      categoriesByRef: new Map([[live.external_ref, live]]),
+      ledger,
+    });
+    const rows = p.work.redirects!.plan.items.map((r) => [
+      r.from_path,
+      r.to_path,
+    ]);
+    expect(rows).toContainEqual(['/kategori/muggar', '/muggar']);
+    expect(rows.some(([, to]) => to.startsWith('/collections/'))).toBe(false);
   });
 
   it('scopes switch whole entity types off', async () => {

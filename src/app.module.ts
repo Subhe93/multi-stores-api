@@ -10,6 +10,7 @@ import { StoreAppsModule } from './modules/store-apps/store-apps.module';
 import { MarketsModule } from './modules/markets/markets.module';
 import { RedirectsModule } from './modules/redirects/redirects.module';
 import { ImporterModule } from './modules/importer/importer.module';
+import { OccasionConversionModule } from './modules/occasion-conversion/occasion-conversion.module';
 import { B2bModule } from './modules/b2b/b2b.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -117,6 +118,8 @@ import { FeedsModule } from './modules/feeds/feeds.module';
     ProductionModule,
     // M4.4 importer app (worker off with IMPORTER_WORKER=off).
     ImporterModule,
+    // Namez go-live Phase 1: sub-collections → root occasion pages (admin only).
+    OccasionConversionModule,
     // M4.2 designer app (P3: storage, template assets, fonts, signed links).
     DesignerModule,
     // M5 W1-C operability: /admin/ops/status, job tick sink, WORKERS switch.

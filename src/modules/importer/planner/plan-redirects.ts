@@ -17,7 +17,8 @@ import {
   collectionPathTarget,
   resolveContentTarget,
 } from '../mapping/map-redirects';
-import type { SnapshotCategory } from './target-snapshot';
+import { ImportEntityStatus } from '@prisma/client';
+import { ledgerKey, type SnapshotCategory } from './target-snapshot';
 import type { CategoryPlan } from './plan-categories';
 import type { PlanContext } from './plan-context';
 import { importedPagePath } from './plan-pages';
@@ -200,11 +201,26 @@ export function planRedirects(
   };
   const categoryPath = (ref: string): string[] | null =>
     plannedPathOfRef(ref, new Set<string>());
+  // Namez Phase 1: a collection converted into a root occasion page (ACTIVE
+  // OCCASION_PAGE ledger row) redirects to that page, not to a collection
+  // path that no longer exists (its label is INTERNAL).
+  const occasionTarget = (ref: string): string | null => {
+    const row = snapshot.ledger.get(ledgerKey('OCCASION_PAGE', ref));
+    if (!row || row.status !== ImportEntityStatus.ACTIVE) return null;
+    const live = snapshot.categoriesByRef.get(ref);
+    return live ? `/${live.slug}` : null;
+  };
   const collectionTarget = (ref: string): string | null => {
+    const occasion = occasionTarget(ref);
+    if (occasion) return occasion;
+    // An INTERNAL label without a page has no public URL at all.
+    if (snapshot.categoriesByRef.get(ref)?.visibility === 'INTERNAL')
+      return null;
     const path = categoryPath(ref);
     return path ? collectionPathTarget(path) : null;
   };
   const built = buildImportRedirects({
+    collectionTarget,
     catalog,
     imported: plannedProducts.map((p) => ({
       product: sourceByRef.get(p.mapped.ref)!,
@@ -237,7 +253,8 @@ export function planRedirects(
   for (const p of plannedProducts)
     if (willBePublished(p)) livePaths.add(`/products/${p.final_slug}`);
   for (const c of snapshot.categoriesBySlug.values())
-    if (c.is_active) livePaths.add(collectionPathTarget(livePathOf(c)));
+    if (c.is_active && c.visibility !== 'INTERNAL')
+      livePaths.add(collectionPathTarget(livePathOf(c)));
   for (const ref of categorySlug.keys()) {
     const to = collectionTarget(ref);
     if (to) livePaths.add(to);
@@ -278,7 +295,13 @@ export function planRedirects(
   if (scopes.categories)
     for (const c of categories.planned) {
       const live = snapshot.categoriesByRef.get(c.mapped.ref);
-      if (c.action === 'CONFLICT' || !live || !live.is_active) continue;
+      if (
+        c.action === 'CONFLICT' ||
+        !live ||
+        !live.is_active ||
+        live.visibility === 'INTERNAL'
+      )
+        continue;
       const to = collectionTarget(c.mapped.ref);
       const from = collectionPathTarget(livePathOf(live));
       if (!to || to === from || claimed.has(from)) continue;

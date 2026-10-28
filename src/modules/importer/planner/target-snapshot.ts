@@ -59,6 +59,12 @@ export interface SnapshotCategory {
   parent_id: string | null;
   external_ref: string | null;
   is_active: boolean;
+  /**
+   * Namez Phase 1: an INTERNAL label (a converted occasion page's label)
+   * is never written by the importer and has no live collection path.
+   * Absent in older fixtures = PUBLIC.
+   */
+  visibility?: 'PUBLIC' | 'INTERNAL';
   state_hash: string;
 }
 

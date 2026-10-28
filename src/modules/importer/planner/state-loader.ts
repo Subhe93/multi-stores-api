@@ -452,6 +452,7 @@ export async function loadTargetSnapshot(
       noindex_when_empty: true,
       thumbnail_url: true,
       external_ref: true,
+      visibility: true,
     },
   });
   const catTr = cats.length
@@ -479,6 +480,7 @@ export async function loadTargetSnapshot(
       parent_id: c.parent_id,
       external_ref: c.external_ref,
       is_active: c.is_active,
+      visibility: c.visibility,
       state_hash: categoryStateHash({
         category: c,
         translation: trByCat.get(c.id) ?? null,

@@ -42,6 +42,12 @@ export interface RedirectBuildInput {
    * the catalog's parent chain over `categorySlug` (see `categoryPathResolver`).
    */
   categoryPath?: (ref: string) => string[] | null;
+  /**
+   * Final target of a category ref; defaults to the `/collections/` path of
+   * `categoryPath`. The planner passes a resolver that sends converted
+   * occasion collections to their root page.
+   */
+  collectionTarget?: (ref: string) => string | null;
   redirectSkipped: boolean;
   /** `/?p=<id>` rows for published products (and pages / posts). Default false. */
   shortlinks?: boolean;
@@ -262,10 +268,12 @@ export function buildImportRedirects(input: RedirectBuildInput): {
       categorySlug: input.categorySlug,
       parentOf: (ref) => parentByRef.get(ref) ?? null,
     });
-  const collectionTarget = (ref: string): string | null => {
-    const path = categoryPath(ref);
-    return path ? collectionPathTarget(path) : null;
-  };
+  const collectionTarget =
+    input.collectionTarget ??
+    ((ref: string): string | null => {
+      const path = categoryPath(ref);
+      return path ? collectionPathTarget(path) : null;
+    });
   if (input.redirectSkipped) {
     for (const p of input.skipped) {
       if (p.status !== 'publish') continue;
