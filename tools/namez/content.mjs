@@ -18,13 +18,18 @@
  *   all                everything above, in this order
  *
  * Env: API_BASE (default https://ms-api.iwings-digital.com/api), TOKEN (required),
- *      WP_BASE (default https://namez.se).
+ *      WP_BASE (default https://namez.se), PUBLIC_API_ORIGIN (default
+ *      https://ms-api.iwings-digital.com — origin of re-hosted image URLs).
  */
 
 import { pathToFileURL } from 'node:url';
 
 const API_BASE = process.env.API_BASE ?? 'https://ms-api.iwings-digital.com/api';
 const WP_BASE = process.env.WP_BASE ?? 'https://namez.se';
+// Public origin that serves /uploads/* (the API host as browsers reach it).
+// API_BASE may point at 127.0.0.1 on the server; asset URLs must not.
+const PUBLIC_API_ORIGIN =
+  process.env.PUBLIC_API_ORIGIN ?? 'https://ms-api.iwings-digital.com';
 const TOKEN = process.env.TOKEN;
 const APPLY = process.argv.includes('--apply');
 const LOCALE = 'sv';
@@ -74,7 +79,7 @@ async function upload(buffer, filename, contentType) {
   const json = await res.json();
   const url = (json.data ?? json).url;
   // /uploads/* is served by the API process, not the storefront host.
-  return url.startsWith('http') ? url : `${API_BASE.replace(/\/api$/, '')}${url}`;
+  return url.startsWith('http') ? url : `${PUBLIC_API_ORIGIN}${url}`;
 }
 
 async function wp(path) {
