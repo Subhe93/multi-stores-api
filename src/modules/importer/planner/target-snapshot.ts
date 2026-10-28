@@ -55,6 +55,8 @@ export interface SnapshotVariant {
 export interface SnapshotCategory {
   id: string;
   slug: string;
+  /** M6.7: the live parent, for the hierarchical `/collections/` path. */
+  parent_id: string | null;
   external_ref: string | null;
   is_active: boolean;
   state_hash: string;

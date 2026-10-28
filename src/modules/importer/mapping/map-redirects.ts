@@ -3,14 +3,15 @@ import type { NormalizedCatalog, NPage, NProduct } from '../model/normalized';
 import type { ContentRedirectOptions } from '../runs/run-options';
 
 /**
- * Redirect generation (M4.4 §6.1) over the planner's final slugs:
+ * Redirect generation (M4.4 §6.1) over the planner's final slugs (M6.7:
+ * every collection target is the hierarchical `/collections/<root>/…/<slug>`):
  *  - `/<product_base>/<slug>` → `/products/<final slug>` for every product
  *    that is PUBLISHED after the status map;
  *  - its old slugs → same target (not `…__trashed`, not a live slug, not drafts);
  *  - skipped published products → their first category, else `/`
  *    (`redirect_skipped`);
  *  - `/<category_base>/<full/path>` and, for nested categories, the leaf
- *    alias → `/collections/<slug>`;
+ *    alias → `/collections/<path…>`;
  *  - `/<tag_base>/<slug>` → the single product carrying the tag, else `/`;
  *  - (M5 B17, `redirect_shortlinks`) the WordPress shortlink `/?p=<post id>`
  *    of every published product → the same target as its slug;
@@ -35,6 +36,12 @@ export interface RedirectBuildInput {
   imported: RedirectProductInput[];
   skipped: NProduct[];
   categorySlug: Map<string, string>;
+  /**
+   * M6.7: slugs root -> self of a category's collection (its hierarchical
+   * `/collections/` URL), null when the category gets no collection. Default:
+   * the catalog's parent chain over `categorySlug` (see `categoryPathResolver`).
+   */
+  categoryPath?: (ref: string) => string[] | null;
   redirectSkipped: boolean;
   /** `/?p=<id>` rows for published products (and pages / posts). Default false. */
   shortlinks?: boolean;
@@ -52,6 +59,40 @@ export interface RedirectBuildInput {
 
 /** Catalog root of the platform (the CATALOG_TEMPLATE page serves it). */
 export const PLATFORM_CATALOG_PATH = '/products';
+
+/** M6.7: the storefront URL of a collection from its slugs root -> self. */
+export const collectionPathTarget = (path: string[]): string =>
+  `/collections/${path.join('/')}`;
+
+/** Longest parent chain the resolver follows (the platform caps depth at 3). */
+const CATEGORY_PATH_MAX_HOPS = 8;
+
+/**
+ * M6.7: build `ref -> slugs root -> self` from a slug map and a parent
+ * function. The chain stops at the first parent without a slug (not
+ * imported: the child is then a root on the platform, fix 18), on a cycle,
+ * or after CATEGORY_PATH_MAX_HOPS. Null when `ref` itself has no slug.
+ */
+export function categoryPathResolver(opts: {
+  categorySlug: ReadonlyMap<string, string>;
+  parentOf: (ref: string) => string | null;
+}): (ref: string) => string[] | null {
+  return (ref) => {
+    const own = opts.categorySlug.get(ref);
+    if (!own) return null;
+    const path = [own];
+    const seen = new Set<string>([ref]);
+    let cursor = opts.parentOf(ref);
+    for (let hop = 0; cursor && hop < CATEGORY_PATH_MAX_HOPS; hop++) {
+      const slug = opts.categorySlug.get(cursor);
+      if (!slug || seen.has(cursor)) break;
+      seen.add(cursor);
+      path.unshift(slug);
+      cursor = opts.parentOf(cursor);
+    }
+    return path;
+  };
+}
 
 /**
  * WordPress / WooCommerce system paths and their platform targets (M5 B17).
@@ -211,36 +252,50 @@ export function buildImportRedirects(input: RedirectBuildInput): {
       });
     }
   }
+  // M6.7: collection targets carry the ancestry (`/collections/a/b/c`).
+  const parentByRef = new Map(
+    catalog.categories.map((c) => [c.ext_id, c.parent_ext_id]),
+  );
+  const categoryPath =
+    input.categoryPath ??
+    categoryPathResolver({
+      categorySlug: input.categorySlug,
+      parentOf: (ref) => parentByRef.get(ref) ?? null,
+    });
+  const collectionTarget = (ref: string): string | null => {
+    const path = categoryPath(ref);
+    return path ? collectionPathTarget(path) : null;
+  };
   if (input.redirectSkipped) {
     for (const p of input.skipped) {
       if (p.status !== 'publish') continue;
       const first = p.category_ext_ids
-        .map((e) => input.categorySlug.get(e))
+        .map(collectionTarget)
         .find((s): s is string => !!s);
       add({
         from: redirectPath(bases.product, p.slug),
-        to: first ? `/collections/${first}` : '/',
+        to: first ?? '/',
         rule: 'skipped_product',
         external_ref: p.ext_id,
       });
     }
   }
   for (const c of catalog.categories) {
-    const slug = input.categorySlug.get(c.ext_id);
-    if (!slug) continue;
+    const to = collectionTarget(c.ext_id);
+    if (!to) continue;
     add({
       from: redirectPath(bases.category, ...c.path),
-      to: `/collections/${slug}`,
+      to,
       rule: 'category_path',
       external_ref: c.ext_id,
     });
   }
   for (const c of catalog.categories) {
-    const slug = input.categorySlug.get(c.ext_id);
-    if (!slug || c.depth === 0) continue;
+    const to = collectionTarget(c.ext_id);
+    if (!to || c.depth === 0) continue;
     add({
       from: redirectPath(bases.category, c.slug),
-      to: `/collections/${slug}`,
+      to,
       rule: 'category_leaf',
       external_ref: c.ext_id,
     });

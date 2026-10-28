@@ -137,13 +137,16 @@ describe('StorefrontService.getSitemapData noindex_when_empty', () => {
     expect(data.collections.map((c) => c.slug)).toEqual(['full', 'plain']);
   });
 
-  it('no flag: no count query, every active collection listed', async () => {
-    const { service, groupOwn } = build([cat('a'), cat('b')]);
+  it('no flag: no count query, every active collection listed with its path (M6.7)', async () => {
+    const { service, groupOwn } = build([
+      cat('a'),
+      cat('b', { parent_id: 'a' }),
+    ]);
     const data = await service.getSitemapData('namez');
     expect(groupOwn).not.toHaveBeenCalled();
     expect(data.collections).toEqual([
-      { slug: 'a', lastmod: new Date(0) },
-      { slug: 'b', lastmod: new Date(0) },
+      { slug: 'a', path: ['a'], lastmod: new Date(0) },
+      { slug: 'b', path: ['a', 'b'], lastmod: new Date(0) },
     ]);
   });
 });
@@ -192,10 +195,12 @@ describe('CreatorCategoriesService.update SEO carry-over (X19)', () => {
         { locale: 'en', name: 'Kids', meta_title: 'Kids SEO', meta_desc: '' },
       ],
     });
-    expect(prisma.creatorCategory.update.mock.calls[0][0]).toMatchObject({
+    expect(
+      (prisma.creatorCategory.update.mock.calls as unknown[][])[0][0],
+    ).toMatchObject({
       data: { noindex_when_empty: true },
     });
-    const rows = createMany.mock.calls[0][0].data as Row[];
+    const rows = (createMany.mock.calls as { data: Row[] }[][])[0][0].data;
     expect(rows.map((r) => [r.locale, r.meta_title, r.meta_desc])).toEqual([
       ['sv', 'SEO sv', 'Desc sv'],
       ['en', 'Kids SEO', null],

@@ -159,6 +159,94 @@ export function dropMenuItemsWithDescendants<
   return items.filter((it) => !gone.has(it.id));
 }
 
+/** What `buildCollectionPaths` reads of a creator's collection row (M6.7). */
+export interface CollectionPathRow {
+  id: string;
+  slug: string;
+  parent_id: string | null;
+  is_active: boolean;
+  visibility: string;
+}
+
+/** M6.7: the hierarchical URL of a collection and whether it is served. */
+export interface CollectionPathInfo {
+  /** Slugs root -> self; `path[path.length - 1]` is the row's own slug. */
+  path: string[];
+  /**
+   * True when the row and every ancestor are active and PUBLIC, the chain is
+   * complete (every parent is among `rows`) and within the depth cap.
+   */
+  reachable: boolean;
+}
+
+/**
+ * M6.7: compute `/collections/<root>/<child>/<self>` paths for a creator's
+ * collections from their `parent_id` chains. Pure: `rows` is the creator's
+ * collection set (one findMany). A parent missing from `rows`, a cycle or a
+ * chain longer than CREATOR_CATEGORY_MAX_DEPTH hops breaks the chain; such
+ * a node (and an inactive / INTERNAL one, or one under such an ancestor) is
+ * `reachable: false` and must not be served as a page.
+ */
+export function buildCollectionPaths(
+  rows: readonly CollectionPathRow[],
+): Map<string, CollectionPathInfo> {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const out = new Map<string, CollectionPathInfo>();
+  for (const row of rows) {
+    const path = [row.slug];
+    let reachable = row.is_active && row.visibility !== 'INTERNAL';
+    const seen = new Set<string>([row.id]);
+    let cursor = row.parent_id;
+    for (let hop = 0; cursor; hop++) {
+      if (hop >= CREATOR_CATEGORY_MAX_DEPTH || seen.has(cursor)) {
+        reachable = false;
+        break;
+      }
+      const parent = byId.get(cursor);
+      if (!parent) {
+        reachable = false;
+        break;
+      }
+      seen.add(parent.id);
+      path.unshift(parent.slug);
+      if (!parent.is_active || parent.visibility === 'INTERNAL')
+        reachable = false;
+      cursor = parent.parent_id;
+    }
+    out.set(row.id, { path, reachable });
+  }
+  return out;
+}
+
+/**
+ * M6.7: menu items as served. A `COLLECTION` item whose collection is not
+ * reachable (unknown id included) goes with its descendants; the kept ones
+ * get `url` = `/collections/<path…>` of the collection.
+ */
+export function rewriteCollectionMenuItems<
+  T extends {
+    id: string;
+    parent_id: string | null;
+    kind: string;
+    resource_id: string | null;
+    url: string | null;
+  },
+>(items: T[], paths: ReadonlyMap<string, CollectionPathInfo>): T[] {
+  const isCollection = (it: T) => it.kind === 'COLLECTION' && !!it.resource_id;
+  const kept = dropMenuItemsWithDescendants(
+    items,
+    (it) => isCollection(it) && !paths.get(it.resource_id!)?.reachable,
+  );
+  return kept.map((it) =>
+    isCollection(it)
+      ? {
+          ...it,
+          url: `/collections/${paths.get(it.resource_id!)!.path.join('/')}`,
+        }
+      : it,
+  );
+}
+
 /** Shape check for `creator_category_id` (M6.4) before it reaches Prisma. */
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -203,6 +291,8 @@ export type PublicCollectionRow = Prisma.CreatorCategoryGetPayload<{
 export interface PublicCollectionPathNode {
   id: string;
   slug: string;
+  /** M6.7: slugs root -> self (the node's `/collections/` URL). */
+  path: string[];
   translations: PublicCollectionRow['translations'];
 }
 
@@ -1478,22 +1568,63 @@ export class StorefrontService {
   }
 
   /**
+   * M6.7: `{ path, reachable }` of every collection of the creator, from one
+   * findMany (see `buildCollectionPaths`).
+   */
+  private async collectionPaths(
+    creatorId: string,
+  ): Promise<Map<string, CollectionPathInfo>> {
+    const rows = await this.prisma.creatorCategory.findMany({
+      where: { creator_id: creatorId },
+      select: {
+        id: true,
+        slug: true,
+        parent_id: true,
+        is_active: true,
+        visibility: true,
+      },
+    });
+    return buildCollectionPaths(rows);
+  }
+
+  /**
    * M6: the collection fields of a product payload. `creator_categories`
-   * is the active PUBLIC linked collections with the primary first (M6.3:
-   * INTERNAL labels are never served); `primary_creator_category_id` is
-   * null when the primary is missing, inactive or INTERNAL;
-   * `primary_collection_path` is root -> leaf (active ancestors, then the
-   * primary), `[]` when there is no primary. Ancestors are read by
-   * parent_id, scoped to the creator, at most CREATOR_CATEGORY_MAX_DEPTH hops.
+   * is the linked collections that are served as pages, primary first
+   * (M6.3: INTERNAL labels are never served; M6.7: nor is a collection
+   * whose ancestor chain is inactive, INTERNAL or broken), each with its
+   * `path`; `primary_creator_category_id` is null when the primary is
+   * missing or unreachable; `primary_collection_path` is root -> leaf
+   * (the ancestors, then the primary), `[]` when there is no primary.
+   * Paths come from one query of the creator's collections.
    */
   private async primaryCollectionFields(
     creatorId: string | null,
     primaryId: string | null,
     linked: PublicCollectionRow[],
   ) {
-    const active = linked.filter(
-      (cc) => cc && cc.is_active !== false && cc.visibility !== 'INTERNAL',
-    );
+    const present = linked.filter((cc) => !!cc);
+    const ownerId = creatorId ?? present[0]?.creator_id ?? null;
+    // One query, only when something is linked: the creator's collections
+    // with their translations, so the paths and the ancestor nodes of the
+    // primary come from the same rows.
+    const rows =
+      ownerId && present.length
+        ? await this.prisma.creatorCategory.findMany({
+            where: { creator_id: ownerId },
+            select: {
+              id: true,
+              slug: true,
+              parent_id: true,
+              is_active: true,
+              visibility: true,
+              translations: true,
+            },
+          })
+        : [];
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const paths = buildCollectionPaths(rows);
+    const pathOf = (id: string) => paths.get(id)?.path ?? [];
+    const active = present.filter((cc) => paths.get(cc.id)?.reachable);
     const primary = primaryId
       ? active.find((cc) => cc.id === primaryId)
       : undefined;
@@ -1502,48 +1633,33 @@ export class StorefrontService {
       : active;
     const path: PublicCollectionPathNode[] = [];
     if (primary) {
+      // The primary is reachable, so its chain is complete, active, PUBLIC
+      // and within the depth cap: walk it up and emit root -> leaf.
       const ancestors: PublicCollectionPathNode[] = [];
-      let cursor = primary.parent_id;
-      const seen = new Set<string>([primary.id]);
       for (
-        let hop = 0;
-        cursor && !seen.has(cursor) && hop < CREATOR_CATEGORY_MAX_DEPTH;
-        hop++
+        let cursor = byId.get(primary.parent_id ?? '');
+        cursor && ancestors.length < CREATOR_CATEGORY_MAX_DEPTH;
+        cursor = byId.get(cursor.parent_id ?? '')
       ) {
-        seen.add(cursor);
-        const row = await this.prisma.creatorCategory.findFirst({
-          where: {
-            id: cursor,
-            ...(creatorId ? { creator_id: creatorId } : {}),
-          },
-          select: {
-            id: true,
-            slug: true,
-            parent_id: true,
-            is_active: true,
-            visibility: true,
-            translations: true,
-          },
+        ancestors.unshift({
+          id: cursor.id,
+          slug: cursor.slug,
+          path: pathOf(cursor.id),
+          translations: cursor.translations,
         });
-        if (!row) break;
-        // An INTERNAL ancestor cannot exist (M6.3 rules); skipped defensively.
-        if (row.is_active && row.visibility !== 'INTERNAL') {
-          ancestors.unshift({
-            id: row.id,
-            slug: row.slug,
-            translations: row.translations,
-          });
-        }
-        cursor = row.parent_id;
       }
       path.push(...ancestors, {
         id: primary.id,
         slug: primary.slug,
+        path: pathOf(primary.id),
         translations: primary.translations,
       });
     }
     return {
-      creator_categories: ordered.map(publicCreatorCategory),
+      creator_categories: ordered.map((cc) => ({
+        ...publicCreatorCategory(cc),
+        path: pathOf(cc.id),
+      })),
       primary_creator_category_id: primary ? primary.id : null,
       primary_collection_path: path,
     };
@@ -1552,9 +1668,12 @@ export class StorefrontService {
   /**
    * Public tree of the creator's active PUBLIC collections for this store
    * (root -> child -> grandchild, three levels at most since M6; INTERNAL
-   * labels are left out, M6.3). Every translation row is served whole, so
-   * it carries the short `description` (hero) and the M6.2
-   * `long_description` (below the products).
+   * labels are left out, M6.3). M6.7: every node carries `path` (slugs
+   * root -> self); a node whose ancestor chain is not served (inactive or
+   * INTERNAL parent, or a chain deeper than the cap) is left out with its
+   * subtree. Every translation row is served whole, so it carries the
+   * short `description` (hero) and the M6.2 `long_description` (below the
+   * products).
    */
   async getCreatorCategories(slug: string) {
     const store = await this.prisma.store.findUnique({
@@ -1593,20 +1712,27 @@ export class StorefrontService {
     type Node = ReturnType<
       typeof publicCreatorCategory<(typeof rows)[number]>
     > & {
+      path: string[];
       children: Node[];
       published_product_count?: number;
     };
+    // `rows` is already the active PUBLIC set, so a parent missing from it
+    // is exactly an unreachable chain.
+    const paths = buildCollectionPaths(rows);
     const map = new Map<string, Node>();
-    rows.forEach((r) =>
+    for (const r of rows) {
+      const info = paths.get(r.id);
+      if (!info?.reachable) continue;
       map.set(r.id, {
         ...publicCreatorCategory(r),
+        path: info.path,
         ...(counts ? { published_product_count: counts.get(r.id) ?? 0 } : {}),
         children: [],
-      }),
-    );
+      });
+    }
     const roots: Node[] = [];
     for (const node of map.values()) {
-      if (node.parent_id && map.has(node.parent_id)) {
+      if (node.parent_id) {
         map.get(node.parent_id)!.children.push(node);
       } else {
         roots.push(node);
@@ -1743,6 +1869,9 @@ export class StorefrontService {
           select: {
             id: true,
             slug: true,
+            parent_id: true,
+            is_active: true,
+            visibility: true,
             updated_at: true,
             noindex_when_empty: true,
             match_rule: true,
@@ -1771,6 +1900,7 @@ export class StorefrontService {
         if (!counts.get(c.id)) emptyCollectionIds.add(c.id);
       }
     }
+    const collectionPaths = buildCollectionPaths(collections);
 
     return {
       locales,
@@ -1812,12 +1942,16 @@ export class StorefrontService {
           return { slug: t.slug, slugs, lastmod: p.updated_at };
         })
         .filter((p): p is { slug: string; lastmod: Date } => !!p),
+      // M6.7: `path` is the hierarchical URL; a collection under an
+      // unserved ancestor (not in this active PUBLIC set) is left out.
       collections: collections
         .filter((c) => !emptyCollectionIds.has(c.id))
-        .map((c) => ({
-          slug: c.slug,
-          lastmod: c.updated_at,
-        })),
+        .flatMap((c) => {
+          const info = collectionPaths.get(c.id);
+          return info?.reachable
+            ? [{ slug: c.slug, path: info.path, lastmod: c.updated_at }]
+            : [];
+        }),
       legal_pages: legalPages.map((p) => ({
         slug: p.slug,
         lastmod: p.updated_at,
@@ -1899,9 +2033,13 @@ export class StorefrontService {
 
   /**
    * Navigation menus for a store, with items ordered. Public read used by the
-   * storefront chrome (header/footer) to resolve a menu key → items. M6.3:
-   * an item that links an INTERNAL collection is dropped together with its
-   * descendants (one extra query, only when some item is a COLLECTION).
+   * storefront chrome (header/footer) to resolve a menu key → items. M6.3 /
+   * M6.7: an item that links a collection that is not served (INTERNAL,
+   * inactive, unknown, or under such an ancestor) is dropped together with
+   * its descendants, and the `url` of the kept COLLECTION items is the
+   * collection's hierarchical `/collections/<path…>` at serve time (one
+   * extra query, only when some item is a COLLECTION; the stored url is
+   * not touched).
    */
   async getMenus(storeSlug: string) {
     const store = await this.prisma.store.findUnique({
@@ -1937,30 +2075,15 @@ export class StorefrontService {
     const linksCollection = menus.some((m) =>
       m.items.some((it) => it.kind === 'COLLECTION' && it.resource_id),
     );
-    const internalIds = linksCollection
-      ? new Set(
-          (
-            await this.prisma.creatorCategory.findMany({
-              where: { creator_id: store.creator_id, visibility: 'INTERNAL' },
-              select: { id: true },
-            })
-          ).map((c) => c.id),
-        )
-      : new Set<string>();
+    const paths = linksCollection
+      ? await this.collectionPaths(store.creator_id)
+      : null;
 
     return menus.map((m) => ({
       id: m.id,
       key: m.key,
       name: m.name,
-      items: internalIds.size
-        ? dropMenuItemsWithDescendants(
-            m.items,
-            (it) =>
-              it.kind === 'COLLECTION' &&
-              !!it.resource_id &&
-              internalIds.has(it.resource_id),
-          )
-        : m.items,
+      items: paths ? rewriteCollectionMenuItems(m.items, paths) : m.items,
     }));
   }
 

@@ -476,6 +476,7 @@ export async function loadTargetSnapshot(
     const sc: SnapshotCategory = {
       id: c.id,
       slug: c.slug,
+      parent_id: c.parent_id,
       external_ref: c.external_ref,
       is_active: c.is_active,
       state_hash: categoryStateHash({

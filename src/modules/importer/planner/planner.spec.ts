@@ -149,6 +149,7 @@ describe('planner on the hand-made v1 bundle', () => {
     const taken = {
       id: 'x',
       slug: 'muggar',
+      parent_id: null,
       external_ref: 'woo:other.example:product_cat:1',
       is_active: true,
       state_hash: '',
@@ -168,6 +169,51 @@ describe('planner on the hand-made v1 bundle', () => {
     expect(q.items.find((i) => i.entity_type === 'CATEGORY')!.action).toBe(
       'CONFLICT',
     );
+  });
+
+  it('M6.7: a live collection this run does not write keeps its live parent chain', async () => {
+    // Merchant moved `muggar` under a platform-made `present`; untracked by
+    // the ledger, so SKIP_MODIFIED skips it. Its page stays at
+    // /collections/present/muggar: redirects target that path and no
+    // `renamed` row points at a /collections/muggar that will not exist.
+    const parent = {
+      id: 'p',
+      slug: 'present',
+      parent_id: null,
+      external_ref: null,
+      is_active: true,
+      state_hash: '',
+    };
+    const live = {
+      id: 'm',
+      slug: 'muggar',
+      parent_id: 'p',
+      external_ref: 'woo:shop.example:product_cat:50',
+      is_active: true,
+      state_hash: '',
+    };
+    const p = plan(await v1Catalog(), {
+      categoriesBySlug: new Map([
+        ['present', parent],
+        ['muggar', live],
+      ]),
+      categoriesByRef: new Map([[live.external_ref, live]]),
+    });
+    expect(p.items.find((i) => i.entity_type === 'CATEGORY')!.action).toBe(
+      'SKIP',
+    );
+    const rows = p.work.redirects!.plan.items.map((r) => [
+      r.from_path,
+      r.to_path,
+    ]);
+    expect(rows).toContainEqual([
+      '/kategori/muggar',
+      '/collections/present/muggar',
+    ]);
+    expect(rows.some(([from]) => from === '/collections/present/muggar')).toBe(
+      false,
+    );
+    expect(rows.some(([, to]) => to === '/collections/muggar')).toBe(false);
   });
 
   it('scopes switch whole entity types off', async () => {

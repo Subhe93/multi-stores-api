@@ -200,7 +200,8 @@ describe('summarizeCatalog — real Namez slice', () => {
     const cat = r.candidates.find(
       (c) =>
         c.rule === 'category_path' &&
-        c.to === '/collections/studentpresent-till-kille',
+        c.to ===
+          '/collections/presenter-till-vem/studentpresent/studentpresent-till-kille',
     );
     expect(cat?.from).toBe(
       '/product-category/presenter-till-vem/studentpresent/studentpresent-till-kille',

@@ -14,8 +14,10 @@ import {
 } from '../model/dry-run-summary';
 import {
   buildImportRedirects,
+  collectionPathTarget,
   resolveContentTarget,
 } from '../mapping/map-redirects';
+import type { SnapshotCategory } from './target-snapshot';
 import type { CategoryPlan } from './plan-categories';
 import type { PlanContext } from './plan-context';
 import { importedPagePath } from './plan-pages';
@@ -132,6 +134,76 @@ export function planRedirects(
     return p.current_status === 'PUBLISHED';
   };
   const sourceByRef = new Map(products.imported.map((x) => [x.ext_id, x]));
+  // M6.7: collection URLs carry the ancestry. `livePathOf` is the chain as
+  // it is now (snapshot parent_id). `categoryPath` is the chain after the
+  // run: a collection this run writes (CREATE / UPDATE, scope on) sits under
+  // its mapped parent when that parent gets a collection (apply-categories
+  // resolves the parent the same way; otherwise the child is a root, fix
+  // 18); every other live collection (SKIP / UNCHANGED / CONFLICT, or the
+  // scope off) keeps its live parent. Each parent is resolved by the same
+  // rule, so a kept child under a renamed parent gets the new parent slug.
+  const liveById = new Map<string, SnapshotCategory>();
+  for (const c of snapshot.categoriesBySlug.values()) liveById.set(c.id, c);
+  const livePathOf = (c: SnapshotCategory): string[] => {
+    const path = [c.slug];
+    const seen = new Set<string>([c.id]);
+    for (
+      let p = c.parent_id ? liveById.get(c.parent_id) : undefined;
+      p && !seen.has(p.id) && path.length <= 8;
+      p = p.parent_id ? liveById.get(p.parent_id) : undefined
+    ) {
+      seen.add(p.id);
+      path.unshift(p.slug);
+    }
+    return path;
+  };
+  const isWritten = (ref: string): boolean => {
+    const pc = categories.byRef.get(ref);
+    return (
+      scopes.categories &&
+      !!pc &&
+      (pc.action === 'CREATE' || pc.action === 'UPDATE')
+    );
+  };
+  // Path of a live row after the run: by ref when this run writes it, else
+  // its own slug under its live parent (resolved the same way).
+  const plannedLivePathOf = (
+    c: SnapshotCategory,
+    seen: Set<string>,
+  ): string[] => {
+    if (c.external_ref && isWritten(c.external_ref)) {
+      const planned = plannedPathOfRef(c.external_ref, seen);
+      if (planned) return planned;
+    }
+    if (seen.has(c.id) || seen.size > 8) return [c.slug];
+    seen.add(c.id);
+    const parent = c.parent_id ? liveById.get(c.parent_id) : undefined;
+    return parent ? [...plannedLivePathOf(parent, seen), c.slug] : [c.slug];
+  };
+  const plannedPathOfRef = (
+    ref: string,
+    seen: Set<string>,
+  ): string[] | null => {
+    const slug = categorySlug.get(ref);
+    if (!slug) return null;
+    if (!isWritten(ref)) {
+      const live = snapshot.categoriesByRef.get(ref);
+      return live ? plannedLivePathOf(live, seen) : [slug];
+    }
+    const parentRef = categories.byRef.get(ref)?.mapped.parent_ref ?? null;
+    if (!parentRef || !categories.collectionFor(parentRef)) return [slug];
+    if (seen.has(ref) || seen.size > 8) return [slug];
+    seen.add(ref);
+    // `collectionFor` is non-null, so the parent is live, created or adopted
+    // by this run and has a planned slug.
+    return [...(plannedPathOfRef(parentRef, seen) ?? []), slug];
+  };
+  const categoryPath = (ref: string): string[] | null =>
+    plannedPathOfRef(ref, new Set<string>());
+  const collectionTarget = (ref: string): string | null => {
+    const path = categoryPath(ref);
+    return path ? collectionPathTarget(path) : null;
+  };
   const built = buildImportRedirects({
     catalog,
     imported: plannedProducts.map((p) => ({
@@ -141,6 +213,7 @@ export function planRedirects(
     })),
     skipped: products.skipped,
     categorySlug,
+    categoryPath,
     redirectSkipped: options.redirect_skipped,
     shortlinks: options.redirect_shortlinks,
     // M5 B17: pages / posts per `content_redirects`, plus the system paths.
@@ -164,13 +237,19 @@ export function planRedirects(
   for (const p of plannedProducts)
     if (willBePublished(p)) livePaths.add(`/products/${p.final_slug}`);
   for (const c of snapshot.categoriesBySlug.values())
-    if (c.is_active) livePaths.add(`/collections/${c.slug}`);
-  for (const s of categorySlug.values()) livePaths.add(`/collections/${s}`);
+    if (c.is_active) livePaths.add(collectionPathTarget(livePathOf(c)));
+  for (const ref of categorySlug.keys()) {
+    const to = collectionTarget(ref);
+    if (to) livePaths.add(to);
+  }
   // Platform pages whose slug this run changes: the old page path
   // redirects to the new one (and older rows pointing at it are re-pointed).
   const claimed = new Set<string>();
   for (const p of plannedProducts) claimed.add(`/products/${p.final_slug}`);
-  for (const s of categorySlug.values()) claimed.add(`/collections/${s}`);
+  for (const ref of categorySlug.keys()) {
+    const to = collectionTarget(ref);
+    if (to) claimed.add(to);
+  }
   if (scopes.products)
     for (const p of plannedProducts) {
       const old = snapshot.productsByRef.get(p.mapped.ref)?.slug;
@@ -193,17 +272,20 @@ export function planRedirects(
         status_code: 301,
       });
     }
+  // M6.7: the old path is the live chain, the new one the planned chain, so
+  // a collection moved under another parent (or whose ancestor is renamed)
+  // redirects too, not only a renamed slug.
   if (scopes.categories)
     for (const c of categories.planned) {
       const live = snapshot.categoriesByRef.get(c.mapped.ref);
-      if (c.action !== 'UPDATE' || !live || live.slug === c.mapped.slug)
-        continue;
-      const from = `/collections/${live.slug}`;
-      if (claimed.has(from)) continue;
+      if (c.action === 'CONFLICT' || !live || !live.is_active) continue;
+      const to = collectionTarget(c.mapped.ref);
+      const from = collectionPathTarget(livePathOf(live));
+      if (!to || to === from || claimed.has(from)) continue;
       livePaths.delete(from);
       built.candidates.push({
         from,
-        to: `/collections/${c.mapped.slug}`,
+        to,
         rule: 'renamed',
         external_ref: c.mapped.ref,
         status_code: 301,
