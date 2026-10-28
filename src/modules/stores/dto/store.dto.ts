@@ -25,6 +25,18 @@ const DOMAIN_REGEX =
 const DOMAIN_MESSAGE =
   'custom_domain must be a valid domain like shop.example.com';
 
+// Tracking ids (Namez go-live 3.9). An empty string clears the id; the
+// service stores NULL (and upper-cases the GA4/TikTok ids, which is why the
+// regexes are case-insensitive). Public ids only, so no secret ever lands here.
+export const GA4_MEASUREMENT_ID_REGEX = /^$|^G-[A-Z0-9]{4,}$/i;
+export const GA4_MEASUREMENT_ID_MESSAGE =
+  'ga4_measurement_id must look like G-XXXXXXXXXX';
+export const META_PIXEL_ID_REGEX = /^$|^[0-9]{5,32}$/;
+export const META_PIXEL_ID_MESSAGE = 'meta_pixel_id must be digits only';
+export const TIKTOK_PIXEL_ID_REGEX = /^$|^[A-Z0-9]{8,64}$/i;
+export const TIKTOK_PIXEL_ID_MESSAGE =
+  'tiktok_pixel_id must be letters and digits only';
+
 export class CreateStoreDto {
   @IsString()
   @MinLength(2)
@@ -123,6 +135,32 @@ export class UpdateStoreDto {
   @IsOptional()
   @IsObject()
   checkout_settings?: Record<string, unknown> | null;
+
+  // Tracking + cookie consent (Namez go-live 3.9). Empty string or null
+  // clears an id. The storefront only loads a tracker whose id is set.
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  @Matches(GA4_MEASUREMENT_ID_REGEX, { message: GA4_MEASUREMENT_ID_MESSAGE })
+  ga4_measurement_id?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  @Matches(META_PIXEL_ID_REGEX, { message: META_PIXEL_ID_MESSAGE })
+  meta_pixel_id?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  @Matches(TIKTOK_PIXEL_ID_REGEX, { message: TIKTOK_PIXEL_ID_MESSAGE })
+  tiktok_pixel_id?: string | null;
+
+  // false = load the trackers without asking (the creator takes the legal
+  // responsibility); true (default) = cookie banner first.
+  @IsOptional()
+  @IsBoolean()
+  consent_required?: boolean;
 }
 
 // Admin-only store update: also allows switching the store type. The creator

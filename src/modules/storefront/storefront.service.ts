@@ -653,7 +653,14 @@ export class StorefrontService {
 
     // Checkout behaviour (M5.1): the raw column never travels; the public
     // `checkout` key is added below only when the store overrides a default.
-    const { checkout_settings: rawCheckoutSettings, ...storeRow } = store;
+    const {
+      checkout_settings: rawCheckoutSettings,
+      ga4_measurement_id,
+      meta_pixel_id,
+      tiktok_pixel_id,
+      consent_required,
+      ...storeRow
+    } = store;
     const checkout = publicCheckoutSettings(rawCheckoutSettings);
 
     return {
@@ -698,6 +705,14 @@ export class StorefrontService {
       apps,
       // Checkout behaviour overrides — only present when non-default.
       ...(checkout ? { checkout } : {}),
+      // Tracking + cookie consent (3.9): public vendor ids only. The
+      // storefront renders the cookie banner when at least one id is set.
+      tracking: {
+        ga4_measurement_id: ga4_measurement_id ?? null,
+        meta_pixel_id: meta_pixel_id ?? null,
+        tiktok_pixel_id: tiktok_pixel_id ?? null,
+        consent_required,
+      },
       pages: mergedPages,
       // New theme system: storefront resolves the registry by theme_key and
       // merges theme_customizations on top.

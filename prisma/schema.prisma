@@ -1091,6 +1091,14 @@ model Store {
   // Null = the platform defaults (today's behaviour); see
   // modules/stores/checkout-settings.ts for the shape.
   checkout_settings       Json?
+  // Tracking + cookie consent (Namez go-live 3.9). Public ids only — the
+  // storefront loads the vendor scripts; no secrets live here.
+  ga4_measurement_id      String?        @db.VarChar(32)
+  meta_pixel_id           String?        @db.VarChar(32)
+  tiktok_pixel_id         String?        @db.VarChar(64)
+  // When true (default) the storefront shows the cookie banner and loads the
+  // trackers only after the visitor accepts; false loads them immediately.
+  consent_required        Boolean        @default(true)
   created_at              DateTime       @default(now())
   updated_at              DateTime       @updatedAt
 

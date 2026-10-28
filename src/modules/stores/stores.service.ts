@@ -749,5 +749,20 @@ function normalizeStoreUpdate(dto: UpdateStoreDto): StoreUpdateData {
         : Prisma.JsonNull,
     };
   }
+  // Tracking ids: trimmed; an empty string (or null) clears the id so the
+  // storefront stops loading that tracker. GA4 and TikTok ids are stored
+  // upper-cased (their canonical form); the DTO accepts either case.
+  if (dto.ga4_measurement_id !== undefined) {
+    const raw = (dto.ga4_measurement_id ?? '').trim().toUpperCase();
+    out = { ...out, ga4_measurement_id: raw || null };
+  }
+  if (dto.meta_pixel_id !== undefined) {
+    const raw = (dto.meta_pixel_id ?? '').trim();
+    out = { ...out, meta_pixel_id: raw || null };
+  }
+  if (dto.tiktok_pixel_id !== undefined) {
+    const raw = (dto.tiktok_pixel_id ?? '').trim().toUpperCase();
+    out = { ...out, tiktok_pixel_id: raw || null };
+  }
   return out;
 }
