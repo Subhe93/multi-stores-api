@@ -5,6 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import {
   CreateCreatorCategoryDto,
   UpdateCreatorCategoryDto,
@@ -36,7 +37,19 @@ function sanitizeTranslation<
 
 @Injectable()
 export class CreatorCategoriesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly revalidation: RevalidationService,
+  ) {}
+
+  /**
+   * Collections feed menus, breadcrumbs, listing pages and the sitemap, which
+   * the storefront caches per store (1 h): every write refreshes the store
+   * tag so an edit is visible within seconds (Namez go-live Phase 3.2).
+   */
+  private async refreshStorefront(creatorId: string): Promise<void> {
+    await this.revalidation.revalidateStoreByCreatorId(creatorId);
+  }
 
   private async getCreatorIdOrThrow(userId: string): Promise<string> {
     const creator = await this.prisma.creator.findUnique({
@@ -233,6 +246,7 @@ export class CreatorCategoriesService {
       );
     }
 
+    await this.refreshStorefront(creatorId);
     return this.findById(created.id, userId);
   }
 
@@ -436,6 +450,7 @@ export class CreatorCategoriesService {
       }
     }
 
+    await this.refreshStorefront(creatorId);
     return this.findById(id, userId);
   }
 
@@ -506,7 +521,9 @@ export class CreatorCategoriesService {
     const creatorId = await this.getCreatorIdOrThrow(userId);
     await this.assertOwnership(id, creatorId);
     // children's parent_id is SET NULL via FK
-    return this.prisma.creatorCategory.delete({ where: { id } });
+    const deleted = await this.prisma.creatorCategory.delete({ where: { id } });
+    await this.refreshStorefront(creatorId);
+    return deleted;
   }
 
   async reorder(userId: string, dto: ReorderCreatorCategoriesDto) {
@@ -529,6 +546,7 @@ export class CreatorCategoriesService {
         }),
       ),
     );
+    await this.refreshStorefront(creatorId);
     return { ok: true };
   }
 

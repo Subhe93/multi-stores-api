@@ -22,6 +22,7 @@ import {
   type PricedAddon,
 } from '../../designer/designer-addons';
 
+import { PLATFORM_TERMS_PATH } from './store-terms';
 /**
  * Pure functions that turn one of our orders — or a not-yet-ordered checkout
  * session — into the Kustom checkout payload. Nothing here touches the
@@ -114,6 +115,8 @@ export interface KustomMapperContext {
   customDomain?: string | null;
   /** Store content locale, e.g. 'sv', 'en'. */
   primaryLocale: string | null | undefined;
+  /** Store terms page path (`/<slug>`); null/undefined → the platform page. */
+  termsPath?: string | null;
   /** STOREFRONT_URL, no trailing slash needed. */
   storefrontBase: string;
   /** PUBLIC_API_URL, no trailing slash needed. */
@@ -537,8 +540,9 @@ export function buildKustomMerchantUrls(
   const oid = encodeURIComponent(orderId);
   const token = encodeURIComponent(ctx.pushToken);
   return {
-    // Every storefront mirrors the platform legal pages under /legal/{slug}.
-    terms: `${base}/legal/terms`,
+    // The store's own published terms page when it has one, else the
+    // platform legal page every storefront mirrors under /legal/{slug}.
+    terms: `${base}${ctx.termsPath ?? PLATFORM_TERMS_PATH}`,
     checkout: `${base}/checkout/kustom?orderId=${oid}`,
     confirmation: `${base}/checkout/kustom/confirmation?orderId=${oid}&kustom_order_id={checkout.order.id}`,
     push: `${api}/payments/kustom/push?order_id=${oid}&token=${token}&kustom_order_id={checkout.order.id}`,
@@ -608,6 +612,8 @@ export interface KustomSessionMapperContext {
   storeSlug: string;
   customDomain?: string | null;
   primaryLocale: string | null | undefined;
+  /** Store terms page path (`/<slug>`); null/undefined → the platform page. */
+  termsPath?: string | null;
   storefrontBase: string;
   apiBase: string;
   sessionId: string;
@@ -671,7 +677,7 @@ export function buildKustomSessionMerchantUrls(
   const callback = encodeURIComponent(ctx.callbackToken);
   const auth = `session_id=${sid}&token=${callback}`;
   return {
-    terms: `${base}/legal/terms`,
+    terms: `${base}${ctx.termsPath ?? PLATFORM_TERMS_PATH}`,
     checkout: `${base}/checkout?kustom_session=${sid}`,
     confirmation: `${base}/checkout/kustom/confirmation?session=${sid}&token=${token}&kustom_order_id={checkout.order.id}`,
     push: `${api}/push?${auth}&kustom_order_id={checkout.order.id}`,

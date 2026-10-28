@@ -1,3 +1,4 @@
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { CreatorCategoriesService } from './creator-categories.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 
@@ -42,7 +43,12 @@ function setup() {
     $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
   };
   return {
-    svc: new CreatorCategoriesService(prisma as unknown as PrismaService),
+    svc: new CreatorCategoriesService(
+      prisma as unknown as PrismaService,
+      {
+        revalidateStoreByCreatorId: jest.fn(),
+      } as unknown as RevalidationService,
+    ),
     create,
     createMany,
   };

@@ -55,6 +55,7 @@ import {
   type TaxLineInput,
 } from '../../taxes/tax.service';
 
+import { resolveStoreTermsPath } from './store-terms';
 // Kustom order statuses (Order Management API) that mean the money is
 // authorized on the creator's account and the order may be treated as paid.
 const PAID_STATUSES = new Set(['AUTHORIZED', 'PART_CAPTURED', 'CAPTURED']);
@@ -103,6 +104,10 @@ export interface StoreContext {
   store_type: StoreType;
   is_active: boolean;
   primaryLocale: string | null;
+  /** Store name for customer-facing messages (welcome mail of a guest checkout). */
+  name: string;
+  /** The store's own published terms page (`/<slug>`), else null → platform page. */
+  termsPath: string | null;
   /**
    * Resolved presentment currency (store override or platform default; the
    * order's / market's currency once a market overlay applied).
@@ -223,6 +228,7 @@ export class KustomService implements OnModuleInit {
       select: {
         id: true,
         slug: true,
+        name: true,
         custom_domain: true,
         store_type: true,
         is_active: true,
@@ -244,10 +250,12 @@ export class KustomService implements OnModuleInit {
     return {
       id: store.id,
       slug: store.slug,
+      name: store.name,
       customDomain: store.custom_domain ?? null,
       store_type: store.store_type,
       is_active: store.is_active,
       primaryLocale: store.language_config?.primary_locale ?? null,
+      termsPath: await resolveStoreTermsPath(this.prisma, store.id),
       currency: resolveStoreCurrency(store, platformConfig?.default_currency),
       creator: store.creator,
       market: null,
@@ -491,6 +499,7 @@ export class KustomService implements OnModuleInit {
       storeSlug: ctx.slug,
       customDomain: ctx.customDomain,
       primaryLocale: ctx.primaryLocale,
+      termsPath: ctx.termsPath,
       pushToken,
       ...this.requirePublicUrls(),
       allowedCustomerTypes: await this.b2b.kustomCustomerTypes(ctx.id),

@@ -46,6 +46,8 @@ const storeCtx: StoreContext = {
   id: STORE_ID,
   slug: 'namez',
   customDomain: null,
+  name: 'Store',
+  termsPath: null,
   store_type: StoreType.INDEPENDENT,
   is_active: true,
   primaryLocale: 'sv',

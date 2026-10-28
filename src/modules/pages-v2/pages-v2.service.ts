@@ -390,7 +390,7 @@ export class PagesV2Service {
     if (dto.sort_order !== undefined) data.sort_order = dto.sort_order;
     if (dto.seo !== undefined) data.seo = dto.seo as Prisma.InputJsonValue;
 
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       if (dto.translations) {
         // Upsert per locale; deleteMany + create would invalidate references.
         for (const tr of dto.translations) {
@@ -417,6 +417,11 @@ export class PagesV2Service {
         include: { translations: true },
       });
     });
+    // Slug, status and SEO of a published page are served from the store
+    // cache: refresh it like publish() does (Namez go-live Phase 3.2).
+    if (updated.published_version_id)
+      await this.revalidation.revalidateStoreById(storeId);
+    return updated;
   }
 
   async delete(userId: string, pageId: string) {
@@ -440,7 +445,10 @@ export class PagesV2Service {
         message: 'This page cannot be deleted',
       });
     }
-    return this.prisma.page.delete({ where: { id: pageId } });
+    const deleted = await this.prisma.page.delete({ where: { id: pageId } });
+    if (deleted.published_version_id)
+      await this.revalidation.revalidateStoreById(storeId);
+    return deleted;
   }
 
   /**

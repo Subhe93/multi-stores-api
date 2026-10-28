@@ -21,6 +21,7 @@ import {
   productionDigestEmail,
   productionNewOrderEmail,
   welcomeEmail,
+  type EmailBrand,
   OrderConfirmationData,
   OrderShippedData,
   OrderDeliveredData,
@@ -606,9 +607,11 @@ export class MailService {
     });
     if (rendered)
       return this.send({ to, ...rendered, event: 'password_reset' });
-    const fallback = passwordResetEmail(resetUrl, {
-      platformName: await this.platformDisplayName(),
-    });
+    const fallback = passwordResetEmail(
+      resetUrl,
+      { platformName: await this.platformDisplayName() },
+      locale,
+    );
     return this.send({ to, ...fallback, event: 'password_reset' });
   }
 
@@ -1048,19 +1051,29 @@ export class MailService {
     return full || undefined;
   }
 
-  // Signup is a platform event, not a store one — it goes out under the
-  // platform sender with the platform template.
-  async sendWelcome(to: string, data: WelcomeData, locale?: string) {
-    const rendered = await this.templates.render('welcome', locale, {
-      platform_name: await this.platformDisplayName(),
-      name: data.name ?? '',
-      login_url: data.loginUrl ?? '',
-    });
+  // Signup is a platform event unless a store is given (a guest checkout
+  // that created the account): then the mail carries the store's name and
+  // goes out under the store's sender when it has one (Phase 3.4).
+  async sendWelcome(
+    to: string,
+    data: WelcomeData,
+    locale?: string,
+    brand?: Pick<EmailBrand, 'storeId' | 'storeName'>,
+  ) {
+    const platformName = await this.platformDisplayName();
+    const rendered = brand?.storeName
+      ? null
+      : await this.templates.render('welcome', locale, {
+          platform_name: platformName,
+          name: data.name ?? '',
+          login_url: data.loginUrl ?? '',
+        });
     if (rendered) return this.send({ to, ...rendered, event: 'welcome' });
     return this.send({
       to,
-      ...welcomeEmail(data, { platformName: await this.platformDisplayName() }),
+      ...welcomeEmail(data, { ...brand, platformName }, locale),
       event: 'welcome',
+      ...(brand?.storeId ? { storeId: brand.storeId } : {}),
     });
   }
 

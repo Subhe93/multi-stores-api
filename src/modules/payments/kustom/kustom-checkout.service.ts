@@ -645,6 +645,7 @@ export class KustomCheckoutService {
       storeSlug: ctx.slug,
       customDomain: ctx.customDomain,
       primaryLocale: ctx.primaryLocale,
+      termsPath: ctx.termsPath,
       storefrontBase: bases.storefrontBase,
       apiBase: bases.apiBase,
       sessionId: session.id,
@@ -1767,6 +1768,7 @@ export class KustomCheckoutService {
               resolved.email,
               { name: resolved.firstName || undefined, loginUrl },
               session.locale ?? ctx.primaryLocale ?? undefined,
+              { storeId: ctx.id, storeName: ctx.name },
             )
             .catch((err: unknown) =>
               this.logger.warn(

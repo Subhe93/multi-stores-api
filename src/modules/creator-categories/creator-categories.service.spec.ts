@@ -1,3 +1,4 @@
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { CreatorCategoriesService } from './creator-categories.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 
@@ -53,6 +54,7 @@ function build(stored: Translation[]) {
   };
   const service = new CreatorCategoriesService(
     prisma as unknown as PrismaService,
+    { revalidateStoreByCreatorId: jest.fn() } as unknown as RevalidationService,
   );
   return { prisma, service, rows };
 }
@@ -203,6 +205,7 @@ function buildTree(nodes: Record<string, string | null>) {
   };
   const service = new CreatorCategoriesService(
     prisma as unknown as PrismaService,
+    { revalidateStoreByCreatorId: jest.fn() } as unknown as RevalidationService,
   );
   jest
     .spyOn(service, 'findById')

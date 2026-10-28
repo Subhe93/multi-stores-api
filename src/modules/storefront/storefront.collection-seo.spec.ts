@@ -1,4 +1,5 @@
 import { StoreType } from '@prisma/client';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { StorefrontService } from './storefront.service';
 import { CreatorCategoriesService } from '../creator-categories/creator-categories.service';
 import type { PrismaService } from '../../prisma/prisma.service';
@@ -177,6 +178,9 @@ describe('CreatorCategoriesService.update SEO carry-over (X19)', () => {
     };
     const svc = new CreatorCategoriesService(
       prisma as unknown as PrismaService,
+      {
+        revalidateStoreByCreatorId: jest.fn(),
+      } as unknown as RevalidationService,
     );
     (svc as unknown as Record<string, unknown>).findById = jest.fn(() =>
       Promise.resolve({}),

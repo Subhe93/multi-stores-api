@@ -71,23 +71,92 @@ function button(label: string, url: string): string {
   return `<a href="${esc(url)}" style="display:inline-block;background:#18181b;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 20px;border-radius:8px;">${esc(label)}</a>`;
 }
 
+/**
+ * Built-in wording of the account emails per locale (the admin DB templates
+ * win when they exist). Swedish added for the Namez store (Phase 3.4); other
+ * locales fall back to English.
+ */
+const ACCOUNT_TEXT: Record<
+  string,
+  {
+    resetSubject: (name: string) => string;
+    resetTitle: string;
+    resetBody: string;
+    resetButton: string;
+    resetIgnore: string;
+    resetText: (name: string, url: string) => string;
+    welcomeSubject: (name: string) => string;
+    welcomeGreeting: (name?: string) => string;
+    welcomeBody: (store: boolean) => string;
+    welcomeButton: string;
+    welcomeText: (name: string, url?: string) => string;
+  }
+> = {
+  en: {
+    resetSubject: (name) => `Reset your ${name} password`,
+    resetTitle: 'Reset your password',
+    resetBody:
+      'We received a request to reset your password. Click the button below to choose a new one. This link expires in 1 hour.',
+    resetButton: 'Reset password',
+    resetIgnore:
+      "If you didn't request this, you can safely ignore this email.",
+    resetText: (name, url) =>
+      `Reset your ${name} password.\n\nOpen this link to choose a new password (expires in 1 hour):\n${url}\n\nIf you didn't request this, ignore this email.`,
+    welcomeSubject: (name) => `Welcome to ${name}`,
+    welcomeGreeting: (name) => (name ? `Hi ${esc(name)},` : 'Hi there,'),
+    welcomeBody: (store) =>
+      store
+        ? "we're glad you're here. Your account is ready — you can follow your orders and manage your addresses any time."
+        : "we're glad you're here. Your account is ready — start exploring stores and products built by independent creators.",
+    welcomeButton: 'Sign in',
+    welcomeText: (name, url) =>
+      `Welcome to ${name}!\n\nYour account is ready.${url ? `\n\nSign in: ${url}` : ''}`,
+  },
+  sv: {
+    resetSubject: (name) => `Återställ ditt lösenord hos ${name}`,
+    resetTitle: 'Återställ ditt lösenord',
+    resetBody:
+      'Vi har fått en begäran om att återställa ditt lösenord. Klicka på knappen nedan för att välja ett nytt. Länken gäller i 1 timme.',
+    resetButton: 'Återställ lösenord',
+    resetIgnore: 'Om du inte begärde detta kan du bortse från det här mejlet.',
+    resetText: (name, url) =>
+      `Återställ ditt lösenord hos ${name}.\n\nÖppna länken för att välja ett nytt lösenord (gäller i 1 timme):\n${url}\n\nOm du inte begärde detta kan du bortse från mejlet.`,
+    welcomeSubject: (name) => `Välkommen till ${name}`,
+    welcomeGreeting: (name) => (name ? `Hej ${esc(name)},` : 'Hej,'),
+    welcomeBody: (store) =>
+      store
+        ? 'vad roligt att du är här. Ditt konto är klart – du kan följa dina beställningar och hantera dina adresser när som helst.'
+        : 'vad roligt att du är här. Ditt konto är klart – börja utforska butiker och produkter från oberoende kreatörer.',
+    welcomeButton: 'Logga in',
+    welcomeText: (name, url) =>
+      `Välkommen till ${name}!\n\nDitt konto är klart.${url ? `\n\nLogga in: ${url}` : ''}`,
+  },
+};
+
+function accountText(locale?: string | null) {
+  const key = (locale ?? 'en').toLowerCase().split('-')[0];
+  return ACCOUNT_TEXT[key] ?? ACCOUNT_TEXT.en;
+}
+
 export function passwordResetEmail(
   resetUrl: string,
   brand?: EmailBrand,
+  locale?: string | null,
 ): EmailParts {
-  const name = brand?.platformName || BRAND;
+  const name = brand?.storeName || brand?.platformName || BRAND;
+  const t = accountText(locale);
   return {
-    subject: `Reset your ${name} password`,
+    subject: t.resetSubject(name),
     html: layout(
-      'Reset your password',
+      t.resetTitle,
       `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">
-         We received a request to reset your password. Click the button below to choose a new one. This link expires in 1 hour.
+         ${t.resetBody}
        </p>
-       <p style="margin:20px 0;">${button('Reset password', resetUrl)}</p>
-       <p style="font-size:12px;color:#71717a;">If you didn't request this, you can safely ignore this email.</p>`,
+       <p style="margin:20px 0;">${button(t.resetButton, resetUrl)}</p>
+       <p style="font-size:12px;color:#71717a;">${t.resetIgnore}</p>`,
       brand,
     ),
-    text: `Reset your ${name} password.\n\nOpen this link to choose a new password (expires in 1 hour):\n${resetUrl}\n\nIf you didn't request this, ignore this email.`,
+    text: t.resetText(name, resetUrl),
   };
 }
 
@@ -465,22 +534,24 @@ export interface WelcomeData {
 export function welcomeEmail(
   data: WelcomeData,
   brand?: EmailBrand,
+  locale?: string | null,
 ): EmailParts {
-  const platform = brand?.platformName || BRAND;
-  const greeting = data.name ? `Hi ${esc(data.name)},` : 'Hi there,';
+  const store = !!brand?.storeName;
+  const name = brand?.storeName || brand?.platformName || BRAND;
+  const t = accountText(locale);
   const cta = data.loginUrl
-    ? `<p style="margin:20px 0;">${button('Sign in', data.loginUrl)}</p>`
+    ? `<p style="margin:20px 0;">${button(t.welcomeButton, data.loginUrl)}</p>`
     : '';
   return {
-    subject: `Welcome to ${platform}`,
+    subject: t.welcomeSubject(name),
     html: layout(
-      `Welcome to ${esc(platform)}`,
+      t.welcomeSubject(esc(name)),
       `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">
-         ${greeting} we're glad you're here. Your account is ready — start exploring stores and products built by independent creators.
+         ${t.welcomeGreeting(data.name)} ${t.welcomeBody(store)}
        </p>
        ${cta}`,
       brand,
     ),
-    text: `Welcome to ${platform}!\n\nYour account is ready.${data.loginUrl ? `\n\nSign in: ${data.loginUrl}` : ''}`,
+    text: t.welcomeText(name, data.loginUrl),
   };
 }
