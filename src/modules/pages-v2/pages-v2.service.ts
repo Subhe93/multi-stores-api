@@ -33,6 +33,8 @@ const PRODUCT_LISTING_DEFAULT_SETTINGS = {
   show_back_link: true,
   show_long_description: true,
   long_description_position: 'below',
+  long_description_collapsed: true,
+  long_description_lines: 3,
   aspect: 'square',
   columns: 4,
   columns_tablet: 3,
