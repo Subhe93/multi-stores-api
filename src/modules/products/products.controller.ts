@@ -69,9 +69,15 @@ export class ProductsController {
     @Query('limit') limit?: number,
     @Query('category_id') category_id?: string,
     @Query('product_type') product_type?: string,
-    @Query('status') status?: ProductStatus,
+    @Query('status') status?: string,
     @Query('search') search?: string,
     @Query('is_featured') is_featured?: string,
+    // Collection id, or "none" for products in no collection (creators only).
+    @Query('collection') collection?: string,
+    // in_stock | out_of_stock
+    @Query('stock') stock?: string,
+    // newest | oldest | updated | title_asc | title_desc | price_asc | price_desc
+    @Query('sort') sort?: string,
   ) {
     return this.productsService.findMine(userId, userRole, {
       page: page ? +page : undefined,
@@ -81,6 +87,9 @@ export class ProductsController {
       status,
       search,
       is_featured: is_featured === 'true' ? true : undefined,
+      collection,
+      stock,
+      sort,
     });
   }
 

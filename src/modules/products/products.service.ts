@@ -23,6 +23,19 @@ import {
 } from '@prisma/client';
 import { BundlesService } from '../bundles/bundles.service';
 import {
+  NO_COLLECTION,
+  noCollectionWhere,
+  single,
+  clampLimit,
+  collectionWhere,
+  orderByFor,
+  parseSort,
+  parseStock,
+  searchWhere,
+  sortByTitle,
+  stockWhere,
+} from './owner-list';
+import {
   validateBundleEconomics,
   formatViolationsMessage,
   type ProductForBundleCheck,
@@ -907,7 +920,9 @@ export class ProductsService {
     };
   }
 
-  // Dashboard listing — only the authenticated provider's/creator's own products.
+  // Dashboard listing — only the authenticated provider's/creator's own
+  // products, with search (title / SKU / slug), collection and stock
+  // filters, sort orders and page sizes up to OWNER_LIST_MAX_LIMIT.
   async findMine(
     userId: string,
     userRole: UserRole,
@@ -916,11 +931,16 @@ export class ProductsService {
       limit?: number;
       category_id?: string;
       product_type?: string;
-      status?: ProductStatus;
+      status?: string;
       search?: string;
       is_featured?: boolean;
+      collection?: string;
+      stock?: string;
+      sort?: string;
     },
   ) {
+    let owner: Prisma.ProductWhereInput;
+    let creatorId: string | null = null;
     if (userRole === UserRole.CREATOR) {
       const creator = await this.prisma.creator.findUnique({
         where: { user_id: userId },
@@ -930,24 +950,126 @@ export class ProductsService {
           code: 'PRODUCT_CREATOR_PROFILE_NOT_FOUND',
           message: 'Creator profile not found',
         });
-
-      return this.withSlug(
-        await this.findAll({ ...filters, creator_id: creator.id }),
-      );
+      creatorId = creator.id;
+      owner = { creator_id: creator.id };
+    } else {
+      const provider = await this.prisma.provider.findUnique({
+        where: { user_id: userId },
+      });
+      if (!provider)
+        throw new NotFoundException({
+          code: 'PRODUCT_PROVIDER_PROFILE_NOT_FOUND',
+          message: 'Provider profile not found',
+        });
+      owner = { provider_id: provider.id };
     }
 
-    const provider = await this.prisma.provider.findUnique({
-      where: { user_id: userId },
-    });
-    if (!provider)
-      throw new NotFoundException({
-        code: 'PRODUCT_PROVIDER_PROFILE_NOT_FOUND',
-        message: 'Provider profile not found',
+    const page =
+      filters.page && Number.isFinite(filters.page) && filters.page >= 1
+        ? Math.floor(filters.page)
+        : 1;
+    const limit = clampLimit(filters.limit);
+    const sort = parseSort(single(filters.sort));
+    const empty = () =>
+      this.withSlug({
+        data: [] as Awaited<ReturnType<typeof this.ownerPage>>,
+        meta: { total: 0, page, limit, totalPages: 0 },
       });
 
-    return this.withSlug(
-      await this.findAll({ ...filters, provider_id: provider.id }),
-    );
+    // Repeated query params arrive as arrays; they are ignored.
+    const rawStatus = single(filters.status);
+    const status = (Object.values(ProductStatus) as string[]).includes(
+      rawStatus ?? '',
+    )
+      ? (rawStatus as ProductStatus)
+      : undefined;
+    const and: Prisma.ProductWhereInput[] = [
+      owner,
+      this.listWhere({
+        category_id: single(filters.category_id),
+        product_type: single(filters.product_type),
+        status,
+        is_featured: filters.is_featured,
+      }),
+    ];
+    const rawSearch = single(filters.search);
+    const search = rawSearch ? searchWhere(rawSearch) : undefined;
+    if (search) and.push(search);
+    const stock = stockWhere(parseStock(single(filters.stock)));
+    if (stock) and.push(stock);
+    // Collections belong to creators; a provider's list ignores the filter.
+    const collectionId = single(filters.collection);
+    if (collectionId && creatorId) {
+      if (collectionId === NO_COLLECTION) {
+        const tagRules = await this.prisma.creatorCategory.findMany({
+          where: { creator_id: creatorId, match_rule: 'TAGS' },
+          select: { match_tags: true },
+        });
+        and.push(
+          noCollectionWhere([
+            ...new Set(tagRules.flatMap((c) => c.match_tags)),
+          ]),
+        );
+      } else {
+        const collection = await this.prisma.creatorCategory.findFirst({
+          where: { id: collectionId, creator_id: creatorId },
+          select: { id: true, match_rule: true, match_tags: true },
+        });
+        if (!collection) return empty();
+        and.push(collectionWhere(collection));
+      }
+    }
+    const where: Prisma.ProductWhereInput = { AND: and };
+
+    const total = await this.prisma.product.count({ where });
+    const skip = (page - 1) * limit;
+    let data: Awaited<ReturnType<typeof this.ownerPage>>;
+    if (sort === 'title_asc' || sort === 'title_desc') {
+      const rows = await this.prisma.product.findMany({
+        where,
+        select: {
+          id: true,
+          translations: { select: { locale: true, title: true } },
+        },
+      });
+      const ids = sortByTitle(
+        rows,
+        sort === 'title_asc' ? 'asc' : 'desc',
+      ).slice(skip, skip + limit);
+      const byId = new Map(
+        (await this.ownerPage({ id: { in: ids } })).map((p) => [p.id, p]),
+      );
+      data = ids.flatMap((id) => byId.get(id) ?? []);
+    } else {
+      data = await this.ownerPage(where, orderByFor(sort), skip, limit);
+    }
+
+    return this.withSlug({
+      data,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    });
+  }
+
+  /** One page of full owner rows (same shape as findAll). */
+  private ownerPage(
+    where: Prisma.ProductWhereInput,
+    orderBy?: Prisma.ProductOrderByWithRelationInput[],
+    skip?: number,
+    take?: number,
+  ) {
+    return this.prisma.product.findMany({
+      where,
+      orderBy,
+      skip,
+      take,
+      include: {
+        translations: true,
+        images: { take: 1, orderBy: { sort_order: 'asc' } },
+        category: { include: { translations: true } },
+        variants: true,
+        provider: { select: { id: true, company_name: true } },
+      },
+    });
   }
 
   /**
