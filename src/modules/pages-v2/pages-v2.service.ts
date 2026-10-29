@@ -30,6 +30,8 @@ const PRODUCT_LISTING_DEFAULT_SETTINGS = {
   show_collections: true,
   show_sort: true,
   show_description: true,
+  description_collapsed: true,
+  description_lines: 3,
   show_back_link: true,
   show_long_description: true,
   long_description_position: 'below',
