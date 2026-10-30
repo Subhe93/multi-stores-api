@@ -1,6 +1,11 @@
 import { NotFoundException } from '@nestjs/common';
 import { StoreType, TaxBasis, TaxPricingMode } from '@prisma/client';
-import { FeedsService, collectionPath, optionsOf } from './feeds.service';
+import {
+  FeedsService,
+  availabilityOf,
+  collectionPath,
+  optionsOf,
+} from './feeds.service';
 import { MarketPricingService } from '../markets/market-pricing.service';
 import type { MarketContext } from '../markets/market-context';
 import { generateFeedToken } from './feeds-settings';
@@ -729,5 +734,15 @@ describe('collectionPath primary collection (M6)', () => {
       path: 'Other',
       leaf: 'Other',
     });
+  });
+});
+
+describe('availabilityOf (same rule as checkout)', () => {
+  it('only a tracked, known stock of 0 or less is out of stock', () => {
+    expect(availabilityOf(false, 0)).toBe('in_stock');
+    expect(availabilityOf(true, null)).toBe('in_stock');
+    expect(availabilityOf(true, undefined)).toBe('in_stock');
+    expect(availabilityOf(true, 0)).toBe('out_of_stock');
+    expect(availabilityOf(true, 4)).toBe('in_stock');
   });
 });

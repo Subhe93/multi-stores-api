@@ -609,9 +609,11 @@ export class FeedsService {
             id: v.id,
             item_group_id: p.id,
             ...prices(pv.price, pv.compare_at_price),
+            // Checkout enforces a variant's stock whenever it has a number
+            // (whatever the product's track_inventory says); none = unlimited.
             availability: availabilityOf(
-              p.track_inventory,
-              v.stock_quantity ?? p.stock_quantity,
+              v.stock_quantity != null,
+              v.stock_quantity,
             ),
             image_link: vImages[0] ?? null,
             additional_image_links: vImages.slice(1),
@@ -800,8 +802,10 @@ export function availabilityOf(
   trackInventory: boolean,
   stock: number | null | undefined,
 ): 'in_stock' | 'out_of_stock' {
-  if (!trackInventory) return 'in_stock';
-  return (stock ?? 0) > 0 ? 'in_stock' : 'out_of_stock';
+  // Same rule as checkout: only a tracked, known stock of 0 or less is out
+  // of stock; a missing stock number is unlimited.
+  if (!trackInventory || stock == null) return 'in_stock';
+  return stock > 0 ? 'in_stock' : 'out_of_stock';
 }
 
 /** Colour / size from a variant's `options` by option name. */
