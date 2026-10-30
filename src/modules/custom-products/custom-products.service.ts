@@ -9,8 +9,10 @@ import {
   CreatorCategoryLinks,
   resolvePrimaryCreatorCategory,
 } from '../creator-categories/primary-collection';
+import { nextCollectionSortOrders } from '../creator-categories/product-order';
 import {
   CreatorCategoryVisibility,
+  Prisma,
   ImportMode,
   PricingType,
   ProductStatus,
@@ -181,7 +183,7 @@ export class CustomProductsService {
    * Silently skips any collection id that doesn't belong to this creator
    * (defense-in-depth — DTO can't enforce ownership). Links that stay keep
    * their row (and so their `sort_order`, M6); only the removed ones are
-   * deleted and the new ones created, appended after the kept ones.
+   * deleted and the new ones created, each at the end of its collection.
    * Returns the linked ids in the order they were sent, with the INTERNAL
    * ones listed separately (M6.3: labels are linkable, never the primary).
    */
@@ -214,14 +216,16 @@ export class CustomProductsService {
       },
     });
     const keptIds = new Set(kept.map((k) => k.creator_category_id));
-    const next = kept.reduce((m, k) => Math.max(m, k.sort_order + 1), 0);
     const toAttach = linked.filter((id) => !keptIds.has(id));
     if (toAttach.length) {
+      // A new link goes to the end of its collection's manual order (max
+      // across own + custom links, + 1); kept links keep their sort_order.
+      const next = await nextCollectionSortOrders(this.prisma, toAttach);
       await this.prisma.customProductCreatorCategory.createMany({
-        data: toAttach.map((creator_category_id, i) => ({
+        data: toAttach.map((creator_category_id) => ({
           custom_product_id: customProductId,
           creator_category_id,
-          sort_order: next + i,
+          sort_order: next.get(creator_category_id) ?? 0,
         })),
         skipDuplicates: true,
       });
@@ -645,7 +649,7 @@ export class CustomProductsService {
     return created;
   }
 
-  async findByCreator(userId: string, page = 1, limit = 20) {
+  async findByCreator(userId: string, page = 1, limit = 20, q?: unknown) {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
     });
@@ -655,18 +659,28 @@ export class CustomProductsService {
         message: 'Creator not found',
       });
 
+    const where: Prisma.CustomProductWhereInput = { creator_id: creator.id };
+    // Repeated query params arrive as arrays; they are ignored.
+    const term = typeof q === 'string' ? q.trim() : '';
+    if (term) {
+      const contains = { contains: term, mode: 'insensitive' as const };
+      where.OR = [
+        { translations: { some: { title: contains } } },
+        { translations: { some: { slug: contains } } },
+        { product: { sku: contains } },
+      ];
+    }
+
     const skip = (page - 1) * limit;
     const [data, total] = await Promise.all([
       this.prisma.customProduct.findMany({
-        where: { creator_id: creator.id },
+        where,
         skip,
         take: limit,
         include: this.includes,
         orderBy: { created_at: 'desc' },
       }),
-      this.prisma.customProduct.count({
-        where: { creator_id: creator.id },
-      }),
+      this.prisma.customProduct.count({ where }),
     ]);
 
     return {

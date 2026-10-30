@@ -8,6 +8,8 @@ import {
   ValidateNested,
   Min,
   ArrayUnique,
+  ArrayMaxSize,
+  Matches,
   MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -15,6 +17,10 @@ import {
   CreatorCategoryMatchRule,
   CreatorCategoryVisibility,
 } from '@prisma/client';
+
+/** Token of one product in a manual collection order: `p:<id>` or `cp:<id>`. */
+export const PRODUCT_ORDER_TOKEN_RE = /^(p|cp):[0-9a-f-]{36}$/i;
+export const PRODUCT_ORDER_MAX = 2000;
 
 export class CreatorCategoryTranslationDto {
   @IsString()
@@ -104,6 +110,16 @@ export class CreateCreatorCategoryDto {
   @IsArray()
   @IsString({ each: true })
   custom_product_ids?: string[];
+
+  // Manual order across own (`p:<productId>`) and custom (`cp:<customProductId>`)
+  // products; both link tables share one sort_order index space. Sent alone
+  // (without product_ids/custom_product_ids) it only reorders existing links.
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(PRODUCT_ORDER_MAX)
+  @IsString({ each: true })
+  @Matches(PRODUCT_ORDER_TOKEN_RE, { each: true })
+  product_order?: string[];
 }
 
 export class UpdateCreatorCategoryDto {
@@ -164,6 +180,16 @@ export class UpdateCreatorCategoryDto {
   @IsArray()
   @IsString({ each: true })
   custom_product_ids?: string[];
+
+  // Manual order across own (`p:<productId>`) and custom (`cp:<customProductId>`)
+  // products; both link tables share one sort_order index space. Sent alone
+  // (without product_ids/custom_product_ids) it only reorders existing links.
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(PRODUCT_ORDER_MAX)
+  @IsString({ each: true })
+  @Matches(PRODUCT_ORDER_TOKEN_RE, { each: true })
+  product_order?: string[];
 }
 
 export class ReorderCreatorCategoriesDto {

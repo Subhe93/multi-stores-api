@@ -61,6 +61,7 @@ import {
   CreatorCategoryLinks,
   resolvePrimaryCreatorCategory,
 } from '../creator-categories/primary-collection';
+import { nextCollectionSortOrders } from '../creator-categories/product-order';
 
 /**
  * `description` / `short_description` are rendered on the storefront as
@@ -439,10 +440,14 @@ export class ProductsService {
       where: { product_id: productId, creator_category_id: { notIn: linked } },
     });
     if (linked.length) {
+      // A new link goes to the end of its collection's manual order; links
+      // that already exist are skipped and keep their sort_order.
+      const next = await nextCollectionSortOrders(this.prisma, linked);
       await this.prisma.productCreatorCategory.createMany({
         data: linked.map((creator_category_id) => ({
           product_id: productId,
           creator_category_id,
+          sort_order: next.get(creator_category_id) ?? 0,
         })),
         skipDuplicates: true,
       });

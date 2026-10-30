@@ -20,6 +20,9 @@ function build(opts: {
   links: Link[];
   primary: string | null;
   owned?: string[];
+  // Highest sort_order of each collection across both link tables (other
+  // products' links); absent = empty collection.
+  collectionMax?: Record<string, number>;
 }) {
   let links = opts.links.map((l) => ({ ...l }));
   const product: Record<string, unknown> = {
@@ -31,6 +34,22 @@ function build(opts: {
     primary_creator_category_id: opts.primary,
   };
   const owned = new Set(opts.owned ?? ['a', 'b', 'c', 'd']);
+  const groupBy = ({
+    where,
+  }: {
+    where: { creator_category_id: { in: string[] } };
+  }) =>
+    Promise.resolve(
+      where.creator_category_id.in.flatMap((id) => {
+        const own = links
+          .filter((l) => l.creator_category_id === id)
+          .map((l) => l.sort_order);
+        const max = Math.max(-1, ...own, opts.collectionMax?.[id] ?? -1);
+        return max < 0
+          ? []
+          : [{ creator_category_id: id, _max: { sort_order: max } }];
+      }),
+    );
   const prisma = {
     creator: { findUnique: jest.fn(() => Promise.resolve({ id: 'c1' })) },
     product: {
@@ -68,17 +87,19 @@ function build(opts: {
           return Promise.resolve({ count: before - links.length });
         },
       ),
-      createMany: jest.fn(({ data }: { data: Omit<Link, 'sort_order'>[] }) => {
+      createMany: jest.fn(({ data }: { data: Link[] }) => {
         for (const d of data) {
           if (
             links.some((l) => l.creator_category_id === d.creator_category_id)
           )
             continue;
-          links.push({ ...d, sort_order: 0 });
+          links.push({ ...d });
         }
         return Promise.resolve({ count: data.length });
       }),
+      groupBy: jest.fn(groupBy),
     },
+    customProductCreatorCategory: { groupBy: jest.fn(groupBy) },
   };
   const revalidation = {
     revalidateStoreByCreatorId: jest.fn(() => Promise.resolve()),
@@ -102,6 +123,24 @@ function build(opts: {
 }
 
 describe('ProductsService.update collection links (M6)', () => {
+  it('a new link goes to the end of the collection (max across own + custom links + 1)', async () => {
+    const { service, links } = build({
+      links: [{ product_id: 'p1', creator_category_id: 'a', sort_order: 5 }],
+      primary: 'a',
+      collectionMax: { a: 9, c: 7 },
+    });
+    await service.update('p1', 'u1', UserRole.CREATOR, {
+      creator_category_ids: ['a', 'c', 'd'],
+    });
+    expect(links()).toEqual([
+      // Existing link keeps its place.
+      { product_id: 'p1', creator_category_id: 'a', sort_order: 5 },
+      { product_id: 'p1', creator_category_id: 'c', sort_order: 8 },
+      // Empty collection starts at 0.
+      { product_id: 'p1', creator_category_id: 'd', sort_order: 0 },
+    ]);
+  });
+
   it('keeps the sort_order of the links that stay and only adds the new ones', async () => {
     const { service, links, prisma } = build({
       links: [

@@ -74,11 +74,16 @@ export class CustomProductsController {
     @CurrentUser('id') userId: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    // Title (any translation), slug or base-product SKU; `search` is an alias
+    // matching GET /products/mine.
+    @Query('q') q?: string,
+    @Query('search') search?: string,
   ) {
     return this.customProductsService.findByCreator(
       userId,
       page ? +page : undefined,
       limit ? +limit : undefined,
+      q ?? search,
     );
   }
 

@@ -15,9 +15,17 @@ import {
 import {
   CreatorCategoryMatchRule,
   CreatorCategoryVisibility,
+  Prisma,
 } from '@prisma/client';
 import { sanitizeCreatorHtml } from '../../common/html/creator-html';
 import { CREATOR_CATEGORY_MAX_DEPTH } from './primary-collection';
+import {
+  compareManualOrder,
+  computeLinkSortOrders,
+  mergedProductOrder,
+  productOrderIndex,
+  productOrderToken,
+} from './product-order';
 
 /**
  * Collection descriptions (short `description`, M6.2 `long_description`) are
@@ -200,6 +208,7 @@ export class CreatorCategoriesService {
       translations,
       product_ids,
       custom_product_ids,
+      product_order,
       match_tags,
       parent_id,
       ...data
@@ -235,16 +244,14 @@ export class CreatorCategoriesService {
       include: { translations: true },
     });
 
-    if (product_ids?.length) {
-      await this.attachProducts(created.id, creatorId, product_ids);
-    }
-    if (custom_product_ids?.length) {
-      await this.attachCustomProducts(
-        created.id,
-        creatorId,
-        custom_product_ids,
-      );
-    }
+    await this.writeProductLinks(created.id, creatorId, {
+      product_ids: product_ids?.length ? product_ids : undefined,
+      custom_product_ids: custom_product_ids?.length
+        ? custom_product_ids
+        : undefined,
+      product_order,
+      replace: false,
+    });
 
     await this.refreshStorefront(creatorId);
     return this.findById(created.id, userId);
@@ -323,7 +330,21 @@ export class CreatorCategoriesService {
         code: 'CREATOR_CATEGORY_NOT_FOUND',
         message: 'Collection not found',
       });
-    return cc;
+    // Merged manual order of both kinds (`p:<id>` / `cp:<id>`), in the order
+    // the storefront lists a MANUAL collection.
+    const product_order = mergedProductOrder(
+      (cc.products ?? []).map((l) => ({
+        id: l.product_id,
+        sort_order: l.sort_order,
+        created_at: l.product?.created_at,
+      })),
+      (cc.custom_products ?? []).map((l) => ({
+        id: l.custom_product_id,
+        sort_order: l.sort_order,
+        created_at: l.custom_product?.created_at,
+      })),
+    );
+    return { ...cc, product_order };
   }
 
   async update(id: string, userId: string, dto: UpdateCreatorCategoryDto) {
@@ -334,6 +355,7 @@ export class CreatorCategoriesService {
       translations,
       product_ids,
       custom_product_ids,
+      product_order,
       parent_id,
       match_tags,
       ...data
@@ -432,23 +454,12 @@ export class CreatorCategoriesService {
       ]);
     }
 
-    if (product_ids !== undefined) {
-      await this.prisma.productCreatorCategory.deleteMany({
-        where: { creator_category_id: id },
-      });
-      if (product_ids.length) {
-        await this.attachProducts(id, creatorId, product_ids);
-      }
-    }
-
-    if (custom_product_ids !== undefined) {
-      await this.prisma.customProductCreatorCategory.deleteMany({
-        where: { creator_category_id: id },
-      });
-      if (custom_product_ids.length) {
-        await this.attachCustomProducts(id, creatorId, custom_product_ids);
-      }
-    }
+    await this.writeProductLinks(id, creatorId, {
+      product_ids,
+      custom_product_ids,
+      product_order,
+      replace: true,
+    });
 
     await this.refreshStorefront(creatorId);
     return this.findById(id, userId);
@@ -622,61 +633,225 @@ export class CreatorCategoriesService {
       }),
     ]);
 
+    // Merged manual order (same as the storefront and `product_order`).
     return [
       ...productLinks.map((l) => ({
-        __kind: 'product' as const,
-        ...l.product,
+        key: {
+          kind: 'p' as const,
+          id: l.product_id,
+          sort_order: l.sort_order,
+          created_at: l.product.created_at,
+        },
+        row: { __kind: 'product' as const, ...l.product },
       })),
       ...customLinks.map((l) => ({
-        __kind: 'custom_product' as const,
-        ...l.custom_product,
+        key: {
+          kind: 'cp' as const,
+          id: l.custom_product_id,
+          sort_order: l.sort_order,
+          created_at: l.custom_product.created_at,
+        },
+        row: { __kind: 'custom_product' as const, ...l.custom_product },
       })),
-    ];
+    ]
+      .sort((a, b) => compareManualOrder(a.key, b.key))
+      .map((e) => e.row);
   }
 
   // ── internal helpers ──────────────────────────────────────
 
+  /**
+   * Link rewrite + manual order of a collection in ONE transaction, so a
+   * failure never leaves the collection emptied or half-ordered. `replace`
+   * deletes the existing links of a kind whose id list was sent (update);
+   * an undefined list leaves that kind untouched. New links are created at
+   * their `product_order` index directly, so applying the order afterwards
+   * only writes the few rows it still moves.
+   */
+  private async writeProductLinks(
+    creatorCategoryId: string,
+    creatorId: string,
+    links: {
+      product_ids?: string[];
+      custom_product_ids?: string[];
+      product_order?: string[];
+      replace: boolean;
+    },
+  ) {
+    const { product_ids, custom_product_ids, product_order, replace } = links;
+    if (
+      product_ids === undefined &&
+      custom_product_ids === undefined &&
+      product_order === undefined
+    )
+      return;
+    const orderIndex = product_order
+      ? productOrderIndex(product_order)
+      : undefined;
+    await this.prisma.$transaction(
+      async (tx) => {
+        if (product_ids !== undefined) {
+          if (replace)
+            await tx.productCreatorCategory.deleteMany({
+              where: { creator_category_id: creatorCategoryId },
+            });
+          if (product_ids.length)
+            await this.attachProducts(
+              tx,
+              creatorCategoryId,
+              creatorId,
+              product_ids,
+              orderIndex,
+            );
+        }
+        if (custom_product_ids !== undefined) {
+          if (replace)
+            await tx.customProductCreatorCategory.deleteMany({
+              where: { creator_category_id: creatorCategoryId },
+            });
+          if (custom_product_ids.length)
+            await this.attachCustomProducts(
+              tx,
+              creatorCategoryId,
+              creatorId,
+              custom_product_ids,
+              orderIndex,
+            );
+        }
+        // Manual order across both kinds; applied after the links were
+        // (re)written so new links take their place, and on its own it only
+        // reorders the existing links.
+        if (product_order !== undefined)
+          await this.applyProductOrder(tx, creatorCategoryId, product_order);
+      },
+      // Large manual collections write many rows; the default 5s is tight.
+      { timeout: 30_000 },
+    );
+  }
+
+  /**
+   * Rewrite the sort_order of the collection's links (both kinds, one index
+   * space) from `order` tokens. Only existing links are touched — tokens of
+   * products that are not linked are ignored — and only rows whose value
+   * changes are written.
+   */
+  private async applyProductOrder(
+    db: Prisma.TransactionClient,
+    creatorCategoryId: string,
+    order: string[],
+  ) {
+    const ownLinks = await db.productCreatorCategory.findMany({
+      where: { creator_category_id: creatorCategoryId },
+      select: { product_id: true, sort_order: true },
+    });
+    const customLinks = await db.customProductCreatorCategory.findMany({
+      where: { creator_category_id: creatorCategoryId },
+      select: { custom_product_id: true, sort_order: true },
+    });
+    const next = computeLinkSortOrders(
+      order,
+      ownLinks.map((l) => ({ id: l.product_id, sort_order: l.sort_order })),
+      customLinks.map((l) => ({
+        id: l.custom_product_id,
+        sort_order: l.sort_order,
+      })),
+    );
+    // Runs inside the caller's transaction; only the moved rows are written.
+    for (const l of ownLinks) {
+      const sort_order = next.own.get(l.product_id)!;
+      if (sort_order === l.sort_order) continue;
+      await db.productCreatorCategory.update({
+        where: {
+          product_id_creator_category_id: {
+            product_id: l.product_id,
+            creator_category_id: creatorCategoryId,
+          },
+        },
+        data: { sort_order },
+      });
+    }
+    for (const l of customLinks) {
+      const sort_order = next.custom.get(l.custom_product_id)!;
+      if (sort_order === l.sort_order) continue;
+      await db.customProductCreatorCategory.update({
+        where: {
+          custom_product_id_creator_category_id: {
+            custom_product_id: l.custom_product_id,
+            creator_category_id: creatorCategoryId,
+          },
+        },
+        data: { sort_order },
+      });
+    }
+  }
+
+  /**
+   * Initial sort_order of a newly created link: its `product_order` index
+   * (same numbering as computeLinkSortOrders), else past the order by
+   * position; without an order, the position in the sent id list.
+   */
+  private static initialSortOrder(
+    orderIndex: Map<string, number> | undefined,
+    token: string,
+    position: number,
+  ): number {
+    if (!orderIndex) return position;
+    return orderIndex.get(token) ?? orderIndex.size + position;
+  }
+
   private async attachProducts(
+    db: Prisma.TransactionClient,
     creatorCategoryId: string,
     creatorId: string,
     productIds: string[],
+    orderIndex?: Map<string, number>,
   ) {
     // Only attach products this creator actually owns.
-    const owned = await this.prisma.product.findMany({
+    const owned = await db.product.findMany({
       where: { id: { in: productIds }, creator_id: creatorId },
       select: { id: true },
     });
     const ownedIds = new Set(owned.map((p) => p.id));
     const toAttach = productIds.filter((id) => ownedIds.has(id));
     if (!toAttach.length) return;
-    await this.prisma.productCreatorCategory.createMany({
-      data: toAttach.map((product_id, sort_order) => ({
+    await db.productCreatorCategory.createMany({
+      data: toAttach.map((product_id, i) => ({
         product_id,
         creator_category_id: creatorCategoryId,
-        sort_order,
+        sort_order: CreatorCategoriesService.initialSortOrder(
+          orderIndex,
+          productOrderToken('p', product_id),
+          i,
+        ),
       })),
       skipDuplicates: true,
     });
   }
 
   private async attachCustomProducts(
+    db: Prisma.TransactionClient,
     creatorCategoryId: string,
     creatorId: string,
     customProductIds: string[],
+    orderIndex?: Map<string, number>,
   ) {
     // Only attach custom products this creator actually owns.
-    const owned = await this.prisma.customProduct.findMany({
+    const owned = await db.customProduct.findMany({
       where: { id: { in: customProductIds }, creator_id: creatorId },
       select: { id: true },
     });
     const ownedIds = new Set(owned.map((p) => p.id));
     const toAttach = customProductIds.filter((id) => ownedIds.has(id));
     if (!toAttach.length) return;
-    await this.prisma.customProductCreatorCategory.createMany({
-      data: toAttach.map((custom_product_id, sort_order) => ({
+    await db.customProductCreatorCategory.createMany({
+      data: toAttach.map((custom_product_id, i) => ({
         custom_product_id,
         creator_category_id: creatorCategoryId,
-        sort_order,
+        sort_order: CreatorCategoriesService.initialSortOrder(
+          orderIndex,
+          productOrderToken('cp', custom_product_id),
+          i,
+        ),
       })),
       skipDuplicates: true,
     });

@@ -37,6 +37,7 @@ import { DesignerTemplatesService } from '../designer/designer-templates.service
 import { countPublishedInCollections } from './collection-counts';
 import { publicCheckoutSettings } from '../stores/checkout-settings';
 import { sanitizeAuthPagesConfig } from '../stores/theme-config';
+import { compareManualOrder } from '../creator-categories/product-order';
 
 /** The legacy freeform Store.theme_config JSON as getStore() reads it. */
 interface LegacyThemeConfig {
@@ -1090,15 +1091,79 @@ export class StorefrontService {
         tax_exempt: cp.product.tax_exempt,
       })),
     ]);
-    if (!rates) return [...ownWithPromos, ...customWithPromos];
     const ownCount = ownWithPromos.length;
-    return [
-      ...ownWithPromos.map((p, i) => ({ ...p, tax_rate_bp: rates[i] })),
-      ...customWithPromos.map((p, i) => ({
-        ...p,
-        tax_rate_bp: rates[ownCount + i],
-      })),
-    ];
+    const listed = rates
+      ? [
+          ...ownWithPromos.map((p, i) => ({ ...p, tax_rate_bp: rates[i] })),
+          ...customWithPromos.map((p, i) => ({
+            ...p,
+            tax_rate_bp: rates[ownCount + i],
+          })),
+        ]
+      : [...ownWithPromos, ...customWithPromos];
+
+    // A MANUAL collection lists its products in the creator's drag order
+    // (link sort_order, one index space for own + custom), newest first on
+    // ties. TAGS collections and plain lists keep own-then-custom by date.
+    // The storefront sorts client-side for its explicit sort options.
+    if (creatorCategory?.match_rule === 'MANUAL' && listed.length > 1) {
+      return this.sortByManualOrder(
+        creatorCategory.id,
+        listed,
+        ownProducts,
+        customProducts,
+      );
+    }
+    return listed;
+  }
+
+  /**
+   * Order a MANUAL collection's merged list by the collection's link
+   * sort_order (see compareManualOrder). Items are told apart by
+   * `_type === 'custom_product'`.
+   */
+  private async sortByManualOrder<
+    T extends { id: string; _type?: 'custom_product' },
+  >(
+    creatorCategoryId: string,
+    items: T[],
+    ownRows: { id: string; created_at: Date }[],
+    customRows: { id: string; created_at: Date }[],
+  ): Promise<T[]> {
+    const [ownLinks, customLinks] = await Promise.all([
+      this.prisma.productCreatorCategory.findMany({
+        where: { creator_category_id: creatorCategoryId },
+        select: { product_id: true, sort_order: true },
+      }),
+      customRows.length
+        ? this.prisma.customProductCreatorCategory.findMany({
+            where: { creator_category_id: creatorCategoryId },
+            select: { custom_product_id: true, sort_order: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const sortOf = new Map<string, number>();
+    for (const l of ownLinks) sortOf.set(`p:${l.product_id}`, l.sort_order);
+    for (const l of customLinks)
+      sortOf.set(`cp:${l.custom_product_id}`, l.sort_order);
+    const createdOf = new Map<string, Date>();
+    for (const r of ownRows) createdOf.set(`p:${r.id}`, r.created_at);
+    for (const r of customRows) createdOf.set(`cp:${r.id}`, r.created_at);
+    const keyed = items.map((item) => {
+      const kind: 'p' | 'cp' = item._type === 'custom_product' ? 'cp' : 'p';
+      const token = `${kind}:${item.id}`;
+      return {
+        item,
+        key: {
+          kind,
+          id: item.id,
+          sort_order: sortOf.get(token) ?? Number.MAX_SAFE_INTEGER,
+          created_at: createdOf.get(token) ?? null,
+        },
+      };
+    });
+    keyed.sort((a, b) => compareManualOrder(a.key, b.key));
+    return keyed.map((k) => k.item);
   }
 
   /**
