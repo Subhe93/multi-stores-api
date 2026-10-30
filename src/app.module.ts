@@ -56,6 +56,7 @@ import { ProductionModule } from './modules/production/production.module';
 import { DesignerModule } from './modules/designer/designer.module';
 import { OpsModule } from './modules/ops/ops.module';
 import { FeedsModule } from './modules/feeds/feeds.module';
+import { ZohoMailModule } from './modules/zoho-mail/zoho-mail.module';
 
 @Module({
   imports: [
@@ -126,6 +127,8 @@ import { FeedsModule } from './modules/feeds/feeds.module';
     OpsModule,
     // M5.6 feeds app: Google Merchant / Meta catalog feeds (public token URLs).
     FeedsModule,
+    // Zoho Mail app: store email through the store's own Zoho mailbox.
+    ZohoMailModule,
   ],
   providers: [
     // ThrottlerModule alone throttles nothing — only routes that explicitly

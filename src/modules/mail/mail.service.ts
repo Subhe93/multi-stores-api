@@ -53,6 +53,7 @@ import {
   type OrderEmailEvent,
   type OrderMailExtension,
 } from './order-mail.helpers';
+import type { StoreMailProvider } from './store-mail-provider';
 import { deriveNetTotals } from '../taxes/tax.service';
 
 /** Delivery log retention. */
@@ -215,6 +216,8 @@ export class MailService {
   private transporters = new Map<string, nodemailer.Transporter>();
   // Apps that add variables / attachments to order emails (invoices app).
   private readonly orderExtensions: OrderMailExtension[] = [];
+  // API senders tried before the store's SMTP (Zoho Mail app).
+  private readonly storeProviders: StoreMailProvider[] = [];
 
   constructor(
     private config: ConfigService,
@@ -226,6 +229,11 @@ export class MailService {
   /** Register an order-email extension (see OrderMailExtension). */
   registerOrderMailExtension(extension: OrderMailExtension): void {
     this.orderExtensions.push(extension);
+  }
+
+  /** Register a store mail provider (see StoreMailProvider). */
+  registerStoreMailProvider(provider: StoreMailProvider): void {
+    this.storeProviders.push(provider);
   }
 
   /**
@@ -385,6 +393,16 @@ export class MailService {
     /** Files to attach; passed to nodemailer only when non-empty. */
     attachments?: MailAttachment[];
   }): Promise<{ sent: boolean }> {
+    // An app-provided sender (Zoho Mail) goes first; when it fails the
+    // message continues down the usual store SMTP → platform path.
+    if (opts.storeId && this.storeProviders.length) {
+      for (const provider of this.storeProviders) {
+        if (await this.tryProvider(provider, opts.storeId, opts)) {
+          return { sent: true };
+        }
+      }
+    }
+
     const storeCfg = opts.storeId
       ? await this.resolveStoreConfig(opts.storeId)
       : null;
@@ -422,6 +440,53 @@ export class MailService {
     return {
       sent: await this.trySend(platformCfg, { ...opts, html }, 'platform'),
     };
+  }
+
+  /** True when the provider sent; false when it failed or did not apply. */
+  private async tryProvider(
+    provider: StoreMailProvider,
+    storeId: string,
+    opts: MailMeta & {
+      html: string;
+      text?: string;
+      attachments?: MailAttachment[];
+    },
+  ): Promise<boolean> {
+    let result: Awaited<ReturnType<StoreMailProvider['sendForStore']>>;
+    try {
+      result = await provider.sendForStore(storeId, {
+        to: opts.to,
+        subject: opts.subject,
+        html: opts.html,
+        text: opts.text,
+        attachments: opts.attachments,
+      });
+    } catch (err) {
+      result = {
+        sent: false,
+        host: provider.via,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (!result) return false;
+    if (result.sent) {
+      await this.logDelivery(opts, {
+        status: EmailLogStatus.SENT,
+        via: provider.via,
+        host: result.host,
+      });
+      return true;
+    }
+    this.logger.warn(
+      `Store ${storeId} ${provider.via} sender failed for "${opts.subject}" — falling back: ${result.error}`,
+    );
+    await this.logDelivery(opts, {
+      status: EmailLogStatus.FAILED,
+      via: provider.via,
+      host: result.host,
+      error: result.error,
+    });
+    return false;
   }
 
   private async trySend(
@@ -477,7 +542,8 @@ export class MailService {
     meta: MailMeta,
     outcome: {
       status: EmailLogStatus;
-      via?: 'store' | 'platform';
+      /** 'store' | 'platform' | a provider's via (e.g. 'zoho'). */
+      via?: string;
       host?: string;
       error?: string;
     },

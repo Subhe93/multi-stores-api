@@ -1110,6 +1110,7 @@ model Store {
   pages                     Page[]
   menus                     Menu[]
   mail_settings             StoreMailSettings?
+  zoho_mail                 StoreZohoMail?
   mail_templates            StoreNotificationTemplate[]
   kustom_sessions           KustomCheckoutSession[]
   apps                      StoreApp[]
@@ -1213,6 +1214,38 @@ model StoreMailSettings {
   store Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
 }
 
+// Zoho Mail app: the store's own Zoho OAuth client (like the WordPress
+// plugin) and the mailbox connected with it. Secrets are encrypted with
+// CryptoService; one row per store.
+model StoreZohoMail {
+  id                String    @id @default(uuid())
+  store_id          String    @unique
+  // Data-centre domain (zoho.com, zoho.eu, ...).
+  region            String
+  client_id         String?
+  client_secret     String?
+  connected_email   String?
+  account_id        String?
+  from_address      String?
+  from_name         String?
+  // Allowed senders with their Zoho account: [{ address, account_id }].
+  available_from    Json      @default("[]")
+  // Set while connected (null = client saved, not authorized).
+  refresh_token     String?
+  access_token      String?
+  access_expires_at DateTime?
+  connected_at      DateTime?
+  verified_at       DateTime?
+  // Stable error code (ZOHO_MAIL_*) + a secret-free human detail.
+  last_error        String?
+  last_error_detail String?
+  last_error_at     DateTime?
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  store Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
+}
+
 enum EmailLogStatus {
   SENT
   FAILED
@@ -1231,7 +1264,7 @@ model EmailLog {
   recipient  String
   subject    String
   status     EmailLogStatus
-  via        String? // 'store' | 'platform'
+  via        String? // 'store' | 'platform' | 'zoho'
   smtp_host  String?
   error      String?
   created_at DateTime       @default(now())
