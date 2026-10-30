@@ -36,6 +36,7 @@ import type { PFieldDef } from '@multi-stores/core/personalization/types';
 import { DesignerTemplatesService } from '../designer/designer-templates.service';
 import { countPublishedInCollections } from './collection-counts';
 import { publicCheckoutSettings } from '../stores/checkout-settings';
+import { sanitizeAuthPagesConfig } from '../stores/theme-config';
 
 /** The legacy freeform Store.theme_config JSON as getStore() reads it. */
 interface LegacyThemeConfig {
@@ -50,6 +51,7 @@ interface LegacyThemeConfig {
   seo?: Record<string, unknown>;
   translations?: Record<string, unknown>;
   hero?: Record<string, unknown>;
+  auth?: unknown;
 }
 
 /** The part of Promotion.conditions the storefront badges read. */
@@ -738,6 +740,9 @@ export class StorefrontService {
         // pages. Freeform config — the storefront reads `products` / `collections`
         // sub-objects (enabled, image_url, height, overlay, show_count).
         hero: themeConfig.hero || {},
+        // Account pages (login / register / password reset) background;
+        // whitelisted here because theme_config is freeform.
+        auth: sanitizeAuthPagesConfig(themeConfig.auth),
       },
       // With a market: the market's currency and locales override the
       // store-level ones so every page reading language_config.primary_locale
