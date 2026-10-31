@@ -5,6 +5,7 @@ import {
   Put,
   Param,
   Body,
+  HttpCode,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
@@ -21,10 +22,14 @@ import {
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '@prisma/client';
+import { EditHintTokenService } from '../storefront/edit-hint/edit-hint-token.service';
 
 @Controller('stores')
 export class StoresController {
-  constructor(private storesService: StoresService) {}
+  constructor(
+    private storesService: StoresService,
+    private editHintTokens: EditHintTokenService,
+  ) {}
 
   // Admin — Get a creator's store by creator id
   @Get('by-creator/:creatorId')
@@ -68,6 +73,19 @@ export class StoresController {
   @Roles(UserRole.CREATOR)
   create(@CurrentUser('id') userId: string, @Body() dto: CreateStoreDto) {
     return this.storesService.create(userId, dto);
+  }
+
+  // Creator — Edit-hint token for the own storefront (30 days). The
+  // dashboard appends it to its "visit store" links so the storefront can
+  // show the owner an "Edit" button; it grants no API access.
+  @Post('my/edit-hint-token')
+  @HttpCode(200)
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.CREATOR)
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  async createEditHintToken(@CurrentUser('id') userId: string) {
+    const storeId = await this.storesService.findStoreIdByCreatorUser(userId);
+    return this.editHintTokens.sign({ store_id: storeId, user_id: userId });
   }
 
   // Creator — My store

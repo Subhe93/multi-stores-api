@@ -105,6 +105,25 @@ export function withoutFeedFields<
   return typeof brand === 'string' && brand ? { ...rest, brand } : rest;
 }
 
+/**
+ * How the product page finds a creator's product by any of its translated
+ * slugs — the same query for own products (tried first) and, for
+ * non-INDEPENDENT stores, custom products. Ordered by updated_at so a
+ * duplicate-slug collision resolves to the most recently edited product
+ * instead of an implementation-defined row. Shared with
+ * `resolveProductRef` (owner edit button) so both always agree.
+ */
+export function productBySlugQuery(creatorId: string, productSlug: string) {
+  return {
+    where: {
+      creator_id: creatorId,
+      status: 'PUBLISHED' as const,
+      translations: { some: { slug: productSlug } },
+    },
+    orderBy: { updated_at: 'desc' as const },
+  };
+}
+
 /** Drops the importer identity (`external_ref`) from a variant before it is served. */
 export function publicVariant<T extends { external_ref?: unknown }>(
   v: T,
@@ -1225,16 +1244,9 @@ export class StorefrontService {
 
     const market = await this.resolveMarket(store.id, marketKey, preview);
 
-    // Try creator's own product first. Order by updated_at so duplicate-slug
-    // collisions resolve to the most recently edited product instead of an
-    // implementation-defined row.
+    // Try creator's own product first (see productBySlugQuery for the order).
     const product = await this.prisma.product.findFirst({
-      where: {
-        creator_id: store.creator.id,
-        status: 'PUBLISHED',
-        translations: { some: { slug: productSlug } },
-      },
-      orderBy: { updated_at: 'desc' },
+      ...productBySlugQuery(store.creator.id, productSlug),
       include: {
         translations: true,
         // Product-level gallery only — variant-linked rows would flood the
@@ -1406,12 +1418,7 @@ export class StorefrontService {
 
     // Fall back to custom product. Same ordering rationale as above.
     const customProduct = await this.prisma.customProduct.findFirst({
-      where: {
-        creator_id: store.creator.id,
-        status: 'PUBLISHED',
-        translations: { some: { slug: productSlug } },
-      },
-      orderBy: { updated_at: 'desc' },
+      ...productBySlugQuery(store.creator.id, productSlug),
       include: {
         translations: true,
         mockup_images: { orderBy: { sort_order: 'asc' } },
@@ -1572,6 +1579,29 @@ export class StorefrontService {
       // b2b app: estimated rate of the base product (app on only).
       ...(await this.taxRateEntry(store, baseProduct)),
     };
+  }
+
+  /**
+   * Owner edit button: which product `/products/<productSlug>` shows, as the
+   * same lookup getProduct runs (own product first; custom products only
+   * for non-INDEPENDENT stores). Null when the page would 404.
+   */
+  async resolveProductRef(
+    store: { creator_id: string; store_type: StoreType },
+    productSlug: string,
+  ): Promise<{ kind: 'own' | 'custom'; id: string } | null> {
+    const query = productBySlugQuery(store.creator_id, productSlug);
+    const own = await this.prisma.product.findFirst({
+      ...query,
+      select: { id: true },
+    });
+    if (own) return { kind: 'own', id: own.id };
+    if (store.store_type === StoreType.INDEPENDENT) return null;
+    const custom = await this.prisma.customProduct.findFirst({
+      ...query,
+      select: { id: true },
+    });
+    return custom ? { kind: 'custom', id: custom.id } : null;
   }
 
   /** `{ tax_rate_bp }` for one product when the b2b app is on, else `{}`. */

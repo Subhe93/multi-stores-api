@@ -146,6 +146,20 @@ export class StoresService {
     return store;
   }
 
+  /** Id of the signed-in creator's store (404 when they have none). */
+  async findStoreIdByCreatorUser(userId: string): Promise<string> {
+    const store = await this.prisma.store.findFirst({
+      where: { creator: { user_id: userId } },
+      select: { id: true },
+    });
+    if (!store)
+      throw new NotFoundException({
+        code: 'STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
+    return store.id;
+  }
+
   async findByCreator(userId: string) {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
