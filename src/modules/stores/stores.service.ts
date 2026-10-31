@@ -18,6 +18,10 @@ import type { StoreByDomainResponse } from '../markets/market.types';
 import { RedirectsService } from '../redirects/redirects.service';
 import { isReservedDomain } from '../../common/domains/reserved-hosts';
 import { stripBrandFromThemeConfig } from './theme-config';
+import {
+  loadStorefrontHosts,
+  type StorefrontHosts,
+} from './storefront-hosts';
 import { normalizeCheckoutSettingsInput } from './checkout-settings';
 import { sanitizeCreatorHtml } from '../../common/html/creator-html';
 import {
@@ -190,7 +194,22 @@ export class StoresService {
         code: 'STORE_NOT_FOUND',
         message: 'Store not found',
       });
-    return store;
+    return { ...store, ...(await this.storefrontHostsOf(store)) };
+  }
+
+  /**
+   * Public host + every served host of a store, for dashboard links. A market
+   * store's legacy custom_domain may be a retired host, so the default
+   * market's primary domain wins over it (see storefront-hosts.ts).
+   */
+  private storefrontHostsOf(store: {
+    id: string;
+    custom_domain: string | null;
+  }): Promise<StorefrontHosts> {
+    return loadStorefrontHosts(
+      { prisma: this.prisma, storeApps: this.storeApps },
+      store,
+    );
   }
 
   async findBySlug(slug: string) {

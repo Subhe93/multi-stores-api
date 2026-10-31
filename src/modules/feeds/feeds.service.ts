@@ -7,6 +7,7 @@ import { StoreAppsService } from '../store-apps/store-apps.service';
 import { MarketsContextService } from '../markets/markets-context.service';
 import { MarketPricingService } from '../markets/market-pricing.service';
 import type { MarketContext } from '../markets/market-context';
+import { loadPublicHost } from '../stores/storefront-hosts';
 import {
   TaxService,
   effectiveRateBp,
@@ -287,7 +288,7 @@ export class FeedsService {
       format === 'google'
         ? googleHead({
             title: store.name,
-            link: this.storeLink(store, market),
+            link: await this.storeLink(store, market),
             description: `${store.name} product feed`,
           }) +
           items.map((i) => googleItem(i) + '\n').join('') +
@@ -534,7 +535,7 @@ export class FeedsService {
       : null;
     const tax = await this.taxSetup(store, market);
     const locale = this.localeOf(store, market);
-    const baseUrl = this.storeLink(store, market);
+    const baseUrl = await this.storeLink(store, market);
     const shippingCountries = market?.countries.length
       ? market.countries
       : tax.ctx.taxCountry
@@ -738,12 +739,22 @@ export class FeedsService {
     );
   }
 
-  /** Public base URL of the store in the market (no trailing slash). */
-  private storeLink(store: FeedStore, market: MarketContext | null): string {
+  /**
+   * Public base URL of the store in the market (no trailing slash): the
+   * market's primary host, else the store's public host (storefront-hosts:
+   * default market primary with the markets app on, legacy custom_domain
+   * with it off), else the platform slug URL.
+   */
+  private async storeLink(
+    store: FeedStore,
+    market: MarketContext | null,
+  ): Promise<string> {
     if (market?.primaryHostname) return `https://${market.primaryHostname}`;
-    if (store.custom_domain) {
-      return `https://${store.custom_domain.replace(/\/$/, '')}`;
-    }
+    const publicHost = await loadPublicHost(
+      { prisma: this.prisma, storeApps: this.storeApps },
+      store,
+    );
+    if (publicHost) return `https://${publicHost.replace(/\/$/, '')}`;
     const base = (
       this.config.get<string>('STOREFRONT_URL') || 'http://localhost:3003'
     ).replace(/\/$/, '');

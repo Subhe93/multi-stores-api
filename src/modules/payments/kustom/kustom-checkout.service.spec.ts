@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Prisma, StoreType } from '@prisma/client';
 import { KustomCheckoutService } from './kustom-checkout.service';
 import { KustomClient } from './kustom.client';
@@ -110,6 +111,10 @@ function build(
     customer?: Record<string, unknown> | null;
     /** Designer app: a DesignerCartService double (8th, optional param). */
     designerCart?: Record<string, unknown>;
+    /** AccountCredentialsService double (9th, optional param). */
+    credentials?: Record<string, unknown>;
+    /** Account found by email for a guest checkout (null = create one). */
+    existingUser?: Record<string, unknown> | null;
   } = {},
 ) {
   const sessions: Record<string, unknown>[] = [];
@@ -130,6 +135,17 @@ function build(
     },
     customer: {
       findUnique: jest.fn(() => Promise.resolve(opts.customer ?? null)),
+    },
+    user: {
+      findUnique: jest.fn(() => Promise.resolve(opts.existingUser ?? null)),
+      findFirst: jest.fn(() => Promise.resolve(null)),
+      create: jest.fn(({ data }: { data: { email: string } }) =>
+        Promise.resolve({
+          id: 'u-new',
+          email: data.email,
+          customer: { id: 'c-new' },
+        }),
+      ),
     },
     address: {
       findFirst: jest.fn((_args: unknown) => Promise.resolve(null)),
@@ -191,7 +207,10 @@ function build(
     isEnabled: jest.fn(() => Promise.resolve(opts.b2b === true)),
     getSettings: jest.fn(() => Promise.resolve(null)),
   } as unknown as StoreAppsService);
-  const markets = { resolve: jest.fn(() => Promise.resolve(market)) };
+  const markets = {
+    resolve: jest.fn(() => Promise.resolve(market)),
+    byId: jest.fn(() => Promise.resolve(market)),
+  };
   const createCheckout = jest.fn((payload: Record<string, unknown>) =>
     Promise.resolve({
       ...payload,
@@ -222,6 +241,7 @@ function build(
     b2b,
     undefined,
     opts.designerCart as never,
+    opts.credentials as never,
   );
   return {
     service,
@@ -871,5 +891,146 @@ describe('KustomCheckoutService designer ownership (M4.2 fixes)', () => {
         custom_fields: null,
       },
     ]);
+  });
+});
+
+describe('KustomCheckoutService.handleValidation account credentials', () => {
+  const body = {
+    order_id: 'k-1',
+    order_amount: 29900,
+    purchase_currency: 'SEK',
+    billing_address: kustomAddress,
+    shipping_address: kustomAddress,
+  };
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+  it('a NEW guest account gets one credentials email with the generated password and the store links', async () => {
+    const send = jest.fn((_input: unknown) => Promise.resolve());
+    const logSpies = (['log', 'warn', 'error', 'debug'] as const).map((m) =>
+      jest.spyOn(Logger.prototype, m).mockImplementation(() => undefined),
+    );
+    const { service, prisma } = build(null, {
+      session: sessionRow({ customer_id: null, locale: 'en' }),
+      credentials: { send },
+    });
+    const res = await service.handleValidation('sess-1', 'cb-token', body);
+    expect(res).toEqual({ ok: true, body: { ok: true } });
+    await flush();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const input = send.mock.calls[0][0] as {
+      password: string;
+      user: { id: string; email: string; role: string };
+      store: { id: string; name: string };
+      storeBase: string;
+      locale: string;
+      name: string;
+    };
+    expect(input.user).toEqual({
+      id: 'u-new',
+      email: 'anna@example.com',
+      role: 'CUSTOMER',
+    });
+    expect(input.password).toMatch(/^[A-Za-z2-9]{16}$/);
+    expect(input.store).toEqual({ id: STORE_ID, name: 'Store' });
+    expect(input.storeBase).toBe('https://stores.example.com/store/namez');
+    expect(input.locale).toBe('en');
+    expect(input.name).toBe('Anna');
+
+    // The hash stored is of that very password; the plain value never
+    // reaches the DB, the session row or a log line.
+    const createArgs = prisma.user.create.mock.calls[0][0] as unknown as {
+      data: { password_hash: string };
+    };
+    expect(createArgs.data.password_hash).not.toContain(input.password);
+    const writes = JSON.stringify([
+      prisma.kustomCheckoutSession.update.mock.calls,
+      prisma.kustomCheckoutSession.updateMany.mock.calls,
+      prisma.$transaction.mock.calls,
+      prisma.user.create.mock.calls,
+    ]);
+    expect(writes).not.toContain(input.password);
+    for (const spy of logSpies) {
+      expect(JSON.stringify(spy.mock.calls)).not.toContain(input.password);
+      spy.mockRestore();
+    }
+  });
+
+  it('a market host carries over to the credentials links', async () => {
+    const send = jest.fn((_input: unknown) => Promise.resolve());
+    const { service, orders } = build(euMarket, {
+      session: sessionRow({
+        customer_id: null,
+        market_id: 'm-eu',
+        hostname: 'namez.shop',
+        currency: 'EUR',
+        locale: 'de',
+      }),
+      credentials: { send },
+    });
+    orders.create.mockImplementationOnce(() =>
+      Promise.resolve({ id: 'o1', total: 29.9, currency: 'EUR' }),
+    );
+    const res = await service.handleValidation('sess-1', 'cb-token', {
+      ...body,
+      order_amount: 2990,
+      purchase_currency: 'EUR',
+    });
+    expect(res).toEqual({ ok: true, body: { ok: true } });
+    await flush();
+    expect(send).toHaveBeenCalledTimes(1);
+    const input = send.mock.calls[0][0] as {
+      storeBase: string;
+      locale: string;
+    };
+    expect(input.storeBase).toBe('https://namez.shop');
+    expect(input.locale).toBe('de');
+  });
+
+  it('an existing customer account sends nothing', async () => {
+    const send = jest.fn((_input: unknown) => Promise.resolve());
+    const { service, prisma } = build(null, {
+      session: sessionRow({ customer_id: null }),
+      credentials: { send },
+      existingUser: {
+        id: 'u1',
+        email: 'anna@example.com',
+        role: 'CUSTOMER',
+        customer: { id: 'c1' },
+      },
+    });
+    const res = await service.handleValidation('sess-1', 'cb-token', body);
+    expect(res).toEqual({ ok: true, body: { ok: true } });
+    await flush();
+    expect(prisma.user.create).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('a logged-in customer sends nothing', async () => {
+    const send = jest.fn((_input: unknown) => Promise.resolve());
+    const { service } = build(null, {
+      session: sessionRow(),
+      customer: loggedIn,
+      credentials: { send },
+    });
+    await service.handleValidation('sess-1', 'cb-token', body);
+    await flush();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('the account still gets its credentials when the order fails after it was created', async () => {
+    const send = jest.fn((_input: unknown) => Promise.resolve());
+    const { service, orders } = build(null, {
+      session: sessionRow({ customer_id: null }),
+      credentials: { send },
+    });
+    orders.create.mockImplementationOnce(() =>
+      Promise.reject(new Error('out of stock')),
+    );
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const res = await service.handleValidation('sess-1', 'cb-token', body);
+    expect(res.ok).toBe(false);
+    await flush();
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });

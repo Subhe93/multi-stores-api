@@ -25,6 +25,8 @@ import {
 } from '../../cart/cart-line';
 import { DesignerCartService } from '../../designer/designer-cart.service';
 import { normalizeEmail } from '../../../common/email/email.util';
+import { generateAccountPassword } from '../../../common/security/account-password';
+import { AccountCredentialsService } from '../../auth/account-credentials.service';
 import { KustomService, withMarket, type StoreContext } from './kustom.service';
 import { MarketsContextService } from '../../markets/markets-context.service';
 import { B2B_COMPANY_NOT_ALLOWED, B2bService } from '../../b2b/b2b.service';
@@ -76,10 +78,22 @@ const CONCURRENT_VALIDATION_POLL_MS = 250;
 // bcrypt cost for the random password of a guest's auto-created account.
 // AuthService.register uses 12 (~300 ms); this runs inside Kustom's 3 s
 // validation budget next to pricing, stock and order creation, so 10
-// (~100 ms) is the compromise. The password is 32 random base64url
-// characters that nobody knows — the account is claimed via "forgot
-// password" — so the lower cost does not weaken it in practice.
+// (~100 ms) is the compromise. The password is 16 CSPRNG characters from a
+// 57-symbol alphabet (~93 bits, generateAccountPassword) mailed to the shopper
+// with a magic link, so the lower cost does not weaken it in practice.
 const GUEST_PASSWORD_BCRYPT_COST = 10;
+
+/** The account an order belongs to (see resolveCustomer). */
+interface ResolvedCustomer {
+  userId: string;
+  customerId: string;
+  email: string;
+  firstName: string;
+  created: boolean;
+  /** Generated password of a NEW account, in memory only; null otherwise. */
+  password: string | null;
+}
+
 // Description shown under a PICKUP shipping option (delivery options show
 // their estimated days instead), keyed by language.
 const PICKUP_DESCRIPTIONS: Record<string, string> = {
@@ -272,8 +286,11 @@ export class KustomCheckoutService {
     // b2b app M2.5 (reverse charge): optional and trailing so positional
     // test constructors stay valid. Absent = no exemption is ever applied.
     @Optional() private b2bTax?: B2bTaxExemptionService,
-    // Designer app (M4.2): ownership of designer lines; optional and last.
+    // Designer app (M4.2): ownership of designer lines; optional.
     @Optional() private designerCart?: DesignerCartService,
+    // Credentials email (password + magic link) of guest accounts created
+    // here; optional and last so positional test constructors stay valid.
+    @Optional() private credentials?: AccountCredentialsService,
   ) {}
 
   /**
@@ -1596,6 +1613,7 @@ export class KustomCheckoutService {
     }
 
     let ordered = false;
+    let resolved: ResolvedCustomer | null = null;
     try {
       // 1. Recompute from the snapshot and compare with what Kustom holds.
       const b = this.callbackBody(body);
@@ -1653,14 +1671,15 @@ export class KustomCheckoutService {
 
       // 2. The customer: the logged-in one, an existing account by email,
       //    or a new account for a guest.
-      const resolved = await this.resolveCustomer(session, b);
+      resolved = await this.resolveCustomer(session, b);
+      const customer = resolved;
 
       // 3. The shipping address, reusing an identical row.
       const address = await this.upsertAddress(
-        resolved.customerId,
+        customer.customerId,
         b.shipping_address ?? b.billing_address,
         b.billing_address,
-        resolved.created,
+        customer.created,
         b2b.company,
       );
 
@@ -1669,7 +1688,7 @@ export class KustomCheckoutService {
       // create() returns the shaped order (typed loosely); only the id and
       // the stored total are needed here.
       const created: unknown = await this.orders.create(
-        resolved.userId,
+        customer.userId,
         {
           address_id: address.id,
           store_id: session.store_id,
@@ -1731,7 +1750,7 @@ export class KustomCheckoutService {
             data: {
               order_id: order.id,
               status: 'ordered',
-              account_created: resolved.created,
+              account_created: customer.created,
               country_code: country,
               region,
               postcode,
@@ -1755,28 +1774,6 @@ export class KustomCheckoutService {
       }
       ordered = true;
 
-      // 6. Welcome email for a freshly created account — off the callback.
-      if (resolved.created) {
-        const loginUrl = `${resolveStoreBase(
-          this.kustom.urls().storefrontBase,
-          ctx.slug,
-          ctx.customDomain,
-        )}/auth/login`;
-        setImmediate(() => {
-          void this.mail
-            .sendWelcome(
-              resolved.email,
-              { name: resolved.firstName || undefined, loginUrl },
-              session.locale ?? ctx.primaryLocale ?? undefined,
-              { storeId: ctx.id, storeName: ctx.name },
-            )
-            .catch((err: unknown) =>
-              this.logger.warn(
-                `Welcome email for ${resolved.email} failed: ${this.describe(err)}`,
-              ),
-            );
-        });
-      }
       return { ok: true, body: { ok: true } };
     } catch (err) {
       // Stock, coupon or any other failure before an order existed: reject
@@ -1792,7 +1789,51 @@ export class KustomCheckoutService {
           data: { status: 'open' },
         });
       }
+      // 6. Credentials email for a freshly created account, off the
+      //    callback. Sent whether or not the order went through: the account
+      //    exists either way, and a retried validation reuses it (created =
+      //    false), so this is the only chance to hand over the password.
+      if (resolved?.created && resolved.password) {
+        this.sendAccountCredentials(resolved, session, ctx);
+      }
+      // Drop the plain password from the only object that held it.
+      if (resolved) resolved.password = null;
     }
+  }
+
+  /**
+   * Mails the generated password and a magic login link of a guest account
+   * created by the validation callback. Links use the same store origin as
+   * every other Kustom redirect (custom domain or market host via
+   * ctx.customDomain). Fire-and-forget: AccountCredentialsService never
+   * throws and never logs the password or the token.
+   */
+  private sendAccountCredentials(
+    resolved: ResolvedCustomer,
+    session: Pick<Session, 'locale'>,
+    ctx: StoreContext,
+  ): void {
+    const credentials = this.credentials;
+    if (!credentials) return;
+    const input = {
+      user: {
+        id: resolved.userId,
+        email: resolved.email,
+        role: UserRole.CUSTOMER,
+      },
+      name: resolved.firstName || null,
+      password: resolved.password ?? '',
+      store: { id: ctx.id, name: ctx.name },
+      storeBase: resolveStoreBase(
+        this.kustom.urls().storefrontBase,
+        ctx.slug,
+        ctx.customDomain,
+      ),
+      locale: session.locale ?? ctx.primaryLocale ?? null,
+    };
+    setImmediate(() => {
+      void credentials.send(input);
+    });
   }
 
   /**
@@ -1933,22 +1974,17 @@ export class KustomCheckoutService {
 
   /**
    * The account the order belongs to. Guests get one created from the email
-   * Kustom collected: role CUSTOMER, ACTIVE, with a random password hashed
-   * with bcrypt (see GUEST_PASSWORD_BCRYPT_COST). No tokens are issued; the
-   * shopper sets a password via "forgot password". An existing account is
+   * Kustom collected: role CUSTOMER, ACTIVE, with a generated password hashed
+   * with bcrypt (see GUEST_PASSWORD_BCRYPT_COST). The plain password is
+   * returned in memory only, for the credentials email handleValidation sends
+   * (with a magic login link) once the callback is done. An existing account is
    * attached only when it is a customer account — a creator, provider or
    * admin must not acquire orders through a guest checkout.
    */
   private async resolveCustomer(
     session: Session,
     b: KustomCheckoutCallbackBody,
-  ): Promise<{
-    userId: string;
-    customerId: string;
-    email: string;
-    firstName: string;
-    created: boolean;
-  }> {
+  ): Promise<ResolvedCustomer> {
     const address = b.billing_address ?? b.shipping_address;
     const firstName = (address?.given_name ?? '').trim();
     const lastName = (address?.family_name ?? '').trim();
@@ -1966,6 +2002,7 @@ export class KustomCheckoutService {
           email: customer.user.email,
           firstName,
           created: false,
+          password: null,
         };
       }
     }
@@ -2027,10 +2064,13 @@ export class KustomCheckoutService {
         email: existing.email,
         firstName,
         created: false,
+        password: null,
       };
     }
 
-    const password = randomBytes(24).toString('base64url').slice(0, 32);
+    // Mailed to the shopper with a magic link once validation finishes; it
+    // stays in memory only (never in the session row, logs or errors).
+    const password = generateAccountPassword();
     const password_hash = await bcrypt.hash(
       password,
       GUEST_PASSWORD_BCRYPT_COST,
@@ -2057,6 +2097,7 @@ export class KustomCheckoutService {
       email: user.email,
       firstName,
       created: true,
+      password,
     };
   }
 

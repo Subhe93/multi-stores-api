@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { StoreAppsService } from '../store-apps/store-apps.service';
+import { loadStorefrontHosts } from '../stores/storefront-hosts';
 import {
   CreateProviderDto,
   UpdateProviderDto,
@@ -7,7 +9,10 @@ import {
 
 @Injectable()
 export class ProvidersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly storeApps: StoreAppsService,
+  ) {}
 
   async create(userId: string, dto: CreateProviderDto) {
     return this.prisma.provider.create({
@@ -208,6 +213,12 @@ export class ProvidersService {
       take: 50,
     });
 
-    return { ...store, custom_products_using: customProducts };
+    // Public host for the "Visit store" link (a market store's legacy
+    // custom_domain may be a retired host).
+    const { public_host } = await loadStorefrontHosts(
+      { prisma: this.prisma, storeApps: this.storeApps },
+      store,
+    );
+    return { ...store, public_host, custom_products_using: customProducts };
   }
 }

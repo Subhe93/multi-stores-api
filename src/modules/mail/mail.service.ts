@@ -1,4 +1,9 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  BadRequestException,
+  Optional,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EmailLogStatus, Prisma, StoreType } from '@prisma/client';
 import * as nodemailer from 'nodemailer';
@@ -21,6 +26,8 @@ import {
   productionDigestEmail,
   productionNewOrderEmail,
   welcomeEmail,
+  accountCreatedEmail,
+  esc,
   type EmailBrand,
   OrderConfirmationData,
   OrderShippedData,
@@ -55,6 +62,9 @@ import {
 } from './order-mail.helpers';
 import type { StoreMailProvider } from './store-mail-provider';
 import { deriveNetTotals } from '../taxes/tax.service';
+import { SUPPORTED_LOCALES } from '../markets/market.types';
+import { StoreAppsService } from '../store-apps/store-apps.service';
+import { loadPublicHost } from '../stores/storefront-hosts';
 
 /** Delivery log retention. */
 const EMAIL_LOG_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
@@ -94,6 +104,28 @@ interface MailMeta {
   storeId?: string;
   orderId?: string;
   event?: string;
+  /**
+   * Secret values carried by the message (an account's password). They are
+   * masked wherever the message is described outside the mail itself: the
+   * delivery log and the application log.
+   */
+  sensitive?: string[];
+}
+
+/** Replace every secret in a log line with a mask. */
+export function redactSecrets(text: string, secrets?: string[]): string {
+  if (!secrets?.length) return text;
+  return secrets
+    .filter((secret) => secret.length > 0)
+    .reduce((out, secret) => out.split(secret).join('[redacted]'), text);
+}
+
+/** The supported base language of a locale tag, or undefined. */
+function supportedLang(raw: string | null | undefined): string | undefined {
+  const lang = (raw ?? '').trim().toLowerCase().split(/[-_]/)[0];
+  return (SUPPORTED_LOCALES as readonly string[]).includes(lang)
+    ? lang
+    : undefined;
 }
 
 interface SmtpConfig {
@@ -224,6 +256,9 @@ export class MailService {
     private prisma: PrismaService,
     private crypto: CryptoService,
     private templates: NotificationTemplatesService,
+    // Optional and last: resolves the store's public host for links (the
+    // markets app is treated as off without it, e.g. in lean unit wiring).
+    @Optional() private readonly storeApps?: StoreAppsService,
   ) {}
 
   /** Register an order-email extension (see OrderMailExtension). */
@@ -392,19 +427,29 @@ export class MailService {
     orderId?: string;
     /** Files to attach; passed to nodemailer only when non-empty. */
     attachments?: MailAttachment[];
+    /** Secrets to keep out of the delivery and application logs. */
+    sensitive?: string[];
+    /**
+     * Skip the store's own senders (Zoho app, store SMTP) even with a
+     * storeId: for messages carrying account secrets, which must not pass
+     * through (or be kept in the sent folder of) a tenant-controlled mailbox.
+     * The storeId still brands the footer and tags the delivery log.
+     */
+    platformSenderOnly?: boolean;
   }): Promise<{ sent: boolean }> {
+    const storeSenderId = opts.platformSenderOnly ? undefined : opts.storeId;
     // An app-provided sender (Zoho Mail) goes first; when it fails the
     // message continues down the usual store SMTP → platform path.
-    if (opts.storeId && this.storeProviders.length) {
+    if (storeSenderId && this.storeProviders.length) {
       for (const provider of this.storeProviders) {
-        if (await this.tryProvider(provider, opts.storeId, opts)) {
+        if (await this.tryProvider(provider, storeSenderId, opts)) {
           return { sent: true };
         }
       }
     }
 
-    const storeCfg = opts.storeId
-      ? await this.resolveStoreConfig(opts.storeId)
+    const storeCfg = storeSenderId
+      ? await this.resolveStoreConfig(storeSenderId)
       : null;
 
     if (storeCfg) {
@@ -414,14 +459,14 @@ export class MailService {
       // fall through to the platform sender for this message. The creator sees
       // the real error when they run a test from the dashboard.
       this.logger.warn(
-        `Store ${opts.storeId} sender failed for "${opts.subject}" — retrying via the platform sender`,
+        `Store ${opts.storeId} sender failed for "${redactSecrets(opts.subject, opts.sensitive)}" — retrying via the platform sender`,
       );
     }
 
     const platformCfg = await this.resolveConfig();
     if (!platformCfg) {
       this.logger.warn(
-        `[mail:not-configured] Would send "${opts.subject}" to ${opts.to}`,
+        `[mail:not-configured] Would send "${redactSecrets(opts.subject, opts.sensitive)}" to ${opts.to}`,
       );
       await this.logDelivery(opts, {
         status: EmailLogStatus.SKIPPED,
@@ -478,7 +523,7 @@ export class MailService {
       return true;
     }
     this.logger.warn(
-      `Store ${storeId} ${provider.via} sender failed for "${opts.subject}" — falling back: ${result.error}`,
+      `Store ${storeId} ${provider.via} sender failed for "${redactSecrets(opts.subject, opts.sensitive)}" — falling back: ${redactSecrets(result.error ?? '', opts.sensitive)}`,
     );
     await this.logDelivery(opts, {
       status: EmailLogStatus.FAILED,
@@ -518,7 +563,7 @@ export class MailService {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(
-        `Failed to send "${opts.subject}" to ${opts.to} via ${cfg.host}: ${message}`,
+        `Failed to send "${redactSecrets(opts.subject, opts.sensitive)}" to ${opts.to} via ${cfg.host}: ${redactSecrets(message, opts.sensitive)}`,
       );
       await this.logDelivery(opts, {
         status: EmailLogStatus.FAILED,
@@ -537,6 +582,8 @@ export class MailService {
   /**
    * Record one delivery attempt. Best-effort like the mail itself: a logging
    * failure must never cost anyone their email, so it is swallowed.
+   * Only metadata is stored (never the body), and any `sensitive` value is
+   * masked in the subject and error, so a password can never land here.
    */
   private async logDelivery(
     meta: MailMeta,
@@ -555,11 +602,13 @@ export class MailService {
           order_id: meta.orderId ?? null,
           event: meta.event ?? null,
           recipient: meta.to,
-          subject: meta.subject.slice(0, 300),
+          subject: redactSecrets(meta.subject, meta.sensitive).slice(0, 300),
           status: outcome.status,
           via: outcome.via ?? null,
           smtp_host: outcome.host ?? null,
-          error: outcome.error ? outcome.error.slice(0, 1000) : null,
+          error: outcome.error
+            ? redactSecrets(outcome.error, meta.sensitive).slice(0, 1000)
+            : null,
         },
       });
       const now = Date.now();
@@ -997,7 +1046,7 @@ export class MailService {
     to: string,
     counts: { itemsCount: number; checksCount: number },
   ): Promise<{ sent: boolean }> {
-    const order = await loadOrderForEmail(this.prisma, orderId);
+    const order = await loadOrderForEmail(this.prisma, orderId, this.storeApps);
     if (!order) return { sent: false };
     const ctx = await this.orderTemplateContext(order, 'new_order_owner');
     const customerName = await this.customerNameOf(order);
@@ -1143,6 +1192,122 @@ export class MailService {
     });
   }
 
+  /**
+   * Login details of an account the platform created for someone (guest
+   * checkout, Kustom, admin): email, password and a one-time magic login
+   * link. Store-branded (name, logo, footer, delivery log) when a store is
+   * given, otherwise a platform email. Always rendered from the platform
+   * template and sent through the platform sender: store overrides and
+   * store mailboxes never see the secrets.
+   *
+   * Locale: the requested one when supported, else the store's primary
+   * locale, else English. Best-effort: never throws. The password only lives
+   * in the message itself; it is masked out of the delivery and app logs.
+   */
+  async sendAccountCreated(
+    to: string,
+    vars: {
+      name: string;
+      email: string;
+      password: string;
+      magicUrl: string;
+      loginUrl: string;
+      expiresHours: number;
+    },
+    locale?: string | null,
+    brand?: { storeId: string; storeName: string } | null,
+  ): Promise<void> {
+    try {
+      const platformName = await this.platformDisplayName();
+      const store = brand?.storeId
+        ? await this.prisma.store.findUnique({
+            where: { id: brand.storeId },
+            select: {
+              logo_url: true,
+              language_config: { select: { primary_locale: true } },
+            },
+          })
+        : null;
+      const lang =
+        supportedLang(locale) ??
+        supportedLang(store?.language_config?.primary_locale) ??
+        'en';
+      const storeName = brand?.storeName?.trim() || platformName;
+
+      const plain: Record<string, string> = {
+        platform_name: platformName,
+        store_name: storeName,
+        name: vars.name ?? '',
+        email: vars.email,
+        password: vars.password,
+        magic_url: vars.magicUrl,
+        login_url: vars.loginUrl,
+        expires_hours: String(vars.expiresHours),
+      };
+      // The HTML body gets escaped copies (`html:` overrides), so a name like
+      // `<script>` or a URL with quotes can never break the markup.
+      const templateVars: Record<string, string> = { ...plain };
+      for (const [key, value] of Object.entries(plain)) {
+        templateVars[`${HTML_VAR_PREFIX}${key}`] = esc(value);
+      }
+
+      // Platform template only (no store override) and, below, the platform
+      // sender only: a store-controlled template or mailbox must never see a
+      // customer's password or magic link (the account is platform-wide and
+      // works on every store). Store branding stays in the body.
+      const rendered = await this.templates.render(
+        'account_created',
+        lang,
+        templateVars,
+      );
+
+      let parts = rendered;
+      if (!parts) {
+        const publicBase =
+          this.config.get<string>('PUBLIC_API_URL') || 'http://localhost:3001';
+        const logoUrl = store?.logo_url
+          ? absoluteUrl(await emailSafeLogoPath(store.logo_url), publicBase)
+          : undefined;
+        parts = accountCreatedEmail(
+          {
+            name: vars.name,
+            email: vars.email,
+            password: vars.password,
+            magicUrl: vars.magicUrl,
+            loginUrl: vars.loginUrl,
+            expiresHours: vars.expiresHours,
+          },
+          brand?.storeId
+            ? { storeName, storeLogoUrl: logoUrl, storeId: brand.storeId }
+            : { platformName },
+          lang,
+        );
+      }
+
+      await this.send({
+        to,
+        ...parts,
+        ...(brand?.storeId
+          ? {
+              storeId: brand.storeId,
+              brandFooter: { storeName, customerEmail: to, locale: lang },
+            }
+          : {}),
+        event: 'account_created',
+        sensitive: [vars.password, vars.magicUrl],
+        platformSenderOnly: true,
+      });
+    } catch (err) {
+      // Never surface the vars: they carry the password.
+      this.logger.warn(
+        `account_created email to ${to} failed: ${redactSecrets(
+          err instanceof Error ? err.message : String(err),
+          [vars.password, vars.magicUrl],
+        )}`,
+      );
+    }
+  }
+
   // ── Order-event dispatcher ─────────────────────────────────────────────────
   // Single entry-point used by orders/payments/auth modules. Loads the order
   // with items + store + customer once, renders the items block, and calls the
@@ -1159,7 +1324,7 @@ export class MailService {
       refundAmount?: number;
     } = {},
   ): Promise<void> {
-    const order = await loadOrderForEmail(this.prisma, orderId);
+    const order = await loadOrderForEmail(this.prisma, orderId, this.storeApps);
     if (!order) return;
 
     const {
@@ -1616,7 +1781,7 @@ export class MailService {
       select: { id: true },
     });
     const order = latest
-      ? await loadOrderForEmail(this.prisma, latest.id)
+      ? await loadOrderForEmail(this.prisma, latest.id, this.storeApps)
       : null;
 
     let vars: Record<string, string>;
@@ -1635,6 +1800,7 @@ export class MailService {
         ? await this.prisma.store.findUnique({
             where: { id: storeId },
             select: {
+              id: true,
               name: true,
               slug: true,
               custom_domain: true,
@@ -1643,6 +1809,12 @@ export class MailService {
             },
           })
         : null;
+      const publicHost = store
+        ? await loadPublicHost(
+            { prisma: this.prisma, storeApps: this.storeApps },
+            store,
+          )
+        : null;
       const cfg = await this.prisma.platformConfig.findFirst({
         select: { default_currency: true },
       });
@@ -1650,7 +1822,7 @@ export class MailService {
       const storeUrl = buildStoreUrl(
         store?.slug,
         storefrontBase,
-        store?.custom_domain ?? undefined,
+        publicHost ?? undefined,
       );
       const { items_html, items_text } = renderOrderItems(
         [
@@ -1735,7 +1907,12 @@ export class MailService {
       reason: 'Sample reason',
       refund_amount: vars.total,
       name: 'Anna',
-      login_url: `${dashboardBase.replace(/\/$/, '')}/login`,
+      login_url: `${dashboardBase.replace(/\/$/, '')}/auth/login`,
+      // account_created: placeholder credentials, never a real account's.
+      email: 'anna@example.com',
+      password: 'Kx7mP2qRw9Tn4bVz',
+      magic_url: `${dashboardBase.replace(/\/$/, '')}/auth/magic#token=sample-token`,
+      expires_hours: '72',
       reset_url: `${storefrontBase.replace(/\/$/, '')}/reset-password?token=sample`,
     };
   }

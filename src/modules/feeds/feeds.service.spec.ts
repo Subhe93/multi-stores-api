@@ -125,6 +125,8 @@ interface World {
   priceRows: Record<string, unknown>[];
   markets: MarketContext[] | null;
   taxRates: Record<string, unknown>[];
+  /** StoreDomain rows (storefront-hosts public host). */
+  domains: Record<string, unknown>[];
 }
 
 function build(w: Partial<World> = {}) {
@@ -135,6 +137,7 @@ function build(w: Partial<World> = {}) {
     priceRows: [],
     markets: null,
     taxRates: [],
+    domains: [],
     ...w,
   };
   const calls = { productFindMany: 0, updateSettings: [] as unknown[] };
@@ -202,9 +205,13 @@ function build(w: Partial<World> = {}) {
       })),
     },
     taxRate: { findMany: jest.fn(async () => world.taxRates) },
+    storeDomain: {
+      findMany: jest.fn(() => Promise.resolve(world.domains)),
+    },
     taxClass: { findMany: jest.fn(async () => []) },
   };
   const storeApps = {
+    isEnabled: jest.fn(() => Promise.resolve(world.markets !== null)),
     getSettings: jest.fn(async () => world.settings),
     storeOfCreator: jest.fn(async () => ({
       id: STORE_ID,
@@ -457,6 +464,38 @@ describe('FeedsService.publicFeed (M5.6)', () => {
     expect(
       (await s2.publicFeed('namz', TOKEN, 'facebook')).body.trim().split('\n'),
     ).toHaveLength(2);
+  });
+
+  it('links the legacy custom domain without the markets app', async () => {
+    const { service } = build({
+      store: store({ custom_domain: 'mybrand.se' }),
+    });
+    const feed = await service.publicFeed('namz', TOKEN, 'google');
+    expect(feed.body).toContain('<link>https://mybrand.se</link>');
+    expect(feed.body).toContain(
+      '<g:link>https://mybrand.se/products/troja</g:link>',
+    );
+  });
+
+  it('links the default market primary host over a retired custom domain when the market has no host', async () => {
+    const { service } = build({
+      store: store({ custom_domain: 'resumely.net' }),
+      markets: [{ ...SE_MARKET, primaryHostname: null }],
+      domains: [
+        {
+          hostname: 'namez.se',
+          is_primary: true,
+          redirect_to: null,
+          status: 'ACTIVE',
+          market: { is_default: true, status: 'LIVE' },
+        },
+      ],
+    });
+    const feed = await service.publicFeed('namz', TOKEN, 'google');
+    expect(feed.body).toContain(
+      '<g:link>https://namez.se/products/troja</g:link>',
+    );
+    expect(feed.body).not.toContain('resumely.net');
   });
 
   it('prices through the market helper, links the market domain, hides market-hidden products', async () => {

@@ -374,7 +374,7 @@ async function seedLegalPages() {
   console.log(`Legal pages ensured (${created}/${Object.keys(TITLES).length})`);
 }
 
-// ── Notification templates (order_confirmation / password_reset) ─────────────
+// ── Notification templates (orders / welcome / password_reset / account_created)
 // Idempotent (upsert with `update: {}`). Bodies use {{var}} placeholders the
 // MailService substitutes at send time.
 async function seedNotificationTemplates() {
@@ -578,6 +578,165 @@ async function seedNotificationTemplates() {
       },
     },
   };
+
+  // account_created: same wording as the bundled builder
+  // (src/modules/mail/templates.ts → ACCOUNT_CREATED_TEXT), in all six
+  // locales so no language silently falls back to English. Tokens: {store},
+  // {name}, {hours}.
+  const ACCOUNT_CREATED: Record<string, Record<string, string>> = {
+    en: {
+      subject: 'Your account at {store}',
+      title: 'Your account is ready',
+      greeting: 'Hi {name},',
+      greetingNoName: 'Hi there,',
+      intro: 'An account has been created for you at {store}. Here are your login details:',
+      emailLabel: 'Email',
+      passwordLabel: 'Password',
+      button: 'Log in with one click',
+      validity: 'This button is valid for {hours} hours and can be used once.',
+      loginLead: 'Or log in with your email and password:',
+      loginLink: 'Log in',
+      changePassword: 'We recommend changing your password after you log in (Account → Change password).',
+      ignore: 'If you did not place an order, you can ignore this email.',
+    },
+    ar: {
+      subject: 'حسابك في {store}',
+      title: 'حسابك جاهز',
+      greeting: 'مرحباً {name}،',
+      greetingNoName: 'مرحباً،',
+      intro: 'تم إنشاء حساب لك في {store}. هذه بيانات الدخول الخاصة بك:',
+      emailLabel: 'البريد الإلكتروني',
+      passwordLabel: 'كلمة المرور',
+      button: 'تسجيل الدخول بنقرة واحدة',
+      validity: 'هذا الزر صالح لمدة {hours} ساعة ويمكن استخدامه مرة واحدة فقط.',
+      loginLead: 'أو سجّل الدخول ببريدك الإلكتروني وكلمة المرور:',
+      loginLink: 'تسجيل الدخول',
+      changePassword: 'ننصحك بتغيير كلمة المرور بعد تسجيل الدخول (الحساب ← تغيير كلمة المرور).',
+      ignore: 'إذا لم تقم بأي طلب، يمكنك تجاهل هذه الرسالة.',
+    },
+    tr: {
+      subject: '{store} hesabınız',
+      title: 'Hesabınız hazır',
+      greeting: 'Merhaba {name},',
+      greetingNoName: 'Merhaba,',
+      intro: '{store} üzerinde sizin için bir hesap oluşturuldu. Giriş bilgileriniz:',
+      emailLabel: 'E-posta',
+      passwordLabel: 'Şifre',
+      button: 'Tek tıkla giriş yap',
+      validity: 'Bu buton {hours} saat geçerlidir ve yalnızca bir kez kullanılabilir.',
+      loginLead: 'Ya da e-posta adresiniz ve şifrenizle giriş yapın:',
+      loginLink: 'Giriş yap',
+      changePassword: 'Giriş yaptıktan sonra şifrenizi değiştirmenizi öneririz (Hesap → Şifreyi değiştir).',
+      ignore: 'Bir sipariş vermediyseniz bu e-postayı dikkate almayabilirsiniz.',
+    },
+    de: {
+      subject: 'Ihr Konto bei {store}',
+      title: 'Ihr Konto ist bereit',
+      greeting: 'Hallo {name},',
+      greetingNoName: 'Hallo,',
+      intro: 'Für Sie wurde ein Konto bei {store} erstellt. Hier sind Ihre Zugangsdaten:',
+      emailLabel: 'E-Mail',
+      passwordLabel: 'Passwort',
+      button: 'Mit einem Klick anmelden',
+      validity: 'Dieser Button ist {hours} Stunden gültig und kann einmal verwendet werden.',
+      loginLead: 'Oder melden Sie sich mit E-Mail und Passwort an:',
+      loginLink: 'Anmelden',
+      changePassword: 'Wir empfehlen, das Passwort nach der Anmeldung zu ändern (Konto → Passwort ändern).',
+      ignore: 'Wenn Sie keine Bestellung aufgegeben haben, können Sie diese E-Mail ignorieren.',
+    },
+    fr: {
+      subject: 'Votre compte sur {store}',
+      title: 'Votre compte est prêt',
+      greeting: 'Bonjour {name},',
+      greetingNoName: 'Bonjour,',
+      intro: 'Un compte a été créé pour vous sur {store}. Voici vos identifiants :',
+      emailLabel: 'E-mail',
+      passwordLabel: 'Mot de passe',
+      button: 'Se connecter en un clic',
+      validity: 'Ce bouton est valable {hours} heures et ne peut être utilisé qu’une seule fois.',
+      loginLead: 'Ou connectez-vous avec votre e-mail et votre mot de passe :',
+      loginLink: 'Se connecter',
+      changePassword: 'Nous vous recommandons de changer votre mot de passe après connexion (Compte → Changer le mot de passe).',
+      ignore: 'Si vous n’avez passé aucune commande, vous pouvez ignorer cet e-mail.',
+    },
+    sv: {
+      subject: 'Ditt konto hos {store}',
+      title: 'Ditt konto är klart',
+      greeting: 'Hej {name},',
+      greetingNoName: 'Hej,',
+      intro: 'Ett konto har skapats åt dig hos {store}. Här är dina inloggningsuppgifter:',
+      emailLabel: 'E-post',
+      passwordLabel: 'Lösenord',
+      button: 'Logga in med ett klick',
+      validity: 'Knappen gäller i {hours} timmar och kan användas en gång.',
+      loginLead: 'Eller logga in med din e-post och ditt lösenord:',
+      loginLink: 'Logga in',
+      changePassword: 'Vi rekommenderar att du byter lösenord när du har loggat in (Konto → Byt lösenord).',
+      ignore: 'Om du inte har lagt någon beställning kan du bortse från det här mejlet.',
+    },
+  };
+  const placeholders = (phrase: string) =>
+    phrase
+      .split('{store}').join('{{store_name}}')
+      .split('{name}').join('{{name}}')
+      .split('{hours}').join('{{expires_hours}}');
+  // RTL-aware layout; the footer names the store (or the platform).
+  const accountLayout = (title: string, body: string, rtl: boolean) => `<!doctype html>
+<html${rtl ? ' dir="rtl"' : ''}>
+  <body${rtl ? ' dir="rtl"' : ''} style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,Helvetica,sans-serif;color:#18181b;">
+    <div style="max-width:520px;margin:0 auto;padding:24px;">
+      <div style="background:#ffffff;border:1px solid #e4e4e7;border-radius:12px;padding:28px;">
+        <h1 style="font-size:18px;margin:0 0 16px;">${title}</h1>
+        ${body}
+      </div>
+      <p style="font-size:11px;color:#a1a1aa;text-align:center;margin-top:16px;">{{store_name}}</p>
+    </div>
+  </body>
+</html>`;
+  const accountCreated: Record<string, { subject: string; body_html: string; body_text: string }> = {};
+  for (const [loc, t] of Object.entries(ACCOUNT_CREATED)) {
+    const p = 'font-size:14px;line-height:1.6;color:#3f3f46;';
+    const small = 'font-size:12px;line-height:1.6;color:#71717a;';
+    const label = 'font-size:12px;color:#71717a;';
+    const value = "font-family:'Courier New',Courier,monospace;font-size:15px;color:#18181b;";
+    const greeting = `{{#if name}}${placeholders(t.greeting)}{{/if}}{{#unless name}}${t.greetingNoName}{{/unless}}`;
+    accountCreated[loc] = {
+      subject: placeholders(t.subject),
+      body_html: accountLayout(
+        t.title,
+        `<p style="${p}margin:0 0 8px;">${greeting}</p>
+           <p style="${p}margin:0 0 16px;">${placeholders(t.intro)}</p>
+           <div style="background:#f4f4f5;border:1px solid #e4e4e7;border-radius:8px;padding:14px 16px;margin:0 0 20px;">
+             <p style="${label}margin:0 0 2px;">${t.emailLabel}</p>
+             <p style="margin:0 0 12px;"><span dir="ltr" style="${value}">{{email}}</span></p>
+             <p style="${label}margin:0 0 2px;">${t.passwordLabel}</p>
+             <p style="margin:0;"><span dir="ltr" style="${value}font-weight:600;letter-spacing:1px;user-select:all;-webkit-user-select:all;">{{password}}</span></p>
+           </div>
+           <p style="margin:0 0 8px;"><a href="{{magic_url}}" style="display:inline-block;background:#18181b;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 20px;border-radius:8px;">${t.button}</a></p>
+           <p style="${small}margin:0 0 20px;">${placeholders(t.validity)}</p>
+           <p style="${p}margin:0 0 16px;">${t.loginLead} <a href="{{login_url}}" style="color:#18181b;font-weight:600;">${t.loginLink}</a></p>
+           <p style="${small}margin:0 0 8px;">${t.changePassword}</p>
+           <p style="${small}margin:0;">${t.ignore}</p>`,
+        loc === 'ar',
+      ),
+      body_text: [
+        greeting,
+        '',
+        placeholders(t.intro),
+        `${t.emailLabel}: {{email}}`,
+        `${t.passwordLabel}: {{password}}`,
+        '',
+        `${t.button}: {{magic_url}}`,
+        placeholders(t.validity),
+        '',
+        `${t.loginLead} {{login_url}}`,
+        '',
+        t.changePassword,
+        t.ignore,
+      ].join('\n'),
+    };
+  }
+  TEMPLATES.account_created = accountCreated;
 
   let created = 0;
   for (const [event, perLocale] of Object.entries(TEMPLATES)) {

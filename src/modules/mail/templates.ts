@@ -14,7 +14,7 @@ const BRAND = 'Multi Stores';
 
 // Escape interpolated values as defense-in-depth, so a future user-controlled
 // field can't inject markup into the email body or break out of an attribute.
-function esc(s: string | number | boolean | null | undefined): string {
+export function esc(s: string | number | boolean | null | undefined): string {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -45,16 +45,23 @@ export interface EmailBrand {
   platformName?: string;
 }
 
-function layout(title: string, bodyHtml: string, brand?: EmailBrand): string {
+function layout(
+  title: string,
+  bodyHtml: string,
+  brand?: EmailBrand,
+  dir: 'ltr' | 'rtl' = 'ltr',
+): string {
   const name = brand?.storeName || brand?.platformName || BRAND;
   const header = brand?.storeLogoUrl
     ? `<div style="text-align:center;margin-bottom:20px;"><img src="${esc(
         brand.storeLogoUrl,
       )}" alt="${esc(name)}" style="max-height:44px;max-width:200px;" /></div>`
     : '';
+  // Only RTL emails carry a direction, so every LTR email stays byte-identical.
+  const htmlAttrs = dir === 'rtl' ? ' dir="rtl"' : '';
   return `<!doctype html>
-<html>
-  <body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,Helvetica,sans-serif;color:#18181b;">
+<html${htmlAttrs}>
+  <body${htmlAttrs} style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,Helvetica,sans-serif;color:#18181b;">
     <div style="max-width:520px;margin:0 auto;padding:24px;">
       <div style="background:#ffffff;border:1px solid #e4e4e7;border-radius:12px;padding:28px;">
         ${header}
@@ -554,4 +561,222 @@ export function welcomeEmail(
     ),
     text: t.welcomeText(name, data.loginUrl),
   };
+}
+
+// ── Account created (auto-created account with credentials) ─────────────────
+
+/**
+ * Wording of the `account_created` email per locale. Tokens: {store},
+ * {name}, {hours}. Values are escaped before they are put in, so a phrase
+ * itself must never contain user input. Keep in sync with the seeded platform
+ * template (prisma/seed.ts → account_created).
+ */
+export const ACCOUNT_CREATED_TEXT: Record<
+  string,
+  {
+    subject: string;
+    title: string;
+    greeting: string;
+    greetingNoName: string;
+    intro: string;
+    emailLabel: string;
+    passwordLabel: string;
+    button: string;
+    validity: string;
+    loginLead: string;
+    loginLink: string;
+    changePassword: string;
+    ignore: string;
+  }
+> = {
+  en: {
+    subject: 'Your account at {store}',
+    title: 'Your account is ready',
+    greeting: 'Hi {name},',
+    greetingNoName: 'Hi there,',
+    intro:
+      'An account has been created for you at {store}. Here are your login details:',
+    emailLabel: 'Email',
+    passwordLabel: 'Password',
+    button: 'Log in with one click',
+    validity: 'This button is valid for {hours} hours and can be used once.',
+    loginLead: 'Or log in with your email and password:',
+    loginLink: 'Log in',
+    changePassword:
+      'We recommend changing your password after you log in (Account → Change password).',
+    ignore: 'If you did not place an order, you can ignore this email.',
+  },
+  ar: {
+    subject: 'حسابك في {store}',
+    title: 'حسابك جاهز',
+    greeting: 'مرحباً {name}،',
+    greetingNoName: 'مرحباً،',
+    intro: 'تم إنشاء حساب لك في {store}. هذه بيانات الدخول الخاصة بك:',
+    emailLabel: 'البريد الإلكتروني',
+    passwordLabel: 'كلمة المرور',
+    button: 'تسجيل الدخول بنقرة واحدة',
+    validity: 'هذا الزر صالح لمدة {hours} ساعة ويمكن استخدامه مرة واحدة فقط.',
+    loginLead: 'أو سجّل الدخول ببريدك الإلكتروني وكلمة المرور:',
+    loginLink: 'تسجيل الدخول',
+    changePassword:
+      'ننصحك بتغيير كلمة المرور بعد تسجيل الدخول (الحساب ← تغيير كلمة المرور).',
+    ignore: 'إذا لم تقم بأي طلب، يمكنك تجاهل هذه الرسالة.',
+  },
+  tr: {
+    subject: '{store} hesabınız',
+    title: 'Hesabınız hazır',
+    greeting: 'Merhaba {name},',
+    greetingNoName: 'Merhaba,',
+    intro:
+      '{store} üzerinde sizin için bir hesap oluşturuldu. Giriş bilgileriniz:',
+    emailLabel: 'E-posta',
+    passwordLabel: 'Şifre',
+    button: 'Tek tıkla giriş yap',
+    validity:
+      'Bu buton {hours} saat geçerlidir ve yalnızca bir kez kullanılabilir.',
+    loginLead: 'Ya da e-posta adresiniz ve şifrenizle giriş yapın:',
+    loginLink: 'Giriş yap',
+    changePassword:
+      'Giriş yaptıktan sonra şifrenizi değiştirmenizi öneririz (Hesap → Şifreyi değiştir).',
+    ignore: 'Bir sipariş vermediyseniz bu e-postayı dikkate almayabilirsiniz.',
+  },
+  de: {
+    subject: 'Ihr Konto bei {store}',
+    title: 'Ihr Konto ist bereit',
+    greeting: 'Hallo {name},',
+    greetingNoName: 'Hallo,',
+    intro:
+      'Für Sie wurde ein Konto bei {store} erstellt. Hier sind Ihre Zugangsdaten:',
+    emailLabel: 'E-Mail',
+    passwordLabel: 'Passwort',
+    button: 'Mit einem Klick anmelden',
+    validity:
+      'Dieser Button ist {hours} Stunden gültig und kann einmal verwendet werden.',
+    loginLead: 'Oder melden Sie sich mit E-Mail und Passwort an:',
+    loginLink: 'Anmelden',
+    changePassword:
+      'Wir empfehlen, das Passwort nach der Anmeldung zu ändern (Konto → Passwort ändern).',
+    ignore:
+      'Wenn Sie keine Bestellung aufgegeben haben, können Sie diese E-Mail ignorieren.',
+  },
+  fr: {
+    subject: 'Votre compte sur {store}',
+    title: 'Votre compte est prêt',
+    greeting: 'Bonjour {name},',
+    greetingNoName: 'Bonjour,',
+    intro:
+      'Un compte a été créé pour vous sur {store}. Voici vos identifiants :',
+    emailLabel: 'E-mail',
+    passwordLabel: 'Mot de passe',
+    button: 'Se connecter en un clic',
+    validity:
+      'Ce bouton est valable {hours} heures et ne peut être utilisé qu’une seule fois.',
+    loginLead: 'Ou connectez-vous avec votre e-mail et votre mot de passe :',
+    loginLink: 'Se connecter',
+    changePassword:
+      'Nous vous recommandons de changer votre mot de passe après connexion (Compte → Changer le mot de passe).',
+    ignore:
+      'Si vous n’avez passé aucune commande, vous pouvez ignorer cet e-mail.',
+  },
+  sv: {
+    subject: 'Ditt konto hos {store}',
+    title: 'Ditt konto är klart',
+    greeting: 'Hej {name},',
+    greetingNoName: 'Hej,',
+    intro:
+      'Ett konto har skapats åt dig hos {store}. Här är dina inloggningsuppgifter:',
+    emailLabel: 'E-post',
+    passwordLabel: 'Lösenord',
+    button: 'Logga in med ett klick',
+    validity: 'Knappen gäller i {hours} timmar och kan användas en gång.',
+    loginLead: 'Eller logga in med din e-post och ditt lösenord:',
+    loginLink: 'Logga in',
+    changePassword:
+      'Vi rekommenderar att du byter lösenord när du har loggat in (Konto → Byt lösenord).',
+    ignore:
+      'Om du inte har lagt någon beställning kan du bortse från det här mejlet.',
+  },
+};
+
+export interface AccountCreatedData {
+  name?: string;
+  email: string;
+  password: string;
+  magicUrl: string;
+  loginUrl: string;
+  expiresHours: number;
+}
+
+/** Split/join token fill, so `$` patterns in values stay literal. */
+function fill(phrase: string, tokens: Record<string, string>): string {
+  return Object.entries(tokens).reduce(
+    (out, [key, value]) => out.split(`{${key}}`).join(value),
+    phrase,
+  );
+}
+
+/**
+ * Bundled `account_created` email: the login details of an account the
+ * platform created for the customer, plus a one-time magic login button.
+ * The password and the magic link each appear exactly once in the HTML.
+ * Unknown locales fall back to English; Arabic renders right-to-left.
+ */
+export function accountCreatedEmail(
+  data: AccountCreatedData,
+  brand?: EmailBrand,
+  locale?: string | null,
+): EmailParts {
+  const key = (locale ?? 'en').toLowerCase().split(/[-_]/)[0];
+  const lang = ACCOUNT_CREATED_TEXT[key] ? key : 'en';
+  const t = ACCOUNT_CREATED_TEXT[lang];
+  const dir = lang === 'ar' ? 'rtl' : 'ltr';
+  const storeName = brand?.storeName || brand?.platformName || BRAND;
+  const name = (data.name ?? '').trim();
+  const hours = String(data.expiresHours);
+
+  const htmlTokens = { store: esc(storeName), name: esc(name), hours };
+  const textTokens = { store: storeName, name, hours };
+  const greeting = name ? t.greeting : t.greetingNoName;
+  const p = 'font-size:14px;line-height:1.6;color:#3f3f46;';
+  const small = 'font-size:12px;line-height:1.6;color:#71717a;';
+  const label = 'font-size:12px;color:#71717a;';
+  const value =
+    "font-family:'Courier New',Courier,monospace;font-size:15px;color:#18181b;";
+
+  const html = layout(
+    esc(t.title),
+    `<p style="${p}margin:0 0 8px;">${fill(greeting, htmlTokens)}</p>
+       <p style="${p}margin:0 0 16px;">${fill(t.intro, htmlTokens)}</p>
+       <div style="background:#f4f4f5;border:1px solid #e4e4e7;border-radius:8px;padding:14px 16px;margin:0 0 20px;">
+         <p style="${label}margin:0 0 2px;">${esc(t.emailLabel)}</p>
+         <p style="margin:0 0 12px;"><span dir="ltr" style="${value}">${esc(data.email)}</span></p>
+         <p style="${label}margin:0 0 2px;">${esc(t.passwordLabel)}</p>
+         <p style="margin:0;"><span dir="ltr" style="${value}font-weight:600;letter-spacing:1px;user-select:all;-webkit-user-select:all;">${esc(data.password)}</span></p>
+       </div>
+       <p style="margin:0 0 8px;">${button(t.button, data.magicUrl)}</p>
+       <p style="${small}margin:0 0 20px;">${fill(t.validity, htmlTokens)}</p>
+       <p style="${p}margin:0 0 16px;">${esc(t.loginLead)} <a href="${esc(data.loginUrl)}" style="color:#18181b;font-weight:600;">${esc(t.loginLink)}</a></p>
+       <p style="${small}margin:0 0 8px;">${esc(t.changePassword)}</p>
+       <p style="${small}margin:0;">${esc(t.ignore)}</p>`,
+    brand,
+    dir,
+  );
+
+  const text = [
+    fill(greeting, textTokens),
+    '',
+    fill(t.intro, textTokens),
+    `${t.emailLabel}: ${data.email}`,
+    `${t.passwordLabel}: ${data.password}`,
+    '',
+    `${t.button}: ${data.magicUrl}`,
+    fill(t.validity, textTokens),
+    '',
+    `${t.loginLead} ${data.loginUrl}`,
+    '',
+    t.changePassword,
+    t.ignore,
+  ].join('\n');
+
+  return { subject: fill(t.subject, textTokens), html, text };
 }

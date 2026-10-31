@@ -16,6 +16,8 @@ import {
   type PDisplayRow,
 } from '@multi-stores/core/personalization/display';
 import { SUPPORTED_LOCALES } from '../markets/market.types';
+import { loadPublicHost } from '../stores/storefront-hosts';
+import type { StoreAppsService } from '../store-apps/store-apps.service';
 
 // Per-locale phrasing used inside order emails. The admin can edit the
 // surrounding template body in NotificationTemplate, but list headers/labels
@@ -1047,7 +1049,10 @@ export interface OrderStoreContext {
   id: string;
   slug: string;
   name: string;
-  /** The store's own domain, when it has one (links then point there). */
+  /**
+   * Public host links point at: the order's market host, else the store's
+   * public host (storefront-hosts), else unset (platform slug URL).
+   */
   customDomain?: string;
   /** Used to brand the email — customers buy from the shop, not the platform. */
   logoUrl?: string;
@@ -1076,6 +1081,7 @@ export type OrderForEmail = OrderBasePayload & {
 export async function loadOrderForEmail(
   prisma: PrismaClient,
   orderId: string,
+  storeApps?: Pick<StoreAppsService, 'isEnabled'> | null,
 ): Promise<OrderForEmail | null> {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
@@ -1103,8 +1109,13 @@ export async function loadOrderForEmail(
         id: store.id,
         slug: store.slug,
         name: store.name,
-        // Markets app: the host the order was placed on (null without it).
-        customDomain: order.hostname ?? store.custom_domain ?? undefined,
+        // Markets app: the host the order was placed on (null without it),
+        // else the store's public host (default market primary with the
+        // app on, legacy custom_domain with it off).
+        customDomain:
+          order.hostname ??
+          (await loadPublicHost({ prisma, storeApps }, store)) ??
+          undefined,
         logoUrl: store.logo_url ?? undefined,
         primaryLocale: store.language_config?.primary_locale,
         // The store's notifications address wins over the login email.

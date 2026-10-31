@@ -8,11 +8,20 @@ import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
-import { RegisterDto, LoginDto } from './dto';
-import { UserRole } from '@prisma/client';
+import { RegisterDto, LoginDto, GuestRegisterDto } from './dto';
+import { Prisma, UserRole, type User } from '@prisma/client';
 import { MailService } from '../mail/mail.service';
-import { StoreAppsService } from '../store-apps/store-apps.service';
 import { normalizeEmail } from '../../common/email/email.util';
+import { generateAccountPassword } from '../../common/security/account-password';
+import { MagicLinkService } from './magic-link.service';
+import {
+  AccountLinksService,
+  type StoreLinkContext,
+} from './account-links.service';
+import { AccountCredentialsService } from './account-credentials.service';
+
+/** Bcrypt cost of every password hash written by the auth flows. */
+const PASSWORD_BCRYPT_COST = 12;
 
 @Injectable()
 export class AuthService {
@@ -21,8 +30,26 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private mail: MailService,
-    private readonly storeApps: StoreAppsService,
+    private readonly magicLinks: MagicLinkService,
+    private readonly links: AccountLinksService,
+    private readonly credentials: AccountCredentialsService,
   ) {}
+
+  private emailExists(): ConflictException {
+    return new ConflictException({
+      code: 'AUTH_EMAIL_EXISTS',
+      message: 'Email already registered',
+    });
+  }
+
+  /** Storefront context of a request, used only when the store is live. */
+  private async activeStore(
+    storeSlug?: string,
+    hostname?: string,
+  ): Promise<StoreLinkContext | null> {
+    const store = await this.links.resolveStore(storeSlug, hostname);
+    return store?.isActive ? store : null;
+  }
 
   /**
    * Account lookup by email. New rows are stored normalised (see
@@ -45,12 +72,7 @@ export class AuthService {
   async register(dto: RegisterDto) {
     const email = normalizeEmail(dto.email);
     const existing = await this.findUserByEmail(email);
-    if (existing) {
-      throw new ConflictException({
-        code: 'AUTH_EMAIL_EXISTS',
-        message: 'Email already registered',
-      });
-    }
+    if (existing) throw this.emailExists();
 
     if (dto.role === UserRole.ADMIN) {
       throw new ForbiddenException({
@@ -59,7 +81,7 @@ export class AuthService {
       });
     }
 
-    const password_hash = await bcrypt.hash(dto.password, 12);
+    const password_hash = await bcrypt.hash(dto.password, PASSWORD_BCRYPT_COST);
 
     const user = await this.prisma.user.create({
       data: {
@@ -103,17 +125,119 @@ export class AuthService {
 
     const tokens = await this.generateTokens(user.id, user.email, user.role);
 
-    // Welcome email — best-effort, never blocks signup. Locale falls back to
-    // the request's Accept-Language path via MailService → DB template lookup.
-    const loginUrl =
-      (this.configService.get<string>('STOREFRONT_URL') ||
-        'http://localhost:3003') + '/auth/login';
-    void this.mail.sendWelcome(user.email, {
-      name: dto.first_name,
-      loginUrl,
-    });
+    // Welcome email, best-effort and never blocking signup. A storefront
+    // signup (store_slug) gets the store's branding, domain and language; the
+    // user chose the password, so the email never contains one.
+    void this.sendRegisterWelcome(user.email, dto).catch(() => undefined);
 
     return { user, ...tokens };
+  }
+
+  private async sendRegisterWelcome(email: string, dto: RegisterDto) {
+    const store = await this.activeStore(dto.store_slug, dto.hostname);
+    const locale = dto.locale ?? store?.primaryLocale ?? undefined;
+    const loginUrl = this.links.storefrontLink(
+      store?.base,
+      '/auth/login',
+      undefined,
+      locale,
+    );
+    await this.mail.sendWelcome(
+      email,
+      { name: dto.first_name, loginUrl },
+      locale,
+      store ? { storeId: store.id, storeName: store.name } : undefined,
+    );
+  }
+
+  /**
+   * Storefront guest checkout: creates a CUSTOMER with a server-generated
+   * password and mails it with a single-use magic login link. Returns the
+   * same body as register (the shopper is logged in right away). The plain
+   * password lives only in this call's memory and the outgoing email.
+   */
+  async guestRegister(dto: GuestRegisterDto) {
+    const email = normalizeEmail(dto.email);
+    if (await this.findUserByEmail(email)) throw this.emailExists();
+
+    const password = generateAccountPassword();
+    const password_hash = await bcrypt.hash(password, PASSWORD_BCRYPT_COST);
+    let user: Pick<User, 'id' | 'email' | 'role' | 'status' | 'created_at'>;
+    try {
+      user = await this.prisma.user.create({
+        data: {
+          email,
+          password_hash,
+          role: UserRole.CUSTOMER,
+          status: 'ACTIVE',
+          customer: {
+            create: {
+              first_name: dto.first_name?.trim() || '',
+              last_name: dto.last_name?.trim() || '',
+              ...(dto.phone ? { phone: dto.phone } : {}),
+            },
+          },
+        },
+        select: {
+          id: true,
+          email: true,
+          role: true,
+          status: true,
+          created_at: true,
+        },
+      });
+    } catch (err) {
+      // A concurrent signup with the same email won the unique index.
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw this.emailExists();
+      }
+      throw err;
+    }
+
+    const tokens = await this.generateTokens(user.id, user.email, user.role);
+
+    // Credentials email off the response path; never fails the signup.
+    const created = user;
+    void (async () => {
+      const store = await this.activeStore(dto.store_slug, dto.hostname);
+      await this.credentials.send({
+        user: created,
+        name: dto.first_name,
+        password,
+        store: store ? { id: store.id, name: store.name } : null,
+        storeBase: store?.base ?? null,
+        locale: dto.locale ?? store?.primaryLocale ?? null,
+      });
+    })().catch(() => undefined);
+
+    return { user, ...tokens };
+  }
+
+  /**
+   * Exchanges a magic login link for a session. Unknown, expired, used and
+   * inactive-account links all get the same 401.
+   */
+  async magicLogin(token: string) {
+    const user = await this.magicLinks.consume(token);
+    if (!user) {
+      throw new UnauthorizedException({
+        code: 'MAGIC_LINK_INVALID',
+        message: 'This login link is invalid or has expired',
+      });
+    }
+    const tokens = await this.generateTokens(user.id, user.email, user.role);
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        status: user.status,
+      },
+      ...tokens,
+    };
   }
 
   async login(dto: LoginDto) {
@@ -241,67 +365,20 @@ export class AuthService {
     // Email the reset link (best-effort — never blocks or reveals existence).
     // When the request came from a store, use that store's primary locale so
     // the email body matches the storefront language.
-    const resetUrl = await this.buildResetUrl(resetToken, storeSlug, hostname);
-    let mailLocale: string | undefined;
-    if (storeSlug) {
-      const store = await this.prisma.store.findUnique({
-        where: { slug: storeSlug },
-        select: { language_config: { select: { primary_locale: true } } },
-      });
-      mailLocale = store?.language_config?.primary_locale;
-    }
+    // The link points back at the store's own domain (market host, custom
+    // domain or {slug}.{platform-host}) so the customer stays in the same
+    // storefront; otherwise at the platform storefront ([locale] tree).
+    const store = await this.links.resolveStore(storeSlug, hostname);
+    const resetUrl = this.links.storefrontLink(
+      store?.base,
+      '/auth/reset-password',
+      `token=${encodeURIComponent(resetToken)}`,
+      'en',
+    );
+    const mailLocale = store?.primaryLocale ?? undefined;
     await this.mail.sendPasswordReset(user.email, resetUrl, mailLocale);
 
     return { message: 'If the email exists, a reset link will be sent' };
-  }
-
-  /**
-   * Build the password-reset link. When the request came from a store
-   * storefront (store_slug), the link points back at that store's own domain
-   * (custom domain or {slug}.{platform-host}) so the customer stays in the same
-   * storefront. Otherwise it points at the platform storefront ([locale] tree).
-   * The store domain is derived server-side from the DB — never from raw client
-   * input — so this can't be turned into an open redirect.
-   */
-  private async buildResetUrl(
-    token: string,
-    storeSlug?: string,
-    hostname?: string,
-  ): Promise<string> {
-    const platformBase =
-      this.configService.get<string>('STOREFRONT_URL') ||
-      'http://localhost:3003';
-    const q = `token=${encodeURIComponent(token)}`;
-
-    if (storeSlug) {
-      const store = await this.prisma.store.findUnique({
-        where: { slug: storeSlug },
-        select: { id: true, slug: true, custom_domain: true, is_active: true },
-      });
-      if (store?.is_active) {
-        // Markets app: keep the customer on the market host they came from,
-        // provided it is one of the store's ACTIVE hostnames.
-        const host = hostname?.trim().toLowerCase().split(':')[0];
-        if (host && (await this.storeApps.isEnabled(store.id, 'markets'))) {
-          const domain = await this.prisma.storeDomain.findFirst({
-            where: { store_id: store.id, hostname: host, status: 'ACTIVE' },
-            select: { id: true },
-          });
-          if (domain) return `https://${host}/auth/reset-password?${q}`;
-        }
-        if (store.custom_domain) {
-          return `https://${store.custom_domain}/auth/reset-password?${q}`;
-        }
-        try {
-          const url = new URL(platformBase);
-          return `${url.protocol}//${store.slug}.${url.host}/auth/reset-password?${q}`;
-        } catch {
-          // Fall through to the platform link on a malformed base URL.
-        }
-      }
-    }
-
-    return `${platformBase}/en/auth/reset-password?${q}`;
   }
 
   async resetPassword(token: string, newPassword: string) {
@@ -332,12 +409,17 @@ export class AuthService {
         });
       }
 
-      const password_hash = await bcrypt.hash(newPassword, 12);
+      const password_hash = await bcrypt.hash(
+        newPassword,
+        PASSWORD_BCRYPT_COST,
+      );
 
       await this.prisma.user.update({
         where: { id: payload.sub },
         data: { password_hash },
       });
+      // Mailed magic links must not outlive the old password.
+      await this.magicLinks.invalidateForUser(payload.sub);
 
       // Revoke ALL of the user's sessions: consumes this reset token, drops any
       // other outstanding reset links, and logs the user out everywhere.
@@ -371,11 +453,13 @@ export class AuthService {
         message: 'Current password is incorrect',
       });
 
-    const password_hash = await bcrypt.hash(newPassword, 12);
+    const password_hash = await bcrypt.hash(newPassword, PASSWORD_BCRYPT_COST);
     await this.prisma.user.update({
       where: { id: userId },
       data: { password_hash },
     });
+    // Mailed magic links must not outlive the old password.
+    await this.magicLinks.invalidateForUser(userId);
 
     return { message: 'Password changed successfully' };
   }

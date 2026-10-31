@@ -17,6 +17,8 @@ import {
   ChangePasswordDto,
   ForgotPasswordDto,
   ResetPasswordDto,
+  MagicLoginDto,
+  GuestRegisterDto,
 } from './dto';
 import { CurrentUser } from '../../common/decorators';
 
@@ -30,6 +32,22 @@ export class AuthController {
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
+  }
+
+  // Storefront guest checkout: the server generates the password and mails
+  // it with a magic login link. Same body as register.
+  @Post('guest-register')
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  guestRegister(@Body() dto: GuestRegisterDto) {
+    return this.authService.guestRegister(dto);
+  }
+
+  // One-click login from an emailed link; same body as login.
+  @Post('magic-login')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  magicLogin(@Body() dto: MagicLoginDto) {
+    return this.authService.magicLogin(dto.token);
   }
 
   @Post('login')

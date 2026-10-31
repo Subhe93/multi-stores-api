@@ -69,9 +69,19 @@ export class UsersController {
       bio?: string;
       first_name?: string;
       last_name?: string;
+      // Email the login details (password + magic link) to the new user.
+      send_credentials?: boolean;
+      locale?: string;
     },
   ) {
-    return this.usersService.create(body);
+    return this.usersService.create({
+      ...body,
+      send_credentials: body.send_credentials === true,
+      locale:
+        typeof body.locale === 'string' && /^[a-z]{2}$/.test(body.locale)
+          ? body.locale
+          : undefined,
+    });
   }
 
   @Put('users/:id')

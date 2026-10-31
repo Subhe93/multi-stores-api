@@ -21,10 +21,11 @@ model User {
   created_at    DateTime   @default(now())
   updated_at    DateTime   @updatedAt
 
-  provider Provider?
-  creator  Creator?
-  customer Customer?
-  sessions Session[]
+  provider     Provider?
+  creator      Creator?
+  customer     Customer?
+  sessions     Session[]
+  login_tokens LoginToken[]
 
   @@index([email])
   @@index([role, status])
@@ -41,6 +42,31 @@ model Session {
 
   @@index([token])
   @@index([user_id])
+}
+
+// One-click login links mailed with auto-created accounts. Only the sha256 hex
+// of the raw token is stored; the raw token lives in the email alone. Single
+// use (used_at), short lived (expires_at), and every unused token of a user is
+// invalidated when that user's password changes.
+model LoginToken {
+  id         String            @id @default(uuid())
+  user_id    String
+  token_hash String            @unique
+  purpose    LoginTokenPurpose @default(MAGIC_LOGIN)
+  // Store whose storefront issued the link (branding / redirect context).
+  store_id   String?
+  expires_at DateTime
+  used_at    DateTime?
+  created_at DateTime          @default(now())
+
+  user  User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  store Store? @relation(fields: [store_id], references: [id], onDelete: SetNull)
+
+  @@index([user_id])
+}
+
+enum LoginTokenPurpose {
+  MAGIC_LOGIN
 }
 
 enum UserRole {
@@ -1127,6 +1153,7 @@ model Store {
   design_templates          DesignTemplate[]
   designs                   Design[]
   product_designers         ProductDesigner[]
+  login_tokens              LoginToken[]
 
   @@index([slug])
 }

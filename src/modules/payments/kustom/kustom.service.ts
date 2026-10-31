@@ -56,6 +56,8 @@ import {
 } from '../../taxes/tax.service';
 
 import { resolveStoreTermsPath } from './store-terms';
+import { StoreAppsService } from '../../store-apps/store-apps.service';
+import { loadPublicHost } from '../../stores/storefront-hosts';
 // Kustom order statuses (Order Management API) that mean the money is
 // authorized on the creator's account and the order may be treated as paid.
 const PAID_STATUSES = new Set(['AUTHORIZED', 'PART_CAPTURED', 'CAPTURED']);
@@ -100,6 +102,10 @@ interface Actor {
 export interface StoreContext {
   id: string;
   slug: string;
+  /**
+   * Host merchant / redirect URLs use (null = slug URL): the store's public
+   * host (storefront-hosts), overlaid by withMarket with the market host.
+   */
   customDomain: string | null;
   store_type: StoreType;
   is_active: boolean;
@@ -138,7 +144,7 @@ export interface StoreContextMarketOverlay {
 /**
  * Apply a market to a store context (M1-DESIGN §3.5): redirect/merchant URLs
  * go to the host the shopper was on (else the market's primary host, else
- * the legacy custom domain), the checkout language follows the order /
+ * the store's public host — ctx.customDomain, see publicHostOf), the checkout language follows the order /
  * market locale, and the currency is the one the order or market is priced
  * in. Without a market the context is returned untouched.
  */
@@ -187,9 +193,28 @@ export class KustomService implements OnModuleInit {
     private b2b: B2bService,
     // Invoices app (M3 D5): optional; no-op without the app.
     @Optional() private readonly invoices?: InvoiceTriggersService,
-    // Designer app (M4.2 WP5): optional and last; no-op without the app.
+    // Designer app (M4.2 WP5): optional; no-op without the app.
     @Optional() private readonly designerTriggers?: DesignerTriggersService,
+    // Optional and last: the store's public host for merchant URLs (the
+    // markets app is treated as off without it, e.g. in lean unit wiring).
+    @Optional() private readonly storeApps?: StoreAppsService,
   ) {}
+
+  /**
+   * Public host merchant / redirect URLs fall back to when the order or
+   * session has no market host: markets app off -> legacy custom_domain;
+   * on -> default LIVE market's primary host (custom_domain only as a
+   * fallback, it may be a retired host). Null = slug URL.
+   */
+  private publicHostOf(store: {
+    id: string;
+    custom_domain: string | null;
+  }): Promise<string | null> {
+    return loadPublicHost(
+      { prisma: this.prisma, storeApps: this.storeApps },
+      store,
+    );
+  }
 
   // OrdersService cannot inject this service (PaymentsModule imports
   // OrdersModule), so capture-on-shipment is wired as a callback.
@@ -251,7 +276,9 @@ export class KustomService implements OnModuleInit {
       id: store.id,
       slug: store.slug,
       name: store.name,
-      customDomain: store.custom_domain ?? null,
+      // The store's public host; a market overlay (withMarket) puts the
+      // order / session host or the market's primary host first.
+      customDomain: await this.publicHostOf(store),
       store_type: store.store_type,
       is_active: store.is_active,
       primaryLocale: store.language_config?.primary_locale ?? null,
@@ -895,13 +922,16 @@ export class KustomService implements OnModuleInit {
     // customer can retry, or shows why the order is no longer payable.
     // With the markets app the order remembers the exact host (D1); that
     // wins over the store's legacy custom domain.
-    const reject = (
-      store?: { slug: string; custom_domain: string | null } | null,
+    // Without one, the store's public host (default market primary with the
+    // app on, legacy custom domain with it off) — resolved only on reject
+    // so the accepted path stays a single order + store read.
+    const reject = async (
+      store?: { id: string; slug: string; custom_domain: string | null } | null,
       hostname?: string | null,
     ) => ({
       ok: false as const,
       redirectUrl: store
-        ? `${resolveStoreBase(storefrontBase, store.slug, hostname ?? store.custom_domain)}/checkout/kustom?orderId=${encodeURIComponent(orderId ?? '')}&error=kustom_validation`
+        ? `${resolveStoreBase(storefrontBase, store.slug, hostname ?? (await this.publicHostOf(store)))}/checkout/kustom?orderId=${encodeURIComponent(orderId ?? '')}&error=kustom_validation`
         : `${storefrontBase.replace(/\/$/, '')}/?error=kustom_validation`,
     });
     if (!orderId || !token) return reject();
@@ -931,7 +961,12 @@ export class KustomService implements OnModuleInit {
     const store = order.store_id
       ? await this.prisma.store.findUnique({
           where: { id: order.store_id },
-          select: { slug: true, custom_domain: true, is_active: true },
+          select: {
+            id: true,
+            slug: true,
+            custom_domain: true,
+            is_active: true,
+          },
         })
       : null;
     if (!store?.is_active) return reject(store, order.hostname);

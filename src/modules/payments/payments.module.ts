@@ -14,6 +14,7 @@ import { B2bModule } from '../b2b/b2b.module';
 import { InvoicesModule } from '../invoices/invoices.module';
 import { DesignerRenderModule } from '../designer/designer-render.module';
 import { DesignerCoreModule } from '../designer/designer-core.module';
+import { MagicLinkModule } from '../auth/magic-link.module';
 
 // PrismaModule, CryptoModule and MailModule are @Global, so PrismaService,
 // CryptoService and MailService are injectable here without importing them.
@@ -30,10 +31,13 @@ import { DesignerCoreModule } from '../designer/designer-core.module';
 // provides DesignerTriggersService for the paid call sites (M4.2 WP5).
 // DesignerCoreModule (cycle-free, imports only the designer asset / render
 // modules) provides DesignerCartService for the Kustom session ownership
-// check of designer lines.
+// check of designer lines. MagicLinkModule (imports only globals) provides
+// AccountCredentialsService for the credentials email of Kustom guest
+// accounts.
 @Module({
   imports: [
     ConfigModule,
+    MagicLinkModule,
     OrdersModule,
     NotificationsModule,
     TaxesModule,

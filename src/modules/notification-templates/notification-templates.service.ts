@@ -26,6 +26,15 @@ type Localized = Record<string, string>;
  */
 export const HTML_VAR_PREFIX = 'html:';
 
+/**
+ * Events a store may not override: their messages carry account secrets
+ * (password, magic login link) of a platform-wide account, so they are always
+ * rendered from the platform template and sent by the platform sender.
+ */
+export const PLATFORM_ONLY_EVENTS: ReadonlySet<string> = new Set([
+  'account_created',
+]);
+
 /** The variables as the HTML body sees them (`html:` overrides applied). */
 export function htmlVars(vars: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = { ...vars };
@@ -283,6 +292,22 @@ export class NotificationTemplatesService {
         event: 'password_reset',
         variables: ['platform_name', 'reset_url'],
       },
+      {
+        // Account created for the customer (guest checkout, Kustom, admin):
+        // login details plus a one-time magic login link. `store_name` falls
+        // back to the platform name when no store is involved.
+        event: 'account_created',
+        variables: [
+          'platform_name',
+          'store_name',
+          'name',
+          'email',
+          'password',
+          'magic_url',
+          'login_url',
+          'expires_hours',
+        ],
+      },
     ];
 
   events() {
@@ -436,7 +461,9 @@ export class NotificationTemplatesService {
     const byEvent = new Map(own.map((r) => [r.event, r]));
     const platformByEvent = new Map(platform.map((r) => [r.event, r]));
 
-    return NotificationTemplatesService.EVENT_CATALOG.map(({ event }) => {
+    return NotificationTemplatesService.EVENT_CATALOG.filter(
+      ({ event }) => !PLATFORM_ONLY_EVENTS.has(event),
+    ).map(({ event }) => {
       const row = byEvent.get(event);
       return {
         event,
@@ -458,7 +485,9 @@ export class NotificationTemplatesService {
     const known = NotificationTemplatesService.EVENT_CATALOG.some(
       (e) => e.event === event,
     );
-    if (!known) throw new NotFoundException('Unknown event');
+    if (!known || PLATFORM_ONLY_EVENTS.has(event)) {
+      throw new NotFoundException('Unknown event');
+    }
 
     const own = await this.prisma.storeNotificationTemplate.findUnique({
       where: { store_id_event: { store_id: store.id, event } },
@@ -489,7 +518,9 @@ export class NotificationTemplatesService {
     const known = NotificationTemplatesService.EVENT_CATALOG.some(
       (e) => e.event === event,
     );
-    if (!known) throw new NotFoundException('Unknown event');
+    if (!known || PLATFORM_ONLY_EVENTS.has(event)) {
+      throw new NotFoundException('Unknown event');
+    }
 
     const existing = await this.prisma.storeNotificationTemplate.findUnique({
       where: { store_id_event: { store_id: store.id, event } },

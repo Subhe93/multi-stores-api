@@ -8,6 +8,8 @@ import {
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UserRole, UserStatus, Prisma } from '@prisma/client';
+import { MagicLinkService } from '../auth/magic-link.service';
+import { AccountCredentialsService } from '../auth/account-credentials.service';
 
 interface CreateUserPayload {
   email: string;
@@ -27,6 +29,10 @@ interface CreateUserPayload {
   // Customer
   first_name?: string;
   last_name?: string;
+  // Mail the login details (typed password + magic link) to the new user.
+  send_credentials?: boolean;
+  // Language of that email; 'en' when absent.
+  locale?: string;
 }
 
 interface UpdateUserPayload {
@@ -51,7 +57,11 @@ interface UpdateUserPayload {
 
 @Injectable()
 export class UsersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly magicLinks: MagicLinkService,
+    private readonly credentials: AccountCredentialsService,
+  ) {}
 
   async findAll(
     page = 1,
@@ -195,6 +205,21 @@ export class UsersService {
       });
     }
 
+    // Login details by email: the password the admin typed plus a one-click
+    // link (dashboard for staff roles, platform storefront for customers).
+    // No store context, so the platform sender is used. Off the response
+    // path and never echoed back.
+    if (dto.send_credentials) {
+      void this.credentials.send({
+        user: { id: user.id, email: user.email, role: user.role },
+        name: dto.first_name || dto.display_name || dto.company_name || null,
+        password: dto.password,
+        store: null,
+        storeBase: null,
+        locale: dto.locale || 'en',
+      });
+    }
+
     return this.findById(user.id);
   }
 
@@ -319,8 +344,10 @@ export class UsersService {
       data: { password_hash },
     });
 
-    // Invalidate all active sessions so the user is forced to re-login.
+    // Invalidate all active sessions so the user is forced to re-login, and
+    // any mailed magic link sent with the previous password.
     await this.prisma.session.deleteMany({ where: { user_id: id } });
+    await this.magicLinks.invalidateForUser(id);
 
     return { message: 'Password reset successfully' };
   }
