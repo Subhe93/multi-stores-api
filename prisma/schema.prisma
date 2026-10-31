@@ -749,6 +749,8 @@ model Order {
   @@index([status])
   @@index([market_id])
   @@index([store_id, tax_exempt_reason])
+  // Creator overview analytics + the store order list (created_at ranges).
+  @@index([store_id, created_at])
 }
 
 // Per-recipient payout (Stripe transfer) for an order — lets each provider /
