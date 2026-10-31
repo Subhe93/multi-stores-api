@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Prisma, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { sanitizeTitle } from '@multi-stores/core/slug';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { OrdersService } from '../orders/orders.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
@@ -70,6 +71,10 @@ export class StoresService {
       });
 
     const { primary_locale, secondary_locales, ...storeData } = dto;
+    // Seeded page slugs go through the same WP rule as every page slug (a
+    // new store has no pages yet, so they are unique as they are).
+    const seedSlug = (slug: string) =>
+      sanitizeTitle(slug, { locale: primary_locale || 'en' });
 
     const store = await this.prisma.store.create({
       data: {
@@ -89,42 +94,42 @@ export class StoresService {
           create: [
             {
               type: 'ABOUT',
-              slug: 'about',
+              slug: seedSlug('about'),
               is_required: true,
               sort_order: 1,
               status: 'DRAFT',
             },
             {
               type: 'CONTACT',
-              slug: 'contact',
+              slug: seedSlug('contact'),
               is_required: true,
               sort_order: 2,
               status: 'DRAFT',
             },
             {
               type: 'PRIVACY_POLICY',
-              slug: 'privacy-policy',
+              slug: seedSlug('privacy-policy'),
               is_required: true,
               sort_order: 3,
               status: 'DRAFT',
             },
             {
               type: 'TERMS',
-              slug: 'terms',
+              slug: seedSlug('terms'),
               is_required: true,
               sort_order: 4,
               status: 'DRAFT',
             },
             {
               type: 'SHIPPING_POLICY',
-              slug: 'shipping-policy',
+              slug: seedSlug('shipping-policy'),
               is_required: true,
               sort_order: 5,
               status: 'DRAFT',
             },
             {
               type: 'RETURN_POLICY',
-              slug: 'return-policy',
+              slug: seedSlug('return-policy'),
               is_required: true,
               sort_order: 6,
               status: 'DRAFT',

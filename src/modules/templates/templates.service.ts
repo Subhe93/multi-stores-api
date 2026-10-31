@@ -1,3 +1,6 @@
+import { randomUUID } from 'crypto';
+import { resolveSlugBase, uniqueProductSlug } from '../../common/slug/wp-slug';
+import { productSlugContext } from '../../common/slug/product-slugs';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PageType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -219,24 +222,37 @@ export class TemplatesService {
     });
     if (!platformCategory) return true;
 
+    // WP slugs: sanitized with the store's content locale (the kit's
+    // fallback locale when the store has none), unique in the creator's
+    // /products/<slug> domain, else `product-<id8>`.
+    const { locale: storeLocale } = await productSlugContext(tx, creatorId);
+    const slugLocale = storeLocale || kit.fallbackLocale;
     let index = 0;
     for (const p of demo.products) {
       index += 1;
       const baseTitle = p.title.en || `product-${index}`;
-      const slug =
-        baseTitle
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-|-$/g, '')
-          .slice(0, 60) +
-        '-' +
-        storeId.slice(0, 6);
+      const productId = randomUUID();
+      const slug = await uniqueProductSlug(
+        tx,
+        { creatorId },
+        resolveSlugBase({
+          candidates: [
+            p.title[slugLocale],
+            p.title[kit.fallbackLocale],
+            baseTitle,
+          ],
+          locale: slugLocale,
+          prefix: 'product',
+          id: productId,
+        }).slug,
+      );
       const imageUrls = (p.images || [])
         .map((ref) => substituteAssets(ref, assetMap))
         .filter((u): u is string => typeof u === 'string' && u.length > 0);
 
       await tx.product.create({
         data: {
+          id: productId,
           creator_id: creatorId,
           category_id: platformCategory.id,
           product_type: 'TRADITIONAL',
@@ -251,7 +267,7 @@ export class TemplatesService {
                 p.description?.[loc] ??
                 p.description?.[kit.fallbackLocale] ??
                 '',
-              slug, // shared across locales (canonical) — unique per product
+              slug, // shared across locales (canonical), unique per creator
             })),
           },
           images: imageUrls.length

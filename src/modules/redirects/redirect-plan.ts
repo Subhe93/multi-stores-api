@@ -16,7 +16,8 @@ export interface ExistingRedirectRow {
   from_path: string; // normalised
   to_path: string;
   status_code: number;
-  source: 'IMPORT' | 'MANUAL';
+  // SLUG_CHANGE: written by a slug change (old-slug 301); never the merchant's.
+  source: 'IMPORT' | 'MANUAL' | 'SLUG_CHANGE';
   is_active: boolean;
 }
 
@@ -69,10 +70,10 @@ export interface RedirectDeactivation {
 }
 
 /**
- * Active IMPORT rows whose `from_path` is a live page of the store (a
- * product or collection path that exists now): left active they would
- * shadow the page — typically a rename that was reverted (a→b, then b→a).
- * MANUAL rows are the merchant's and are left alone. `livePaths` holds
+ * Active IMPORT / SLUG_CHANGE rows whose `from_path` is a live page of the
+ * store (a product or collection path that exists now): left active they
+ * would shadow the page — typically a rename that was reverted (a→b, then
+ * b→a). MANUAL rows are the merchant's and are left alone. `livePaths` holds
  * normalised paths. Pure: the dry run and `bulkUpsertFromImport` both use it.
  */
 export function planRedirectDeactivations(
@@ -81,7 +82,7 @@ export function planRedirectDeactivations(
 ): RedirectDeactivation[] {
   return existing
     .filter(
-      (r) => r.is_active && r.source === 'IMPORT' && livePaths.has(r.from_path),
+      (r) => r.is_active && r.source !== 'MANUAL' && livePaths.has(r.from_path),
     )
     .map((r) => ({
       id: r.id,
@@ -184,13 +185,14 @@ export function planRedirectUpserts(
   // Flattened targets must be visible to step 5.
   for (const it of items) working.set(it.from_path, it.to_path);
 
-  // 5. Existing IMPORT rows not in the batch that now point at a source.
+  // 5. Existing IMPORT / SLUG_CHANGE rows not in the batch that now point at
+  //    a source.
   //    MANUAL rows are never re-pointed by an import: the merchant chose
   //    their target, and a MANUAL row whose target became an IMPORT source
   //    still works (the browser follows the second redirect).
   const repoints: RedirectRepoint[] = [];
   for (const r of existing) {
-    if (!r.is_active || r.source !== 'IMPORT' || accepted.has(r.from_path)) {
+    if (!r.is_active || r.source === 'MANUAL' || accepted.has(r.from_path)) {
       continue;
     }
     if (targetHasQuery(r.to_path)) continue;

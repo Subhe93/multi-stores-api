@@ -4,9 +4,23 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PageType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RedirectsService } from '../redirects/redirects.service';
+import {
+  ROOT_ROUTE_RESERVED_SLUGS,
+  isReservedPageSlug,
+  isRootPageSlugServed,
+  isUniqueViolation,
+  resolveSlugBase,
+  storeSlugLocale,
+  titlesPrimaryFirst,
+  uniqueV2PageSlug,
+  withSlugRetry,
+} from '../../common/slug/wp-slug';
+import { rootPagePath } from '../../common/slug/slug-moves';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import {
   CreatePageDto,
@@ -46,28 +60,16 @@ const PRODUCT_LISTING_DEFAULT_SETTINGS = {
 /**
  * M6.6: STATIC and LANDING pages are both served at the store root
  * (`/<slug>`), so a slug must not shadow a storefront route segment.
- * Mirrors RESERVED_SLUGS in the web's `[pageSlug]` route plus the root
- * files the proxy serves.
+ * The list lives in common/slug/wp-slug (ROOT_ROUTE_RESERVED_SLUGS); writes
+ * no longer reject a reserved slug but suffix it like WP (`cart-2`), see
+ * uniqueV2PageSlug.
  */
-export const RESERVED_PAGE_SLUGS: ReadonlySet<string> = new Set([
-  'products',
-  'collections',
-  'cart',
-  'checkout',
-  'auth',
-  'account',
-  'legal',
-  'p',
-  'api',
-  'market-not-found',
-  'builder-preview',
-  'robots.txt',
-  'sitemap.xml',
-  'favicon.ico',
-]);
+export const RESERVED_PAGE_SLUGS: ReadonlySet<string> =
+  ROOT_ROUTE_RESERVED_SLUGS;
 
+/** 400 PAGE_SLUG_RESERVED for a reserved root slug (compared lower-cased). */
 export function assertSlugNotReserved(slug: string): void {
-  if (RESERVED_PAGE_SLUGS.has(slug.toLowerCase())) {
+  if (isReservedPageSlug(slug)) {
     throw new BadRequestException({
       code: 'PAGE_SLUG_RESERVED',
       message: `"${slug}" is reserved for a storefront route`,
@@ -141,6 +143,8 @@ export class PagesV2Service {
   constructor(
     private prisma: PrismaService,
     private readonly revalidation: RevalidationService,
+    // Old-slug 301s (WP `_wp_old_slug`); optional for positional tests.
+    @Optional() private readonly redirects?: RedirectsService,
   ) {}
 
   // ── Helpers ─────────────────────────────────────────────
@@ -329,13 +333,21 @@ export class PagesV2Service {
     if (slugless && dto.slug) {
       throw new BadRequestException(`${dto.type} page cannot have a slug`);
     }
-    if (!slugless && !dto.slug) {
-      throw new BadRequestException({
-        code: 'PAGE_SLUG_REQUIRED',
-        message: 'slug is required for this page type',
-      });
+    // WP page slug: sanitized with the store's content locale (from the
+    // title when no slug is sent, else `page-<id8>`), then made unique among
+    // the store's v2 pages with reserved and numeric slugs suffixed.
+    let slugBase: string | null = null;
+    if (!slugless) {
+      const locale = await storeSlugLocale(this.prisma, { storeId });
+      slugBase = resolveSlugBase({
+        candidates: [
+          dto.slug,
+          ...titlesPrimaryFirst(dto.translations ?? [], locale),
+        ],
+        locale,
+        prefix: 'page',
+      }).slug;
     }
-    if (dto.slug) assertSlugNotReserved(dto.slug);
     if (dto.type === PageType.STATIC && !dto.static_kind) {
       throw new BadRequestException({
         code: 'PAGE_STATIC_KIND_REQUIRED',
@@ -354,24 +366,28 @@ export class PagesV2Service {
     }
 
     try {
-      return await this.prisma.page.create({
-        data: {
-          store_id: storeId,
-          type: dto.type,
-          static_kind: dto.static_kind ?? null,
-          slug: dto.slug ?? null,
-          sort_order: dto.sort_order ?? 0,
-          translations: dto.translations
-            ? { create: dto.translations.map((t) => ({ ...t })) }
-            : undefined,
-        },
-        include: { translations: true },
-      });
+      return await withSlugRetry(async () =>
+        this.prisma.page.create({
+          data: {
+            store_id: storeId,
+            type: dto.type,
+            static_kind: dto.static_kind ?? null,
+            slug:
+              slugBase !== null
+                ? await uniqueV2PageSlug(this.prisma, storeId, slugBase)
+                : null,
+            sort_order: dto.sort_order ?? 0,
+            translations: dto.translations
+              ? { create: dto.translations.map((t) => ({ ...t })) }
+              : undefined,
+          },
+          include: { translations: true },
+        }),
+      );
     } catch (err) {
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2002'
-      ) {
+      // After the slug retry only the (store, type, static_kind) singleton
+      // can still collide.
+      if (isUniqueViolation(err)) {
         throw new ConflictException({
           code: 'PAGE_SLUG_OR_KIND_EXISTS',
           message: 'A page with this slug or kind already exists',
@@ -386,41 +402,94 @@ export class PagesV2Service {
     await this.assertPageBelongsToStore(pageId, storeId);
 
     const data: Prisma.PageUpdateInput = {};
-    if (dto.slug !== undefined) {
-      if (dto.slug) assertSlugNotReserved(dto.slug);
-      data.slug = dto.slug;
+    // WP page slug on edit: unchanged = kept as stored; else sanitized and
+    // made unique (this page excluded). Slugless page types keep no slug.
+    const current = await this.prisma.page.findUnique({
+      where: { id: pageId },
+      select: { slug: true, type: true, published_version_id: true },
+    });
+    let slugBase: string | null = null;
+    if (dto.slug !== undefined && current) {
+      if (
+        current.type !== PageType.STATIC &&
+        current.type !== PageType.LANDING
+      ) {
+        throw new BadRequestException(
+          `${current.type} page cannot have a slug`,
+        );
+      }
+      const locale = await storeSlugLocale(this.prisma, { storeId });
+      const stored = await this.prisma.pageTranslation.findMany({
+        where: { page_id: pageId },
+        select: { locale: true, title: true },
+      });
+      const res = resolveSlugBase({
+        candidates: [
+          dto.slug,
+          ...titlesPrimaryFirst(dto.translations ?? stored, locale),
+        ],
+        locale,
+        stored: current.slug,
+        prefix: 'page',
+        id: pageId,
+      });
+      if (!res.keep) slugBase = res.slug;
     }
     if (dto.status !== undefined) data.status = dto.status;
     if (dto.sort_order !== undefined) data.sort_order = dto.sort_order;
     if (dto.seo !== undefined) data.seo = dto.seo as Prisma.InputJsonValue;
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      if (dto.translations) {
-        // Upsert per locale; deleteMany + create would invalidate references.
-        for (const tr of dto.translations) {
-          await tx.pageTranslation.upsert({
-            where: { page_id_locale: { page_id: pageId, locale: tr.locale } },
-            update: {
-              title: tr.title,
-              meta_title: tr.meta_title,
-              meta_description: tr.meta_description,
-            },
-            create: {
-              page_id: pageId,
-              locale: tr.locale,
-              title: tr.title,
-              meta_title: tr.meta_title,
-              meta_description: tr.meta_description,
-            },
-          });
+    const updated = await withSlugRetry(() =>
+      this.prisma.$transaction(async (tx) => {
+        if (dto.translations) {
+          // Upsert per locale; deleteMany + create would invalidate references.
+          for (const tr of dto.translations) {
+            await tx.pageTranslation.upsert({
+              where: { page_id_locale: { page_id: pageId, locale: tr.locale } },
+              update: {
+                title: tr.title,
+                meta_title: tr.meta_title,
+                meta_description: tr.meta_description,
+              },
+              create: {
+                page_id: pageId,
+                locale: tr.locale,
+                title: tr.title,
+                meta_title: tr.meta_title,
+                meta_description: tr.meta_description,
+              },
+            });
+          }
         }
-      }
-      return tx.page.update({
-        where: { id: pageId },
-        data,
-        include: { translations: true },
-      });
-    });
+        if (slugBase !== null)
+          data.slug = await uniqueV2PageSlug(tx, storeId, slugBase, pageId);
+        return tx.page.update({
+          where: { id: pageId },
+          data,
+          include: { translations: true },
+        });
+      }),
+    );
+    // Old-slug 301 (WP `_wp_old_slug`) when a live page moved, unless the old
+    // path is still served by another root page.
+    if (
+      this.redirects &&
+      current?.slug &&
+      current.published_version_id &&
+      updated.slug &&
+      updated.slug !== current.slug &&
+      !(await isRootPageSlugServed(this.prisma, storeId, current.slug, {
+        pageId,
+      }))
+    ) {
+      await this.redirects.applySlugChangeRedirects(
+        storeId,
+        [{ from: rootPagePath(current.slug), to: rootPagePath(updated.slug) }],
+        undefined,
+        { localePrefixes: true },
+      );
+    }
+    await this.releaseLivePagePath(storeId, updated);
     // Slug, status and SEO of a published page are served from the store
     // cache: refresh it like publish() does (Namez go-live Phase 3.2).
     if (updated.published_version_id)
@@ -855,10 +924,36 @@ export class PagesV2Service {
       });
     });
 
+    await this.releaseLivePagePath(storeId, result);
     // Refresh the storefront cache so the publish is visible within seconds.
     await this.revalidation.revalidateStoreById(storeId);
 
     return result;
+  }
+
+  /**
+   * A live STATIC/LANDING page serves `/<slug>`: old-slug / import 301s from
+   * that path are switched off (the proxy matches redirects before routing,
+   * so they would shadow the page). See RedirectsService.releaseLivePaths.
+   */
+  private async releaseLivePagePath(
+    storeId: string,
+    page: {
+      type: PageType;
+      slug: string | null;
+      published_version_id: string | null;
+    },
+  ): Promise<void> {
+    if (
+      !this.redirects ||
+      !page.slug ||
+      !page.published_version_id ||
+      (page.type !== PageType.STATIC && page.type !== PageType.LANDING)
+    )
+      return;
+    await this.redirects.releaseLivePaths(storeId, [rootPagePath(page.slug)], {
+      localePrefixes: true,
+    });
   }
 
   async listVersions(userId: string, pageId: string) {

@@ -121,6 +121,25 @@ describe('wp-bundle pages (M5 B17)', () => {
     ]);
   });
 
+  it('decodes percent-encoded WP page slugs (Arabic, ä) like every imported slug', () => {
+    const page = tables.posts.get(600)!;
+    const posts = new Map(tables.posts);
+    posts.set(600, {
+      ...page,
+      name: '%d9%87%d8%af%d9%8a%d8%a9-%d9%84%d8%a3%d9%85%d9%8a',
+    });
+    posts.set(601, {
+      ...tables.posts.get(601)!,
+      name: 'kl%C3%A4der',
+    });
+    const t: WpTables = { ...tables, posts };
+    const pages = buildPages(t, (kind, id) => `woo:x:${kind}:${id}`, []);
+    // Stored decoded (NFC, lower case): reachable through the API, which
+    // decodes `:pageSlug`; the old WP path keeps its own form.
+    expect(pages.find((p) => p.source_id === '600')?.slug).toBe('هدية-لأمي');
+    expect(pages.find((p) => p.source_id === '601')?.slug).toBe('kläder');
+  });
+
   it('is absent for a bundle without content post types (legacy export)', () => {
     const posts = new Map(
       [...tables.posts].filter(

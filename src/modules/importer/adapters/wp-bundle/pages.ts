@@ -1,4 +1,5 @@
 import type { NIssue, NPage, NProductStatus } from '../../model/normalized';
+import { platformSlug } from '../../mapping/slug';
 import { CONTENT_POST_TYPES } from './bundle-schema';
 import { detectSeo } from './detectors/rank-math';
 import { metaOf, WpPost, WpTables, WpTermTaxonomy } from './wp-tables';
@@ -190,7 +191,9 @@ export function buildPages(
       ref: extRef,
       source_id: String(post.id),
       kind,
-      slug: post.name,
+      // WP stores non-ASCII slugs percent-encoded: decode like every
+      // imported slug, or the page is unreachable on the storefront.
+      slug: platformSlug(post.name, `page-${post.id}`),
       path,
       title: post.title,
       excerpt: post.excerpt,

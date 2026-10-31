@@ -540,6 +540,27 @@ export async function loadTargetSnapshot(
     },
   );
 
+  // Builder page slugs (imported pages are made unique against them).
+  const pageSlugs = new Map<string, string>();
+  const livePageSlugs = new Set<string>();
+  await forEachPage(
+    (skip, take) =>
+      db.page.findMany({
+        where: { store_id: storeId, slug: { not: null } },
+        orderBy: { id: 'asc' },
+        skip,
+        take,
+        select: { id: true, slug: true, published_version_id: true },
+      }),
+    (rows) => {
+      for (const r of rows) {
+        if (!r.slug) continue;
+        pageSlugs.set(r.id, r.slug);
+        if (r.published_version_id) livePageSlugs.add(r.slug);
+      }
+    },
+  );
+
   return {
     storeId,
     creatorId,
@@ -562,5 +583,7 @@ export async function loadTargetSnapshot(
     creatorHasDefaultProfile,
     media,
     redirects: input.redirects,
+    pageSlugs,
+    livePageSlugs,
   };
 }

@@ -100,7 +100,10 @@ export function planRedirects(
   categories: CategoryPlan,
   products: ProductPlan,
   /** Pages the pages scope creates (their `/<slug>` is the `import` target). */
-  importedPages: readonly { mapped: { ref: string } }[] = [],
+  importedPages: readonly {
+    mapped: { ref: string };
+    final_slug: string;
+  }[] = [],
 ): RedirectPlanResult {
   const { catalog, options, snapshot, scopes, warn, push } = ctx;
   const { categorySlug } = categories;
@@ -113,6 +116,7 @@ export function planRedirects(
   }[] = [];
   const byRule: Record<string, number> = {};
   const importedRefs = new Set(importedPages.map((p) => p.mapped.ref));
+  const importedByRef = new Map(importedPages.map((p) => [p.mapped.ref, p]));
   const { content, unmapped: contentUnmapped } = summarizeContent(
     ctx,
     importedRefs,
@@ -235,8 +239,10 @@ export function planRedirects(
     // M5 B17: pages / posts per `content_redirects`, plus the system paths.
     // An `import` target only gets a row when the pages scope creates the page.
     content: options.content_redirects,
-    importedPagePath: (page) =>
-      importedRefs.has(page.ref) ? importedPagePath(page) : null,
+    importedPagePath: (page) => {
+      const planned = importedByRef.get(page.ref);
+      return planned ? importedPagePath(planned) : null;
+    },
   });
   for (const row of contentUnmapped)
     warn({
@@ -259,6 +265,9 @@ export function planRedirects(
     const to = collectionTarget(ref);
     if (to) livePaths.add(to);
   }
+  // Live builder pages (`/<slug>`): an imported page that had to take a
+  // suffixed slug must not redirect away from the merchant's own page.
+  for (const s of snapshot.livePageSlugs ?? []) livePaths.add(`/${s}`);
   // Platform pages whose slug this run changes: the old page path
   // redirects to the new one (and older rows pointing at it are re-pointed).
   const claimed = new Set<string>();

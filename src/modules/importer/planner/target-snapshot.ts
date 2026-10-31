@@ -100,6 +100,13 @@ export interface TargetSnapshot {
   /** `ImportMedia` rows by source URL. */
   media: Map<string, { public: boolean; private: boolean }>;
   redirects: ExistingRedirectRow[];
+  /**
+   * Builder (v2) page slugs of the store, by page id: imported pages are
+   * made unique against them. Absent in older fixtures = none.
+   */
+  pageSlugs?: Map<string, string>;
+  /** Slugs of builder pages with a published snapshot (live `/<slug>` paths). */
+  livePageSlugs?: Set<string>;
 }
 
 export const ledgerKey = (entityType: string, ref: string): string =>

@@ -2603,6 +2603,9 @@ enum ImportEntityStatus {
 enum RedirectSource {
   IMPORT
   MANUAL
+  // Old-slug 301 written when a product/collection/page slug changes
+  // (migration 20261107120000_redirect_source_slug_change).
+  SLUG_CHANGE
 }
 
 model ImportSource {

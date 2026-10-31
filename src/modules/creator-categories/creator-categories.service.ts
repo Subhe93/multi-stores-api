@@ -3,8 +3,21 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RedirectsService } from '../redirects/redirects.service';
+import { buildCollectionPaths } from '../storefront/storefront.service';
+import {
+  resolveSlugBase,
+  storeSlugLocale,
+  uniqueCollectionSlug,
+  withSlugRetry,
+} from '../../common/slug/wp-slug';
+import {
+  collectionPath,
+  collectionPathMoves,
+} from '../../common/slug/slug-moves';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import {
   CreateCreatorCategoryDto,
@@ -43,12 +56,87 @@ function sanitizeTranslation<
   return out;
 }
 
+/** Translation names with the store's primary locale first (slug fallbacks). */
+function namesPrimaryFirst(
+  translations: readonly { locale: string; name?: string | null }[],
+  locale: string,
+): (string | null | undefined)[] {
+  return [
+    ...translations.filter((t) => t.locale === locale),
+    ...translations.filter((t) => t.locale !== locale),
+  ].map((t) => t.name);
+}
+
 @Injectable()
 export class CreatorCategoriesService {
   constructor(
     private prisma: PrismaService,
     private readonly revalidation: RevalidationService,
+    // Old-path 301s (WP `_wp_old_slug`); optional for positional tests.
+    @Optional() private readonly redirects?: RedirectsService,
   ) {}
+
+  /**
+   * Slugs of a collection's ancestors, nearest first (WP hierarchical term
+   * uniqueness tries `<slug>-<parent>`, then `<slug>-<parent>-<grandparent>`).
+   */
+  private async ancestorSlugs(parentId: string | null): Promise<string[]> {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    let cursor = parentId;
+    while (
+      cursor &&
+      !seen.has(cursor) &&
+      out.length <= CREATOR_CATEGORY_MAX_DEPTH
+    ) {
+      seen.add(cursor);
+      const row: { slug: string; parent_id: string | null } | null =
+        await this.prisma.creatorCategory.findUnique({
+          where: { id: cursor },
+          select: { slug: true, parent_id: true },
+        });
+      if (!row) break;
+      out.push(row.slug);
+      cursor = row.parent_id;
+    }
+    return out;
+  }
+
+  /** `/collections/…` paths of all the creator's collections (buildCollectionPaths). */
+  private async collectionPaths(creatorId: string) {
+    const rows = await this.prisma.creatorCategory.findMany({
+      where: { creator_id: creatorId },
+      select: {
+        id: true,
+        slug: true,
+        parent_id: true,
+        is_active: true,
+        visibility: true,
+      },
+    });
+    return buildCollectionPaths(rows);
+  }
+
+  /**
+   * Old-slug / import 301s whose source is a served `/collections/…` path
+   * are switched off: the proxy matches redirects before routing, so they
+   * would shadow a collection that took an old path (create, rename back,
+   * activation). See RedirectsService.releaseLivePaths.
+   */
+  private async releaseLiveCollectionPaths(creatorId: string): Promise<void> {
+    if (!this.redirects) return;
+    const store = await this.prisma.store.findUnique({
+      where: { creator_id: creatorId },
+      select: { id: true },
+    });
+    if (!store) return;
+    const live = [...(await this.collectionPaths(creatorId)).values()]
+      .filter((v) => v.reachable)
+      .map((v) => collectionPath(v.path));
+    await this.redirects.releaseLivePaths(store.id, live, {
+      localePrefixes: true,
+    });
+  }
 
   /**
    * Collections feed menus, breadcrumbs, listing pages and the sitemap, which
@@ -76,7 +164,12 @@ export class CreatorCategoriesService {
   private async assertOwnership(id: string, creatorId: string) {
     const found = await this.prisma.creatorCategory.findUnique({
       where: { id },
-      select: { creator_id: true, visibility: true, parent_id: true },
+      select: {
+        creator_id: true,
+        visibility: true,
+        parent_id: true,
+        slug: true,
+      },
     });
     if (!found)
       throw new NotFoundException({
@@ -233,16 +326,33 @@ export class CreatorCategoriesService {
       await this.assertDepthAllowed(parent_id);
     }
 
-    const created = await this.prisma.creatorCategory.create({
-      data: {
-        ...data,
-        match_tags: match_tags ?? [],
-        parent_id: parent_id ?? null,
-        creator_id: creatorId,
-        translations: { create: translations.map(sanitizeTranslation) },
-      },
-      include: { translations: true },
+    // WP term slug: sanitized with the store's content locale (the primary
+    // name when the slug is empty), then `<slug>-<parent>`, ..., `-2`.
+    const locale = await storeSlugLocale(this.prisma, { creatorId });
+    const { slug: base } = resolveSlugBase({
+      candidates: [data.slug, ...namesPrimaryFirst(translations, locale)],
+      locale,
+      prefix: 'collection',
     });
+    const ancestors = await this.ancestorSlugs(parent_id ?? null);
+    const created = await withSlugRetry(async () =>
+      this.prisma.creatorCategory.create({
+        data: {
+          ...data,
+          slug: await uniqueCollectionSlug(
+            this.prisma,
+            creatorId,
+            base,
+            ancestors,
+          ),
+          match_tags: match_tags ?? [],
+          parent_id: parent_id ?? null,
+          creator_id: creatorId,
+          translations: { create: translations.map(sanitizeTranslation) },
+        },
+        include: { translations: true },
+      }),
+    );
 
     await this.writeProductLinks(created.id, creatorId, {
       product_ids: product_ids?.length ? product_ids : undefined,
@@ -253,6 +363,7 @@ export class CreatorCategoriesService {
       replace: false,
     });
 
+    await this.releaseLiveCollectionPaths(creatorId);
     await this.refreshStorefront(creatorId);
     return this.findById(created.id, userId);
   }
@@ -406,31 +517,97 @@ export class CreatorCategoriesService {
       }
     }
 
-    await this.prisma.$transaction([
-      this.prisma.creatorCategory.update({
-        where: { id },
-        data: {
-          ...data,
-          ...(parent_id !== undefined ? { parent_id } : {}),
-          ...(match_tags !== undefined ? { match_tags } : {}),
-        },
-      }),
-      // M6.3: an INTERNAL collection is never a product's primary one, so
-      // the primaries that pointed at it are cleared in the same transaction
-      // (the product editors re-pick the first PUBLIC link on their next save).
-      ...(becomesInternal
-        ? [
-            this.prisma.product.updateMany({
-              where: { primary_creator_category_id: id },
-              data: { primary_creator_category_id: null },
-            }),
-            this.prisma.customProduct.updateMany({
-              where: { primary_creator_category_id: id },
-              data: { primary_creator_category_id: null },
-            }),
-          ]
-        : []),
-    ]);
+    // WP term slug on edit: an unchanged slug is kept as stored; a new one
+    // is sanitized and made unique (this collection excluded).
+    let slugBase: string | null = null;
+    if (data.slug !== undefined) {
+      const locale = await storeSlugLocale(this.prisma, { creatorId });
+      const res = resolveSlugBase({
+        candidates: [
+          data.slug,
+          ...namesPrimaryFirst(translations ?? [], locale),
+        ],
+        locale,
+        stored: current.slug,
+        prefix: 'collection',
+        id,
+      });
+      slugBase = res.keep ? null : res.slug;
+    }
+    delete data.slug;
+    // The public paths move when the slug or the parent changes (the
+    // collection and its whole subtree): snapshot them for the 301s.
+    const pathsMayMove =
+      slugBase !== null ||
+      (parent_id !== undefined && parent_id !== (current.parent_id ?? null));
+    const pathsBefore =
+      pathsMayMove && this.redirects
+        ? await this.collectionPaths(creatorId)
+        : null;
+    const ancestors =
+      slugBase !== null ? await this.ancestorSlugs(effectiveParentId) : [];
+
+    await withSlugRetry(async () =>
+      this.prisma.$transaction([
+        this.prisma.creatorCategory.update({
+          where: { id },
+          data: {
+            ...data,
+            ...(slugBase !== null
+              ? {
+                  slug: await uniqueCollectionSlug(
+                    this.prisma,
+                    creatorId,
+                    slugBase,
+                    ancestors,
+                    id,
+                  ),
+                }
+              : {}),
+            ...(parent_id !== undefined ? { parent_id } : {}),
+            ...(match_tags !== undefined ? { match_tags } : {}),
+          },
+        }),
+        // M6.3: an INTERNAL collection is never a product's primary one, so
+        // the primaries that pointed at it are cleared in the same transaction
+        // (the product editors re-pick the first PUBLIC link on their next save).
+        ...(becomesInternal
+          ? [
+              this.prisma.product.updateMany({
+                where: { primary_creator_category_id: id },
+                data: { primary_creator_category_id: null },
+              }),
+              this.prisma.customProduct.updateMany({
+                where: { primary_creator_category_id: id },
+                data: { primary_creator_category_id: null },
+              }),
+            ]
+          : []),
+      ]),
+    );
+
+    // Old-path 301s (WP `_wp_old_slug`) for every served collection whose
+    // `/collections/…` path changed, descendants included.
+    if (pathsBefore && this.redirects) {
+      const moves = collectionPathMoves(
+        pathsBefore,
+        await this.collectionPaths(creatorId),
+      );
+      if (moves.length) {
+        const store = await this.prisma.store.findUnique({
+          where: { creator_id: creatorId },
+          select: { id: true },
+        });
+        if (store)
+          await this.redirects.applySlugChangeRedirects(
+            store.id,
+            moves,
+            undefined,
+            { localePrefixes: true },
+          );
+      }
+    }
+    await this.releaseLiveCollectionPaths(creatorId);
 
     if (translations) {
       // X19 carry-over (M5 A-X, same semantics as ProductsService): only the

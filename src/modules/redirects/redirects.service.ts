@@ -28,6 +28,13 @@ import {
   planRedirectUpserts,
   withoutDeactivated,
 } from './redirect-plan';
+import {
+  planSlugChangeRedirects,
+  type SlugMove,
+  type SlugRedirectPlan,
+} from './slug-redirects';
+import { withLocalePrefixes } from '../../common/slug/slug-moves';
+import { SUPPORTED_LOCALES } from '../markets/market.types';
 import type {
   CreateRedirectDto,
   RedirectListQueryDto,
@@ -660,6 +667,173 @@ export class RedirectsService {
     );
     if (result.created.length) this.invalidate(storeId);
     return result;
+  }
+
+  // ── Old-slug redirects ───────────────────────────────────────────────────
+
+  /**
+   * Writes the 301s of a slug change (WP `_wp_old_slug`): `old → new` per
+   * move, chains flattened, rows targeting an old path re-pointed, rows that
+   * would shadow a new path switched off; MANUAL rows on an old path are left
+   * alone and reported (planSlugChangeRedirects). Runs in `tx` when given
+   * (then the caller's transaction owns the commit) and invalidates the
+   * store's cached map. Callers pass only moves whose old path is no longer
+   * served by anything. Never throws on a conflict: a failed redirect must
+   * not undo the merchant's edit.
+   */
+  async applySlugChangeRedirects(
+    storeId: string,
+    moves: readonly SlugMove[],
+    tx?: Prisma.TransactionClient,
+    opts: { localePrefixes?: boolean } = {},
+  ): Promise<SlugRedirectPlan | null> {
+    if (!moves.length) return null;
+    const run = async (db: Prisma.TransactionClient) => {
+      const existing = await this.existingForPlan(storeId, db);
+      // Collections and root pages have one slug for every locale, so the
+      // `/<locale>/…` URLs of the secondary locales moved too.
+      const all = opts.localePrefixes
+        ? withLocalePrefixes(moves, await this.storeLocalePrefixes(storeId, db))
+        : moves;
+      const plan = planSlugChangeRedirects(existing, all);
+      const room = Math.max(0, REDIRECT_MAX_ROWS_PER_STORE - existing.length);
+      if (plan.creates.length > room) {
+        this.logger.warn(
+          `slug redirects of store ${storeId}: ${plan.creates.length - room} over the row limit, not written`,
+        );
+        plan.creates = plan.creates.slice(0, room);
+      }
+      for (const d of plan.deactivations)
+        await db.storeRedirect.update({
+          where: { id: d.id },
+          data: { is_active: false },
+        });
+      if (plan.creates.length)
+        await db.storeRedirect.createMany({
+          data: plan.creates.map((c) => ({
+            store_id: storeId,
+            from_path: c.from_path,
+            to_path: c.to_path,
+            status_code: 301,
+            source: RedirectSource.SLUG_CHANGE,
+            is_active: true,
+          })),
+          skipDuplicates: true,
+        });
+      for (const u of plan.updates)
+        await db.storeRedirect.update({
+          where: { id: u.id },
+          data: {
+            to_path: u.to_path,
+            status_code: 301,
+            is_active: true,
+            source: RedirectSource.SLUG_CHANGE,
+          },
+        });
+      for (const r of plan.repoints)
+        await db.storeRedirect.update({
+          where: { id: r.id },
+          data: { to_path: r.to_path },
+        });
+      return plan;
+    };
+    try {
+      const plan = tx ? await run(tx) : await this.prisma.$transaction(run);
+      for (const c of plan.conflicts)
+        this.logger.warn(
+          `slug redirect ${c.from_path} -> ${c.to_path} of store ${storeId} not written: ${c.code}`,
+        );
+      this.invalidate(storeId);
+      return plan;
+    } catch (err) {
+      if (tx) throw err;
+      this.logger.error(
+        `slug redirects of store ${storeId} failed: ${String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Locale prefixes the storefront serves for a store (`/<locale>/…`): its
+   * secondary content locales and its market locales, lower-cased, limited to
+   * the locales the web proxy recognizes, the primary locale excluded.
+   */
+  async storeLocalePrefixes(
+    storeId: string,
+    db: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<string[]> {
+    const [cfg, markets] = await Promise.all([
+      db.storeLanguageConfig.findUnique({
+        where: { store_id: storeId },
+        select: { primary_locale: true, secondary_locales: true },
+      }),
+      db.market.findMany({
+        where: { store_id: storeId },
+        select: { locales: true },
+      }),
+    ]);
+    const primary = (cfg?.primary_locale || 'en').toLowerCase();
+    const known = new Set<string>(SUPPORTED_LOCALES);
+    const out = new Set<string>();
+    for (const l of [
+      ...(cfg?.secondary_locales ?? []),
+      ...markets.flatMap((m) => m.locales ?? []),
+    ]) {
+      const k = String(l).toLowerCase();
+      if (known.has(k) && k !== primary) out.add(k);
+    }
+    return [...out];
+  }
+
+  /**
+   * Switches off active IMPORT / SLUG_CHANGE rows whose source is a path the
+   * store serves again (a new or re-published product, collection or page
+   * that took an old slug). The proxy matches redirects before routing, so
+   * such a row would shadow the live page; WP's old-slug redirect only runs
+   * on a 404. MANUAL rows are the merchant's and are left alone. With
+   * `localePrefixes` the `/<locale>/…` forms are released too. Never throws:
+   * a failure must not undo the merchant's edit.
+   */
+  async releaseLivePaths(
+    storeId: string,
+    paths: readonly string[],
+    opts: { localePrefixes?: boolean } = {},
+  ): Promise<number> {
+    if (!paths.length) return 0;
+    try {
+      const prefixes = opts.localePrefixes
+        ? await this.storeLocalePrefixes(storeId)
+        : [];
+      const keys = new Set<string>();
+      for (const p of paths) {
+        for (const q of [p, ...prefixes.map((l) => `/${l}${p}`)]) {
+          const k = normalizeRedirectPath(q);
+          if (k) keys.add(k);
+        }
+      }
+      const all = [...keys];
+      let total = 0;
+      for (let i = 0; i < all.length; i += 5000) {
+        const { count } = await this.prisma.storeRedirect.updateMany({
+          where: {
+            store_id: storeId,
+            is_active: true,
+            source: { not: RedirectSource.MANUAL },
+            from_path: { in: all.slice(i, i + 5000) },
+          },
+          data: { is_active: false },
+        });
+        total += count;
+      }
+      if (total) this.invalidate(storeId);
+      return total;
+    } catch (err) {
+      this.logger.error(
+        `releasing live paths of store ${storeId} failed: ${String(err)}`,
+      );
+      return 0;
+    }
   }
 
   // ── Importer ─────────────────────────────────────────────────────────────

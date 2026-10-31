@@ -127,6 +127,13 @@ export interface MappedPage {
 export interface PlannedPage extends Planned {
   page: NPage;
   mapped: MappedPage;
+  /**
+   * The slug the page is served at (`/<final_slug>`): the target page's
+   * stored slug on UPDATE/UNCHANGED, else `mapped.slug` made unique like a
+   * builder page (reserved routes, numeric slugs, taken slugs get `-2`, ...).
+   * Apply creates the page with exactly this slug (PLAN == APPLY).
+   */
+  final_slug: string;
 }
 
 /**

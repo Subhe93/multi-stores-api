@@ -18,7 +18,7 @@ type Row = {
   from_path: string;
   to_path: string;
   status_code: number;
-  source: 'IMPORT' | 'MANUAL';
+  source: 'IMPORT' | 'MANUAL' | 'SLUG_CHANGE';
   import_run_id: string | null;
   is_active: boolean;
   created_at: Date;
@@ -106,6 +106,11 @@ function setup(initial: Row[] = []) {
       return Promise.resolve({ count: before - rows.length });
     }),
     count: jest.fn(() => Promise.resolve(rows.length)),
+    createMany: jest.fn(({ data }: { data: Partial<Row>[] }) => {
+      for (const d of data)
+        rows.push(mkRow({ id: `new-${++n}`, from_path: d.from_path!, ...d }));
+      return Promise.resolve({ count: data.length });
+    }),
   };
   const prisma = {
     storeRedirect,
@@ -551,5 +556,159 @@ describe('RedirectsService.bulkCreate', () => {
       object
     >;
     expect(Reflect.getMetadata(REQUIRE_APP_KEY, p.bulk)).toBe('importer');
+  });
+});
+
+describe('RedirectsService.applySlugChangeRedirects (old-slug 301s)', () => {
+  it('writes SLUG_CHANGE rows, re-points, switches off shadowing rows, invalidates', async () => {
+    const { svc, rows } = setup([
+      mkRow({ id: 'r1', from_path: '/gammal', to_path: '/products/mugg' }),
+      mkRow({
+        id: 'r2',
+        from_path: '/products/kopp',
+        to_path: '/products/x',
+        source: 'SLUG_CHANGE',
+      }),
+    ]);
+    const invalidate = jest.spyOn(svc, 'invalidate');
+    const plan = await svc.applySlugChangeRedirects('s1', [
+      { from: '/products/mugg', to: '/products/kopp' },
+    ]);
+    expect(plan?.conflicts).toEqual([]);
+    const byFrom = Object.fromEntries(
+      rows().map((r) => [r.from_path, [r.to_path, r.source, r.is_active]]),
+    );
+    expect(byFrom).toEqual({
+      '/gammal': ['/products/kopp', 'MANUAL', true],
+      '/products/kopp': ['/products/x', 'SLUG_CHANGE', false],
+      '/products/mugg': ['/products/kopp', 'SLUG_CHANGE', true],
+    });
+    expect(invalidate).toHaveBeenCalledWith('s1');
+  });
+
+  it('nothing to do: no writes', async () => {
+    const { svc, prisma } = setup();
+    expect(await svc.applySlugChangeRedirects('s1', [])).toBeNull();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('RedirectsService live paths and locale prefixes (old-slug 301s)', () => {
+  /** setup() plus a language config, markets and a real updateMany. */
+  function withLocales(initial: Row[]) {
+    const ctx = setup(initial);
+    const p = ctx.prisma as unknown as Record<string, unknown> & {
+      storeRedirect: Record<string, unknown>;
+      $transaction: jest.Mock;
+    };
+    p.storeLanguageConfig = {
+      findUnique: jest.fn(() =>
+        Promise.resolve({ primary_locale: 'sv', secondary_locales: ['en'] }),
+      ),
+    };
+    p.market = {
+      findMany: jest.fn(() =>
+        Promise.resolve([{ locales: ['ar', 'xx'] }, { locales: [] }]),
+      ),
+    };
+    p.storeRedirect.updateMany = jest.fn(
+      ({
+        where,
+        data,
+      }: {
+        where: {
+          store_id: string;
+          is_active: boolean;
+          source: { not: string };
+          from_path: { in: string[] };
+        };
+        data: Partial<Row>;
+      }) => {
+        let count = 0;
+        for (const r of ctx.rows()) {
+          if (
+            r.store_id === where.store_id &&
+            r.is_active === where.is_active &&
+            r.source !== where.source.not &&
+            where.from_path.in.includes(r.from_path)
+          ) {
+            Object.assign(r, data);
+            count++;
+          }
+        }
+        return Promise.resolve({ count });
+      },
+    );
+    p.$transaction = jest.fn((fn: (tx: unknown) => Promise<unknown>) => fn(p));
+    return ctx;
+  }
+
+  it('storeLocalePrefixes: secondary + market locales, known ones, primary excluded', async () => {
+    const { svc } = withLocales([]);
+    expect((await svc.storeLocalePrefixes('s1')).sort()).toEqual(['ar', 'en']);
+  });
+
+  it('releaseLivePaths switches off IMPORT / SLUG_CHANGE rows on live paths, never MANUAL', async () => {
+    const { svc, rows } = withLocales([
+      mkRow({
+        id: 'a',
+        from_path: '/products/mugg',
+        to_path: '/products/kopp',
+        source: 'SLUG_CHANGE',
+      }),
+      mkRow({
+        id: 'b',
+        from_path: '/en/products/mugg',
+        to_path: '/en/products/kopp',
+        source: 'IMPORT',
+      }),
+      mkRow({
+        id: 'c',
+        from_path: '/products/kläder',
+        to_path: '/products/x',
+        source: 'SLUG_CHANGE',
+      }),
+      mkRow({
+        id: 'm',
+        from_path: '/ar/products/mugg',
+        to_path: '/',
+        source: 'MANUAL',
+      }),
+      mkRow({
+        id: 'o',
+        from_path: '/products/other',
+        to_path: '/',
+        source: 'SLUG_CHANGE',
+      }),
+    ]);
+    const invalidate = jest.spyOn(svc, 'invalidate');
+    const n = await svc.releaseLivePaths(
+      's1',
+      ['/products/mugg', '/products/kl%c3%a4der'],
+      { localePrefixes: true },
+    );
+    expect(n).toBe(3);
+    const active = Object.fromEntries(rows().map((r) => [r.id, r.is_active]));
+    expect(active).toEqual({ a: false, b: false, c: false, m: true, o: true });
+    expect(invalidate).toHaveBeenCalledWith('s1');
+  });
+
+  it('applySlugChangeRedirects with localePrefixes also moves /<locale>/ paths', async () => {
+    const { svc, rows } = withLocales([]);
+    await svc.applySlugChangeRedirects(
+      's1',
+      [{ from: '/collections/rea', to: '/collections/kampanj' }],
+      undefined,
+      { localePrefixes: true },
+    );
+    expect(
+      rows()
+        .map((r) => `${r.from_path} -> ${r.to_path}`)
+        .sort(),
+    ).toEqual([
+      '/ar/collections/rea -> /ar/collections/kampanj',
+      '/collections/rea -> /collections/kampanj',
+      '/en/collections/rea -> /en/collections/kampanj',
+    ]);
   });
 });

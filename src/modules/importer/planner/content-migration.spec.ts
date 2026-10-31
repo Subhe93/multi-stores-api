@@ -11,6 +11,7 @@ import {
   SYSTEM_REDIRECTS,
 } from '../mapping/map-redirects';
 import { defaultRunOptions, normalizeRunOptions } from '../runs/run-options';
+import { plannedPageSlug } from './plan-pages';
 
 /**
  * M5 B17 content migration (W2-B): WP pages / posts → redirects per
@@ -315,7 +316,7 @@ describe('content migration through the importer (bundle v1 fixture)', () => {
     expect((third.summary as any).counts.PAGE).toEqual({ CREATE: 1 });
   });
 
-  it('rollback keeps an imported page the merchant published; an existing slug is an ERROR, not a crash', async () => {
+  it('rollback keeps an imported page the merchant published; an existing slug is suffixed like a builder page (PLAN == APPLY)', async () => {
     const h = await makeHarness();
     const options = {
       ...NAMEZ_OPTIONS,
@@ -341,23 +342,26 @@ describe('content migration through the importer (bundle v1 fixture)', () => {
     // `home` mode: the unmapped post goes to `/`; `import` pages need no row
     // when the old path equals the new one (`/om-oss/` → `/om-oss`).
     expect(s.content).toMatchObject({ mapped: 3, unmapped: 0, imported: 2 });
+    expect(s.warnings.W_SLUG_CONFLICT_SUFFIXED).toBeTruthy();
     const done = await h.apply(run.id);
     expect(['COMPLETED', 'COMPLETED_WITH_WARNINGS']).toContain(done.status);
     const applied = h
       .itemsOf(run.id, 'APPLY')
       .filter((i: any) => i.entity_type === 'PAGE');
     expect(applied.map((i: any) => [i.external_ref, i.action])).toEqual([
-      [OM, 'ERROR'],
+      [OM, 'CREATE'],
       [KONTAKT, 'CREATE'],
     ]);
-    expect(applied[0].message).toContain('om-oss');
+    // The store's own (unpublished) `om-oss` keeps its slug; the imported
+    // page takes `om-oss-2` and the old WordPress URL follows it.
     const red = redirectsOf(h);
-    expect(red['/om-oss']).toBeUndefined();
+    expect(red['/om-oss']).toEqual(['/om-oss-2', 301]);
     expect(red['/om-oss/kontakt']).toEqual(['/kontakt', 301]);
     expect(red['/nyheter-varen']).toEqual(['/', 301]);
     expect(h.db.page.rows.map((p: any) => p.slug).sort()).toEqual([
       'kontakt',
       'om-oss',
+      'om-oss-2',
     ]);
 
     // The merchant publishes the imported page before the rollback: kept.
@@ -368,7 +372,7 @@ describe('content migration through the importer (bundle v1 fixture)', () => {
     const rolled = await h.runs.detail(STORE_ID, run.id);
     expect(rolled.status).toBe('ROLLED_BACK');
     expect((rolled.summary as any).rollback).toMatchObject({
-      pages_deleted: 0,
+      pages_deleted: 1,
       pages_kept: 1,
       skipped_edited: [
         expect.objectContaining({ entity_type: 'PAGE', external_ref: KONTAKT }),
@@ -432,5 +436,42 @@ describe('content migration through the importer (bundle v1 fixture)', () => {
       action: 'SKIP',
       message: 'W_TARGET_MODIFIED_SKIPPED',
     });
+  });
+});
+
+describe('imported page slugs follow the builder page rules', () => {
+  it('reserved, numeric and taken slugs are suffixed; a live page is never redirected away', async () => {
+    const taken = new Set(['om-oss', 'om-oss-2']);
+    const isTaken = (x: string) => taken.has(x);
+    expect(plannedPageSlug('cart', isTaken)).toBe('cart-2');
+    expect(plannedPageSlug('sv', isTaken)).toBe('sv-2');
+    expect(plannedPageSlug('2024', isTaken)).toBe('2024-2');
+    expect(plannedPageSlug('page3', isTaken)).toBe('page3-2');
+    expect(plannedPageSlug('om-oss', isTaken)).toBe('om-oss-3');
+    expect(plannedPageSlug('kontakt', isTaken)).toBe('kontakt');
+
+    const h = await makeHarness();
+    const options = {
+      ...NAMEZ_OPTIONS,
+      scopes: { pages: true },
+      content_redirects: { mode: 'home', targets: { [OM]: 'import' } },
+    };
+    // The merchant's own LIVE `om-oss` page.
+    h.db.page.rows.push({
+      id: 'page-live',
+      store_id: STORE_ID,
+      type: 'LANDING',
+      slug: 'om-oss',
+      status: 'PUBLISHED',
+      published_version_id: 'v1',
+      seo: {},
+    });
+    const run = await h.dryRun(options, V1_DIR);
+    await h.apply(run.id);
+    expect(h.db.page.rows.map((p: any) => p.slug).sort()).toEqual([
+      'om-oss',
+      'om-oss-2',
+    ]);
+    expect(redirectsOf(h)['/om-oss']).toBeUndefined();
   });
 });

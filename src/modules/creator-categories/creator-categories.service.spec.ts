@@ -22,7 +22,10 @@ function build(stored: Translation[]) {
     creator: {
       findUnique: jest.fn(() => Promise.resolve({ id: 'c1' })),
     },
+    // WP slug rule: store content locale + uniqueness lookups.
+    store: { findUnique: jest.fn(() => Promise.resolve(null)) },
     creatorCategory: {
+      findFirst: jest.fn(() => Promise.resolve(null)),
       findUnique: jest.fn(() =>
         Promise.resolve({ id: 'cat1', creator_id: 'c1', translations: rows }),
       ),
@@ -173,7 +176,10 @@ describe('CreatorCategoriesService.update translations (M5 A-X carry-over)', () 
 function buildTree(nodes: Record<string, string | null>) {
   const prisma = {
     creator: { findUnique: jest.fn(() => Promise.resolve({ id: 'c1' })) },
+    // WP slug rule: store content locale + uniqueness lookups.
+    store: { findUnique: jest.fn(() => Promise.resolve(null)) },
     creatorCategory: {
+      findFirst: jest.fn(() => Promise.resolve(null)),
       findUnique: jest.fn(({ where }: { where: { id: string } }) =>
         Promise.resolve(
           where.id in nodes

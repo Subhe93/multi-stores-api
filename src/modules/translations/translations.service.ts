@@ -7,6 +7,11 @@ import {
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
+  productSlugContext,
+  resolveProductTranslationSlugs,
+} from '../../common/slug/product-slugs';
+import { productSlugOwner } from '../../common/slug/wp-slug';
+import {
   AutoTranslateDto,
   BulkTranslateDto,
   TranslatableEntity,
@@ -252,7 +257,12 @@ export class TranslationsService {
             locale: targetLocale,
             title: result.title || source.title,
             description: result.description || source.description,
-            slug: this.generateSlug(result.title || source.title),
+            slug: await this.translatedSlug(
+              { productId: product.id },
+              product,
+              targetLocale,
+              result.title || source.title,
+            ),
           },
         });
         translated++;
@@ -298,7 +308,12 @@ export class TranslationsService {
             locale: targetLocale,
             title: result.title || source.title,
             description: result.description || source.description,
-            slug: this.generateSlug(result.title || source.title),
+            slug: await this.translatedSlug(
+              { customProductId: item.id },
+              item,
+              targetLocale,
+              result.title || source.title,
+            ),
           },
         });
         translated++;
@@ -488,7 +503,17 @@ export class TranslationsService {
     translated: Record<string, string>,
   ) {
     switch (entityType) {
-      case TranslatableEntity.PRODUCT:
+      case TranslatableEntity.PRODUCT: {
+        const owner = await this.prisma.product.findUnique({
+          where: { id: entityId },
+          select: { creator_id: true, provider_id: true },
+        });
+        const slug = await this.translatedSlug(
+          { productId: entityId },
+          owner ?? {},
+          locale,
+          translated.title,
+        );
         await this.prisma.productTranslation.upsert({
           where: { product_id_locale: { product_id: entityId, locale } },
           update: {
@@ -500,10 +525,11 @@ export class TranslationsService {
             locale,
             title: translated.title,
             description: translated.description,
-            slug: this.generateSlug(translated.title),
+            slug,
           },
         });
         break;
+      }
 
       case TranslatableEntity.CATEGORY:
         await this.prisma.categoryTranslation.upsert({
@@ -534,7 +560,17 @@ export class TranslationsService {
         });
         break;
 
-      case TranslatableEntity.CUSTOM_PRODUCT:
+      case TranslatableEntity.CUSTOM_PRODUCT: {
+        const owner = await this.prisma.customProduct.findUnique({
+          where: { id: entityId },
+          select: { creator_id: true },
+        });
+        const slug = await this.translatedSlug(
+          { customProductId: entityId },
+          owner ?? {},
+          locale,
+          translated.title,
+        );
         await this.prisma.customProductTranslation.upsert({
           where: {
             custom_product_id_locale: { custom_product_id: entityId, locale },
@@ -548,10 +584,11 @@ export class TranslationsService {
             locale,
             title: translated.title,
             description: translated.description,
-            slug: this.generateSlug(translated.title),
+            slug,
           },
         });
         break;
+      }
     }
   }
 
@@ -656,16 +693,30 @@ export class TranslationsService {
     return chunks;
   }
 
-  private generateSlug(text: string): string {
-    return (
-      text
-        .toLowerCase()
-        .replace(/[\u0600-\u06FF]/g, '')
-        .replace(/[^\w\s-]/g, '')
-        .replace(/[\s_]+/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .substring(0, 100) || `item-${Date.now()}`
+  /**
+   * Slug of a machine-translated product / custom product translation: WP
+   * sanitize_title of the translated title with the store's content locale
+   * (Arabic letters kept, `ä` -> `a`), unique in the creator's
+   * `/products/<slug>` domain (the entity itself excluded), else
+   * `product-<id8>` (the shared product slug rule, common/slug).
+   */
+  private async translatedSlug(
+    exclude: { productId?: string; customProductId?: string },
+    owner: { creator_id?: string | null; provider_id?: string | null },
+    locale: string,
+    title: string | null | undefined,
+  ): Promise<string> {
+    const ctx = await productSlugContext(this.prisma, owner.creator_id);
+    const [row] = await resolveProductTranslationSlugs(
+      this.prisma,
+      [{ locale, slug: title, title }],
+      {
+        owner: productSlugOwner(owner),
+        locale: ctx.locale,
+        exclude,
+        id: exclude.productId ?? exclude.customProductId,
+      },
     );
+    return row.slug;
   }
 }

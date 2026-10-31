@@ -15,8 +15,12 @@ function setup() {
       create,
       update,
       findUnique: jest.fn(() => Promise.resolve({ id: 'pg1', store_id: 's1' })),
+      findFirst: jest.fn(() => Promise.resolve(null)),
     },
     staticPageTranslation: { deleteMany: jest.fn() },
+    // WP slug rule: store content locale + uniqueness lookups.
+    store: { findUnique: jest.fn(() => Promise.resolve(null)) },
+    page: { findFirst: jest.fn(() => Promise.resolve(null)) },
   };
   return {
     svc: new PagesService(prisma as unknown as PrismaService),

@@ -499,7 +499,7 @@ describe('StorefrontService.resolveProductRef (same lookup as getProduct)', () =
     where: {
       creator_id: 'creator-1',
       status: 'PUBLISHED',
-      translations: { some: { slug: 'mug' } },
+      translations: { some: { slug: { equals: 'mug' } } },
     },
     orderBy: { updated_at: 'desc' },
     select: { id: true },
@@ -537,5 +537,28 @@ describe('StorefrontService.resolveProductRef (same lookup as getProduct)', () =
       ),
     ).resolves.toBeNull();
     expect(prisma.customProduct.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('exact matches (own, then custom) before the case-insensitive fallback', async () => {
+    const { service, prisma } = build(null, null);
+    prisma.product.findFirst
+      .mockResolvedValueOnce(null) // exact own
+      .mockResolvedValueOnce({ id: 'legacy' }); // insensitive own
+    await expect(
+      service.resolveProductRef(
+        { creator_id: 'creator-1', store_type: StoreType.MARKETPLACE },
+        'mug',
+      ),
+    ).resolves.toEqual({ kind: 'own', id: 'legacy' });
+    const slugOf = (c: unknown[]) =>
+      (c[0] as { where: { translations: { some: { slug: unknown } } } }).where
+        .translations.some.slug;
+    expect(prisma.product.findFirst.mock.calls.map(slugOf)).toEqual([
+      { equals: 'mug' },
+      { equals: 'mug', mode: 'insensitive' },
+    ]);
+    expect(prisma.customProduct.findFirst.mock.calls.map(slugOf)).toEqual([
+      { equals: 'mug' },
+    ]);
   });
 });

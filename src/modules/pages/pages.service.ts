@@ -2,8 +2,19 @@ import {
   Injectable,
   ForbiddenException,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RedirectsService } from '../redirects/redirects.service';
+import {
+  isRootPageSlugServed,
+  resolveSlugBase,
+  storeSlugLocale,
+  titlesPrimaryFirst,
+  uniqueStaticPageSlug,
+  withSlugRetry,
+} from '../../common/slug/wp-slug';
+import { rootPagePath } from '../../common/slug/slug-moves';
 import { UserRole } from '@prisma/client';
 import {
   CreatePageDto,
@@ -21,7 +32,11 @@ function sanitizeTranslation(t: PageTranslationDto): PageTranslationDto {
 
 @Injectable()
 export class PagesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    // Old-slug 301s (WP `_wp_old_slug`); optional for positional tests.
+    @Optional() private readonly redirects?: RedirectsService,
+  ) {}
 
   async findByStore(storeId: string, userId: string, userRole: UserRole) {
     await this.assertOwnsStore(storeId, userId, userRole);
@@ -67,16 +82,51 @@ export class PagesService {
     await this.assertOwnsStore(storeId, userId, userRole);
     const { translations, ...data } = dto;
 
-    return this.prisma.staticPage.create({
-      data: {
-        store_id: storeId,
-        ...data,
-        ...(translations && {
-          translations: { create: translations.map(sanitizeTranslation) },
-        }),
-      },
-      include: { translations: true },
+    // WP page slug: sanitized with the store's content locale (the title
+    // when the slug is empty, else `page-<id8>`), unique among the store's
+    // legacy and v2 pages, reserved and numeric slugs suffixed.
+    const locale = await storeSlugLocale(this.prisma, { storeId });
+    const { slug: base } = resolveSlugBase({
+      candidates: [
+        data.slug,
+        ...titlesPrimaryFirst(translations ?? [], locale),
+      ],
+      locale,
+      prefix: 'page',
     });
+    const created = await withSlugRetry(async () =>
+      this.prisma.staticPage.create({
+        data: {
+          store_id: storeId,
+          ...data,
+          slug: await uniqueStaticPageSlug(this.prisma, storeId, base),
+          ...(translations && {
+            translations: { create: translations.map(sanitizeTranslation) },
+          }),
+        },
+        include: { translations: true },
+      }),
+    );
+    await this.releaseLivePagePath(created);
+    return created;
+  }
+
+  /**
+   * A published page serves `/<slug>` again: old-slug / import 301s from
+   * that path are switched off (the proxy matches redirects before routing,
+   * so they would shadow the page). See RedirectsService.releaseLivePaths.
+   */
+  private async releaseLivePagePath(page: {
+    store_id: string;
+    slug: string;
+    status: string;
+  }): Promise<void> {
+    if (!this.redirects || page.status !== 'PUBLISHED' || !page.slug) return;
+    await this.redirects.releaseLivePaths(
+      page.store_id,
+      [rootPagePath(page.slug)],
+      { localePrefixes: true },
+    );
   }
 
   async update(
@@ -86,7 +136,37 @@ export class PagesService {
     userRole: UserRole,
   ) {
     await this.assertOwnsPage(id, userId, userRole);
-    const { translations, ...data } = dto;
+    const { translations, slug: sentSlug, ...data } = dto;
+
+    // WP page slug on edit: unchanged = kept as stored; else sanitized and
+    // made unique (this page excluded).
+    const current = await this.prisma.staticPage.findUnique({
+      where: { id },
+      select: { store_id: true, slug: true, status: true },
+    });
+    let slugBase: string | null = null;
+    if (sentSlug !== undefined && current) {
+      const locale = await storeSlugLocale(this.prisma, {
+        storeId: current.store_id,
+      });
+      const stored = translations
+        ? []
+        : await this.prisma.staticPageTranslation.findMany({
+            where: { page_id: id },
+            select: { locale: true, title: true },
+          });
+      const res = resolveSlugBase({
+        candidates: [
+          sentSlug,
+          ...titlesPrimaryFirst(translations ?? stored, locale),
+        ],
+        locale,
+        stored: current.slug,
+        prefix: 'page',
+        id,
+      });
+      if (!res.keep) slugBase = res.slug;
+    }
 
     if (translations) {
       await this.prisma.staticPageTranslation.deleteMany({
@@ -94,16 +174,54 @@ export class PagesService {
       });
     }
 
-    return this.prisma.staticPage.update({
-      where: { id },
-      data: {
-        ...data,
-        ...(translations && {
-          translations: { create: translations.map(sanitizeTranslation) },
-        }),
-      },
-      include: { translations: true },
-    });
+    const updated = await withSlugRetry(async () =>
+      this.prisma.staticPage.update({
+        where: { id },
+        data: {
+          ...data,
+          ...(slugBase !== null && current
+            ? {
+                slug: await uniqueStaticPageSlug(
+                  this.prisma,
+                  current.store_id,
+                  slugBase,
+                  id,
+                ),
+              }
+            : {}),
+          ...(translations && {
+            translations: { create: translations.map(sanitizeTranslation) },
+          }),
+        },
+        include: { translations: true },
+      }),
+    );
+
+    // Old-slug 301 when a published page moved and nothing else serves the
+    // old path (a v2 page with that slug would).
+    if (
+      this.redirects &&
+      current &&
+      current.status === 'PUBLISHED' &&
+      updated.slug !== current.slug &&
+      !(await isRootPageSlugServed(
+        this.prisma,
+        current.store_id,
+        current.slug,
+        {
+          staticPageId: id,
+        },
+      ))
+    ) {
+      await this.redirects.applySlugChangeRedirects(
+        current.store_id,
+        [{ from: rootPagePath(current.slug), to: rootPagePath(updated.slug) }],
+        undefined,
+        { localePrefixes: true },
+      );
+    }
+    await this.releaseLivePagePath(updated);
+    return updated;
   }
 
   async delete(id: string, userId: string, userRole: UserRole) {

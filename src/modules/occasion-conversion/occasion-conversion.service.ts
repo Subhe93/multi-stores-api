@@ -56,7 +56,7 @@ interface BatchBefore {
     id: string;
     to_path: string;
     status_code: number;
-    source: 'IMPORT' | 'MANUAL';
+    source: 'IMPORT' | 'MANUAL' | 'SLUG_CHANGE';
     is_active: boolean;
   }[];
 }

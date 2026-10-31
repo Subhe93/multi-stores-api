@@ -3,8 +3,19 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Optional,
 } from '@nestjs/common';
+import { encodeSlugForUrl, sanitizeTitle } from '@multi-stores/core/slug';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RedirectsService } from '../redirects/redirects.service';
+import { uniqueProductSlug } from '../../common/slug/wp-slug';
+import {
+  productRedirectMoves,
+  productSlugContext,
+  releaseLiveProductPaths,
+  resolveProductTranslationSlugs,
+} from '../../common/slug/product-slugs';
+import type { LocaleSlug } from '../../common/slug/slug-moves';
 import {
   CreatorCategoryLinks,
   resolvePrimaryCreatorCategory,
@@ -36,6 +47,8 @@ export class CustomProductsService {
   constructor(
     private prisma: PrismaService,
     private notificationsService: NotificationsService,
+    // Old-slug 301s (WP `_wp_old_slug`); optional for positional tests.
+    @Optional() private readonly redirects?: RedirectsService,
   ) {}
 
   /**
@@ -303,62 +316,45 @@ export class CustomProductsService {
   }
 
   /**
-   * Reject any translation whose slug is already in use by this creator's
-   * other products or custom products. Empty slugs are skipped — the caller
-   * should have already filled them in from the title.
+   * WP slugs of a custom product's translations: sanitized with the store's
+   * content locale, a slug sent back unchanged kept as stored, the rest made
+   * unique (`-2`, `-3`, ...) across the creator's own products and custom
+   * products, which share `/products/<slug>` on the storefront. Replaces the
+   * former 400 "Slug already in use".
    */
-  private async assertSlugsAvailable(
+  private async slugTranslations<
+    T extends { locale: string; slug?: string | null; title?: string | null },
+  >(
     creatorId: string,
-    translations: { slug?: string }[] | undefined,
-    excludeCustomProductId?: string,
-  ) {
-    const slugs = (translations ?? [])
-      .map((t) => (t.slug || '').trim())
-      .filter((s) => s.length > 0);
-    if (!slugs.length) return;
-
-    const [customConflicts, productConflicts] = await Promise.all([
-      this.prisma.customProductTranslation.findMany({
-        where: {
-          slug: { in: slugs },
-          custom_product: {
-            creator_id: creatorId,
-            ...(excludeCustomProductId
-              ? { id: { not: excludeCustomProductId } }
-              : {}),
-          },
-        },
-        select: { slug: true },
-      }),
-      this.prisma.productTranslation.findMany({
-        where: {
-          slug: { in: slugs },
-          product: { creator_id: creatorId },
-        },
-        select: { slug: true },
-      }),
-    ]);
-
-    const taken = new Set([
-      ...customConflicts.map((c) => c.slug),
-      ...productConflicts.map((c) => c.slug),
-    ]);
-    if (taken.size > 0) {
-      throw new BadRequestException(
-        `Slug already in use: ${Array.from(taken).join(', ')}`,
-      );
-    }
+    translations: readonly T[],
+    opts: { stored?: readonly LocaleSlug[]; customProductId?: string } = {},
+  ): Promise<{
+    rows: (T & { slug: string })[];
+    storeId: string | null;
+    locale: string;
+  }> {
+    const ctx = await productSlugContext(this.prisma, creatorId);
+    const rows = await resolveProductTranslationSlugs(
+      this.prisma,
+      translations,
+      {
+        owner: { creatorId },
+        locale: ctx.locale,
+        stored: opts.stored,
+        exclude: { customProductId: opts.customProductId },
+        id: opts.customProductId,
+      },
+    );
+    return { rows, storeId: ctx.storeId, locale: ctx.locale };
   }
 
   /**
-   * Check whether a slug is already used by another product or custom product
-   * owned by this creator. Primary-locale slugs share the same URL space, so
-   * a collision in either table would shadow the new product on the storefront.
+   * Check a slug for the dashboard: `slug` is what the server would store
+   * (WP sanitize_title with the store's content locale), `available` whether
+   * it is free among this creator's products and custom products, and
+   * `suggestion` the slug a save would get (`<slug>-2`, ...).
    */
   async checkSlug(userId: string, slug: string, excludeId?: string) {
-    const trimmed = (slug || '').trim();
-    if (!trimmed) return { available: false, reason: 'empty' as const };
-
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
       select: { id: true },
@@ -368,27 +364,39 @@ export class CustomProductsService {
         code: 'CUSTOM_PRODUCT_CREATOR_NOT_FOUND',
         message: 'Creator not found',
       });
+    const { locale } = await productSlugContext(this.prisma, creator.id);
+    const sanitized = sanitizeTitle(slug || '', { locale });
+    if (!sanitized) return { available: false, reason: 'empty' as const };
 
     const [customConflict, productConflict] = await Promise.all([
       this.prisma.customProduct.findFirst({
         where: {
           creator_id: creator.id,
           ...(excludeId ? { id: { not: excludeId } } : {}),
-          translations: { some: { slug: trimmed } },
+          translations: { some: { slug: sanitized } },
         },
         select: { id: true },
       }),
       this.prisma.product.findFirst({
         where: {
           creator_id: creator.id,
-          translations: { some: { slug: trimmed } },
+          translations: { some: { slug: sanitized } },
         },
         select: { id: true },
       }),
     ]);
-
+    const available = !customConflict && !productConflict;
     return {
-      available: !customConflict && !productConflict,
+      available,
+      slug: sanitized,
+      suggestion: available
+        ? sanitized
+        : await uniqueProductSlug(
+            this.prisma,
+            { creatorId: creator.id },
+            sanitized,
+            { customProductId: excludeId },
+          ),
       conflictsWith: customConflict
         ? ('custom_product' as const)
         : productConflict
@@ -460,13 +468,15 @@ export class CustomProductsService {
     // Validate pricing consistency
     this.validatePricing(dto.pricing_type, dto);
 
-    // Reject creating with a slug already taken by this creator's own
-    // products or custom products — slug collisions shadow each other on the
-    // storefront URL space.
-    await this.assertSlugsAvailable(creator.id, dto.translations);
+    // WP slugs: a slug taken by this creator's own products or custom
+    // products (they share the storefront URL space) gets `-2`, `-3`, ...
+    const { rows: translations } = await this.slugTranslations(
+      creator.id,
+      dto.translations,
+    );
 
     const {
-      translations,
+      translations: _sentTranslations,
       selected_variants,
       field_values,
       mockup_image_urls,
@@ -475,6 +485,7 @@ export class CustomProductsService {
       primary_creator_category_id,
       ...data
     } = dto;
+    void _sentTranslations; // replaced by the slugged rows above
 
     // M6: a requested primary that is not among the sent links fails before
     // anything is written (the ownership-filtered check runs again after the
@@ -834,18 +845,29 @@ export class CustomProductsService {
       });
     }
 
-    // Reject any slug already in use by another product/custom-product of
-    // this creator (excluding the current custom product being updated).
+    // WP slugs (excluding this custom product): unchanged slugs kept,
+    // others sanitized and suffixed when taken.
+    let storedSlugs: LocaleSlug[] = [];
+    let slugCtx: { storeId: string | null; locale: string } | null = null;
+    let translations: UpdateCustomProductDto['translations'];
     if (dto.translations && dto.translations.length > 0) {
-      await this.assertSlugsAvailable(
+      storedSlugs = await this.prisma.customProductTranslation.findMany({
+        where: { custom_product_id: id },
+        select: { locale: true, slug: true },
+      });
+      const res = await this.slugTranslations(
         existing.creator_id,
         dto.translations,
-        id,
+        { stored: storedSlugs, customProductId: id },
       );
+      translations = res.rows;
+      slugCtx = res;
+    } else {
+      translations = dto.translations;
     }
 
     const {
-      translations,
+      translations: _sentTranslations,
       selected_variants,
       field_values,
       mockup_image_urls,
@@ -854,6 +876,7 @@ export class CustomProductsService {
       primary_creator_category_id,
       ...data
     } = dto;
+    void _sentTranslations; // replaced by the slugged rows above
 
     // Cross-check: if the price is changing and the product has SINGLE
     // pricing, re-validate every already-attached bundle even when bundle_ids
@@ -1018,6 +1041,26 @@ export class CustomProductsService {
       );
     }
 
+    // Old-slug 301s when a published custom product's slugs changed.
+    if (
+      slugCtx?.storeId &&
+      translations &&
+      existing.status === ProductStatus.PUBLISHED &&
+      this.redirects
+    ) {
+      const moves = await productRedirectMoves(this.prisma, {
+        creatorId: existing.creator_id,
+        primaryLocale: slugCtx.locale,
+        before: storedSlugs,
+        after: translations as LocaleSlug[],
+        exclude: { customProductId: id },
+      });
+      await this.redirects.applySlugChangeRedirects(slugCtx.storeId, moves);
+    }
+    await releaseLiveProductPaths(this.prisma, this.redirects, {
+      customProductId: id,
+    });
+
     // Notify provider if product was auto-reverted to PENDING_REVIEW after edit
     if (autoRevertedToReview && existing.product.provider_id) {
       await this.notifyProviderOfSubmission(
@@ -1062,6 +1105,10 @@ export class CustomProductsService {
         message: 'Custom product not found',
       });
 
+    const { locale: slugLocale } = await productSlugContext(
+      this.prisma,
+      source.creator_id,
+    );
     const created = await this.prisma.$transaction(async (tx) => {
       const newCp = await tx.customProduct.create({
         data: {
@@ -1081,13 +1128,29 @@ export class CustomProductsService {
       });
 
       if (source.translations.length > 0) {
+        // WP uniqueness suffix (`<slug>-2`, ...) instead of `-copy-<id>`;
+        // the stored slug goes in its stable encoded form.
+        const slugged = await resolveProductTranslationSlugs(
+          tx,
+          source.translations.map((t) => ({
+            locale: t.locale,
+            slug: encodeSlugForUrl(t.slug),
+            title: t.title,
+          })),
+          {
+            owner: { creatorId: source.creator_id },
+            locale: slugLocale,
+            exclude: { customProductId: newCp.id },
+            id: newCp.id,
+          },
+        );
         await tx.customProductTranslation.createMany({
-          data: source.translations.map((t) => ({
+          data: source.translations.map((t, i) => ({
             custom_product_id: newCp.id,
             locale: t.locale,
             title: `${t.title} (Copy)`,
             description: t.description,
-            slug: `${t.slug}-copy-${newCp.id.slice(0, 6)}`,
+            slug: slugged[i].slug,
           })),
         });
       }
@@ -1174,7 +1237,7 @@ export class CustomProductsService {
 
     // No provider → auto-publish
     if (!product?.provider_id) {
-      return this.prisma.customProduct.update({
+      const published = await this.prisma.customProduct.update({
         where: { id },
         data: {
           status: ProductStatus.PUBLISHED,
@@ -1183,6 +1246,10 @@ export class CustomProductsService {
         },
         include: this.includes,
       });
+      await releaseLiveProductPaths(this.prisma, this.redirects, {
+        customProductId: id,
+      });
+      return published;
     }
 
     // Has provider → set to PENDING_REVIEW and notify
@@ -1219,6 +1286,9 @@ export class CustomProductsService {
         reviewed_by: userId,
       },
       include: this.includes,
+    });
+    await releaseLiveProductPaths(this.prisma, this.redirects, {
+      customProductId: id,
     });
 
     // Notify creator

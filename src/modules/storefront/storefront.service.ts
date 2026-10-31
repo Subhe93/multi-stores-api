@@ -5,6 +5,10 @@ import {
   Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  findBySlugTolerant,
+  slugLookupFilters,
+} from '../../common/slug/wp-slug';
 import { CREATOR_CATEGORY_MAX_DEPTH } from '../creator-categories/primary-collection';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { MarketsContextService } from '../markets/markets-context.service';
@@ -111,14 +115,22 @@ export function withoutFeedFields<
  * non-INDEPENDENT stores, custom products. Ordered by updated_at so a
  * duplicate-slug collision resolves to the most recently edited product
  * instead of an implementation-defined row. Shared with
- * `resolveProductRef` (owner edit button) so both always agree.
+ * `resolveProductRef` (owner edit button) so both always agree. The
+ * incoming slug is normalized like WP's query context (percent-decoded,
+ * NFC, lower case) to the form slugs are stored in.
  */
-export function productBySlugQuery(creatorId: string, productSlug: string) {
+export function productBySlugQuery(
+  creatorId: string,
+  productSlug: string,
+  /** The case-insensitive fallback (legacy slugs with capitals). */
+  insensitive = false,
+) {
+  const [exact, ci] = slugLookupFilters(productSlug);
   return {
     where: {
       creator_id: creatorId,
       status: 'PUBLISHED' as const,
-      translations: { some: { slug: productSlug } },
+      translations: { some: { slug: insensitive ? ci : exact } },
     },
     orderBy: { updated_at: 'desc' as const },
   };
@@ -819,12 +831,14 @@ export class StorefrontService {
       return collectionFilterFrom(cc, { allowInternal: true });
     }
     if (filters.creator_category) {
-      const slug = filters.creator_category;
-      if (typeof slug !== 'string') return null;
-      const cc = await this.prisma.creatorCategory.findUnique({
-        where: { creator_id_slug: { creator_id: creatorId, slug } },
-        select,
-      });
+      const raw = filters.creator_category;
+      if (typeof raw !== 'string') return null;
+      const cc = await findBySlugTolerant(raw, (slug) =>
+        this.prisma.creatorCategory.findFirst({
+          where: { creator_id: creatorId, slug },
+          select,
+        }),
+      );
       return collectionFilterFrom(cc, { allowInternal: false });
     }
     return null;
@@ -1245,45 +1259,65 @@ export class StorefrontService {
     const market = await this.resolveMarket(store.id, marketKey, preview);
 
     // Try creator's own product first (see productBySlugQuery for the order).
-    const product = await this.prisma.product.findFirst({
-      ...productBySlugQuery(store.creator.id, productSlug),
-      include: {
-        translations: true,
-        // Product-level gallery only — variant-linked rows would flood the
-        // gallery with one duplicate per size/color combination.
-        images: { where: { variant_id: null }, orderBy: { sort_order: 'asc' } },
-        attributes: {
-          include: { template: { include: { translations: true } } },
-        },
-        variants: { where: { is_active: true }, include: { images: true } },
-        tags: true,
-        category: { include: { translations: true } },
-        creator_categories: {
-          include: { creator_category: { include: { translations: true } } },
-          orderBy: { sort_order: 'asc' },
-        },
-        custom_fields: {
-          include: { translations: true },
-          orderBy: [{ sort_order: 'asc' as const }, { id: 'asc' as const }],
-        },
-        faqs: {
-          include: { translations: true },
-          orderBy: { sort_order: 'asc' },
-        },
-        shipping_profile: {
-          include: {
-            zones: {
-              include: {
-                methods: {
-                  where: { is_active: true },
-                  orderBy: { sort_order: 'asc' },
+    const findOwn = (insensitive: boolean) =>
+      this.prisma.product.findFirst({
+        ...productBySlugQuery(store.creator.id, productSlug, insensitive),
+        include: {
+          translations: true,
+          // Product-level gallery only — variant-linked rows would flood the
+          // gallery with one duplicate per size/color combination.
+          images: {
+            where: { variant_id: null },
+            orderBy: { sort_order: 'asc' },
+          },
+          attributes: {
+            include: { template: { include: { translations: true } } },
+          },
+          variants: { where: { is_active: true }, include: { images: true } },
+          tags: true,
+          category: { include: { translations: true } },
+          creator_categories: {
+            include: { creator_category: { include: { translations: true } } },
+            orderBy: { sort_order: 'asc' },
+          },
+          custom_fields: {
+            include: { translations: true },
+            orderBy: [{ sort_order: 'asc' as const }, { id: 'asc' as const }],
+          },
+          faqs: {
+            include: { translations: true },
+            orderBy: { sort_order: 'asc' },
+          },
+          shipping_profile: {
+            include: {
+              zones: {
+                include: {
+                  methods: {
+                    where: { is_active: true },
+                    orderBy: { sort_order: 'asc' },
+                  },
                 },
               },
             },
           },
         },
-      },
-    });
+      });
+    // Exact matches (own, then custom) win over the case-insensitive
+    // fallback for legacy slugs with capitals (slugLookupFilters).
+    let product = await findOwn(false);
+    let customInsensitive = false;
+    if (!product) {
+      const customExact =
+        store.store_type !== StoreType.INDEPENDENT &&
+        !!(await this.prisma.customProduct.findFirst({
+          ...productBySlugQuery(store.creator.id, productSlug),
+          select: { id: true },
+        }));
+      if (!customExact) {
+        product = await findOwn(true);
+        customInsensitive = true;
+      }
+    }
 
     if (product) {
       const prodBasePrice = Number(product.base_price);
@@ -1418,7 +1452,7 @@ export class StorefrontService {
 
     // Fall back to custom product. Same ordering rationale as above.
     const customProduct = await this.prisma.customProduct.findFirst({
-      ...productBySlugQuery(store.creator.id, productSlug),
+      ...productBySlugQuery(store.creator.id, productSlug, customInsensitive),
       include: {
         translations: true,
         mockup_images: { orderBy: { sort_order: 'asc' } },
@@ -1590,18 +1624,27 @@ export class StorefrontService {
     store: { creator_id: string; store_type: StoreType },
     productSlug: string,
   ): Promise<{ kind: 'own' | 'custom'; id: string } | null> {
-    const query = productBySlugQuery(store.creator_id, productSlug);
-    const own = await this.prisma.product.findFirst({
-      ...query,
-      select: { id: true },
-    });
-    if (own) return { kind: 'own', id: own.id };
-    if (store.store_type === StoreType.INDEPENDENT) return null;
-    const custom = await this.prisma.customProduct.findFirst({
-      ...query,
-      select: { id: true },
-    });
-    return custom ? { kind: 'custom', id: custom.id } : null;
+    // Same order as getProduct: exact own, exact custom, then the
+    // case-insensitive fallback (legacy slugs with capitals).
+    for (const insensitive of [false, true]) {
+      const query = productBySlugQuery(
+        store.creator_id,
+        productSlug,
+        insensitive,
+      );
+      const own = await this.prisma.product.findFirst({
+        ...query,
+        select: { id: true },
+      });
+      if (own) return { kind: 'own', id: own.id };
+      if (store.store_type === StoreType.INDEPENDENT) continue;
+      const custom = await this.prisma.customProduct.findFirst({
+        ...query,
+        select: { id: true },
+      });
+      if (custom) return { kind: 'custom', id: custom.id };
+    }
+    return null;
   }
 
   /** `{ tax_rate_bp }` for one product when the b2b app is on, else `{}`. */
@@ -1864,12 +1907,12 @@ export class StorefrontService {
         message: 'Store not found',
       });
 
-    const page = await this.prisma.staticPage.findUnique({
-      where: {
-        store_id_slug: { store_id: store.id, slug: pageSlug },
-      },
-      include: { translations: true },
-    });
+    const page = await findBySlugTolerant(pageSlug, (slug) =>
+      this.prisma.staticPage.findFirst({
+        where: { store_id: store.id, slug },
+        include: { translations: true },
+      }),
+    );
 
     if (!page || page.status !== 'PUBLISHED') {
       throw new NotFoundException({
@@ -2245,17 +2288,16 @@ export class StorefrontService {
       type: opts.type === 'SLUG' ? { in: ['STATIC', 'LANDING'] } : opts.type,
       published_version_id: { not: null },
     };
-    if (
-      opts.type === 'STATIC' ||
-      opts.type === 'LANDING' ||
-      opts.type === 'SLUG'
-    )
-      whereType.slug = opts.slug;
-
-    const page = await this.prisma.page.findFirst({
-      where: whereType,
-      include: { published_version: true },
-    });
+    const bySlug =
+      opts.type === 'STATIC' || opts.type === 'LANDING' || opts.type === 'SLUG';
+    const find = (slug?: Prisma.StringFilter) =>
+      this.prisma.page.findFirst({
+        where: slug ? { ...whereType, slug } : whereType,
+        include: { published_version: true },
+      });
+    const page = bySlug
+      ? await findBySlugTolerant(opts.slug, find)
+      : await find();
     if (!page || !page.published_version) return null;
     return {
       id: page.id,

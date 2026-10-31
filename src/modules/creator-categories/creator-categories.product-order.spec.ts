@@ -82,7 +82,10 @@ function build(seed: { own?: OwnLink[]; custom?: CustomLink[] } = {}) {
   const revalidate = jest.fn();
   const prisma = {
     creator: { findUnique: jest.fn(() => Promise.resolve({ id: 'c1' })) },
+    // WP slug rule: store content locale + uniqueness lookups.
+    store: { findUnique: jest.fn(() => Promise.resolve(null)) },
     creatorCategory: {
+      findFirst: jest.fn(() => Promise.resolve(null)),
       findUnique: jest.fn(({ include }: { include?: unknown } = {}) =>
         Promise.resolve(
           include
@@ -189,10 +192,11 @@ function build(seed: { own?: OwnLink[]; custom?: CustomLink[] } = {}) {
       ),
     },
     // Batch form (array) and interactive form (callback with the client).
-    $transaction: jest.fn((arg: unknown): Promise<unknown> =>
-      typeof arg === 'function'
-        ? (arg as (tx: unknown) => Promise<unknown>)(prisma)
-        : Promise.all(arg as Promise<unknown>[]),
+    $transaction: jest.fn(
+      (arg: unknown): Promise<unknown> =>
+        typeof arg === 'function'
+          ? (arg as (tx: unknown) => Promise<unknown>)(prisma)
+          : Promise.all(arg as Promise<unknown>[]),
     ),
   };
   const service = new CreatorCategoriesService(

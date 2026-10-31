@@ -307,6 +307,34 @@ describe('planOccasionConversion', () => {
     expect(p.counts.pages.CREATE).toBe(4);
   });
 
+  it('WP slugs: Arabic, ä and `_` collections convert; numeric and locale slugs are reserved', () => {
+    const s = state();
+    s.categories.push(
+      cat({ id: 'a1', slug: 'هدية-لأمي', parent_id: 'root' }),
+      cat({ id: 'a2', slug: 'kläder', parent_id: 'root' }),
+      cat({ id: 'a3', slug: '3d_presenter', parent_id: 'root' }),
+      cat({ id: 'a4', slug: '2024', parent_id: 'root' }),
+      cat({ id: 'a5', slug: 'sv', parent_id: 'root' }),
+    );
+    const p = planOccasionConversion(s, input);
+    const action = (slug: string) => p.items.find((i) => i.slug === slug);
+    expect(action('هدية-لأمي')?.action).toBe('CREATE');
+    expect(action('kläder')?.action).toBe('CREATE');
+    expect(action('3d_presenter')?.action).toBe('CREATE');
+    expect(action('2024')?.conflicts).toEqual(['PAGE_SLUG_RESERVED']);
+    expect(action('sv')?.conflicts).toEqual(['PAGE_SLUG_RESERVED']);
+  });
+
+  it('the parent slug is matched in its stored form (encoded / upper case input)', () => {
+    const s = state();
+    s.categories[0] = { ...s.categories[0], slug: 'presenter-till-väm' };
+    const p = planOccasionConversion(s, {
+      ...input,
+      parent_slug: 'PRESENTER-TILL-V%C3%A4M',
+    });
+    expect(p.blockers).not.toContain('PARENT_NOT_FOUND');
+  });
+
   it('is idempotent: UNCHANGED on re-run, SKIP when the source changed', () => {
     const s = state();
     const first = planOccasionConversion(s, input);

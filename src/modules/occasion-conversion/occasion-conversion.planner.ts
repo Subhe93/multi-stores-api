@@ -1,7 +1,11 @@
 import { ImportEntityStatus } from '@prisma/client';
 import { hashOf } from '../importer/mapping/hash';
 import { htmlToPlainText, truncateWords } from '../importer/model/clean';
-import { RESERVED_PAGE_SLUGS } from '../pages-v2/pages-v2.service';
+import {
+  isNumericPageSlug,
+  normalizeSlugForLookup,
+} from '@multi-stores/core/slug';
+import { isReservedPageSlug, isWpSlug } from '../../common/slug/wp-slug';
 import {
   planRedirectUpserts,
   type ExistingRedirectRow,
@@ -28,7 +32,6 @@ import {
 
 export const OCCASION_ENTITY_TYPE = 'OCCASION_PAGE';
 export const CATEGORY_REF_PREFIX = 'cc:';
-export const SLUG_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** Longest ancestor chain followed when building a collection path. */
 const PATH_MAX_DEPTH = 8;
 /** Rank Math `%excerpt%` length for a generated meta description. */
@@ -267,9 +270,12 @@ export function planOccasionConversion(
   state: ConversionState,
   rawInput: ConversionInput,
 ): ConversionPlan {
+  // Collection slugs as typed / encoded by the caller, in the stored form.
   const input: Required<ConversionInput> = {
-    parent_slug: rawInput.parent_slug,
-    merge_descendant_products: rawInput.merge_descendant_products ?? [],
+    parent_slug: normalizeSlugForLookup(rawInput.parent_slug),
+    merge_descendant_products: (rawInput.merge_descendant_products ?? []).map(
+      (s) => normalizeSlugForLookup(s),
+    ),
     include_parent: rawInput.include_parent ?? false,
     publish: rawInput.publish ?? true,
   };
@@ -398,9 +404,13 @@ export function planOccasionConversion(
 
     // Pre-checks → CONFLICT per item.
     const conflicts: string[] = [];
-    if (!SLUG_REGEX.test(c.slug) || c.slug.length > 80)
+    // The page slug is the collection slug: valid when it is what the WP
+    // rule stores for it (Unicode letters kept, <= 200 encoded bytes).
+    if (!isWpSlug(c.slug, state.primaryLocale))
       conflicts.push('PAGE_SLUG_INVALID');
-    if (RESERVED_PAGE_SLUGS.has(c.slug.toLowerCase()))
+    // WP page rules: reserved routes / feeds / locale prefixes, and numeric
+    // slugs (`2024`, `page2`) that clash with pagination.
+    if (isReservedPageSlug(c.slug) || isNumericPageSlug(c.slug))
       conflicts.push('PAGE_SLUG_RESERVED');
     if (seenSlugs.has(c.slug)) conflicts.push('PAGE_SLUG_DUPLICATE');
     if (pageSlugs.has(c.slug)) conflicts.push('PAGE_SLUG_TAKEN');

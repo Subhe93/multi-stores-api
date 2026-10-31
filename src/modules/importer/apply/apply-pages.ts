@@ -5,6 +5,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { hashOf } from '../mapping/hash';
+import { uniqueV2PageSlug } from '../../../common/slug/wp-slug';
 import type { MappedPage, PlannedPage } from '../planner/plan-types';
 import {
   appliedRefs,
@@ -178,7 +179,9 @@ async function writePage(
     data: {
       store_id: ctx.storeId,
       type: 'LANDING',
-      slug: m.slug,
+      // The planned slug (already unique, reserved / numeric suffixed); the
+      // check runs again so a page created since the dry run cannot collide.
+      slug: await uniqueV2PageSlug(tx, ctx.storeId, p.final_slug ?? m.slug),
       status: 'DRAFT',
       seo,
     },

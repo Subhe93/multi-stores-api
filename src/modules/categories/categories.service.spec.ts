@@ -10,7 +10,13 @@ function setup() {
   const create = jest.fn((args: { data: Row }) => Promise.resolve(args.data));
   const update = jest.fn((args: { data: Row }) => Promise.resolve(args.data));
   const prisma = {
-    category: { create, update },
+    category: {
+      create,
+      update,
+      // WP slug rule: uniqueness lookup.
+      findFirst: jest.fn(() => Promise.resolve(null)),
+      findUnique: jest.fn(() => Promise.resolve(null)),
+    },
     categoryTranslation: { deleteMany: jest.fn() },
   };
   return {

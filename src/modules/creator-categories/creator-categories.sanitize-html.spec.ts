@@ -18,7 +18,10 @@ function setup() {
   );
   const prisma = {
     creator: { findUnique: jest.fn(() => Promise.resolve({ id: 'c1' })) },
+    // WP slug rule: store content locale + uniqueness lookups.
+    store: { findUnique: jest.fn(() => Promise.resolve(null)) },
     creatorCategory: {
+      findFirst: jest.fn(() => Promise.resolve(null)),
       create,
       findUnique: jest.fn(() =>
         Promise.resolve({ id: 'cat1', creator_id: 'c1', translations: [] }),

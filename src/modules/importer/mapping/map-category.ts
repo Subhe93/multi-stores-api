@@ -62,7 +62,7 @@ export function mapCategory(
     ref: c.ext_id,
     source_id: c.source_id,
     parent_ref: c.parent_ext_id,
-    slug: platformSlug(c.slug),
+    slug: platformSlug(c.slug, `category-${c.source_id}`),
     name,
     description,
     meta_title: c.seo.title
@@ -79,7 +79,7 @@ export function mapCategory(
         ? c.thumbnail
         : null,
     depth: c.depth,
-    path: c.path.map(platformSlug),
+    path: c.path.map((seg) => platformSlug(seg) || seg),
   };
 }
 

@@ -31,8 +31,15 @@ function setup() {
     },
     productTranslation: {
       findMany: jest.fn(() => Promise.resolve([])),
+      findFirst: jest.fn(() => Promise.resolve(null)),
       deleteMany: jest.fn(),
       createMany,
+    },
+    // WP slug rule: store content locale + uniqueness lookups.
+    store: { findUnique: jest.fn(() => Promise.resolve(null)) },
+    customProductTranslation: {
+      findFirst: jest.fn(() => Promise.resolve(null)),
+      findMany: jest.fn(() => Promise.resolve([])),
     },
   };
   const svc = new ProductsService(

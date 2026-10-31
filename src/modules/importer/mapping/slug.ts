@@ -1,15 +1,22 @@
+import { encodeSlugForUrl, sanitizeTitle } from '@multi-stores/core/slug';
+
 /**
- * Platform slug of a WordPress slug: WordPress stores non-ASCII slugs
- * percent-encoded; the platform stores them decoded (NFC, lower case).
+ * Platform slug of a WordPress slug. WordPress stores non-ASCII slugs
+ * percent-encoded (`kl%c3%a4der`); the platform stores them decoded (NFC,
+ * lower case) and runs every slug through the same WP sanitize_title port as
+ * the rest of the API. The decoded value is first put back in WP's own
+ * encoded form, so the sanitizer keeps what WP kept (`kläder`, `مرحبا`)
+ * instead of folding accents of an already-saved slug. `fallback` (WP's id
+ * fallback, e.g. `product-<source id>`) is used when nothing remains.
  */
-export function platformSlug(slug: string): string {
+export function platformSlug(slug: string, fallback = ''): string {
   let s = slug ?? '';
   try {
     s = decodeURIComponent(s);
   } catch {
-    // An invalid escape keeps the slug as it is.
+    // An invalid escape keeps the slug as it is; the sanitizer drops the '%'.
   }
-  return s.normalize('NFC').toLowerCase().trim();
+  return sanitizeTitle(encodeSlugForUrl(s.normalize('NFC'))) || fallback;
 }
 
 /** `slug`, `slug-2`, `slug-3`, … — the first one `isTaken` accepts. */

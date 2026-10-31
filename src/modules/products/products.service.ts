@@ -43,6 +43,15 @@ import {
 import { BundleOfferLike } from '../bundles/bundle-pricing.util';
 import { TaxManagementService } from '../taxes/tax-management.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
+import { RedirectsService } from '../redirects/redirects.service';
+import { encodeSlugForUrl } from '@multi-stores/core/slug';
+import { productSlugOwner } from '../../common/slug/wp-slug';
+import {
+  productRedirectMoves,
+  productSlugContext,
+  releaseLiveProductPaths,
+  resolveProductTranslationSlugs,
+} from '../../common/slug/product-slugs';
 import { validateOptionConfig } from '../personalization/personalization-config.validator';
 import {
   appRequired,
@@ -229,6 +238,8 @@ export class ProductsService {
     // Global module; optional so positional tests stay short (the
     // personalization app then counts as disabled).
     @Optional() private readonly storeApps?: StoreAppsService,
+    // Old-slug 301s (WP `_wp_old_slug`); optional for positional tests.
+    @Optional() private readonly redirects?: RedirectsService,
   ) {}
 
   /**
@@ -665,7 +676,6 @@ export class ProductsService {
 
     const productData: Prisma.ProductUncheckedCreateInput = {
       ...data,
-      translations: { create: translations.map(sanitizeTranslationHtml) },
     };
 
     // ربط المنتج بالـ Provider أو Creator
@@ -690,6 +700,21 @@ export class ProductsService {
         });
       productData.creator_id = creator.id;
     }
+
+    // WP slugs: sanitized with the store's content locale, unique in the
+    // creator's /products/<slug> domain.
+    const slugCtx = await productSlugContext(
+      this.prisma,
+      productData.creator_id,
+    );
+    const slugged = await resolveProductTranslationSlugs(
+      this.prisma,
+      translations,
+      { owner: productSlugOwner(productData), locale: slugCtx.locale },
+    );
+    productData.translations = {
+      create: slugged.map(sanitizeTranslationHtml),
+    };
 
     // M6: a requested primary that is not among the sent links fails before
     // anything is written (the ownership-filtered check runs again after the
@@ -799,6 +824,9 @@ export class ProductsService {
 
     await this.syncVariantsAndImages(product.id, variants, images);
 
+    await releaseLiveProductPaths(this.prisma, this.redirects, {
+      productId: product.id,
+    });
     await this.revalidateForCreator(productData.creator_id);
 
     return this.findById(product.id);
@@ -1248,10 +1276,33 @@ export class ProductsService {
 
     // تحديث الترجمات
     if (translations) {
+      // WP slugs: an unchanged slug is kept as stored; the rest are
+      // sanitized and made unique (the product itself excluded).
+      // One read serves the slug rule and the X19 carry-over below.
+      const storedSlugs = await this.prisma.productTranslation.findMany({
+        where: { product_id: id },
+        select: { locale: true, slug: true, short_description: true },
+      });
+      const slugCtx = await productSlugContext(this.prisma, product.creator_id);
+      const slugged = await resolveProductTranslationSlugs(
+        this.prisma,
+        translations,
+        {
+          owner: productSlugOwner(product),
+          locale: slugCtx.locale,
+          stored: storedSlugs,
+          exclude: { productId: id },
+          id,
+        },
+      );
       // Translations are deleted and recreated, so fields the client did not
       // send must be carried over or they are wiped (M4.4 X19):
       // short_description `undefined` = keep the stored value of that locale.
-      const rows = await this.withTranslationCarryOver(id, translations);
+      const rows = await this.withTranslationCarryOver(
+        id,
+        slugged,
+        storedSlugs,
+      );
       await this.prisma.productTranslation.deleteMany({
         where: { product_id: id },
       });
@@ -1261,6 +1312,22 @@ export class ProductsService {
           product_id: id,
         })),
       });
+      // Old-slug 301s for a published creator product.
+      if (
+        product.status === ProductStatus.PUBLISHED &&
+        product.creator_id &&
+        slugCtx.storeId &&
+        this.redirects
+      ) {
+        const moves = await productRedirectMoves(this.prisma, {
+          creatorId: product.creator_id,
+          primaryLocale: slugCtx.locale,
+          before: storedSlugs,
+          after: slugged,
+          exclude: { productId: id },
+        });
+        await this.redirects.applySlugChangeRedirects(slugCtx.storeId, moves);
+      }
     }
 
     // تحديث الـ attributes
@@ -1287,6 +1354,9 @@ export class ProductsService {
       });
     }
 
+    await releaseLiveProductPaths(this.prisma, this.redirects, {
+      productId: id,
+    });
     await this.revalidateForCreator(product.creator_id);
 
     return this.findById(id);
@@ -1318,6 +1388,7 @@ export class ProductsService {
   private async withTranslationCarryOver(
     productId: string,
     translations: ProductTranslationDto[],
+    preRead?: { locale: string; short_description: string | null }[],
   ): Promise<ProductTranslationDto[]> {
     if (!translations.some((t) => t.short_description === undefined)) {
       return translations.map((t) => ({
@@ -1325,10 +1396,12 @@ export class ProductsService {
         short_description: t.short_description || null,
       }));
     }
-    const stored = await this.prisma.productTranslation.findMany({
-      where: { product_id: productId },
-      select: { locale: true, short_description: true },
-    });
+    const stored =
+      preRead ??
+      (await this.prisma.productTranslation.findMany({
+        where: { product_id: productId },
+        select: { locale: true, short_description: true },
+      }));
     const byLocale = new Map(
       stored.map((r) => [r.locale, r.short_description]),
     );
@@ -1343,8 +1416,8 @@ export class ProductsService {
 
   /**
    * Duplicate a product with all its relations. The clone is always created
-   * as DRAFT, never featured, and titles/slugs are suffixed with "(Copy)" to
-   * stay distinct from the source. Unique fields like SKU are cleared or
+   * as DRAFT, never featured, titles are suffixed with "(Copy)" and slugs get
+   * the WP uniqueness suffix (`-2`, `-3`, ...) to stay distinct from the source. Unique fields like SKU are cleared or
    * suffixed to avoid conflicts. Variant→image links are remapped so a
    * cloned image points at its cloned variant.
    */
@@ -1375,6 +1448,7 @@ export class ProductsService {
     // owner's any more (e.g. it was deleted or re-assigned).
     await this.assertShippingProfileAllowed(source.shipping_profile_id, source);
 
+    const slugCtx = await productSlugContext(this.prisma, source.creator_id);
     const newProduct = await this.prisma.$transaction(async (tx) => {
       // Create the bare product first so we have an id for child rows.
       const created = await tx.product.create({
@@ -1411,15 +1485,32 @@ export class ProductsService {
         },
       });
 
-      // Translations — suffix title and slug to stay distinct.
+      // Translations — suffix the title; the slug gets the WP uniqueness
+      // suffix (`<slug>-2`, `-3`, ...) in the creator's product domain.
       if (source.translations.length > 0) {
+        const slugged = await resolveProductTranslationSlugs(
+          tx,
+          source.translations.map((t) => ({
+            locale: t.locale,
+            // The stored slug in WP's stable (encoded) form, so a decoded
+            // `kläder` stays `kläder` before the suffix.
+            slug: encodeSlugForUrl(t.slug),
+            title: t.title,
+          })),
+          {
+            owner: productSlugOwner(source),
+            locale: slugCtx.locale,
+            exclude: { productId: created.id },
+            id: created.id,
+          },
+        );
         await tx.productTranslation.createMany({
-          data: source.translations.map((t) => ({
+          data: source.translations.map((t, i) => ({
             product_id: created.id,
             locale: t.locale,
             title: `${t.title} (Copy)`,
             description: t.description,
-            slug: `${t.slug}-copy-${created.id.slice(0, 6)}`,
+            slug: slugged[i].slug,
             meta_title: t.meta_title,
             meta_desc: t.meta_desc,
             // M4.4 X20: copied; external refs are never copied (the clone
@@ -1595,10 +1686,14 @@ export class ProductsService {
 
     await this.checkOwnership(product, userId, userRole);
 
-    return this.prisma.product.update({
+    const updated = await this.prisma.product.update({
       where: { id },
       data: { status },
     });
+    await releaseLiveProductPaths(this.prisma, this.redirects, {
+      productId: id,
+    });
+    return updated;
   }
 
   // Image management

@@ -26,8 +26,15 @@ function updateSetup(
     },
     productTranslation: {
       findMany,
+      findFirst: jest.fn(() => Promise.resolve(null)),
       deleteMany: jest.fn(),
       createMany,
+    },
+    // WP slug rule: store content locale + uniqueness lookups.
+    store: { findUnique: jest.fn(() => Promise.resolve(null)) },
+    customProductTranslation: {
+      findFirst: jest.fn(() => Promise.resolve(null)),
+      findMany: jest.fn(() => Promise.resolve([])),
     },
   };
   const svc = new ProductsService(
@@ -88,12 +95,12 @@ describe('ProductsService.update short_description carry-over (X19)', () => {
     ]);
   });
 
-  it('skips the extra read when every row carries the field', async () => {
+  it('reads the stored rows once (slug rule + carry-over share it)', async () => {
     const { svc, findMany, written } = updateSetup([]);
     await svc.update('p1', 'u', UserRole.CREATOR, {
       translations: [tr('sv', { short_description: '' })],
     });
-    expect(findMany).not.toHaveBeenCalled();
+    expect(findMany).toHaveBeenCalledTimes(1);
     expect(written()[0].short_description).toBeNull();
   });
 
@@ -115,7 +122,13 @@ describe('ProductsService.duplicate short_description (X20)', () => {
     const trCreateMany = jest.fn();
     const tx = {
       product: { create: productCreate },
-      productTranslation: { createMany: trCreateMany },
+      productTranslation: {
+        createMany: trCreateMany,
+        findFirst: jest.fn(() => Promise.resolve(null)),
+      },
+      customProductTranslation: {
+        findFirst: jest.fn(() => Promise.resolve(null)),
+      },
       productTag: { createMany: jest.fn() },
       productAttribute: { createMany: jest.fn() },
       productVariant: { create: variantCreate },
@@ -162,6 +175,7 @@ describe('ProductsService.duplicate short_description (X20)', () => {
         ),
       },
       $transaction: jest.fn((fn: (t: unknown) => Promise<unknown>) => fn(tx)),
+      store: { findUnique: jest.fn(() => Promise.resolve(null)) },
     };
     const svc = new ProductsService(
       prisma as unknown as PrismaService,

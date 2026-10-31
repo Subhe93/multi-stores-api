@@ -13,19 +13,26 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+// Collection slugs follow WordPress sanitize_title (Unicode letters, `_`,
+// up to 200 encoded bytes), so any collection can be named; the planner
+// normalizes the value (decode, NFC, lower case) before matching.
+const SLUG_INPUT_MAX = 1000;
+// No '/', no whitespace or control characters: one path segment.
+// eslint-disable-next-line no-control-regex
+const SLUG_SEGMENT = /^[^\s/\u0000-\u001f\u007f]+$/u;
 
 export class ConversionInputDto {
   @IsString()
-  @MaxLength(80)
-  @Matches(SLUG, { message: 'parent_slug must be a collection slug' })
+  @MaxLength(SLUG_INPUT_MAX)
+  @Matches(SLUG_SEGMENT, { message: 'parent_slug must be a collection slug' })
   parent_slug!: string;
 
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(50)
   @IsString({ each: true })
-  @Matches(SLUG, { each: true })
+  @MaxLength(SLUG_INPUT_MAX, { each: true })
+  @Matches(SLUG_SEGMENT, { each: true })
   merge_descendant_products?: string[];
 
   @IsOptional()

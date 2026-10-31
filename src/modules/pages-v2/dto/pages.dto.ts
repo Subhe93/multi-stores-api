@@ -6,7 +6,6 @@ import {
   IsObject,
   IsOptional,
   IsString,
-  Matches,
   MaxLength,
   Min,
   MinLength,
@@ -15,7 +14,10 @@ import {
 import { Type } from 'class-transformer';
 import { PageStatus, PageType, StaticPageType } from '@prisma/client';
 
-const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+// Slugs follow WordPress sanitize_title (Unicode letters kept, up to 200
+// encoded bytes): the service sanitizes and dedupes whatever is sent and
+// returns the final slug, so only the raw input length is bounded here.
+const SLUG_INPUT_MAX = 1000;
 
 // ── Pages ────────────────────────────────────────────────
 
@@ -51,11 +53,7 @@ export class CreatePageDto {
 
   @IsOptional()
   @IsString()
-  @MinLength(1)
-  @MaxLength(80)
-  @Matches(SLUG_REGEX, {
-    message: 'slug must be lowercase letters, digits, and hyphens',
-  })
+  @MaxLength(SLUG_INPUT_MAX)
   slug?: string;
 
   @IsOptional()
@@ -75,8 +73,7 @@ export class UpdatePageDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
-  @MaxLength(80)
-  @Matches(SLUG_REGEX)
+  @MaxLength(SLUG_INPUT_MAX)
   slug?: string;
 
   @IsOptional()

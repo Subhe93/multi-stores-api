@@ -1,4 +1,6 @@
 import { ImportEntityStatus } from '@prisma/client';
+import { isNumericPageSlug, suffixSlug } from '@multi-stores/core/slug';
+import { isReservedPageSlug } from '../../../common/slug/wp-slug';
 import { cleanHtml, htmlToPlainText, truncateWords } from '../model/clean';
 import type { NPage } from '../model/normalized';
 import { hashOf } from '../mapping/hash';
@@ -7,8 +9,26 @@ import type { PlanContext } from './plan-context';
 import type { PlanAction, PlannedPage } from './plan-types';
 
 /** Platform path of an imported page: the storefront serves builder pages at `/<slug>`. */
-export function importedPagePath(page: NPage): string {
-  return `/${page.slug}`;
+export function importedPagePath(page: { final_slug: string }): string {
+  return `/${page.final_slug}`;
+}
+
+/**
+ * Synchronous twin of uniqueV2PageSlug (common/slug/wp-slug): reserved root
+ * routes, feeds, locale prefixes and numeric slugs (`2024`, `page2`) always
+ * get a suffix; a taken slug gets `-2`, `-3`, ... (numbered candidates are
+ * only checked against `taken`, as uniqueSlug does).
+ */
+export function plannedPageSlug(
+  base: string,
+  taken: (slug: string) => boolean,
+): string {
+  if (!isReservedPageSlug(base) && !isNumericPageSlug(base) && !taken(base))
+    return base;
+  for (let n = 2; ; n++) {
+    const c = suffixSlug(base, n);
+    if (!taken(c)) return c;
+  }
 }
 
 /** Meta description fallback (same rule as products: the excerpt, else the text). */
@@ -30,6 +50,9 @@ export function planPages(ctx: PlanContext): PlannedPage[] {
   const planned: PlannedPage[] = [];
   if (!scopes.pages) return planned;
   const seenSlugs = new Set<string>();
+  // Slugs served by builder pages now, plus the ones this plan hands out.
+  const storePages = ctx.snapshot.pageSlugs ?? new Map<string, string>();
+  const claimed = new Set<string>(storePages.values());
   for (const page of catalog.pages ?? []) {
     if (page.kind !== 'page' || page.status !== 'publish') continue;
     if (
@@ -78,9 +101,22 @@ export function planPages(ctx: PlanContext): PlannedPage[] {
       action = ledger.source_hash === sourceHash ? 'UNCHANGED' : 'UPDATE';
     else action = 'CREATE';
     const targetId = action === 'CREATE' ? null : ledger!.target_id;
+    // Apply never renames an existing page: it keeps its stored slug.
+    const stored = targetId ? storePages.get(targetId) : undefined;
+    const finalSlug =
+      stored ?? plannedPageSlug(page.slug, (s) => claimed.has(s));
+    claimed.add(finalSlug);
+    if (!stored && finalSlug !== page.slug)
+      warn({
+        code: 'W_SLUG_CONFLICT_SUFFIXED',
+        external_ref: page.ref,
+        title: page.title,
+        message: `"${page.slug}" → "${finalSlug}"`,
+      });
     planned.push({
       page,
       mapped,
+      final_slug: finalSlug,
       action,
       target_id: targetId,
       source_hash: sourceHash,

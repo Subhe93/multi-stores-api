@@ -692,7 +692,7 @@ export function mapProduct(p: NProduct, ctx: ProductMapContext): MappedProduct {
     ref: p.ext_id,
     source_id: p.source_id,
     source_title: p.title,
-    slug: platformSlug(p.slug),
+    slug: platformSlug(p.slug, `product-${p.source_id}`),
     status: options.status_map[p.status] ?? 'DRAFT',
     product_type: custom.product_type,
     customization_type: custom.customization_type,

@@ -1,4 +1,5 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { normalizeSlugForLookup } from '@multi-stores/core/slug';
 import { ConfigService } from '@nestjs/config';
 import { StoreType, UserRole, UserStatus } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -196,7 +197,10 @@ export function walkCollectionPath(
   let level = tree;
   let node: CollectionNode | undefined;
   for (const segment of segments) {
-    node = level.find((n) => n.slug === segment);
+    // Both sides in the stored form (decode, NFC, lower case), so a legacy
+    // row or an encoded / NFD segment still matches.
+    const key = normalizeSlugForLookup(segment);
+    node = level.find((n) => normalizeSlugForLookup(n.slug) === key);
     if (!node) return null;
     level = node.children ?? [];
   }

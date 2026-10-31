@@ -1,3 +1,4 @@
+import { normalizeSlugForLookup } from '@multi-stores/core/slug';
 import { SUPPORTED_LOCALES } from '../../markets/market.types';
 
 /**
@@ -65,7 +66,8 @@ export function parseStorefrontPath(
   let segments: string[];
   try {
     // The browser sends the percent-encoded path; Next.js decodes the route
-    // params before the pages look them up, so decode the same way.
+    // params before the pages look them up, so decode the same way. Malformed
+    // escapes make the path unknown.
     segments = path
       .split('/')
       .filter((s) => s.length > 0)
@@ -73,6 +75,9 @@ export function parseStorefrontPath(
   } catch {
     return { kind: 'unknown' };
   }
+  // WP query context: slugs are matched in their stored form (NFC, lower
+  // case; percent-decoding already done above).
+  segments = segments.map((s) => normalizeSlugForLookup(s));
 
   if (
     segments.length > 0 &&
