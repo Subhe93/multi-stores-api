@@ -5,6 +5,7 @@ import { OrdersModule } from '../orders/orders.module';
 import { MarketsModule } from '../markets/markets.module';
 import { RedirectsModule } from '../redirects/redirects.module';
 import { EditHintTokenModule } from '../storefront/edit-hint/edit-hint-token.module';
+import { CorsModule } from '../../common/cors/cors.module';
 
 @Module({
   // OrdersModule: an admin store-type switch re-derives the commission split of
@@ -13,7 +14,14 @@ import { EditHintTokenModule } from '../storefront/edit-hint/edit-hint-token.mod
   // updateLanguages, and consulted by the by-domain proxy lookup.
   // RedirectsModule: by-domain answers `redirects_version` (M4.4).
   // EditHintTokenModule: signs the storefront owner edit-hint token.
-  imports: [OrdersModule, MarketsModule, RedirectsModule, EditHintTokenModule],
+  // CorsModule: removing a custom domain drops its cached CORS answer.
+  imports: [
+    OrdersModule,
+    MarketsModule,
+    RedirectsModule,
+    EditHintTokenModule,
+    CorsModule,
+  ],
   controllers: [StoresController],
   providers: [StoresService],
   exports: [StoresService],

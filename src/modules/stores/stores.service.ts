@@ -4,7 +4,9 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
+import { CorsOriginService } from '../../common/cors/cors-origin.service';
 import { Prisma, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { sanitizeTitle } from '@multi-stores/core/slug';
@@ -53,6 +55,8 @@ export class StoresService {
     private readonly marketsContext: MarketsContextService,
     // M4.4 D17 / M5 B18: required (StoresModule imports RedirectsModule).
     private readonly redirects: RedirectsService,
+    // Optional so lean unit wiring stays valid; StoresModule imports CorsModule.
+    @Optional() private readonly corsOrigins?: CorsOriginService,
   ) {}
 
   async create(userId: string, dto: CreateStoreDto) {
@@ -349,7 +353,7 @@ export class StoresService {
 
     const own = await this.prisma.store.findUnique({
       where: { creator_id: creator.id },
-      select: { id: true },
+      select: { id: true, custom_domain: true },
     });
     if (
       data.custom_domain !== undefined &&
@@ -383,17 +387,36 @@ export class StoresService {
         });
     }
 
+    const dropRow =
+      data.custom_domain !== undefined && own
+        ? await this.mirrorRowToDrop(
+            own.id,
+            own.custom_domain,
+            data.custom_domain ?? null,
+          )
+        : null;
     const store = await this.runStoreUpdate(() =>
-      this.prisma.store.update({
-        where: { creator_id: creator.id },
-        data,
-        include: { language_config: true },
-      }),
+      this.updateWithMirrorDrop(
+        this.prisma.store.update({
+          where: { creator_id: creator.id },
+          data,
+          include: { language_config: true },
+        }),
+        own?.id ?? '',
+        dropRow,
+      ),
     );
 
     // The default market prices in the store currency (read live through
     // the markets cache), so a currency change drops the cached contexts.
     if (data.currency !== undefined) this.marketsContext.invalidate(store.id);
+    if (data.custom_domain !== undefined && own) {
+      this.afterCustomDomainChange(
+        own.id,
+        own.custom_domain,
+        data.custom_domain ?? null,
+      );
+    }
 
     await this.revalidation.revalidateStoreBySlug(store.slug);
 
@@ -419,6 +442,149 @@ export class StoresService {
     return row !== null;
   }
 
+  /**
+   * Creator self-service: detach the store's legacy external domain (e.g.
+   * after its DNS was removed). Allowed with the markets app on too — the
+   * Markets rule only stops a creator from SETTING the legacy field there,
+   * and a dead host must always be removable. Idempotent.
+   */
+  async removeCustomDomain(userId: string) {
+    const store = await this.prisma.store.findFirst({
+      where: { creator: { user_id: userId } },
+      select: { id: true, slug: true, custom_domain: true },
+    });
+    if (!store)
+      throw new NotFoundException({
+        code: 'STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
+    return this.clearCustomDomain(store);
+  }
+
+  /** Admin variant of removeCustomDomain, by creator id. */
+  async adminRemoveCustomDomain(creatorId: string) {
+    const store = await this.prisma.store.findUnique({
+      where: { creator_id: creatorId },
+      select: { id: true, slug: true, custom_domain: true },
+    });
+    if (!store)
+      throw new NotFoundException({
+        code: 'STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
+    return this.clearCustomDomain(store);
+  }
+
+  private async clearCustomDomain(store: {
+    id: string;
+    slug: string;
+    custom_domain: string | null;
+  }) {
+    const previous = store.custom_domain;
+    if (previous) {
+      const dropRow = await this.mirrorRowToDrop(store.id, previous, null);
+      await this.updateWithMirrorDrop(
+        this.prisma.store.update({
+          where: { id: store.id },
+          data: { custom_domain: null },
+        }),
+        store.id,
+        dropRow,
+      );
+      this.afterCustomDomainChange(store.id, previous, null);
+      await this.revalidation.revalidateStoreBySlug(store.slug);
+    }
+    // Market rows (app on) are owned by the Markets page and stay; tell the
+    // dashboard when one of them still serves the removed host.
+    const stillServedByMarket = previous
+      ? (await this.prisma.storeDomain.findFirst({
+          where: {
+            store_id: store.id,
+            hostname: previous.toLowerCase(),
+            status: 'ACTIVE',
+          },
+          select: { id: true },
+        })) !== null
+      : false;
+    return {
+      removed: previous !== null,
+      removed_domain: previous,
+      custom_domain: null,
+      still_served_by_market: stillServedByMarket,
+      ...(await this.storefrontHostsOf({ id: store.id, custom_domain: null })),
+    };
+  }
+
+  /**
+   * The StoreDomain row to delete with a legacy custom_domain change (set,
+   * replace or clear), or null. With the markets app off, the row mirroring
+   * the old host (backfilled by the markets migration) is inert but would
+   * resurrect the host once the app is enabled, and it keeps the hostname
+   * claimed against other stores, so it goes with the legacy value. With the
+   * app on (or unknown), rows belong to the Markets page and are never
+   * touched here.
+   */
+  private async mirrorRowToDrop(
+    storeId: string,
+    previous: string | null,
+    next: string | null,
+  ): Promise<string | null> {
+    const prev = normalizeHost(previous);
+    if (!prev || prev === normalizeHost(next)) return null;
+    const marketsOn = await this.storeApps
+      .isEnabled(storeId, 'markets')
+      .catch(() => true);
+    return marketsOn ? null : prev;
+  }
+
+  /**
+   * Runs the store update and the mirror-row delete in one transaction, so a
+   * failed delete cannot leave an orphan row behind a cleared column (a
+   * retry would see no previous domain and never clean it up).
+   */
+  private async updateWithMirrorDrop<T>(
+    update: Prisma.PrismaPromise<T>,
+    storeId: string,
+    dropHostname: string | null,
+  ): Promise<T> {
+    if (!dropHostname) return update;
+    const [updated] = await this.prisma.$transaction([
+      update,
+      this.prisma.storeDomain.deleteMany({
+        where: { store_id: storeId, hostname: dropHostname },
+      }),
+    ]);
+    return updated;
+  }
+
+  /**
+   * Cache side effects of a legacy custom_domain change. Best effort: the
+   * column is already saved, so a cache failure must not fail the request.
+   */
+  private afterCustomDomainChange(
+    storeId: string,
+    previous: string | null,
+    next: string | null,
+  ): void {
+    const prev = normalizeHost(previous);
+    const nxt = normalizeHost(next);
+    if (prev === nxt) return;
+    try {
+      // The default market's public host may have been this legacy value.
+      this.marketsContext.invalidate(storeId);
+      // Drop a cached "allowed" for the old host and a cached "denied" for
+      // the new one.
+      if (prev) this.corsOrigins?.forget(prev);
+      if (nxt) this.corsOrigins?.forget(nxt);
+    } catch (err) {
+      this.logger.warn(
+        `Custom-domain cache invalidation failed for store ${storeId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
   async findByCreatorId(creatorId: string) {
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creatorId },
@@ -439,7 +605,7 @@ export class StoresService {
   async adminUpdateByCreatorId(creatorId: string, dto: AdminUpdateStoreDto) {
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creatorId },
-      select: { id: true, store_type: true },
+      select: { id: true, store_type: true, custom_domain: true },
     });
     if (!store)
       throw new NotFoundException({
@@ -508,15 +674,34 @@ export class StoresService {
         });
     }
 
+    const dropRow =
+      data.custom_domain !== undefined
+        ? await this.mirrorRowToDrop(
+            store.id,
+            store.custom_domain,
+            data.custom_domain ?? null,
+          )
+        : null;
     const updated = await this.runStoreUpdate(() =>
-      this.prisma.store.update({
-        where: { id: store.id },
-        data,
-        include: { language_config: true },
-      }),
+      this.updateWithMirrorDrop(
+        this.prisma.store.update({
+          where: { id: store.id },
+          data,
+          include: { language_config: true },
+        }),
+        store.id,
+        dropRow,
+      ),
     );
 
     if (data.currency !== undefined) this.marketsContext.invalidate(store.id);
+    if (data.custom_domain !== undefined) {
+      this.afterCustomDomainChange(
+        store.id,
+        store.custom_domain,
+        data.custom_domain ?? null,
+      );
+    }
 
     // The commission split of an unpaid order is derived from the store type
     // at payment time — but COD orders are never "paid" through Stripe, so
@@ -750,6 +935,11 @@ export class StoresService {
 type StoreUpdateData = Omit<UpdateStoreDto, 'checkout_settings'> & {
   checkout_settings?: Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput;
 };
+
+/** Lower-case hostname without a trailing dot, or null when empty. */
+function normalizeHost(host: string | null | undefined): string | null {
+  return host?.trim().toLowerCase().replace(/\.$/, '') || null;
+}
 
 function normalizeStoreUpdate(dto: UpdateStoreDto): StoreUpdateData {
   let out: StoreUpdateData = dto as StoreUpdateData;

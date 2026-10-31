@@ -53,7 +53,13 @@ rule. Built for Namez: `namez.se` (Sweden, SEK, Swedish) and `namez.shop`
 - Store settings: the custom-domain field and the languages card are taken
   over by Markets ("managed by Markets" hint in
   `app/creator/store/page.tsx`); the API refuses `custom_domain` edits with
-  `STORE_CUSTOM_DOMAIN_MANAGED_BY_MARKETS` while the app is on.
+  `STORE_CUSTOM_DOMAIN_MANAGED_BY_MARKETS` while the app is on. Removing a
+  dead legacy domain is still allowed (`DELETE /stores/my/store/custom-domain`,
+  admin `DELETE /stores/by-creator/:creatorId/custom-domain`); market rows are
+  left alone and the answer flags `still_served_by_market`. With the app
+  OFF, clearing or replacing the legacy domain also deletes this store's
+  StoreDomain row for the old host (same transaction), so the host is freed
+  for other stores and does not come back when Markets is re-enabled.
 - Admin: FX rates card and domain status card
   (`components/markets/AdminFxRatesCard.tsx`, `AdminStoreDomainsCard.tsx`).
 

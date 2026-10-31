@@ -79,6 +79,19 @@ export class CorsOriginService {
     return allowed;
   }
 
+  /**
+   * Drop the cached answer for a hostname (and its www./bare twin) after a
+   * store's domain changed, so this instance re-reads it on the next request.
+   * Other instances converge within CACHE_TTL_MS.
+   */
+  forget(hostname: string): void {
+    const host = hostname.trim().toLowerCase().replace(/\.$/, '');
+    if (!host) return;
+    const bare = host.startsWith('www.') ? host.slice(4) : host;
+    this.cache.delete(bare);
+    this.cache.delete(`www.${bare}`);
+  }
+
   private remember(host: string, allowed: boolean, now: number): void {
     if (this.cache.size >= CACHE_MAX_ENTRIES) {
       // Drop expired entries first; if still full, evict the oldest inserted.

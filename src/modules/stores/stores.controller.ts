@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Put,
+  Delete,
   Param,
   Body,
   HttpCode,
@@ -48,6 +49,14 @@ export class StoresController {
     @Body() dto: AdminUpdateStoreDto,
   ) {
     return this.storesService.adminUpdateByCreatorId(creatorId, dto);
+  }
+
+  // Admin — Detach a creator store's legacy external domain
+  @Delete('by-creator/:creatorId/custom-domain')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  adminRemoveCustomDomain(@Param('creatorId') creatorId: string) {
+    return this.storesService.adminRemoveCustomDomain(creatorId);
   }
 
   // Public — Resolve a custom CNAME (e.g. shop.merchant.com) to its store slug.
@@ -102,6 +111,14 @@ export class StoresController {
   @Roles(UserRole.CREATOR)
   update(@CurrentUser('id') userId: string, @Body() dto: UpdateStoreDto) {
     return this.storesService.update(userId, dto);
+  }
+
+  // Creator — Detach the legacy external domain (allowed with Markets on too)
+  @Delete('my/store/custom-domain')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.CREATOR)
+  removeCustomDomain(@CurrentUser('id') userId: string) {
+    return this.storesService.removeCustomDomain(userId);
   }
 
   // Creator — Update the theme
