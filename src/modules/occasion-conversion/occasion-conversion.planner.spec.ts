@@ -413,4 +413,27 @@ describe('planOccasionConversion', () => {
       planOccasionConversion(state(), { ...input, publish: false }).blockers,
     ).toEqual(['PUBLISH_REQUIRED']);
   });
+  it('converts the parent itself after its children with include_parent', () => {
+    const p = planOccasionConversion(state(), {
+      parent_slug: 'studentpresent',
+      include_parent: true,
+    });
+    expect(p.blockers).toEqual([]);
+    expect(
+      p.items.filter((i) => i.action === 'CREATE').map((i) => i.slug),
+    ).toEqual([
+      'studentpresent-till-kille',
+      'studentpresent-till-tjej',
+      'studentpresent',
+    ]);
+    const parent = p.items.find((i) => i.slug === 'studentpresent')!;
+    expect(parent.redirect_from).toEqual([
+      '/collections/presenter-till-vem/studentpresent',
+    ]);
+    // Without the flag the parent stays a collection.
+    const plain = planOccasionConversion(state(), {
+      parent_slug: 'studentpresent',
+    });
+    expect(plain.items.map((i) => i.slug)).not.toContain('studentpresent');
+  });
 });

@@ -112,6 +112,11 @@ export interface ConversionInput {
    * children too). Defaults to none.
    */
   merge_descendant_products?: string[];
+  /**
+   * Also convert the parent collection itself (after its descendants), e.g.
+   * `svensk-present` and its child both become root pages. Defaults to false.
+   */
+  include_parent?: boolean;
   /** When false, the plan is reported but pages would be drafts: not supported for apply. */
   publish?: boolean;
 }
@@ -265,6 +270,7 @@ export function planOccasionConversion(
   const input: Required<ConversionInput> = {
     parent_slug: rawInput.parent_slug,
     merge_descendant_products: rawInput.merge_descendant_products ?? [],
+    include_parent: rawInput.include_parent ?? false,
     publish: rawInput.publish ?? true,
   };
   const byId = new Map(state.categories.map((c) => [c.id, c]));
@@ -291,7 +297,11 @@ export function planOccasionConversion(
   const text = occasionPresetText(state.primaryLocale);
 
   const targets = parent
-    ? descendantsDeepestFirst(parent.id, state.categories)
+    ? [
+        ...descendantsDeepestFirst(parent.id, state.categories),
+        // The parent goes last: it is only converted when every child was.
+        ...(input.include_parent ? [parent] : []),
+      ]
     : [];
   // Every converted category is INTERNAL after the batch, so a primary
   // re-pick never lands on another converted sibling.

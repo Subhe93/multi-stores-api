@@ -30,6 +30,10 @@ export class ConversionInputDto {
 
   @IsOptional()
   @IsBoolean()
+  include_parent?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   publish?: boolean;
 }
 
