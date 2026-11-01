@@ -4,6 +4,7 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { rewritePageMenuItems } from '../menus/page-menu-links';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   findBySlugTolerant,
@@ -2197,7 +2198,8 @@ export class StorefrontService {
    * its descendants, and the `url` of the kept COLLECTION items is the
    * collection's hierarchical `/collections/<path…>` at serve time (one
    * extra query, only when some item is a COLLECTION; the stored url is
-   * not touched).
+   * not touched). A PAGE item's `url` is its linked page's current
+   * `/<slug>` (one query per page system, only when some item links a page).
    */
   async getMenus(storeSlug: string) {
     const store = await this.prisma.store.findUnique({
@@ -2237,12 +2239,54 @@ export class StorefrontService {
       ? await this.collectionPaths(store.creator_id)
       : null;
 
-    return menus.map((m) => ({
-      id: m.id,
-      key: m.key,
-      name: m.name,
-      items: paths ? rewriteCollectionMenuItems(m.items, paths) : m.items,
-    }));
+    const pageSlugs = await this.menuPageSlugs(store.id, menus);
+
+    return menus.map((m) => {
+      const items = paths
+        ? rewriteCollectionMenuItems(m.items, paths)
+        : m.items;
+      return {
+        id: m.id,
+        key: m.key,
+        name: m.name,
+        items: pageSlugs ? rewritePageMenuItems(items, pageSlugs) : items,
+      };
+    });
+  }
+
+  /**
+   * Current slug of every root page (v2 or legacy) a PAGE menu item links,
+   * by page id; null when no item links a page. A renamed page's menu link
+   * then follows the new slug even if its stored URL is stale.
+   */
+  private async menuPageSlugs(
+    storeId: string,
+    menus: { items: { kind: string; resource_id: string | null }[] }[],
+  ): Promise<Map<string, string> | null> {
+    const ids = [
+      ...new Set(
+        menus.flatMap((m) =>
+          m.items
+            .filter((it) => it.kind === 'PAGE' && !!it.resource_id)
+            .map((it) => it.resource_id as string),
+        ),
+      ),
+    ];
+    if (!ids.length) return null;
+    const [v2, legacy] = await Promise.all([
+      this.prisma.page.findMany({
+        where: { id: { in: ids }, store_id: storeId, slug: { not: null } },
+        select: { id: true, slug: true },
+      }),
+      this.prisma.staticPage.findMany({
+        where: { id: { in: ids }, store_id: storeId },
+        select: { id: true, slug: true },
+      }),
+    ]);
+    const out = new Map<string, string>();
+    for (const p of legacy) if (p.slug) out.set(p.id, p.slug);
+    for (const p of v2) if (p.slug) out.set(p.id, p.slug);
+    return out;
   }
 
   /**

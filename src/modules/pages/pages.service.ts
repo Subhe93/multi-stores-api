@@ -22,6 +22,8 @@ import {
   UpdatePageDto,
 } from './dto/page.dto';
 import { sanitizeCreatorHtml } from '../../common/html/creator-html';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
+import { relinkPageMenuItems } from '../menus/page-menu-links';
 
 /** Legacy page content is rendered as HTML on the storefront. */
 function sanitizeTranslation(t: PageTranslationDto): PageTranslationDto {
@@ -36,6 +38,8 @@ export class PagesService {
     private prisma: PrismaService,
     // Old-slug 301s (WP `_wp_old_slug`); optional for positional tests.
     @Optional() private readonly redirects?: RedirectsService,
+    // Storefront cache refresh after a live page moved; optional for tests.
+    @Optional() private readonly revalidation?: RevalidationService,
   ) {}
 
   async findByStore(storeId: string, userId: string, userRole: UserRole) {
@@ -221,6 +225,23 @@ export class PagesService {
       );
     }
     await this.releaseLivePagePath(updated);
+    // Menu items that link this page carry its URL: point them at the new
+    // slug, and refresh the cached storefront (nav pages + menus).
+    if (current && updated.slug !== current.slug) {
+      const relinked = await relinkPageMenuItems(
+        this.prisma,
+        current.store_id,
+        id,
+        updated.slug,
+      );
+      if (
+        this.revalidation &&
+        (relinked > 0 ||
+          current.status === 'PUBLISHED' ||
+          updated.status === 'PUBLISHED')
+      )
+        await this.revalidation.revalidateStoreById(current.store_id);
+    }
     return updated;
   }
 

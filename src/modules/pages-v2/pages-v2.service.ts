@@ -22,6 +22,7 @@ import {
 } from '../../common/slug/wp-slug';
 import { rootPagePath } from '../../common/slug/slug-moves';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
+import { relinkPageMenuItems } from '../menus/page-menu-links';
 import {
   CreatePageDto,
   CreateSectionDto,
@@ -490,9 +491,18 @@ export class PagesV2Service {
       );
     }
     await this.releaseLivePagePath(storeId, updated);
+    // Menu items that link this page carry its URL: point them at the new
+    // slug so the header links it directly (not through the 301).
+    const relinked =
+      updated.slug && updated.slug !== current?.slug
+        ? await relinkPageMenuItems(this.prisma, storeId, pageId, updated.slug)
+        : 0;
     // Slug, status and SEO of a published page are served from the store
-    // cache: refresh it like publish() does (Namez go-live Phase 3.2).
-    if (updated.published_version_id)
+    // cache: refresh it like publish() does (Namez go-live Phase 3.2). The
+    // slug is page-level routing (the storefront looks the page up by its
+    // current slug, not by the snapshot), so the new URL serves right away
+    // without a re-publish.
+    if (updated.published_version_id || relinked > 0)
       await this.revalidation.revalidateStoreById(storeId);
     return updated;
   }

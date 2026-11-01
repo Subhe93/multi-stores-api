@@ -45,6 +45,10 @@ function db(opts: { v2?: Row[]; legacy?: Row[]; locale?: string }) {
       ),
       update: staticUpdate,
     },
+    menuItem: {
+      findMany: jest.fn(() => Promise.resolve([])),
+      update: jest.fn(),
+    },
     staticPageTranslation: {
       findMany: jest.fn(() => Promise.resolve([])),
       deleteMany: jest.fn(),
@@ -187,6 +191,12 @@ describe('PagesService (legacy) WP slugs', () => {
       [{ from: '/villkor', to: '/kopvillkor' }],
       undefined,
       { localePrefixes: true },
+    );
+    // PAGE menu items that link the page are pointed at the new slug.
+    expect(d.prisma.menuItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { kind: 'PAGE', resource_id: 'l1', menu: { store_id: 's1' } },
+      }),
     );
     d.redirects.applySlugChangeRedirects.mockClear();
     await svc.update('l2', { slug: 'nytt' }, 'a', 'ADMIN' as never);
