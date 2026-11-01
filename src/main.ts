@@ -30,6 +30,19 @@ async function bootstrap() {
     rawBody: true,
   });
 
+  // Access and refresh tokens must be signed with different secrets, or a
+  // purpose token (2FA challenge, password reset) signed with JWT_SECRET
+  // could pass as a refresh token. Refuse to start rather than run unsafe.
+  // Both must be set: without JWT_REFRESH_SECRET, @nestjs/jwt silently falls
+  // back to JWT_SECRET and a 7-day refresh token would pass as access token.
+  const jwtSecret = process.env.JWT_SECRET;
+  const refreshSecret = process.env.JWT_REFRESH_SECRET;
+  if (!jwtSecret || !refreshSecret || jwtSecret === refreshSecret) {
+    throw new Error(
+      'JWT_SECRET and JWT_REFRESH_SECRET must both be set and must differ',
+    );
+  }
+
   // Reverse proxy (deploy): TRUST_PROXY makes req.ip the real client, which
   // the per-IP throttles and the customer upload byte budget key on. A hop
   // count ("1" behind one nginx) or "loopback"; unset keeps Express's

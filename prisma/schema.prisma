@@ -27,6 +27,23 @@ model User {
   // (JWT iat, whole seconds) are rejected. Set on block, password reset and
   // password change.
   tokens_valid_after DateTime?
+  // Two-factor authentication (TOTP, staff only). totp_secret is encrypted at
+  // rest (CryptoService); it is set while setup is pending and after enabling.
+  // 2FA is ON only when totp_enabled_at is set.
+  totp_secret          String?
+  totp_enabled_at      DateTime?
+  // Last accepted 30-second TOTP step: a code is never accepted twice.
+  totp_last_step       Int?
+  // sha256 hex of the unused recovery codes.
+  totp_recovery_hashes String[]  @default([])
+  // Attempts of the 2FA sign-in step in the current window; 5 lock sign-in
+  // codes until auth_locked_until.
+  auth_failed_count    Int       @default(0)
+  auth_locked_until    DateTime?
+  // Same for re-auth inside a session (payment keys, 2FA changes). Kept
+  // apart so a stolen token cannot lock the owner out of signing in.
+  reauth_failed_count  Int       @default(0)
+  reauth_locked_until  DateTime?
   created_at    DateTime   @default(now())
   updated_at    DateTime   @updatedAt
 
@@ -36,11 +53,39 @@ model User {
   customer     Customer?
   sessions     Session[]
   login_tokens LoginToken[]
+  security_events SecurityEvent[]
 
   @@unique([store_id, email])
   @@index([email])
   @@index([role, status])
   @@index([store_id, created_at])
+}
+
+// Append-only security audit trail: payment-key changes, 2FA changes, failed
+// re-authentication. Never stores secret VALUES — `fields` holds field names.
+// The API exposes no update/delete path for these rows.
+model SecurityEvent {
+  id           String    @id @default(uuid())
+  // Acting account; kept as a snapshot (email/role) so the row survives the
+  // user's deletion (user_id is then set to NULL).
+  user_id      String?
+  actor_email  String
+  actor_role   UserRole?
+  action       String
+  // What was changed: 'platform' | 'creator' | 'provider' | 'user'.
+  target_type  String?
+  target_id    String?
+  target_label String?
+  fields       String[]  @default([])
+  ip           String?
+  user_agent   String?
+  created_at   DateTime  @default(now())
+
+  user User? @relation(fields: [user_id], references: [id], onDelete: SetNull)
+
+  @@index([created_at])
+  @@index([user_id, created_at])
+  @@index([action, created_at])
 }
 
 model Session {

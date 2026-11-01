@@ -7,6 +7,7 @@ import {
   IsString,
   MaxLength,
 } from 'class-validator';
+import { ReauthDto } from '../../../security/dto/security.dto';
 
 // Order-first flow: like Stripe, the client only names the order. Everything
 // that affects money (amount, currency, merchant account) is derived from the
@@ -18,7 +19,8 @@ export class KustomSessionDto {
 
 // Creator-managed Kustom credentials. All optional so one field can be updated
 // at a time; an empty string clears merchant_id / shared_secret.
-export class UpdateKustomSettingsDto {
+// Credential changes (merchant_id / shared_secret) need the ReauthDto fields.
+export class UpdateKustomSettingsDto extends ReauthDto {
   @IsOptional()
   @IsString()
   @MaxLength(255)

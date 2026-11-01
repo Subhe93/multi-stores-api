@@ -3,6 +3,7 @@ import { JwtModule, type JwtSignOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ConfigService } from '@nestjs/config';
 import { AuthController } from './auth.controller';
+import { TwoFactorController } from './two-factor.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { MagicLinkModule } from './magic-link.module';
@@ -23,7 +24,7 @@ import { MagicLinkModule } from './magic-link.module';
       }),
     }),
   ],
-  controllers: [AuthController],
+  controllers: [AuthController, TwoFactorController],
   providers: [AuthService, JwtStrategy],
   exports: [AuthService],
 })

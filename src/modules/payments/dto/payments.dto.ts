@@ -1,4 +1,5 @@
 import { IsString, IsOptional } from 'class-validator';
+import { ReauthDto } from '../../security/dto/security.dto';
 
 // Order-first flow: the client only sends the order id. The server derives the
 // charge amount, currency, and Connect destination from the order itself, so a
@@ -10,7 +11,7 @@ export class CreatePaymentIntentDto {
 
 // Admin-managed platform Stripe credentials. All optional so the admin can
 // update one field at a time; an empty string clears that value.
-export class UpdateStripeSettingsDto {
+export class UpdateStripeSettingsDto extends ReauthDto {
   @IsOptional()
   @IsString()
   secret_key?: string;

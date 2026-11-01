@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule } from './prisma/prisma.module';
 import { CryptoModule } from './common/crypto/crypto.module';
+import { SecurityModule } from './modules/security/security.module';
 import { RevalidationModule } from './common/revalidation/revalidation.module';
 import { CorsModule } from './common/cors/cors.module';
 import { StoreAppsModule } from './modules/store-apps/store-apps.module';
@@ -71,6 +72,7 @@ import { HealthModule } from './modules/health/health.module';
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 300 }]),
     PrismaModule,
     CryptoModule,
+    SecurityModule,
     RevalidationModule,
     StoreAppsModule,
     MarketsModule,

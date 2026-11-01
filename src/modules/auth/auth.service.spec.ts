@@ -15,6 +15,14 @@ import type { MagicLinkService } from './magic-link.service';
 import type { MailService } from '../mail/mail.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { StoreAppsService } from '../store-apps/store-apps.service';
+import type { TwoFactorService } from '../security/two-factor.service';
+
+/** Accounts in these specs have no 2FA. */
+const twoFactorMock = {
+  issueChallenge: jest.fn(),
+  verifyLogin: jest.fn(),
+};
+const noTwoFactor = twoFactorMock as unknown as TwoFactorService;
 
 const RAW_TOKEN = 'RawMagicToken_abcdefghijklmnopqrstuvwxyz0123';
 
@@ -117,6 +125,7 @@ function build(
     magicLinks as unknown as MagicLinkService,
     links,
     credentials,
+    noTwoFactor,
   );
   return { service, prisma, mail, magicLinks, jwt };
 }
@@ -414,6 +423,35 @@ describe('AuthService.magicLogin', () => {
     });
   });
 
+  it('a link never bypasses 2FA: challenge instead of tokens', async () => {
+    const { service, prisma, jwt } = build({
+      consumed: {
+        id: 'u2',
+        email: 'c@b.se',
+        role: 'CREATOR',
+        status: 'ACTIVE',
+        store_id: null,
+      },
+    });
+    prisma.user.findUnique.mockResolvedValueOnce({
+      totp_enabled_at: new Date(),
+      totp_secret: 'v1:enc',
+    } as never);
+    twoFactorMock.issueChallenge.mockResolvedValueOnce({
+      requires_2fa: true,
+      challenge_token: 'challenge',
+      expires_in: 300,
+    });
+    const res = await service.magicLogin(RAW_TOKEN);
+    expect(res).toEqual({
+      requires_2fa: true,
+      challenge_token: 'challenge',
+      expires_in: 300,
+    });
+    expect(twoFactorMock.issueChallenge).toHaveBeenCalledWith('u2');
+    expect(jwt.signAsync).not.toHaveBeenCalled();
+  });
+
   it('answers unknown / expired / used / inactive with the same 401', async () => {
     const { service } = build({ consumed: null });
     const err = await service.magicLogin('whatever').catch((e: unknown) => e);
@@ -422,6 +460,33 @@ describe('AuthService.magicLogin', () => {
       code: 'MAGIC_LINK_INVALID',
       message: 'This login link is invalid or has expired',
     });
+  });
+});
+
+describe('AuthService.login with 2FA', () => {
+  it('a right password on a 2FA account returns a challenge, no tokens', async () => {
+    const { service, prisma, jwt } = build();
+    prisma.user.findFirst.mockResolvedValueOnce({
+      id: 'u3',
+      email: 'admin@b.se',
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      store_id: null,
+      password_hash: bcrypt.hashSync('Right-pw1', 4),
+      totp_enabled_at: new Date(),
+      totp_secret: 'v1:enc',
+    } as never);
+    twoFactorMock.issueChallenge.mockResolvedValueOnce({
+      requires_2fa: true,
+      challenge_token: 'c',
+      expires_in: 300,
+    });
+    const res = await service.login({
+      email: 'admin@b.se',
+      password: 'Right-pw1',
+    });
+    expect(res).toMatchObject({ requires_2fa: true });
+    expect(jwt.signAsync).not.toHaveBeenCalled();
   });
 });
 

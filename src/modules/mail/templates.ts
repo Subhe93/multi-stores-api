@@ -943,3 +943,359 @@ export function customerLoginLinkEmail(
 
   return { subject: fill(t.subject, textTokens), html, text };
 }
+
+// ── Security alerts ─────────────────────────────────────────────────────────
+// Sent when payment keys or two-factor settings change. They never contain a
+// secret value — only which fields changed, when, and from where.
+
+export type SecurityAlertKind =
+  | 'platform_keys_changed'
+  | 'kustom_keys_changed'
+  | 'stripe_disconnected'
+  | 'two_factor_enabled'
+  | 'two_factor_disabled'
+  | 'recovery_codes_regenerated'
+  | 'account_locked'
+  | 'recovery_code_used'
+  | 'admin_account_created';
+
+export interface SecurityAlertData {
+  kind: SecurityAlertKind;
+  actorEmail: string;
+  /** Field NAMES that changed (never values). */
+  fields?: string[];
+  at: Date;
+  ip?: string | null;
+  userAgent?: string | null;
+  platformName?: string;
+}
+
+interface SecurityText {
+  subject: Record<SecurityAlertKind, string>;
+  body: Record<SecurityAlertKind, string>;
+  by: string;
+  fields: string;
+  when: string;
+  ip: string;
+  device: string;
+  notYou: string;
+  dir: 'ltr' | 'rtl';
+}
+
+const SECURITY_TEXT: Record<string, SecurityText> = {
+  en: {
+    subject: {
+      platform_keys_changed:
+        'Security alert: platform payment keys were changed',
+      kustom_keys_changed:
+        'Security alert: your Kustom payment credentials were changed',
+      stripe_disconnected:
+        'Security alert: your Stripe account was disconnected',
+      two_factor_enabled: 'Two-factor authentication was turned on',
+      two_factor_disabled:
+        'Security alert: two-factor authentication was turned off',
+      recovery_codes_regenerated: 'New two-factor recovery codes were created',
+      account_locked: 'Security alert: too many failed verification attempts',
+      recovery_code_used: 'Security alert: a recovery code was used',
+      admin_account_created:
+        'Security alert: a new administrator account was created',
+    },
+    body: {
+      platform_keys_changed:
+        "The platform's Stripe payment settings were changed.",
+      kustom_keys_changed:
+        'The Kustom credentials used to receive payments for your store were changed.',
+      stripe_disconnected:
+        'The Stripe account that receives your payouts was disconnected.',
+      two_factor_enabled:
+        'Two-factor authentication is now required to sign in to your account.',
+      two_factor_disabled:
+        'Your account no longer asks for a two-factor code when you sign in.',
+      recovery_codes_regenerated:
+        'Your previous recovery codes no longer work.',
+      account_locked:
+        'Verification on your account was locked for 15 minutes after 5 wrong codes or passwords.',
+      recovery_code_used:
+        'One of your two-factor recovery codes was just used to verify your account. Each code works only once.',
+      admin_account_created:
+        'A new administrator account was created on the platform.',
+    },
+    by: 'Account',
+    fields: 'Changed',
+    when: 'Time (UTC)',
+    ip: 'IP address',
+    device: 'Device',
+    notYou:
+      "If this wasn't you, change your password immediately, turn on two-factor authentication and check your payment settings.",
+    dir: 'ltr',
+  },
+  ar: {
+    subject: {
+      platform_keys_changed: 'تنبيه أمني: تم تغيير مفاتيح الدفع الخاصة بالمنصة',
+      kustom_keys_changed:
+        'تنبيه أمني: تم تغيير بيانات اعتماد Kustom الخاصة بك',
+      stripe_disconnected: 'تنبيه أمني: تم فصل حساب Stripe الخاص بك',
+      two_factor_enabled: 'تم تفعيل المصادقة الثنائية',
+      two_factor_disabled: 'تنبيه أمني: تم إيقاف المصادقة الثنائية',
+      recovery_codes_regenerated:
+        'تم إنشاء رموز استرداد جديدة للمصادقة الثنائية',
+      account_locked: 'تنبيه أمني: محاولات تحقق فاشلة كثيرة',
+      recovery_code_used: 'تنبيه أمني: تم استخدام رمز استرداد',
+      admin_account_created: 'تنبيه أمني: تم إنشاء حساب مدير جديد',
+    },
+    body: {
+      platform_keys_changed:
+        'تم تغيير إعدادات الدفع عبر Stripe الخاصة بالمنصة.',
+      kustom_keys_changed:
+        'تم تغيير بيانات Kustom المستخدمة لاستقبال مدفوعات متجرك.',
+      stripe_disconnected: 'تم فصل حساب Stripe الذي تُحوَّل إليه أرباحك.',
+      two_factor_enabled:
+        'أصبح رمز المصادقة الثنائية مطلوباً لتسجيل الدخول إلى حسابك.',
+      two_factor_disabled:
+        'لم يعد حسابك يطلب رمز المصادقة الثنائية عند تسجيل الدخول.',
+      recovery_codes_regenerated: 'رموز الاسترداد السابقة لم تعد صالحة.',
+      account_locked:
+        'تم قفل التحقق في حسابك لمدة 15 دقيقة بعد 5 رموز أو كلمات مرور خاطئة.',
+      recovery_code_used:
+        'تم للتو استخدام أحد رموز الاسترداد للتحقق من حسابك. كل رمز يعمل مرة واحدة فقط.',
+      admin_account_created: 'تم إنشاء حساب مدير جديد على المنصة.',
+    },
+    by: 'الحساب',
+    fields: 'ما تغيّر',
+    when: 'الوقت (UTC)',
+    ip: 'عنوان IP',
+    device: 'الجهاز',
+    notYou:
+      'إذا لم تكن أنت من قام بذلك، غيّر كلمة المرور فوراً، وفعّل المصادقة الثنائية، وراجع إعدادات الدفع.',
+    dir: 'rtl',
+  },
+  sv: {
+    subject: {
+      platform_keys_changed:
+        'Säkerhetsvarning: plattformens betalnyckel har ändrats',
+      kustom_keys_changed:
+        'Säkerhetsvarning: dina Kustom-uppgifter har ändrats',
+      stripe_disconnected:
+        'Säkerhetsvarning: ditt Stripe-konto har kopplats bort',
+      two_factor_enabled: 'Tvåstegsverifiering har aktiverats',
+      two_factor_disabled:
+        'Säkerhetsvarning: tvåstegsverifiering har stängts av',
+      recovery_codes_regenerated: 'Nya återställningskoder har skapats',
+      account_locked:
+        'Säkerhetsvarning: för många misslyckade verifieringsförsök',
+      recovery_code_used: 'Säkerhetsvarning: en återställningskod har använts',
+      admin_account_created:
+        'Säkerhetsvarning: ett nytt administratörskonto har skapats',
+    },
+    body: {
+      platform_keys_changed:
+        'Plattformens Stripe-betalinställningar har ändrats.',
+      kustom_keys_changed:
+        'Kustom-uppgifterna som tar emot betalningar för din butik har ändrats.',
+      stripe_disconnected:
+        'Stripe-kontot som tar emot dina utbetalningar har kopplats bort.',
+      two_factor_enabled:
+        'En tvåstegskod krävs nu för att logga in på ditt konto.',
+      two_factor_disabled:
+        'Ditt konto frågar inte längre efter en tvåstegskod vid inloggning.',
+      recovery_codes_regenerated:
+        'Dina tidigare återställningskoder fungerar inte längre.',
+      account_locked:
+        'Verifieringen på ditt konto låstes i 15 minuter efter 5 felaktiga koder eller lösenord.',
+      recovery_code_used:
+        'En av dina återställningskoder användes nyss för att verifiera ditt konto. Varje kod fungerar bara en gång.',
+      admin_account_created:
+        'Ett nytt administratörskonto har skapats på plattformen.',
+    },
+    by: 'Konto',
+    fields: 'Ändrat',
+    when: 'Tid (UTC)',
+    ip: 'IP-adress',
+    device: 'Enhet',
+    notYou:
+      'Om det inte var du: byt lösenord direkt, aktivera tvåstegsverifiering och kontrollera dina betalinställningar.',
+    dir: 'ltr',
+  },
+  tr: {
+    subject: {
+      platform_keys_changed:
+        'Güvenlik uyarısı: platformun ödeme anahtarları değiştirildi',
+      kustom_keys_changed:
+        'Güvenlik uyarısı: Kustom ödeme bilgileriniz değiştirildi',
+      stripe_disconnected:
+        'Güvenlik uyarısı: Stripe hesabınızın bağlantısı kesildi',
+      two_factor_enabled: 'İki adımlı doğrulama açıldı',
+      two_factor_disabled: 'Güvenlik uyarısı: iki adımlı doğrulama kapatıldı',
+      recovery_codes_regenerated:
+        'Yeni iki adımlı doğrulama kurtarma kodları oluşturuldu',
+      account_locked:
+        'Güvenlik uyarısı: çok fazla başarısız doğrulama denemesi',
+      recovery_code_used: 'Güvenlik uyarısı: bir kurtarma kodu kullanıldı',
+      admin_account_created:
+        'Güvenlik uyarısı: yeni bir yönetici hesabı oluşturuldu',
+    },
+    body: {
+      platform_keys_changed: 'Platformun Stripe ödeme ayarları değiştirildi.',
+      kustom_keys_changed:
+        'Mağazanızın ödemelerini almak için kullanılan Kustom bilgileri değiştirildi.',
+      stripe_disconnected:
+        'Ödemelerinizi alan Stripe hesabının bağlantısı kesildi.',
+      two_factor_enabled:
+        'Hesabınıza giriş için artık iki adımlı doğrulama kodu gerekiyor.',
+      two_factor_disabled:
+        'Hesabınız artık girişte iki adımlı doğrulama kodu istemiyor.',
+      recovery_codes_regenerated:
+        'Önceki kurtarma kodlarınız artık çalışmıyor.',
+      account_locked:
+        '5 hatalı kod veya şifreden sonra hesabınızdaki doğrulama 15 dakika kilitlendi.',
+      recovery_code_used:
+        'Kurtarma kodlarınızdan biri az önce hesabınızı doğrulamak için kullanıldı. Her kod yalnızca bir kez çalışır.',
+      admin_account_created: 'Platformda yeni bir yönetici hesabı oluşturuldu.',
+    },
+    by: 'Hesap',
+    fields: 'Değişenler',
+    when: 'Zaman (UTC)',
+    ip: 'IP adresi',
+    device: 'Cihaz',
+    notYou:
+      'Bunu siz yapmadıysanız hemen şifrenizi değiştirin, iki adımlı doğrulamayı açın ve ödeme ayarlarınızı kontrol edin.',
+    dir: 'ltr',
+  },
+  de: {
+    subject: {
+      platform_keys_changed:
+        'Sicherheitswarnung: Die Zahlungsschlüssel der Plattform wurden geändert',
+      kustom_keys_changed:
+        'Sicherheitswarnung: Ihre Kustom-Zahlungsdaten wurden geändert',
+      stripe_disconnected:
+        'Sicherheitswarnung: Ihr Stripe-Konto wurde getrennt',
+      two_factor_enabled: 'Zwei-Faktor-Authentifizierung wurde aktiviert',
+      two_factor_disabled:
+        'Sicherheitswarnung: Zwei-Faktor-Authentifizierung wurde deaktiviert',
+      recovery_codes_regenerated:
+        'Neue Wiederherstellungscodes wurden erstellt',
+      account_locked:
+        'Sicherheitswarnung: zu viele fehlgeschlagene Bestätigungsversuche',
+      recovery_code_used:
+        'Sicherheitswarnung: Ein Wiederherstellungscode wurde verwendet',
+      admin_account_created:
+        'Sicherheitswarnung: Ein neues Administratorkonto wurde erstellt',
+    },
+    body: {
+      platform_keys_changed:
+        'Die Stripe-Zahlungseinstellungen der Plattform wurden geändert.',
+      kustom_keys_changed:
+        'Die Kustom-Daten, über die Ihr Shop Zahlungen erhält, wurden geändert.',
+      stripe_disconnected:
+        'Das Stripe-Konto, das Ihre Auszahlungen erhält, wurde getrennt.',
+      two_factor_enabled:
+        'Für die Anmeldung bei Ihrem Konto ist jetzt ein Zwei-Faktor-Code erforderlich.',
+      two_factor_disabled:
+        'Ihr Konto fragt bei der Anmeldung nicht mehr nach einem Zwei-Faktor-Code.',
+      recovery_codes_regenerated:
+        'Ihre bisherigen Wiederherstellungscodes funktionieren nicht mehr.',
+      account_locked:
+        'Die Bestätigung Ihres Kontos wurde nach 5 falschen Codes oder Passwörtern für 15 Minuten gesperrt.',
+      recovery_code_used:
+        'Einer Ihrer Wiederherstellungscodes wurde gerade zur Bestätigung Ihres Kontos verwendet. Jeder Code funktioniert nur einmal.',
+      admin_account_created:
+        'Auf der Plattform wurde ein neues Administratorkonto erstellt.',
+    },
+    by: 'Konto',
+    fields: 'Geändert',
+    when: 'Zeit (UTC)',
+    ip: 'IP-Adresse',
+    device: 'Gerät',
+    notYou:
+      'Wenn Sie das nicht waren, ändern Sie sofort Ihr Passwort, aktivieren Sie die Zwei-Faktor-Authentifizierung und prüfen Sie Ihre Zahlungseinstellungen.',
+    dir: 'ltr',
+  },
+  fr: {
+    subject: {
+      platform_keys_changed:
+        'Alerte de sécurité : les clés de paiement de la plateforme ont été modifiées',
+      kustom_keys_changed:
+        'Alerte de sécurité : vos identifiants de paiement Kustom ont été modifiés',
+      stripe_disconnected:
+        'Alerte de sécurité : votre compte Stripe a été déconnecté',
+      two_factor_enabled: "L'authentification à deux facteurs a été activée",
+      two_factor_disabled:
+        "Alerte de sécurité : l'authentification à deux facteurs a été désactivée",
+      recovery_codes_regenerated:
+        'De nouveaux codes de récupération ont été créés',
+      account_locked:
+        'Alerte de sécurité : trop de tentatives de vérification échouées',
+      recovery_code_used:
+        'Alerte de sécurité : un code de récupération a été utilisé',
+      admin_account_created:
+        'Alerte de sécurité : un nouveau compte administrateur a été créé',
+    },
+    body: {
+      platform_keys_changed:
+        'Les paramètres de paiement Stripe de la plateforme ont été modifiés.',
+      kustom_keys_changed:
+        'Les identifiants Kustom utilisés pour recevoir les paiements de votre boutique ont été modifiés.',
+      stripe_disconnected:
+        'Le compte Stripe qui reçoit vos versements a été déconnecté.',
+      two_factor_enabled:
+        'Un code à deux facteurs est désormais requis pour vous connecter à votre compte.',
+      two_factor_disabled:
+        'Votre compte ne demande plus de code à deux facteurs à la connexion.',
+      recovery_codes_regenerated:
+        'Vos anciens codes de récupération ne fonctionnent plus.',
+      account_locked:
+        'La vérification de votre compte a été bloquée pendant 15 minutes après 5 codes ou mots de passe erronés.',
+      recovery_code_used:
+        "L'un de vos codes de récupération vient d'être utilisé pour vérifier votre compte. Chaque code ne fonctionne qu'une fois.",
+      admin_account_created:
+        'Un nouveau compte administrateur a été créé sur la plateforme.',
+    },
+    by: 'Compte',
+    fields: 'Modifié',
+    when: 'Heure (UTC)',
+    ip: 'Adresse IP',
+    device: 'Appareil',
+    notYou:
+      "Si ce n'était pas vous, changez immédiatement votre mot de passe, activez l'authentification à deux facteurs et vérifiez vos paramètres de paiement.",
+    dir: 'ltr',
+  },
+};
+
+export function securityAlertEmail(
+  data: SecurityAlertData,
+  locale?: string | null,
+): EmailParts {
+  const key = (locale ?? 'en').toLowerCase().split('-')[0];
+  const t = SECURITY_TEXT[key] ?? SECURITY_TEXT.en;
+  const when = data.at.toISOString().replace('T', ' ').slice(0, 19);
+  const rows: Array<[string, string]> = [[t.by, data.actorEmail]];
+  if (data.fields?.length) rows.push([t.fields, data.fields.join(', ')]);
+  rows.push([t.when, when]);
+  if (data.ip) rows.push([t.ip, data.ip]);
+  if (data.userAgent) rows.push([t.device, data.userAgent.slice(0, 160)]);
+
+  const table = rows
+    .map(
+      ([label, value]) =>
+        `<tr><td style="padding:4px 12px 4px 0;font-size:13px;color:#71717a;white-space:nowrap;vertical-align:top;">${esc(label)}</td><td style="padding:4px 0;font-size:13px;color:#18181b;word-break:break-word;"><bdi>${esc(value)}</bdi></td></tr>`,
+    )
+    .join('');
+  const html = layout(
+    esc(t.subject[data.kind]),
+    `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">${esc(t.body[data.kind])}</p>
+     <table style="border-collapse:collapse;margin:16px 0;">${table}</table>
+     <p style="font-size:13px;line-height:1.6;color:#b91c1c;">${esc(t.notYou)}</p>`,
+    { platformName: data.platformName },
+    t.dir,
+  );
+  const text = [
+    t.subject[data.kind],
+    '',
+    t.body[data.kind],
+    '',
+    ...rows.map(([label, value]) => `${label}: ${value}`),
+    '',
+    t.notYou,
+  ].join('\n');
+  return { subject: t.subject[data.kind], html, text };
+}

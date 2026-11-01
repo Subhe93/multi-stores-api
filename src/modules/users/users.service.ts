@@ -136,6 +136,7 @@ export class UsersService {
         // Never ship the Kustom shared secret, not even as ciphertext.
         creator: { omit: { kustom_shared_secret: true } },
         customer: { include: { addresses: true } },
+        totp_enabled_at: true,
       },
     });
 
@@ -144,7 +145,9 @@ export class UsersService {
         code: 'USER_NOT_FOUND',
         message: 'User not found',
       });
-    return user;
+    // Only the on/off state leaves the API, never the 2FA secret.
+    const { totp_enabled_at, ...rest } = user;
+    return { ...rest, two_factor_enabled: Boolean(totp_enabled_at) };
   }
 
   async create(dto: CreateUserPayload) {

@@ -24,10 +24,17 @@ import {
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '@prisma/client';
+import type { RequestUser } from '../../common/decorators/current-user.decorator';
+import { PaymentKeysGuardService } from '../security/payment-keys-guard.service';
+import { ReauthDto } from '../security/dto/security.dto';
+import { ReqMeta, type RequestMeta } from '../security/request-meta';
 
 @Controller('payments')
 export class PaymentsController {
-  constructor(private paymentsService: PaymentsService) {}
+  constructor(
+    private paymentsService: PaymentsService,
+    private paymentKeys: PaymentKeysGuardService,
+  ) {}
 
   // Public — frontend checks if Stripe is available. With ?store=<slug>, the
   // config is store-aware: independent stores also return the connected
@@ -59,8 +66,26 @@ export class PaymentsController {
   @Put('admin/settings')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
-  updateAdminSettings(@Body() dto: UpdateStripeSettingsDto) {
-    return this.paymentsService.updateAdminSettings(dto);
+  updateAdminSettings(
+    @CurrentUser() user: RequestUser,
+    @Body() dto: UpdateStripeSettingsDto,
+    @ReqMeta() meta: RequestMeta,
+  ) {
+    const { current_password, totp_code, ...settings } = dto;
+    // Credential fields need password + 2FA (mandatory for admins).
+    return this.paymentKeys.run({
+      scope: 'platform',
+      user,
+      input: { current_password, totp_code },
+      changed: {
+        secret_key: settings.secret_key,
+        publishable_key: settings.publishable_key,
+        webhook_secret: settings.webhook_secret,
+        connect_webhook_secret: settings.connect_webhook_secret,
+      },
+      meta,
+      apply: () => this.paymentsService.updateAdminSettings(settings),
+    });
   }
 
   // ── Stripe Connect (creator onboarding) ────────────────────────────────────
@@ -103,10 +128,22 @@ export class PaymentsController {
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.CREATOR, UserRole.PROVIDER)
   disconnectAccount(
-    @CurrentUser('id') userId: string,
-    @CurrentUser('role') role: UserRole,
+    @CurrentUser() user: RequestUser,
+    @Body() dto: ReauthDto,
+    @ReqMeta() meta: RequestMeta,
   ) {
-    return this.paymentsService.disconnectConnectedAccount(userId, role);
+    // Disconnecting is the first step of rerouting payouts to another
+    // account, so it always needs re-authentication.
+    return this.paymentKeys.run({
+      scope: 'stripe_connect',
+      user,
+      input: dto,
+      changed: {},
+      always: true,
+      meta,
+      apply: () =>
+        this.paymentsService.disconnectConnectedAccount(user.id, user.role),
+    });
   }
 
   // ── Checkout (order-first) ──────────────────────────────────────────────────

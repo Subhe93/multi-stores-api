@@ -15,6 +15,18 @@ import type { MagicLinkService } from './magic-link.service';
 import type { MailService } from '../mail/mail.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
+import type { TwoFactorService } from '../security/two-factor.service';
+
+/** Accounts in these specs have no 2FA. */
+const noTwoFactor = {
+  issueChallenge: jest.fn(),
+  verifyLogin: jest.fn(),
+} as unknown as TwoFactorService;
+
+/** Narrows a login result to the signed-in shape. */
+function signedIn<T>(r: T): Extract<T, { user: unknown }> {
+  return r as Extract<T, { user: unknown }>;
+}
 
 /**
  * Revocation cutoff (User.tokens_valid_after) and the magic-login store
@@ -54,13 +66,12 @@ function build(initial: Partial<Row> = {}) {
       }),
     },
     session: {
-      findUnique: jest.fn(
-        ({ where }: { where: { token: string } }) =>
-          Promise.resolve(
-            where.token === 'reset-token'
-              ? { expires_at: new Date(Date.now() + 60_000) }
-              : null,
-          ),
+      findUnique: jest.fn(({ where }: { where: { token: string } }) =>
+        Promise.resolve(
+          where.token === 'reset-token'
+            ? { expires_at: new Date(Date.now() + 60_000) }
+            : null,
+        ),
       ),
       deleteMany: jest.fn(() => Promise.resolve({ count: 0 })),
     },
@@ -95,6 +106,7 @@ function build(initial: Partial<Row> = {}) {
     magicLinks as unknown as MagicLinkService,
     links as unknown as AccountLinksService,
     {} as AccountCredentialsService,
+    noTwoFactor,
   );
   const strategy = new JwtStrategy(
     config as unknown as ConfigService,
@@ -136,9 +148,9 @@ describe('tokenIssuedAfterCutoff / issuedAtFor', () => {
   const cutoffSec = Math.floor(cutoff.getTime() / 1000);
 
   it('no cutoff: every token passes', () => {
-    expect(tokenIssuedAfterCutoff({ iat: 1 }, { tokens_valid_after: null })).toBe(
-      true,
-    );
+    expect(
+      tokenIssuedAfterCutoff({ iat: 1 }, { tokens_valid_after: null }),
+    ).toBe(true);
   });
 
   it('iat at or before the cutoff second is rejected, after it passes', () => {
@@ -194,6 +206,20 @@ describe('JwtStrategy and refreshToken honour the cutoff', () => {
     const pair = await t.service.refreshToken(fresh);
     expect(pair.access_token).toEqual(expect.any(String));
   });
+
+  it('refresh: a purpose token (2FA challenge) is never exchanged for a session', async () => {
+    // Staff: no store claim needed, so only the type check can refuse it.
+    const t = build({ role: UserRole.ADMIN, store_id: null });
+    // Signed with the refresh secret on purpose: even if the two secrets
+    // were equal, the `type` claim alone must get it refused.
+    const challenge = new JwtService({}).sign(
+      { sub: 'u1', type: 'two_factor_challenge' },
+      { secret: REFRESH, expiresIn: 300 },
+    );
+    await expect(t.service.refreshToken(challenge)).rejects.toMatchObject({
+      response: { code: 'AUTH_INVALID_REFRESH_TOKEN' },
+    });
+  });
 });
 
 describe('cutoff is moved on password changes and blocks', () => {
@@ -206,7 +232,9 @@ describe('cutoff is moved on password changes and blocks', () => {
       'New-password-1',
     );
     expect(t.user.tokens_valid_after).toBeInstanceOf(Date);
-    await expect(t.access(before)).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(t.access(before)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
     // Same second as the cutoff, yet valid: iat is dated after it.
     await expect(t.access(res.access_token)).resolves.toMatchObject({
       id: 'u1',
@@ -286,7 +314,7 @@ describe('magic-login store check (before the link is consumed)', () => {
     t.magicLinks.peek.mockResolvedValue(customer);
     t.magicLinks.consume.mockResolvedValue(consumed);
     const res = await t.service.magicLogin('tok', { store_slug: 'shop-a' });
-    expect(res.user).toMatchObject({ id: 'u1', store_id: 's1' });
+    expect(signedIn(res).user).toMatchObject({ id: 'u1', store_id: 's1' });
     expect(t.magicLinks.consume).toHaveBeenCalledWith('tok');
   });
 

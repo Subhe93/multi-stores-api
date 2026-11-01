@@ -20,6 +20,8 @@ import {
   type StoreLinkContext,
 } from './account-links.service';
 import { AccountCredentialsService } from './account-credentials.service';
+import { TwoFactorService } from '../security/two-factor.service';
+import type { RequestMeta } from '../security/request-meta';
 
 /** Bcrypt cost of every password hash written by the auth flows. */
 const PASSWORD_BCRYPT_COST = 12;
@@ -115,6 +117,7 @@ export class AuthService {
     private readonly magicLinks: MagicLinkService,
     private readonly links: AccountLinksService,
     private readonly credentials: AccountCredentialsService,
+    private readonly twoFactor: TwoFactorService,
   ) {}
 
   private emailExists(): ConflictException {
@@ -414,6 +417,10 @@ export class AuthService {
 
     const user = await this.magicLinks.consume(token);
     if (!user) throw invalid();
+    // A mailed link proves the inbox, not the second factor.
+    if (await this.twoFactorEnabled(user.id)) {
+      return this.twoFactor.issueChallenge(user.id);
+    }
     const tokens = await this.generateTokens(user);
     return {
       user: {
@@ -458,6 +465,12 @@ export class AuthService {
       });
     }
 
+    // Password is right; with 2FA on, the tokens wait for the code
+    // (POST /auth/2fa/verify-login).
+    if (user.totp_enabled_at && user.totp_secret) {
+      return this.twoFactor.issueChallenge(user.id);
+    }
+
     const tokens = await this.generateTokens(user);
 
     return {
@@ -478,6 +491,11 @@ export class AuthService {
         refreshToken,
         { secret: this.configService.get<string>('JWT_REFRESH_SECRET') },
       );
+      // Purpose tokens (2FA challenge, password reset) carry `type`; they
+      // must never be exchanged for a session, even if the secrets match.
+      if ((payload as { type?: unknown }).type !== undefined || !payload.sub) {
+        throw new UnauthorizedException();
+      }
 
       // logout() records the surrendered token as an expired session row. That
       // list was never consulted here, so a token stolen before logout stayed
@@ -696,6 +714,7 @@ export class AuthService {
         // Never ship the Kustom shared secret, not even as ciphertext.
         creator: { omit: { kustom_shared_secret: true } },
         customer: true,
+        totp_enabled_at: true,
       },
     });
 
@@ -703,7 +722,41 @@ export class AuthService {
       throw new UnauthorizedException();
     }
 
-    return user;
+    const { totp_enabled_at, ...profile } = user;
+    return { ...profile, two_factor_enabled: Boolean(totp_enabled_at) };
+  }
+
+  private async twoFactorEnabled(userId: string): Promise<boolean> {
+    const row = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { totp_enabled_at: true, totp_secret: true },
+    });
+    return Boolean(row?.totp_enabled_at && row.totp_secret);
+  }
+
+  /** Second sign-in step: challenge + code → the normal login body. */
+  async verifyTwoFactorLogin(
+    challengeToken: string,
+    code: string,
+    meta?: RequestMeta,
+  ) {
+    const user = await this.twoFactor.verifyLogin(challengeToken, code, meta);
+    const tokens = await this.generateTokens(user);
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        status: user.status,
+        store_id: user.store_id,
+      },
+      ...tokens,
+    };
+  }
+
+  /** Fresh token pair for an already-verified user (e.g. after enabling 2FA). */
+  issueTokens(user: TokenSubject) {
+    return this.generateTokens(user);
   }
 
   private async generateTokens(user: TokenSubject) {

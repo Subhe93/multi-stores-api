@@ -15,6 +15,18 @@ import type { MagicLinkService } from './magic-link.service';
 import type { MailService } from '../mail/mail.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { StoreAppsService } from '../store-apps/store-apps.service';
+import type { TwoFactorService } from '../security/two-factor.service';
+
+/** Accounts in these specs have no 2FA. */
+const noTwoFactor = {
+  issueChallenge: jest.fn(),
+  verifyLogin: jest.fn(),
+} as unknown as TwoFactorService;
+
+/** Narrows a login result to the signed-in shape. */
+function signedIn<T>(r: T): Extract<T, { user: unknown }> {
+  return r as Extract<T, { user: unknown }>;
+}
 
 /**
  * Customer accounts per store (plans/customer-per-store): login, register,
@@ -171,6 +183,7 @@ function build() {
     {
       send: jest.fn(() => Promise.resolve()),
     } as unknown as AccountCredentialsService,
+    noTwoFactor,
   );
   const strategy = new JwtStrategy(
     config as unknown as ConfigService,
@@ -238,7 +251,7 @@ describe('login is store scoped', () => {
       password: 'pass-A-1',
       store_slug: 'store-a',
     });
-    expect(a.user).toEqual({
+    expect(signedIn(a).user).toEqual({
       id: 'ca',
       email: 'anna@x.se',
       role: 'CUSTOMER',
@@ -250,7 +263,7 @@ describe('login is store scoped', () => {
       password: 'pass-B-1',
       store_slug: 'store-b',
     });
-    expect(b.user.id).toBe('cb');
+    expect(signedIn(b).user.id).toBe('cb');
 
     // Store A's password does not open store B's account.
     const err = await errorOf(
@@ -291,7 +304,7 @@ describe('login is store scoped', () => {
       email: 'owner@x.se',
       password: 'owner-pw-1',
     });
-    expect(staff.user).toMatchObject({
+    expect(signedIn(staff).user).toMatchObject({
       id: 'cr',
       role: 'CREATOR',
       store_id: null,
@@ -344,7 +357,7 @@ describe('login is store scoped', () => {
         store_slug: 'store-a',
         hostname,
       });
-      expect(res.user.store_id).toBe('sa');
+      expect(signedIn(res).user.store_id).toBe('sa');
     }
   });
 
@@ -361,7 +374,7 @@ describe('login is store scoped', () => {
       password: 'pass-B-1',
       hostname: 'shop-b.se',
     });
-    expect(res.user.id).toBe('cb');
+    expect(signedIn(res).user.id).toBe('cb');
     const err = await errorOf(
       t.service.login({
         email: 'anna@x.se',

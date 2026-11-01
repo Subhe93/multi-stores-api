@@ -16,6 +16,9 @@ import { UserRole } from '@prisma/client';
 import { CurrentUser, Roles } from '../../../common/decorators';
 import { RolesGuard } from '../../../common/guards/roles.guard';
 import { KustomService } from './kustom.service';
+import type { RequestUser } from '../../../common/decorators/current-user.decorator';
+import { PaymentKeysGuardService } from '../../security/payment-keys-guard.service';
+import { ReqMeta, type RequestMeta } from '../../security/request-meta';
 import {
   KustomRefundDto,
   KustomSessionDto,
@@ -24,7 +27,10 @@ import {
 
 @Controller('payments/kustom')
 export class KustomController {
-  constructor(private readonly kustom: KustomService) {}
+  constructor(
+    private readonly kustom: KustomService,
+    private readonly paymentKeys: PaymentKeysGuardService,
+  ) {}
 
   // ── Customer (order-first checkout) ─────────────────────────────────────
 
@@ -103,10 +109,25 @@ export class KustomController {
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.CREATOR)
   updateSettings(
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: RequestUser,
     @Body() dto: UpdateKustomSettingsDto,
+    @ReqMeta() meta: RequestMeta,
   ) {
-    return this.kustom.updateSettings(userId, dto);
+    const { current_password, totp_code, ...settings } = dto;
+    // merchant_id / shared_secret decide where the money goes: re-auth.
+    return this.paymentKeys.run({
+      scope: 'kustom',
+      user,
+      input: { current_password, totp_code },
+      changed: {
+        merchant_id: settings.merchant_id,
+        shared_secret: settings.shared_secret,
+        // Switches which Kustom backend takes live checkouts.
+        environment: settings.environment,
+      },
+      meta,
+      apply: () => this.kustom.updateSettings(user.id, settings),
+    });
   }
 
   @Post('settings/test')

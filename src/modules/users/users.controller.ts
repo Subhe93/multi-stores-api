@@ -14,12 +14,55 @@ import { UsersService } from './users.service';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole, UserStatus } from '@prisma/client';
+import type { RequestUser } from '../../common/decorators/current-user.decorator';
+import { ReauthService, type ReauthInput } from '../security/reauth.service';
+import {
+  SecurityAuditService,
+  type SecurityAction,
+} from '../security/security-audit.service';
+import { ReqMeta, type RequestMeta } from '../security/request-meta';
 
 @Controller('admin')
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 @Roles(UserRole.ADMIN)
 export class UsersController {
-  constructor(private usersService: UsersService) {}
+  constructor(
+    private usersService: UsersService,
+    private reauth: ReauthService,
+    private audit: SecurityAuditService,
+  ) {}
+
+  /**
+   * Privilege-bearing account changes need the acting admin's password +
+   * 2FA: a stolen admin token alone must not be able to mint an admin or
+   * take over a creator (and through it, the payment keys).
+   */
+  private stepUp(
+    admin: RequestUser,
+    input: ReauthInput,
+    purpose: string,
+    meta: RequestMeta,
+  ) {
+    return this.reauth.verifyAdmin(admin.id, input, { purpose, meta });
+  }
+
+  private record(
+    admin: RequestUser,
+    action: SecurityAction,
+    target: { id: string; email?: string | null },
+    meta: RequestMeta,
+    fields?: string[],
+  ) {
+    return this.audit.record({
+      actor: { id: admin.id, email: admin.email, role: admin.role },
+      action,
+      targetType: 'user',
+      targetId: target.id,
+      targetLabel: target.email ?? null,
+      fields,
+      meta,
+    });
+  }
 
   @Get('users')
   findAll(
@@ -53,9 +96,11 @@ export class UsersController {
   }
 
   @Post('users')
-  create(
+  async create(
+    @CurrentUser() admin: RequestUser,
+    @ReqMeta() meta: RequestMeta,
     @Body()
-    body: {
+    body: ReauthInput & {
       email: string;
       password: string;
       role: UserRole;
@@ -77,21 +122,47 @@ export class UsersController {
       locale?: string;
     },
   ) {
-    return this.usersService.create({
-      ...body,
-      send_credentials: body.send_credentials === true,
+    const { current_password, totp_code, reauth_token, ...data } = body;
+    const staff = data.role !== UserRole.CUSTOMER;
+    if (staff) {
+      await this.stepUp(
+        admin,
+        { current_password, totp_code, reauth_token },
+        'user.create_staff',
+        meta,
+      );
+    }
+    const created = await this.usersService.create({
+      ...data,
+      send_credentials: data.send_credentials === true,
       locale:
-        typeof body.locale === 'string' && /^[a-z]{2}$/.test(body.locale)
-          ? body.locale
+        typeof data.locale === 'string' && /^[a-z]{2}$/.test(data.locale)
+          ? data.locale
           : undefined,
     });
+    if (staff) {
+      await this.record(admin, 'user.created_staff', created, meta, [
+        `role: ${data.role}`,
+      ]);
+      if (data.role === UserRole.ADMIN) {
+        this.audit.alert(
+          await this.audit.adminEmails(),
+          'admin_account_created',
+          { actorEmail: admin.email, fields: [created.email], meta },
+          await this.audit.platformLocale(),
+        );
+      }
+    }
+    return created;
   }
 
   @Put('users/:id')
-  update(
+  async update(
+    @CurrentUser() admin: RequestUser,
+    @ReqMeta() meta: RequestMeta,
     @Param('id') id: string,
     @Body()
-    body: {
+    body: ReauthInput & {
       email?: string;
       status?: UserStatus;
       avatar_url?: string | null;
@@ -108,22 +179,95 @@ export class UsersController {
       last_name?: string;
     },
   ) {
-    return this.usersService.update(id, body);
+    const { current_password, totp_code, reauth_token, ...data } = body;
+    // Email (account recovery address) and status changes are takeover /
+    // privilege levers; profile fields are not.
+    const sensitive = [
+      ...(data.email !== undefined ? ['email'] : []),
+      ...(data.status !== undefined ? [`status: ${data.status}`] : []),
+    ];
+    if (sensitive.length) {
+      await this.stepUp(
+        admin,
+        { current_password, totp_code, reauth_token },
+        'user.update',
+        meta,
+      );
+    }
+    const before = sensitive.length
+      ? await this.usersService.findById(id)
+      : null;
+    const updated = await this.usersService.update(id, data);
+    if (before && data.email !== undefined && data.email !== before.email) {
+      await this.record(
+        admin,
+        'user.email_changed_by_admin',
+        { id, email: before.email },
+        meta,
+        ['email'],
+      );
+    }
+    if (before && data.status !== undefined && data.status !== before.status) {
+      await this.record(
+        admin,
+        'user.status_changed',
+        { id, email: before.email },
+        meta,
+        [`status: ${data.status}`],
+      );
+    }
+    return updated;
   }
 
   @Put('users/:id/status')
-  updateStatus(@Param('id') id: string, @Body('status') status: UserStatus) {
-    return this.usersService.updateStatus(id, status);
+  async updateStatus(
+    @CurrentUser() admin: RequestUser,
+    @ReqMeta() meta: RequestMeta,
+    @Param('id') id: string,
+    @Body() body: ReauthInput & { status: UserStatus },
+  ) {
+    const target = await this.usersService.findById(id);
+    // Moderating customers stays one click; staff accounts need step-up.
+    if (target.role !== UserRole.CUSTOMER) {
+      await this.stepUp(admin, body, 'user.status', meta);
+    }
+    const res = await this.usersService.updateStatus(id, body.status);
+    await this.record(admin, 'user.status_changed', target, meta, [
+      `status: ${body.status}`,
+    ]);
+    return res;
   }
 
   @Put('users/:id/password')
-  resetPassword(@Param('id') id: string, @Body('password') password: string) {
-    return this.usersService.resetPassword(id, password);
+  async resetPassword(
+    @CurrentUser() admin: RequestUser,
+    @ReqMeta() meta: RequestMeta,
+    @Param('id') id: string,
+    @Body() body: ReauthInput & { password: string },
+  ) {
+    await this.stepUp(admin, body, 'user.password_reset', meta);
+    const target = await this.usersService.findById(id);
+    const res = await this.usersService.resetPassword(id, body.password);
+    await this.record(admin, 'user.password_reset_by_admin', target, meta, [
+      'password',
+    ]);
+    return res;
   }
 
   @Delete('users/:id')
-  remove(@Param('id') id: string, @CurrentUser('id') actingUserId: string) {
-    return this.usersService.remove(id, actingUserId);
+  async remove(
+    @CurrentUser() admin: RequestUser,
+    @ReqMeta() meta: RequestMeta,
+    @Param('id') id: string,
+    @Body() body: ReauthInput = {},
+  ) {
+    await this.stepUp(admin, body ?? {}, 'user.delete', meta);
+    const target = await this.usersService.findById(id);
+    const res = await this.usersService.remove(id, admin.id);
+    await this.record(admin, 'user.deleted_by_admin', target, meta, [
+      `role: ${target.role}`,
+    ]);
+    return res;
   }
 
   @Get('platform-config')

@@ -38,6 +38,8 @@ import {
   NewOrderOwnerData,
   ProductionDigestOrder,
   WelcomeData,
+  securityAlertEmail,
+  type SecurityAlertData,
 } from './templates';
 import {
   absoluteUrl,
@@ -712,6 +714,27 @@ export class MailService {
       // Failed or skipped in the last 7 days, for the page's warning line.
       failed_last_7_days: failed,
     };
+  }
+
+  /**
+   * Security alert (payment keys / 2FA changed). Always via the platform
+   * sender, never a tenant-controlled mailbox, and never carries a secret.
+   */
+  async sendSecurityAlert(
+    to: string,
+    data: Omit<SecurityAlertData, 'platformName'>,
+    locale?: string,
+  ) {
+    const parts = securityAlertEmail(
+      { ...data, platformName: await this.platformDisplayName() },
+      locale,
+    );
+    return this.send({
+      to,
+      ...parts,
+      event: 'security_alert',
+      platformSenderOnly: true,
+    });
   }
 
   async sendPasswordReset(to: string, resetUrl: string, locale?: string) {
