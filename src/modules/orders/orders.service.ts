@@ -3295,7 +3295,11 @@ export class OrdersService {
         commission: true,
         timeline: { orderBy: { created_at: 'asc' } },
         address: true,
-        customer: true,
+        // The account email and status live on the user row; the order
+        // detail's customer card shows them (contact + blocked badge).
+        customer: {
+          include: { user: { select: { email: true, status: true } } },
+        },
         payouts: { orderBy: { created_at: 'asc' } },
         market: this.marketRef,
       },
@@ -3361,10 +3365,38 @@ export class OrdersService {
       void _ko;
       void _kc;
       void _kd;
+      // Providers fulfil lines only: they keep the shipping contact but not
+      // the buyer's account email / status.
+      const customer =
+        role === UserRole.PROVIDER && customerSafe.customer
+          ? { ...customerSafe.customer, user: undefined }
+          : customerSafe.customer;
       // Customers / providers: reverse-charge evidence without internals.
       return this.forCustomer(
-        this.withItemImages({ ...customerSafe, payouts: scopedPayouts }),
+        this.withItemImages({
+          ...customerSafe,
+          customer,
+          payouts: scopedPayouts,
+        }),
       );
+    }
+    // The buyer's account email / status go to the store's owner only: a
+    // creator reading a foreign store's order as a fulfiller of one of its
+    // items does not get them.
+    if (safe.customer?.user && userId) {
+      const creator = await this.prisma.creator.findUnique({
+        where: { user_id: userId },
+        select: { store: { select: { id: true } } },
+      });
+      const ownsStore =
+        !!order.store_id && creator?.store?.id === order.store_id;
+      if (!ownsStore) {
+        return this.withItemImages({
+          ...safe,
+          customer: { ...safe.customer, user: undefined },
+          payouts: scopedPayouts,
+        });
+      }
     }
     return this.withItemImages({ ...safe, payouts: scopedPayouts });
   }

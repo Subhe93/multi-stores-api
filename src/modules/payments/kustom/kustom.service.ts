@@ -67,6 +67,25 @@ type KustomCaptureMode = 'on_shipment' | 'immediate';
 
 const CHECKOUT_COMPLETE = 'checkout_complete';
 
+/** Billing address of a live Kustom order, shaped for the dashboard; null when absent. */
+function liveBillingAddress(a: KustomAddress | undefined) {
+  if (!a?.street_address && !a?.city && !a?.postal_code) return null;
+  const s = (v: string | undefined) => (v && v.trim() ? v.trim() : null);
+  return {
+    full_name:
+      [a.given_name, a.family_name].filter(Boolean).join(' ').trim() || null,
+    company_name: s(a.organization_name),
+    line1: s(a.street_address),
+    line2: s(a.street_address2),
+    postal_code: s(a.postal_code),
+    city: s(a.city),
+    region: s(a.region),
+    country_code: a.country ? a.country.toUpperCase().slice(0, 2) : null,
+    phone: s(a.phone),
+    email: s(a.email),
+  };
+}
+
 /** What createSession loads: the order with everything the payload needs. */
 const sessionOrderInclude = {
   items: {
@@ -1620,6 +1639,9 @@ export class KustomService implements OnModuleInit {
         live.initial_payment_method?.description ??
         live.initial_payment_method?.type ??
         null,
+      // The order keeps only the shipping address; the billing address the
+      // shopper entered in the Kustom iframe is read live for the order page.
+      billing_address: liveBillingAddress(live.billing_address),
       captures: (live.captures ?? []).map((c) => ({
         capture_id: c.capture_id ?? null,
         amount: money(c.captured_amount),
