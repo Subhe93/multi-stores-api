@@ -14,7 +14,12 @@ type Row = {
  * In-memory LoginToken table that honours the exact where-clauses the
  * service uses, so single use and expiry are exercised for real.
  */
-function build(users: Record<string, { id: string; status: string }>) {
+function build(
+  users: Record<
+    string,
+    { id: string; status: string; role?: string; store_id?: string | null }
+  >,
+) {
   const rows: Row[] = [];
   const matches = (r: Row, where: Record<string, unknown>) => {
     if (where.user_id !== undefined && r.user_id !== where.user_id)
@@ -61,6 +66,10 @@ function build(users: Record<string, { id: string; status: string }>) {
           return Promise.resolve({ count: hit.length });
         },
       ),
+      findFirst: jest.fn(({ where }: { where: Record<string, unknown> }) => {
+        const r = rows.find((x) => matches(x, where));
+        return Promise.resolve(r ? { user: users[r.user_id] ?? null } : null);
+      }),
       findUnique: jest.fn(({ where }: { where: { token_hash: string } }) => {
         const r = rows.find((x) => x.token_hash === where.token_hash);
         return Promise.resolve(r ? { user: users[r.user_id] ?? null } : null);
@@ -147,5 +156,35 @@ describe('MagicLinkService', () => {
     rows[0].expires_at = new Date(Date.now() - 1000);
     await service.issue('u1');
     expect(rows).toHaveLength(1);
+  });
+
+  describe('peek (store check before redeeming)', () => {
+    const owners = {
+      c1: { id: 'c1', status: 'ACTIVE', role: 'CUSTOMER', store_id: 's1' },
+    };
+
+    it('returns the owner of a live token without consuming it', async () => {
+      const { service, rows } = build(owners);
+      const raw = await service.issue('c1', { storeId: 's1' });
+      await expect(service.peek(raw)).resolves.toEqual({
+        userId: 'c1',
+        role: 'CUSTOMER',
+        storeId: 's1',
+      });
+      expect(rows[0].used_at).toBeNull();
+      await expect(service.consume(raw)).resolves.toMatchObject({ id: 'c1' });
+    });
+
+    it('null for used, expired, unknown and malformed tokens', async () => {
+      const { service, rows } = build(owners);
+      const raw = await service.issue('c1');
+      await service.consume(raw);
+      await expect(service.peek(raw)).resolves.toBeNull();
+      const raw2 = await service.issue('c1');
+      rows[rows.length - 1].expires_at = new Date(Date.now() - 1000);
+      await expect(service.peek(raw2)).resolves.toBeNull();
+      await expect(service.peek('A'.repeat(43))).resolves.toBeNull();
+      await expect(service.peek('bad!')).resolves.toBeNull();
+    });
   });
 });

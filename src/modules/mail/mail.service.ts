@@ -27,6 +27,7 @@ import {
   productionNewOrderEmail,
   welcomeEmail,
   accountCreatedEmail,
+  customerLoginLinkEmail,
   esc,
   type EmailBrand,
   OrderConfirmationData,
@@ -1303,6 +1304,108 @@ export class MailService {
         `account_created email to ${to} failed: ${redactSecrets(
           err instanceof Error ? err.message : String(err),
           [vars.password, vars.magicUrl],
+        )}`,
+      );
+    }
+  }
+
+  /**
+   * One-time magic login link for an existing customer, sent by the store
+   * owner from the dashboard (event `customer_login_link`). Like
+   * account_created it carries a login secret, so it is rendered from the
+   * platform template only and sent by the platform sender; store branding
+   * stays in the body. Locale: the requested one when supported, else the
+   * store's primary locale, else English. Best-effort: never throws, and the
+   * link is masked out of the delivery and app logs.
+   */
+  async sendCustomerLoginLink(
+    to: string,
+    vars: {
+      name: string;
+      magicUrl: string;
+      loginUrl: string;
+      expiresHours: number;
+    },
+    locale?: string | null,
+    brand?: { storeId: string; storeName: string } | null,
+  ): Promise<void> {
+    try {
+      const platformName = await this.platformDisplayName();
+      const store = brand?.storeId
+        ? await this.prisma.store.findUnique({
+            where: { id: brand.storeId },
+            select: {
+              logo_url: true,
+              language_config: { select: { primary_locale: true } },
+            },
+          })
+        : null;
+      const lang =
+        supportedLang(locale) ??
+        supportedLang(store?.language_config?.primary_locale) ??
+        'en';
+      const storeName = brand?.storeName?.trim() || platformName;
+
+      const plain: Record<string, string> = {
+        platform_name: platformName,
+        store_name: storeName,
+        name: vars.name ?? '',
+        magic_url: vars.magicUrl,
+        login_url: vars.loginUrl,
+        expires_hours: String(vars.expiresHours),
+      };
+      const templateVars: Record<string, string> = { ...plain };
+      for (const [key, value] of Object.entries(plain)) {
+        templateVars[`${HTML_VAR_PREFIX}${key}`] = esc(value);
+      }
+
+      // Platform template only: a store-controlled template must never see
+      // a login link.
+      const rendered = await this.templates.render(
+        'customer_login_link',
+        lang,
+        templateVars,
+      );
+
+      let parts = rendered;
+      if (!parts) {
+        const publicBase =
+          this.config.get<string>('PUBLIC_API_URL') || 'http://localhost:3001';
+        const logoUrl = store?.logo_url
+          ? absoluteUrl(await emailSafeLogoPath(store.logo_url), publicBase)
+          : undefined;
+        parts = customerLoginLinkEmail(
+          {
+            name: vars.name,
+            magicUrl: vars.magicUrl,
+            loginUrl: vars.loginUrl,
+            expiresHours: vars.expiresHours,
+          },
+          brand?.storeId
+            ? { storeName, storeLogoUrl: logoUrl, storeId: brand.storeId }
+            : { platformName },
+          lang,
+        );
+      }
+
+      await this.send({
+        to,
+        ...parts,
+        ...(brand?.storeId
+          ? {
+              storeId: brand.storeId,
+              brandFooter: { storeName, customerEmail: to, locale: lang },
+            }
+          : {}),
+        event: 'customer_login_link',
+        sensitive: [vars.magicUrl],
+        platformSenderOnly: true,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `customer_login_link email to ${to} failed: ${redactSecrets(
+          err instanceof Error ? err.message : String(err),
+          [vars.magicUrl],
         )}`,
       );
     }

@@ -249,6 +249,7 @@ d('personalization order path (real database)', () => {
         email: `customer-${stamp}@personalization.e2e`,
         password_hash: 'x',
         role: 'CUSTOMER',
+        store_id: store.id,
       },
     });
     customerUserId = customerUser.id;

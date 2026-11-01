@@ -172,6 +172,8 @@ export interface IssueResult {
 interface Reader {
   id: string;
   role: UserRole;
+  /** RequestUser.storeId: the store of a CUSTOMER account (null for staff). */
+  storeId?: string | null;
 }
 
 function iso(date: Date | null): string | null {
@@ -920,7 +922,12 @@ export class InvoicesService {
       case UserRole.ADMIN:
         return true;
       case UserRole.CUSTOMER:
-        return order.customer?.user_id === user.id;
+        // Per-store accounts: the buyer, and (defensively) only for an
+        // order of the account's own store.
+        return (
+          order.customer?.user_id === user.id &&
+          (!user.storeId || !order.store_id || order.store_id === user.storeId)
+        );
       case UserRole.PROVIDER: {
         const provider = await this.prisma.provider.findUnique({
           where: { user_id: user.id },

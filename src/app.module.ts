@@ -58,6 +58,8 @@ import { OpsModule } from './modules/ops/ops.module';
 import { FeedsModule } from './modules/feeds/feeds.module';
 import { ZohoMailModule } from './modules/zoho-mail/zoho-mail.module';
 import { OverviewModule } from './modules/overview/overview.module';
+import { StoreCustomersModule } from './modules/store-customers/store-customers.module';
+import { HealthModule } from './modules/health/health.module';
 
 @Module({
   imports: [
@@ -131,6 +133,8 @@ import { OverviewModule } from './modules/overview/overview.module';
     // Zoho Mail app: store email through the store's own Zoho mailbox.
     ZohoMailModule,
     OverviewModule,
+    StoreCustomersModule,
+    HealthModule,
   ],
   providers: [
     // ThrottlerModule alone throttles nothing — only routes that explicitly

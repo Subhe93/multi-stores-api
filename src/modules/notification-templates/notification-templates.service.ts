@@ -33,6 +33,7 @@ export const HTML_VAR_PREFIX = 'html:';
  */
 export const PLATFORM_ONLY_EVENTS: ReadonlySet<string> = new Set([
   'account_created',
+  'customer_login_link',
 ]);
 
 /** The variables as the HTML body sees them (`html:` overrides applied). */
@@ -303,6 +304,19 @@ export class NotificationTemplatesService {
           'name',
           'email',
           'password',
+          'magic_url',
+          'login_url',
+          'expires_hours',
+        ],
+      },
+      {
+        // One-time login link a store owner sends to one of its customers
+        // from the dashboard (Customers page).
+        event: 'customer_login_link',
+        variables: [
+          'platform_name',
+          'store_name',
+          'name',
           'magic_url',
           'login_url',
           'expires_hours',

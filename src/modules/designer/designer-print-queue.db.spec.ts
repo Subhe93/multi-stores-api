@@ -85,16 +85,6 @@ describeDb('DesignerPrintQueueService (local Postgres)', () => {
       );
       return;
     }
-    const customerUser = await prisma.user.create({
-      data: {
-        email: `designer-queue-spec-${tag}-c@example.invalid`,
-        password_hash: 'x',
-        role: 'CUSTOMER',
-        status: 'ACTIVE',
-        customer: { create: { first_name: 'Spec', last_name: 'Customer' } },
-      },
-      include: { customer: true },
-    });
     const creatorUser = await prisma.user.create({
       data: {
         email: `designer-queue-spec-${tag}-s@example.invalid`,
@@ -121,6 +111,18 @@ describeDb('DesignerPrintQueueService (local Postgres)', () => {
         },
       },
       include: { creator: { include: { store: true } } },
+    });
+    const customerUser = await prisma.user.create({
+      data: {
+        email: `designer-queue-spec-${tag}-c@example.invalid`,
+        password_hash: 'x',
+        role: 'CUSTOMER',
+        status: 'ACTIVE',
+        // Customer accounts belong to one store (User_customer_store_chk).
+        store_id: creatorUser.creator!.store!.id,
+        customer: { create: { first_name: 'Spec', last_name: 'Customer' } },
+      },
+      include: { customer: true },
     });
     userIds = [customerUser.id, creatorUser.id];
     storeId = creatorUser.creator!.store!.id;
@@ -188,8 +190,10 @@ describeDb('DesignerPrintQueueService (local Postgres)', () => {
     if (orderId) {
       await prisma.order.deleteMany({ where: { id: orderId } }); // items + designs cascade
     }
-    if (userIds.length) {
-      await prisma.user.deleteMany({ where: { id: { in: userIds } } }); // customer, creator, store, apps cascade
+    // The customer first: User.store_id is ON DELETE RESTRICT, so the store
+    // (cascaded from the creator) can only go once its customer is gone.
+    for (const id of userIds) {
+      await prisma.user.deleteMany({ where: { id } }); // customer / creator, store, apps cascade
     }
     await prisma.$disconnect();
   });

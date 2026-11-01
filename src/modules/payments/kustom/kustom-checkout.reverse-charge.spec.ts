@@ -345,7 +345,10 @@ const address = (country: string) => ({
   country,
 });
 
-const loggedIn = { id: 'c1', user: { id: 'u1', email: 'max@example.com' } };
+const loggedIn = {
+  id: 'c1',
+  user: { id: 'u1', email: 'max@example.com', store_id: STORE_ID },
+};
 
 type QuoteCall = [string, unknown, QuoteOpts];
 

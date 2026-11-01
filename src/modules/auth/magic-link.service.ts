@@ -54,6 +54,32 @@ export class MagicLinkService {
   }
 
   /**
+   * The account a live (unused, unexpired) token belongs to, WITHOUT
+   * redeeming it: lets the caller refuse a link opened in the wrong store
+   * while leaving it usable in the right one. Null for anything not live.
+   */
+  async peek(
+    raw: unknown,
+  ): Promise<{ userId: string; role: User['role']; storeId: string | null } | null> {
+    if (typeof raw !== 'string' || !RAW_TOKEN_PATTERN.test(raw)) return null;
+    const row = await this.prisma.loginToken.findFirst({
+      where: {
+        token_hash: hashLoginToken(raw),
+        purpose: LoginTokenPurpose.MAGIC_LOGIN,
+        used_at: null,
+        expires_at: { gt: new Date() },
+      },
+      select: { user: { select: { id: true, role: true, store_id: true } } },
+    });
+    if (!row) return null;
+    return {
+      userId: row.user.id,
+      role: row.user.role,
+      storeId: row.user.store_id,
+    };
+  }
+
+  /**
    * Redeems a raw token. Atomic single use: the conditional update only
    * matches an unused, unexpired token, so two concurrent clicks cannot both
    * win. Returns the user only when the account is ACTIVE; null for unknown,

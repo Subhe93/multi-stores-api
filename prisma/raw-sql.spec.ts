@@ -25,6 +25,8 @@ export const RAW_SQL_ALLOWLIST: readonly string[] = [
   'ImportRun_one_active_per_store',
   'OrderItemDesign_queue_claim_idx',
   'OrderItemDesign_assets_gin_idx',
+  'User_staff_email_key',
+  'User_customer_store_chk',
 ];
 
 const ROOT = join(__dirname, '..');

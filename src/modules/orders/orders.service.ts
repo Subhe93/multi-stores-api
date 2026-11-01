@@ -120,6 +120,7 @@ import {
   type PricedAddon,
 } from '../designer/designer-addons';
 import { backTextRowsOf } from '../designer/designer-back';
+import { assertCustomerStore } from '../../common/customers/customer-store';
 import {
   DESIGNER_TRIGGERS_PORT,
   type DesignerTriggersPort,
@@ -2010,15 +2011,26 @@ export class OrdersService {
   ): Promise<OrderQuote> {
     let lines: CartLineLike[] = dto.lines ?? [];
     let lineIds: (string | undefined)[] | undefined;
-    if (!lines.length && userId) {
+    if (userId) {
+      // Per-store accounts: a customer quotes only in its own store
+      // (403 CUSTOMER_STORE_MISMATCH); staff (no customer profile) are not
+      // restricted.
       const customer = await this.prisma.customer.findUnique({
         where: { user_id: userId },
-        select: { cart: { select: { items: true } } },
+        select: {
+          user: { select: { role: true, store_id: true } },
+          ...(lines.length ? {} : { cart: { select: { items: true } } }),
+        },
       });
-      lines = customer?.cart?.items ?? [];
-      // Cart rows: personalization errors also name the row (line_id), so
-      // the storefront can point at the product whatever the row order.
-      lineIds = lines.map((l) => (l as { id?: string }).id);
+      assertCustomerStore(customer?.user, dto.store_id);
+      if (!lines.length) {
+        lines =
+          (customer as { cart?: { items: CartLineLike[] } | null } | null)?.cart
+            ?.items ?? [];
+        // Cart rows: personalization errors also name the row (line_id), so
+        // the storefront can point at the product whatever the row order.
+        lineIds = lines.map((l) => (l as { id?: string }).id);
+      }
     }
     if (!lines.length) {
       throw new BadRequestException({
@@ -2065,12 +2077,16 @@ export class OrdersService {
 
     const customer = await this.prisma.customer.findUnique({
       where: { user_id: userId },
+      include: { user: { select: { role: true, store_id: true } } },
     });
     if (!customer)
       throw new NotFoundException({
         code: 'ORDER_CUSTOMER_NOT_FOUND',
         message: 'Customer not found',
       });
+    // Per-store accounts: the order must be placed in the customer's own
+    // store (403 CUSTOMER_STORE_MISMATCH).
+    assertCustomerStore(customer.user, dto.store_id);
 
     // Source of the lines: the caller's snapshot, else the customer's cart.
     let cart: { id: string } | null = null;
@@ -3035,6 +3051,7 @@ export class OrdersService {
   async findByCustomer(userId: string, page = 1, limit = 20) {
     const customer = await this.prisma.customer.findUnique({
       where: { user_id: userId },
+      include: { user: { select: { store_id: true } } },
     });
     if (!customer)
       throw new NotFoundException({
@@ -3042,16 +3059,26 @@ export class OrdersService {
         message: 'Customer not found',
       });
 
+    // Only this account's orders; defensively also only orders of its own
+    // store (legacy orders without a store_id stay visible: they are the
+    // customer's by customer_id).
+    const storeId = customer.user?.store_id ?? null;
+    const where: Prisma.OrderWhereInput = storeId
+      ? {
+          customer_id: customer.id,
+          OR: [{ store_id: storeId }, { store_id: null }],
+        }
+      : { customer_id: customer.id };
     const skip = (page - 1) * limit;
     const [data, total] = await Promise.all([
       this.prisma.order.findMany({
-        where: { customer_id: customer.id },
+        where,
         skip,
         take: limit,
         include: { items: this.itemsWithProduct },
         orderBy: { created_at: 'desc' },
       }),
-      this.prisma.order.count({ where: { customer_id: customer.id } }),
+      this.prisma.order.count({ where }),
     ]);
 
     return {

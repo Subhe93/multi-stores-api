@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { BundleOffer, CartItem, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { customerStoreMismatch } from '../../common/customers/customer-store';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
@@ -56,7 +57,10 @@ import {
   linesToDisplay,
   personalizationInvalid,
 } from '../personalization/personalization-runtime';
-import type { PFieldDef, PResult } from '@multi-stores/core/personalization/types';
+import type {
+  PFieldDef,
+  PResult,
+} from '@multi-stores/core/personalization/types';
 import {
   DesignerCartService,
   type CartDesignAddon,
@@ -326,12 +330,15 @@ export class CartService {
   private async getOrCreateCart(userId: string) {
     const customer = await this.prisma.customer.findUnique({
       where: { user_id: userId },
+      include: { user: { select: { store_id: true } } },
     });
     if (!customer)
       throw new NotFoundException({
         code: 'CART_CUSTOMER_NOT_FOUND',
         message: 'Customer not found',
       });
+    // Per-store accounts: the cart belongs to the customer's store.
+    const accountStoreId = customer.user?.store_id ?? null;
 
     let cart = await this.prisma.cart.findUnique({
       where: { customer_id: customer.id },
@@ -339,11 +346,61 @@ export class CartService {
 
     if (!cart) {
       cart = await this.prisma.cart.create({
-        data: { customer_id: customer.id },
+        data: { customer_id: customer.id, store_id: accountStoreId },
+      });
+    } else if (accountStoreId && cart.store_id !== accountStoreId) {
+      cart = await this.prisma.cart.update({
+        where: { id: cart.id },
+        data: { store_id: accountStoreId },
       });
     }
 
-    return cart;
+    return { ...cart, account_store_id: accountStoreId };
+  }
+
+  /**
+   * Store a cart line belongs to: the store of the creator owning the
+   * product (own product) or the custom product. Null when it cannot be
+   * resolved (no such product, or a product without a creator store).
+   */
+  private async lineStoreId(line: {
+    product_id?: string | null;
+    custom_product_id?: string | null;
+  }): Promise<string | null> {
+    let creatorId: string | null = null;
+    if (line.custom_product_id) {
+      const cp = await this.prisma.customProduct.findUnique({
+        where: { id: line.custom_product_id },
+        select: { creator_id: true },
+      });
+      creatorId = cp?.creator_id ?? null;
+    } else if (line.product_id) {
+      const p = await this.prisma.product.findUnique({
+        where: { id: line.product_id },
+        select: { creator_id: true },
+      });
+      creatorId = p?.creator_id ?? null;
+    }
+    if (!creatorId) return null;
+    const store = await this.prisma.store.findUnique({
+      where: { creator_id: creatorId },
+      select: { id: true },
+    });
+    return store?.id ?? null;
+  }
+
+  /**
+   * Per-store accounts: a customer may only put products of its own store
+   * in its cart (403 CUSTOMER_STORE_MISMATCH). Lines whose store cannot be
+   * resolved are left to the existing availability checks.
+   */
+  private async assertLineInAccountStore(
+    accountStoreId: string | null,
+    line: { product_id?: string | null; custom_product_id?: string | null },
+  ): Promise<void> {
+    if (!accountStoreId) return;
+    const storeId = await this.lineStoreId(line);
+    if (storeId && storeId !== accountStoreId) throw customerStoreMismatch();
   }
 
   /**
@@ -1385,6 +1442,7 @@ export class CartService {
       // query on the add path; loadContexts no longer looks it up, M5 A11).
       await this.assertVariantOfProduct(dto.product_id, dto.variant_id);
     }
+    await this.assertLineInAccountStore(cart.account_store_id, dto);
     await this.assertAvailableInMarket(dto, locale, marketKey, preview);
     // M4.2 designer (C29 step 2): a line with a design, or of a product the
     // designer is active for, is validated (and the design claimed for this
@@ -1498,6 +1556,7 @@ export class CartService {
         code: 'CART_ITEM_NOT_FOUND',
         message: 'Cart item not found',
       });
+    await this.assertLineInAccountStore(cart.account_store_id, item);
     await this.assertAvailableInMarket(item, locale, marketKey, preview);
 
     const data: {

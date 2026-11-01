@@ -23,6 +23,7 @@ import {
   type RequestUser,
 } from '../../common/decorators';
 import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt.guard';
+import { assertCustomerStore } from '../../common/customers/customer-store';
 import {
   RequireAppGuard,
   type RequestWithAppStore,
@@ -54,10 +55,16 @@ export class DesignsController {
   constructor(private readonly designs: DesignsService) {}
 
   private async access(
+    req: RequestWithAppStore,
     user: RequestUser | undefined,
     token: string | undefined,
     locale?: unknown,
   ): Promise<DesignAccess> {
+    // Per-store accounts: a customer token works only on its own store's
+    // designer (403 CUSTOMER_STORE_MISMATCH).
+    if (user?.role === UserRole.CUSTOMER) {
+      assertCustomerStore(user, appStoreId(req));
+    }
     return {
       customerId:
         user?.role === UserRole.CUSTOMER
@@ -82,6 +89,7 @@ export class DesignsController {
     @Query('locale') locale?: string,
   ) {
     const { customerId, locale: loc } = await this.access(
+      req,
       user,
       undefined,
       locale,
@@ -101,7 +109,7 @@ export class DesignsController {
     return this.designs.get(
       appStoreId(req),
       id,
-      await this.access(user, token, locale),
+      await this.access(req, user, token, locale),
     );
   }
 
@@ -123,7 +131,7 @@ export class DesignsController {
     return this.designs.duplicate(
       appStoreId(req),
       id,
-      await this.access(user, token, locale),
+      await this.access(req, user, token, locale),
     );
   }
 
@@ -142,7 +150,7 @@ export class DesignsController {
       appStoreId(req),
       id,
       dto,
-      await this.access(user, token, locale),
+      await this.access(req, user, token, locale),
     );
   }
 
@@ -162,7 +170,7 @@ export class DesignsController {
     return this.designs.proof(
       appStoreId(req),
       id,
-      await this.access(user, token),
+      await this.access(req, user, token),
     );
   }
 
@@ -192,7 +200,7 @@ export class DesignsController {
       id,
       dto.element_id,
       file?.buffer as Buffer,
-      await this.access(user, token),
+      await this.access(req, user, token),
       dto.side === 'back' ? 'back' : 'front',
     );
   }
@@ -210,7 +218,7 @@ export class DesignsController {
       appStoreId(req),
       id,
       assetId,
-      await this.access(user, token),
+      await this.access(req, user, token),
     );
   }
 }

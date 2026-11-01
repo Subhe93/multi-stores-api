@@ -18,6 +18,8 @@ in `prisma/raw-sql.spec.ts` in sync when a migration adds one.
 | `ImportRun_one_active_per_store` | partial unique index (`WHERE status IN (PLANNING, QUEUED, RUNNING, ROLLBACK_QUEUED, ROLLING_BACK)`) | `ImportRun` | `20261025120000_add_importer` | one active run per store; the API pre-check alone is not race-safe |
 | `OrderItemDesign_queue_claim_idx` | partial index (`WHERE print_requested_at IS NOT NULL AND files_purged_at IS NULL AND terminal_at IS NULL`) | `OrderItemDesign` | `20261027120000_designer_indexes` | print-queue claim scans only claimable rows |
 | `OrderItemDesign_assets_gin_idx` | GIN index (`jsonb_path_ops`) on `assets` | `OrderItemDesign` | `20261027120000_designer_indexes` | `assets @> [{"asset_id": …}]` lookups of the designer orphan sweep |
+| `User_staff_email_key` | partial unique index (`WHERE store_id IS NULL`) | `User` | `20261109120000_user_store_id` | staff emails unique platform-wide; customers are unique per store via `User_store_id_email_key` (NULLs are distinct there) |
+| `User_customer_store_chk` | CHECK constraint | `User` | `20261109130000_user_store_check` | `(role = 'CUSTOMER') = (store_id IS NOT NULL)`: every customer belongs to one store, staff to none |
 
 The invoice objects are also kept verbatim in `prisma/sql/invoice-guards.sql`
 (idempotent) so an e2e database built with `prisma db push` can re-apply them.

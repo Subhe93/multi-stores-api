@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -91,6 +91,49 @@ export class AccountLinksService {
       isActive: store.is_active,
       base: store.is_active ? await this.storeOrigin(store, hostname) : null,
     };
+  }
+
+  /**
+   * Store context of an auth request (login, register, guest-register,
+   * forgot-password) that decides WHICH account is meant: customers belong
+   * to exactly one store, staff to none.
+   *
+   * - Neither `store_slug` nor `hostname`: null (staff / platform context).
+   * - `store_slug`: that store (active or not), else 400 STORE_NOT_FOUND.
+   *   The `hostname` never changes which store is meant; like resolveStore
+   *   it only picks the origin of emailed links when it is one of the
+   *   store's ACTIVE hosts, and is ignored otherwise (platform host, slug
+   *   subdomain, localhost, a foreign host).
+   * - `hostname` alone: the store owning that ACTIVE domain, else 400
+   *   STORE_NOT_FOUND.
+   *
+   * The 400 never depends on accounts, so it reveals nothing about emails.
+   */
+  async resolveRequestStore(
+    storeSlug?: string | null,
+    hostname?: string | null,
+  ): Promise<StoreLinkContext | null> {
+    const slug = storeSlug?.trim() || null;
+    const host = hostname?.trim().toLowerCase().split(':')[0] || null;
+    if (!slug && !host) return null;
+
+    let store: StoreLinkContext | null = null;
+    if (slug) {
+      store = await this.resolveStore(slug, host);
+    } else if (host) {
+      const domain = await this.prisma.storeDomain.findFirst({
+        where: { hostname: host, status: 'ACTIVE' },
+        select: { store: { select: { slug: true } } },
+      });
+      if (domain) store = await this.resolveStore(domain.store.slug, host);
+    }
+    if (!store) {
+      throw new BadRequestException({
+        code: 'STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
+    }
+    return store;
   }
 
   private async storeOrigin(

@@ -780,3 +780,166 @@ export function accountCreatedEmail(
 
   return { subject: fill(t.subject, textTokens), html, text };
 }
+
+// ── Customer login link (sent by the store owner from the dashboard) ────────
+
+/**
+ * Wording of the `customer_login_link` email per locale. Tokens: {store},
+ * {name}, {hours}. Values are escaped before they are put in, so a phrase
+ * itself must never contain user input.
+ */
+export const CUSTOMER_LOGIN_LINK_TEXT: Record<
+  string,
+  {
+    subject: string;
+    title: string;
+    greeting: string;
+    greetingNoName: string;
+    intro: string;
+    button: string;
+    validity: string;
+    loginLead: string;
+    loginLink: string;
+    ignore: string;
+  }
+> = {
+  en: {
+    subject: 'Your login link for {store}',
+    title: 'Log in to {store}',
+    greeting: 'Hi {name},',
+    greetingNoName: 'Hi there,',
+    intro: 'Use the button below to log in to your account at {store}.',
+    button: 'Log in with one click',
+    validity: 'This button is valid for {hours} hours and can be used once.',
+    loginLead: 'You can also log in with your email and password:',
+    loginLink: 'Log in',
+    ignore: 'If you did not expect this email, you can ignore it.',
+  },
+  ar: {
+    subject: 'رابط تسجيل الدخول إلى {store}',
+    title: 'تسجيل الدخول إلى {store}',
+    greeting: 'مرحباً {name}،',
+    greetingNoName: 'مرحباً،',
+    intro: 'استخدم الزر أدناه لتسجيل الدخول إلى حسابك في {store}.',
+    button: 'تسجيل الدخول بنقرة واحدة',
+    validity: 'هذا الزر صالح لمدة {hours} ساعة ويمكن استخدامه مرة واحدة فقط.',
+    loginLead: 'يمكنك أيضاً تسجيل الدخول ببريدك الإلكتروني وكلمة المرور:',
+    loginLink: 'تسجيل الدخول',
+    ignore: 'إذا لم تكن تتوقع هذه الرسالة، يمكنك تجاهلها.',
+  },
+  tr: {
+    subject: '{store} giriş bağlantınız',
+    title: '{store} hesabınıza giriş yapın',
+    greeting: 'Merhaba {name},',
+    greetingNoName: 'Merhaba,',
+    intro: '{store} hesabınıza giriş yapmak için aşağıdaki butonu kullanın.',
+    button: 'Tek tıkla giriş yap',
+    validity:
+      'Bu buton {hours} saat geçerlidir ve yalnızca bir kez kullanılabilir.',
+    loginLead: 'E-posta adresiniz ve şifrenizle de giriş yapabilirsiniz:',
+    loginLink: 'Giriş yap',
+    ignore: 'Bu e-postayı beklemiyorduysanız dikkate almayabilirsiniz.',
+  },
+  de: {
+    subject: 'Ihr Anmeldelink für {store}',
+    title: 'Bei {store} anmelden',
+    greeting: 'Hallo {name},',
+    greetingNoName: 'Hallo,',
+    intro:
+      'Mit dem Button unten melden Sie sich bei Ihrem Konto bei {store} an.',
+    button: 'Mit einem Klick anmelden',
+    validity:
+      'Dieser Button ist {hours} Stunden gültig und kann einmal verwendet werden.',
+    loginLead: 'Sie können sich auch mit E-Mail und Passwort anmelden:',
+    loginLink: 'Anmelden',
+    ignore:
+      'Wenn Sie diese E-Mail nicht erwartet haben, können Sie sie ignorieren.',
+  },
+  fr: {
+    subject: 'Votre lien de connexion à {store}',
+    title: 'Connexion à {store}',
+    greeting: 'Bonjour {name},',
+    greetingNoName: 'Bonjour,',
+    intro:
+      'Utilisez le bouton ci-dessous pour vous connecter à votre compte sur {store}.',
+    button: 'Se connecter en un clic',
+    validity:
+      'Ce bouton est valable {hours} heures et ne peut être utilisé qu’une seule fois.',
+    loginLead:
+      'Vous pouvez aussi vous connecter avec votre e-mail et votre mot de passe :',
+    loginLink: 'Se connecter',
+    ignore: 'Si vous n’attendiez pas cet e-mail, vous pouvez l’ignorer.',
+  },
+  sv: {
+    subject: 'Din inloggningslänk till {store}',
+    title: 'Logga in hos {store}',
+    greeting: 'Hej {name},',
+    greetingNoName: 'Hej,',
+    intro: 'Använd knappen nedan för att logga in på ditt konto hos {store}.',
+    button: 'Logga in med ett klick',
+    validity: 'Knappen gäller i {hours} timmar och kan användas en gång.',
+    loginLead: 'Du kan också logga in med din e-post och ditt lösenord:',
+    loginLink: 'Logga in',
+    ignore: 'Om du inte väntade dig det här mejlet kan du bortse från det.',
+  },
+};
+
+export interface CustomerLoginLinkData {
+  name?: string;
+  magicUrl: string;
+  loginUrl: string;
+  expiresHours: number;
+}
+
+/**
+ * Bundled `customer_login_link` email: a one-time magic login button for an
+ * existing customer account, sent by the store owner. The magic link appears
+ * exactly once in the HTML. Unknown locales fall back to English; Arabic
+ * renders right-to-left.
+ */
+export function customerLoginLinkEmail(
+  data: CustomerLoginLinkData,
+  brand?: EmailBrand,
+  locale?: string | null,
+): EmailParts {
+  const key = (locale ?? 'en').toLowerCase().split(/[-_]/)[0];
+  const lang = CUSTOMER_LOGIN_LINK_TEXT[key] ? key : 'en';
+  const t = CUSTOMER_LOGIN_LINK_TEXT[lang];
+  const dir = lang === 'ar' ? 'rtl' : 'ltr';
+  const storeName = brand?.storeName || brand?.platformName || BRAND;
+  const name = (data.name ?? '').trim();
+  const hours = String(data.expiresHours);
+
+  const htmlTokens = { store: esc(storeName), name: esc(name), hours };
+  const textTokens = { store: storeName, name, hours };
+  const greeting = name ? t.greeting : t.greetingNoName;
+  const p = 'font-size:14px;line-height:1.6;color:#3f3f46;';
+  const small = 'font-size:12px;line-height:1.6;color:#71717a;';
+
+  const html = layout(
+    fill(t.title, htmlTokens),
+    `<p style="${p}margin:0 0 8px;">${fill(greeting, htmlTokens)}</p>
+       <p style="${p}margin:0 0 16px;">${fill(t.intro, htmlTokens)}</p>
+       <p style="margin:0 0 8px;">${button(t.button, data.magicUrl)}</p>
+       <p style="${small}margin:0 0 20px;">${fill(t.validity, htmlTokens)}</p>
+       <p style="${p}margin:0 0 16px;">${esc(t.loginLead)} <a href="${esc(data.loginUrl)}" style="color:#18181b;font-weight:600;">${esc(t.loginLink)}</a></p>
+       <p style="${small}margin:0;">${esc(t.ignore)}</p>`,
+    brand,
+    dir,
+  );
+
+  const text = [
+    fill(greeting, textTokens),
+    '',
+    fill(t.intro, textTokens),
+    '',
+    `${t.button}: ${data.magicUrl}`,
+    fill(t.validity, textTokens),
+    '',
+    `${t.loginLead} ${data.loginUrl}`,
+    '',
+    t.ignore,
+  ].join('\n');
+
+  return { subject: fill(t.subject, textTokens), html, text };
+}

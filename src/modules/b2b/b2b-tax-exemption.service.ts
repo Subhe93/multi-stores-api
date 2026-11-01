@@ -151,9 +151,15 @@ export class B2bTaxExemptionService {
     if (!customerId && opts.userId) {
       const customer = await this.prisma.customer.findUnique({
         where: { user_id: opts.userId },
-        select: { id: true },
+        select: { id: true, user: { select: { store_id: true } } },
       });
-      customerId = customer?.id ?? null;
+      // Per-store accounts: only a customer of this store can carry its
+      // exemption (a foreign account never matches one anyway).
+      const ownStore = customer?.user?.store_id;
+      customerId =
+        customer && (ownStore === undefined || ownStore === storeId)
+          ? customer.id
+          : null;
     }
     if (customerId) {
       customerExemption = await this.prisma.storeCustomerTaxExemption.findFirst(
@@ -255,12 +261,22 @@ export class B2bTaxExemptionService {
       customerId = order.customer_id;
       orderVat = order.vat_number;
     } else if (input.customer_id) {
-      const order = await this.prisma.order.findFirst({
-        where: { customer_id: input.customer_id, store_id: storeId },
-        select: { customer_id: true },
+      // A customer account of this store (per-store accounts), or a
+      // customer with an order in it.
+      const own = await this.prisma.customer.findFirst({
+        where: { id: input.customer_id, user: { store_id: storeId } },
+        select: { id: true },
       });
-      if (!order) throw notFound();
-      customerId = order.customer_id;
+      if (own) {
+        customerId = own.id;
+      } else {
+        const order = await this.prisma.order.findFirst({
+          where: { customer_id: input.customer_id, store_id: storeId },
+          select: { customer_id: true },
+        });
+        if (!order) throw notFound();
+        customerId = order.customer_id;
+      }
     }
     if (!customerId) throw notFound();
 

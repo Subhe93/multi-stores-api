@@ -84,7 +84,11 @@ function build(opts: {
       ),
     },
     customer: {
-      findUnique: jest.fn(() => Promise.resolve({ id: 'cust1' })),
+      findUnique: jest.fn(
+        (): Promise<unknown> => Promise.resolve({ id: 'cust1' }),
+      ),
+      // Per-store accounts: a customer account of the store (none by default).
+      findFirst: jest.fn((): Promise<unknown> => Promise.resolve(null)),
     },
     store: {
       findUnique: jest.fn(() =>
@@ -190,6 +194,21 @@ describe('B2bTaxExemptionService.prepare', () => {
       }),
     );
   });
+
+  it('a customer account of another store never carries this store exemption', async () => {
+    const { service, prisma } = build({});
+    prisma.customer.findUnique.mockResolvedValueOnce({
+      id: 'cust1',
+      user: { store_id: 'other-store' },
+    });
+    const r = await service.prepare('s1', {
+      buyerType: 'PERSON',
+      userId: 'u1',
+      mode: 'cached',
+    });
+    expect(r?.customerExemption).toBeNull();
+    expect(prisma.storeCustomerTaxExemption.findFirst).not.toHaveBeenCalled();
+  });
 });
 
 describe('B2bTaxExemptionService CRUD', () => {
@@ -224,6 +243,21 @@ describe('B2bTaxExemptionService CRUD', () => {
     await expect(
       service.create('s1', 'u1', { kind: 'FULL' }),
     ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('grants to a customer account of the store even without an order', async () => {
+    const { service, prisma } = build({});
+    prisma.order.findFirst.mockResolvedValue(null);
+    prisma.customer.findFirst.mockResolvedValue({ id: 'cust1' });
+    const view = await service.create('s1', 'u1', {
+      customer_id: 'cust1',
+      kind: 'FULL',
+    });
+    expect(prisma.customer.findFirst).toHaveBeenCalledWith({
+      where: { id: 'cust1', user: { store_id: 's1' } },
+      select: { id: true },
+    });
+    expect(view).toMatchObject({ customer: { id: 'cust1' } });
   });
 
   it('400 B2B_EXEMPTION_VAT_REQUIRED for reverse charge without an EU number', async () => {

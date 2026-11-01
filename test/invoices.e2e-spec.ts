@@ -69,7 +69,12 @@ d('invoices (real database)', () => {
     });
     storeId = store.id;
     const custUser = await prisma.user.create({
-      data: { email: 'cust@e2e.test', password_hash: 'x', role: 'CUSTOMER' },
+      data: {
+        email: 'cust@e2e.test',
+        password_hash: 'x',
+        role: 'CUSTOMER',
+        store_id: storeId,
+      },
     });
     const customer = await prisma.customer.create({
       data: { user_id: custUser.id, first_name: 'Anna', last_name: 'S' },

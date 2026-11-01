@@ -139,10 +139,10 @@ function build(
     user: {
       findUnique: jest.fn(() => Promise.resolve(opts.existingUser ?? null)),
       findFirst: jest.fn(() => Promise.resolve(null)),
-      create: jest.fn(({ data }: { data: { email: string } }) =>
+      create: jest.fn((args: { data: { email: string } }) =>
         Promise.resolve({
           id: 'u-new',
-          email: data.email,
+          email: args.data.email,
           customer: { id: 'c-new' },
         }),
       ),
@@ -456,7 +456,10 @@ const kustomAddress = {
   country: 'SE',
 };
 
-const loggedIn = { id: 'c1', user: { id: 'u1', email: 'anna@example.com' } };
+const loggedIn = {
+  id: 'c1',
+  user: { id: 'u1', email: 'anna@example.com', store_id: STORE_ID },
+};
 
 // A logged-in customer with a saved Swedish address (customerPrefill).
 const savedAddressCustomer = {
@@ -1004,6 +1007,66 @@ describe('KustomCheckoutService.handleValidation account credentials', () => {
     await flush();
     expect(prisma.user.create).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('accounts are per store: lookup by (session.store_id, email), a new account belongs to that store', async () => {
+    const send = jest.fn((_input: unknown) => Promise.resolve());
+    const { service, prisma } = build(null, {
+      session: sessionRow({ customer_id: null }),
+      credentials: { send },
+    });
+    await service.handleValidation('sess-1', 'cb-token', body);
+    expect(prisma.user.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          store_id_email: { store_id: STORE_ID, email: 'anna@example.com' },
+        },
+      }),
+    );
+    const createArgs = prisma.user.create.mock.calls[0][0] as unknown as {
+      data: { store_id: string; role: string };
+    };
+    expect(createArgs.data).toMatchObject({
+      store_id: STORE_ID,
+      role: 'CUSTOMER',
+    });
+  });
+
+  it('a staff account with the same email no longer blocks: a separate customer is created in this store', async () => {
+    const send = jest.fn((_input: unknown) => Promise.resolve());
+    const staff = {
+      id: 'u-staff',
+      email: 'anna@example.com',
+      role: 'CREATOR',
+      store_id: null,
+      customer: null,
+    };
+    const { service, prisma } = build(null, {
+      session: sessionRow({ customer_id: null }),
+      credentials: { send },
+    });
+    // The staff row only matches a platform-wide lookup, never a store one.
+    prisma.user.findUnique.mockImplementation(((args: {
+      where: Record<string, unknown>;
+    }) =>
+      Promise.resolve('store_id_email' in args.where ? null : staff)) as never);
+    const res = await service.handleValidation('sess-1', 'cb-token', body);
+    expect(res).toEqual({ ok: true, body: { ok: true } });
+    expect(prisma.user.create).toHaveBeenCalledTimes(1);
+    await flush();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("a logged-in customer of another store is not attached (the order gets this store's account)", async () => {
+    const send = jest.fn((_input: unknown) => Promise.resolve());
+    const { service, prisma, orders } = build(null, {
+      session: sessionRow(),
+      customer: { ...loggedIn, user: { ...loggedIn.user, store_id: 'other' } },
+      credentials: { send },
+    });
+    await service.handleValidation('sess-1', 'cb-token', body);
+    expect(prisma.user.create).toHaveBeenCalledTimes(1);
+    expect((orders.create.mock.calls[0] as unknown[])[0]).toBe('u-new');
   });
 
   it('a logged-in customer sends nothing', async () => {

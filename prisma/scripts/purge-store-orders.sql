@@ -19,7 +19,7 @@ FROM "Order" o
 JOIN "Store" s ON s.id = o.store_id
 JOIN "Creator" c ON c.id = s.creator_id
 JOIN "User" u ON u.id = c.user_id
-WHERE u.email = :'email';
+WHERE u.email = :'email' AND u.store_id IS NULL;  -- staff row only (customers share emails per store)
 
 CREATE TEMP TABLE purge_items AS
 SELECT id FROM "OrderItem" WHERE order_id IN (SELECT id FROM purge_orders);
@@ -29,7 +29,7 @@ SELECT u.email, u.role, c.display_name, s.slug, s.store_type
 FROM "User" u
 LEFT JOIN "Creator" c ON c.user_id = u.id
 LEFT JOIN "Store" s ON s.creator_id = c.id
-WHERE u.email = :'email';
+WHERE u.email = :'email' AND u.store_id IS NULL;  -- staff row only (customers share emails per store)
 
 \echo === orders that will be removed
 SELECT o.order_number, o.status, o.payment_method, o.payment_status, o.total, o.currency, o.created_at

@@ -93,6 +93,14 @@ async function step(label, fn) {
     await step('StaticPageTranslation', () => prisma.staticPageTranslation.deleteMany());
     await step('StaticPage', () => prisma.staticPage.deleteMany());
     await step('StoreLanguageConfig', () => prisma.storeLanguageConfig.deleteMany());
+    // Customer accounts belong to a store (User.store_id, ON DELETE RESTRICT),
+    // so they go before the stores. Their Customer, addresses, sessions and
+    // login tokens cascade with the user row.
+    await step('User (store customers)', () =>
+      prisma.user.deleteMany({
+        where: { store_id: { not: null }, id: { notIn: KEEP_USER_IDS } },
+      }),
+    );
     await step('Store', () => prisma.store.deleteMany());
 
     // ── Shipping ──

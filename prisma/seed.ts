@@ -1,42 +1,45 @@
-import { PrismaClient, UserRole } from '@prisma/client';
+import { Prisma, PrismaClient, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
+
+/**
+ * Staff accounts (store_id NULL) are unique by email through a partial index
+ * Prisma cannot address in upsert(), so find-or-create instead.
+ */
+async function upsertStaff(data: Prisma.UserCreateInput) {
+  const existing = await prisma.user.findFirst({
+    where: { email: data.email, store_id: null },
+  });
+  return existing ?? prisma.user.create({ data });
+}
 
 async function main() {
   console.log('Seeding database...');
 
   // Admin user
   const adminPassword = await bcrypt.hash('admin123456', 12);
-  const admin = await prisma.user.upsert({
-    where: { email: 'admin@multistores.com' },
-    update: {},
-    create: {
-      email: 'admin@multistores.com',
-      password_hash: adminPassword,
-      role: UserRole.ADMIN,
-      status: 'ACTIVE',
-    },
+  const admin = await upsertStaff({
+    email: 'admin@multistores.com',
+    password_hash: adminPassword,
+    role: UserRole.ADMIN,
+    status: 'ACTIVE',
   });
   console.log('Admin created:', admin.email);
 
   // Test Provider
   const providerPassword = await bcrypt.hash('provider123', 12);
-  const providerUser = await prisma.user.upsert({
-    where: { email: 'provider@test.com' },
-    update: {},
-    create: {
-      email: 'provider@test.com',
-      password_hash: providerPassword,
-      role: UserRole.PROVIDER,
-      status: 'ACTIVE',
-      provider: {
-        create: {
-          company_name: 'Test Manufacturing Co.',
-          description: 'Premium handmade products',
-          country: 'DE',
-          verified: true,
-        },
+  const providerUser = await upsertStaff({
+    email: 'provider@test.com',
+    password_hash: providerPassword,
+    role: UserRole.PROVIDER,
+    status: 'ACTIVE',
+    provider: {
+      create: {
+        company_name: 'Test Manufacturing Co.',
+        description: 'Premium handmade products',
+        country: 'DE',
+        verified: true,
       },
     },
   });
@@ -44,20 +47,16 @@ async function main() {
 
   // Test Creator
   const creatorPassword = await bcrypt.hash('creator123', 12);
-  const creatorUser = await prisma.user.upsert({
-    where: { email: 'creator@test.com' },
-    update: {},
-    create: {
-      email: 'creator@test.com',
-      password_hash: creatorPassword,
-      role: UserRole.CREATOR,
-      status: 'ACTIVE',
-      creator: {
-        create: {
-          display_name: 'Ahmed Design',
-          bio: 'Creative designer specializing in custom products',
-          verified: true,
-        },
+  const creatorUser = await upsertStaff({
+    email: 'creator@test.com',
+    password_hash: creatorPassword,
+    role: UserRole.CREATOR,
+    status: 'ACTIVE',
+    creator: {
+      create: {
+        display_name: 'Ahmed Design',
+        bio: 'Creative designer specializing in custom products',
+        verified: true,
       },
     },
   });
@@ -65,8 +64,9 @@ async function main() {
 
   // Create Store for Creator
   const creator = await prisma.creator.findUnique({ where: { user_id: creatorUser.id } });
+  let seededStoreId: string | null = null;
   if (creator) {
-    await prisma.store.upsert({
+    const store = await prisma.store.upsert({
       where: { creator_id: creator.id },
       update: {},
       create: {
@@ -84,19 +84,26 @@ async function main() {
         },
       },
     });
+    seededStoreId = store.id;
     console.log('Store created for creator');
   }
+  if (!seededStoreId) throw new Error('Seed store missing');
 
   // Test Customer
   const customerPassword = await bcrypt.hash('customer123', 12);
+  // Customer accounts belong to one store: the demo customer is a customer
+  // of the seeded store and logs in on that storefront only.
   const customerUser = await prisma.user.upsert({
-    where: { email: 'customer@test.com' },
+    where: {
+      store_id_email: { store_id: seededStoreId, email: 'customer@test.com' },
+    },
     update: {},
     create: {
       email: 'customer@test.com',
       password_hash: customerPassword,
       role: UserRole.CUSTOMER,
       status: 'ACTIVE',
+      store: { connect: { id: seededStoreId } },
       customer: {
         create: {
           first_name: 'Sara',

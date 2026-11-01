@@ -47,7 +47,10 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   magicLogin(@Body() dto: MagicLoginDto) {
-    return this.authService.magicLogin(dto.token);
+    return this.authService.magicLogin(dto.token, {
+      store_slug: dto.store_slug,
+      hostname: dto.hostname,
+    });
   }
 
   @Post('login')

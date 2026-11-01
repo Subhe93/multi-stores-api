@@ -34,8 +34,9 @@ export class RegisterDto {
   @IsString()
   phone?: string;
 
-  // Optional storefront context: brands and localizes the welcome email
-  // (resolved server-side like forgot-password). Never affects the account.
+  // Storefront context. Required for role CUSTOMER (the account belongs to
+  // that store; 400 STORE_REQUIRED without it), ignored for CREATOR /
+  // PROVIDER. Also brands and localizes the welcome email.
   @IsOptional()
   @IsString()
   @MaxLength(100)

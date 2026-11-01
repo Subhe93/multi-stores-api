@@ -55,7 +55,10 @@ describe('AuthController magic-link endpoints (HTTP)', () => {
       .send({ token: 'tok' })
       .expect(200);
     expect(res.body).toEqual(body);
-    expect(auth.magicLogin).toHaveBeenCalledWith('tok');
+    expect(auth.magicLogin).toHaveBeenCalledWith('tok', {
+      store_slug: undefined,
+      hostname: undefined,
+    });
   });
 
   it('POST /auth/magic-login → 401 MAGIC_LINK_INVALID', async () => {

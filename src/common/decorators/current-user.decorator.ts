@@ -7,6 +7,8 @@ export interface RequestUser {
   email: string;
   role: UserRole;
   status: UserStatus;
+  /** Store a CUSTOMER account belongs to; null for staff. */
+  storeId: string | null;
 }
 
 export const CurrentUser = createParamDecorator(

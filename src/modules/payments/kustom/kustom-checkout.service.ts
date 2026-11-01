@@ -14,6 +14,7 @@ import type { KustomCheckoutSession } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { assertCustomerStore } from '../../../common/customers/customer-store';
 import { MailService } from '../../mail/mail.service';
 import { OrdersService, type OrderQuote } from '../../orders/orders.service';
 import {
@@ -924,9 +925,15 @@ export class KustomCheckoutService {
     const customer = userId
       ? await this.prisma.customer.findUnique({
           where: { user_id: userId },
-          select: { id: true },
+          select: {
+            id: true,
+            user: { select: { role: true, store_id: true } },
+          },
         })
       : null;
+    // Per-store accounts: a logged-in customer checks out only in its own
+    // store (403 CUSTOMER_STORE_MISMATCH).
+    if (customer) assertCustomerStore(customer.user, ctx.id);
 
     let raw: CartLineLike[] = dto.items ?? [];
     if (!raw.length && customer) {
@@ -1977,9 +1984,12 @@ export class KustomCheckoutService {
    * Kustom collected: role CUSTOMER, ACTIVE, with a generated password hashed
    * with bcrypt (see GUEST_PASSWORD_BCRYPT_COST). The plain password is
    * returned in memory only, for the credentials email handleValidation sends
-   * (with a magic login link) once the callback is done. An existing account is
-   * attached only when it is a customer account — a creator, provider or
-   * admin must not acquire orders through a guest checkout.
+   * (with a magic login link) once the callback is done.
+   *
+   * Customer accounts are per store: the account is found or created by
+   * (session.store_id, email). Staff accounts (store_id NULL) are never
+   * matched, so a creator, provider or admin email no longer blocks the
+   * checkout; the shopper gets a separate customer account in this store.
    */
   private async resolveCustomer(
     session: Session,
@@ -1993,9 +2003,14 @@ export class KustomCheckoutService {
     if (session.customer_id) {
       const customer = await this.prisma.customer.findUnique({
         where: { id: session.customer_id },
-        select: { id: true, user: { select: { id: true, email: true } } },
+        select: {
+          id: true,
+          user: { select: { id: true, email: true, store_id: true } },
+        },
       });
-      if (customer) {
+      // Only an account of this store; anything else falls through to the
+      // email path (a token of another store never attaches its account).
+      if (customer && customer.user.store_id === session.store_id) {
         return {
           userId: customer.user.id,
           customerId: customer.id,
@@ -2017,34 +2032,8 @@ export class KustomCheckoutService {
       });
     }
 
-    // Accounts are stored normalised, so the unique index answers first; the
-    // case-insensitive fallback covers rows created before normalisation
-    // (lower-cased by a separate one-off data migration).
-    const userSelect = {
-      id: true,
-      email: true,
-      role: true,
-      customer: { select: { id: true } },
-    } as const;
-    const existing =
-      (await this.prisma.user.findUnique({
-        where: { email },
-        select: userSelect,
-      })) ??
-      (await this.prisma.user.findFirst({
-        where: { email: { equals: email, mode: 'insensitive' } },
-        select: userSelect,
-      }));
+    const existing = await this.findStoreCustomer(session.store_id, email);
     if (existing) {
-      if (existing.role !== UserRole.CUSTOMER) {
-        this.logger.warn(
-          `Kustom session ${session.id}: ${existing.role} account ${existing.id} cannot check out as a guest`,
-        );
-        throw new BadRequestException({
-          code: 'KUSTOM_ACCOUNT_UNAVAILABLE',
-          message: 'This email belongs to an account that cannot place orders.',
-        });
-      }
       // A customer account without a profile (registered before profiles
       // existed) still gets one so it can order.
       const customer =
@@ -2075,22 +2064,41 @@ export class KustomCheckoutService {
       password,
       GUEST_PASSWORD_BCRYPT_COST,
     );
-    const user = await this.prisma.user.create({
-      data: {
-        email,
-        password_hash,
-        role: UserRole.CUSTOMER,
-        status: 'ACTIVE',
-        customer: {
-          create: {
-            first_name: firstName,
-            last_name: lastName,
-            ...(phone ? { phone } : {}),
+    let user: { id: string; email: string; customer: { id: string } | null };
+    try {
+      user = await this.prisma.user.create({
+        data: {
+          email,
+          password_hash,
+          role: UserRole.CUSTOMER,
+          status: 'ACTIVE',
+          store_id: session.store_id,
+          customer: {
+            create: {
+              first_name: firstName,
+              last_name: lastName,
+              ...(phone ? { phone } : {}),
+            },
           },
         },
-      },
-      select: { id: true, email: true, customer: { select: { id: true } } },
-    });
+        select: { id: true, email: true, customer: { select: { id: true } } },
+      });
+    } catch (err) {
+      // A concurrent signup in this store won (store_id, email): attach the
+      // order to that account instead.
+      const winner = this.isUniqueViolation(err)
+        ? await this.findStoreCustomer(session.store_id, email)
+        : null;
+      if (!winner?.customer) throw err;
+      return {
+        userId: winner.id,
+        customerId: winner.customer.id,
+        email: winner.email,
+        firstName,
+        created: false,
+        password: null,
+      };
+    }
     return {
       userId: user.id,
       customerId: user.customer!.id,
@@ -2099,6 +2107,33 @@ export class KustomCheckoutService {
       created: true,
       password,
     };
+  }
+
+  /**
+   * The CUSTOMER account of a store by email. Accounts are stored
+   * normalised, so the compound unique answers first; the case-insensitive
+   * fallback covers rows created before normalisation.
+   */
+  private async findStoreCustomer(storeId: string, email: string) {
+    const select = {
+      id: true,
+      email: true,
+      role: true,
+      customer: { select: { id: true } },
+    } as const;
+    const exact = await this.prisma.user.findUnique({
+      where: { store_id_email: { store_id: storeId, email } },
+      select,
+    });
+    if (exact) return exact.role === UserRole.CUSTOMER ? exact : null;
+    return this.prisma.user.findFirst({
+      where: {
+        store_id: storeId,
+        role: UserRole.CUSTOMER,
+        email: { equals: email, mode: 'insensitive' },
+      },
+      select,
+    });
   }
 
   /**

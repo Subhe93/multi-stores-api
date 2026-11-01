@@ -1,4 +1,8 @@
-import { ConflictException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Logger } from '@nestjs/common';
 import { Prisma, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
@@ -43,18 +47,25 @@ function build(
         ),
       ),
       findFirst: jest.fn(() => Promise.resolve(null)),
-      create: jest.fn(({ data }: { data: { email: string; role: UserRole } }) =>
-        Promise.resolve({
-          id: 'u-new',
-          email: data.email,
-          role: data.role,
-          status: 'ACTIVE',
-          created_at: new Date('2026-11-01T00:00:00Z'),
-        }),
+      create: jest.fn(
+        ({
+          data,
+        }: {
+          data: { email: string; role: UserRole; store_id?: string | null };
+        }) =>
+          Promise.resolve({
+            id: 'u-new',
+            email: data.email,
+            role: data.role,
+            status: 'ACTIVE',
+            store_id: data.store_id ?? null,
+            created_at: new Date('2026-11-01T00:00:00Z'),
+          }),
       ),
       update: jest.fn(() => Promise.resolve({})),
     },
     customer: { create: jest.fn(() => Promise.resolve({})) },
+    creator: { create: jest.fn(() => Promise.resolve({})) },
     store: {
       findUnique: jest.fn(() => Promise.resolve(opts.store ?? null)),
     },
@@ -137,6 +148,7 @@ describe('AuthService.guestRegister', () => {
         email: 'anna@example.com',
         role: 'CUSTOMER',
         status: 'ACTIVE',
+        store_id: 's1',
         created_at: expect.any(Date) as unknown,
       },
       access_token: 'jwt-u-new',
@@ -152,6 +164,7 @@ describe('AuthService.guestRegister', () => {
       email: 'anna@example.com',
       role: 'CUSTOMER',
       status: 'ACTIVE',
+      store_id: 's1',
       customer: {
         create: { first_name: 'Anna', last_name: 'S', phone: '+4670' },
       },
@@ -196,9 +209,46 @@ describe('AuthService.guestRegister', () => {
     expect(JSON.stringify(res)).not.toContain(vars.password);
   });
 
-  it('without a store: platform links, explicit locale, platform sender', async () => {
-    const { service, mail } = build();
-    await service.guestRegister({ email: 'a@b.se', locale: 'de' });
+  it('without a store: 400 STORE_REQUIRED, nothing created or mailed', async () => {
+    const { service, prisma, mail } = build();
+    const err = await service
+      .guestRegister({ email: 'a@b.se', locale: 'de' })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect((err as BadRequestException).getResponse()).toMatchObject({
+      code: 'STORE_REQUIRED',
+    });
+    expect(prisma.user.create).not.toHaveBeenCalled();
+    expect(mail.sendAccountCreated).not.toHaveBeenCalled();
+  });
+
+  it('an unknown store slug: 400 STORE_NOT_FOUND', async () => {
+    const { service } = build({ store: null });
+    const err = await service
+      .guestRegister({ email: 'a@b.se', store_slug: 'nope' })
+      .catch((e: unknown) => e);
+    expect((err as BadRequestException).getResponse()).toMatchObject({
+      code: 'STORE_NOT_FOUND',
+    });
+  });
+
+  it('an inactive store: platform links, explicit locale, platform sender', async () => {
+    const { service, mail, prisma } = build({
+      store: { ...activeStore, is_active: false },
+    });
+    await service.guestRegister({
+      email: 'a@b.se',
+      store_slug: 'namez',
+      locale: 'de',
+    });
+    // The account still belongs to the store.
+    expect(
+      (
+        prisma.user.create.mock.calls[0] as unknown as [
+          { data: { store_id: string } },
+        ]
+      )[0].data.store_id,
+    ).toBe('s1');
     await waitFor(() => mail.sendAccountCreated.mock.calls.length === 1);
     const [, vars, locale, brand] = mail.sendAccountCreated.mock
       .calls[0] as unknown as [string, { magicUrl: string }, string, unknown];
@@ -209,27 +259,13 @@ describe('AuthService.guestRegister', () => {
     expect(brand).toBeNull();
   });
 
-  it('an inactive store does not brand the email', async () => {
-    const { service, mail } = build({
-      store: { ...activeStore, is_active: false },
-    });
-    await service.guestRegister({ email: 'a@b.se', store_slug: 'namez' });
-    await waitFor(() => mail.sendAccountCreated.mock.calls.length === 1);
-    const [, , , brand] = mail.sendAccountCreated.mock.calls[0] as unknown as [
-      string,
-      unknown,
-      unknown,
-      unknown,
-    ];
-    expect(brand).toBeNull();
-  });
-
-  it('an existing email is the same 409 AUTH_EMAIL_EXISTS as register', async () => {
+  it('an existing email in this store is the same 409 AUTH_EMAIL_EXISTS as register', async () => {
     const { service, prisma, mail } = build({
-      existing: { id: 'u1', email: 'a@b.se' },
+      store: activeStore,
+      existing: { id: 'u1', email: 'a@b.se', role: 'CUSTOMER', store_id: 's1' },
     });
     const err = await service
-      .guestRegister({ email: 'A@B.se' })
+      .guestRegister({ email: 'A@B.se', store_slug: 'namez' })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ConflictException);
     expect((err as ConflictException).getResponse()).toMatchObject({
@@ -240,7 +276,7 @@ describe('AuthService.guestRegister', () => {
   });
 
   it('a concurrent duplicate (P2002) is also 409', async () => {
-    const { service, prisma } = build();
+    const { service, prisma } = build({ store: activeStore });
     prisma.user.create.mockImplementationOnce(() =>
       Promise.reject(
         new Prisma.PrismaClientKnownRequestError('dup', {
@@ -250,7 +286,7 @@ describe('AuthService.guestRegister', () => {
       ),
     );
     await expect(
-      service.guestRegister({ email: 'a@b.se' }),
+      service.guestRegister({ email: 'a@b.se', store_slug: 'namez' }),
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
@@ -258,11 +294,14 @@ describe('AuthService.guestRegister', () => {
     const warn = jest
       .spyOn(Logger.prototype, 'warn')
       .mockImplementation(() => undefined);
-    const { service, mail } = build();
+    const { service, mail } = build({ store: activeStore });
     mail.sendAccountCreated.mockImplementationOnce(() =>
       Promise.reject(new Error('smtp down')),
     );
-    const res = await service.guestRegister({ email: 'a@b.se' });
+    const res = await service.guestRegister({
+      email: 'a@b.se',
+      store_slug: 'namez',
+    });
     expect(res.access_token).toBe('jwt-u-new');
     await waitFor(() => warn.mock.calls.length === 1);
     const [, vars] = mail.sendAccountCreated.mock.calls[0] as unknown as [
@@ -309,9 +348,25 @@ describe('AuthService.register with store context', () => {
     );
   });
 
-  it('without a store: platform welcome on the [locale] login page', async () => {
-    const { service, mail } = build();
-    await service.register(dto);
+  it('a customer without a store: 400 STORE_REQUIRED', async () => {
+    const { service, prisma } = build();
+    const err = await service.register(dto).catch((e: unknown) => e);
+    expect((err as BadRequestException).getResponse()).toMatchObject({
+      code: 'STORE_REQUIRED',
+    });
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it('a creator without a store: platform welcome on the [locale] login page', async () => {
+    const { service, mail, prisma } = build();
+    await service.register({ ...dto, role: UserRole.CREATOR });
+    expect(
+      (
+        prisma.user.create.mock.calls[0] as unknown as [
+          { data: { store_id: string | null } },
+        ]
+      )[0].data.store_id,
+    ).toBeNull();
     await waitFor(() => mail.sendWelcome.mock.calls.length === 1);
     expect(mail.sendWelcome).toHaveBeenCalledWith(
       'anna@example.com',
@@ -321,11 +376,14 @@ describe('AuthService.register with store context', () => {
     );
   });
 
-  it('still rejects an existing email with AUTH_EMAIL_EXISTS', async () => {
-    const { service } = build({ existing: { id: 'u1' } });
-    await expect(service.register(dto)).rejects.toBeInstanceOf(
-      ConflictException,
-    );
+  it('still rejects an existing email in the store with AUTH_EMAIL_EXISTS', async () => {
+    const { service } = build({
+      store: activeStore,
+      existing: { id: 'u1', role: 'CUSTOMER', store_id: 's1' },
+    });
+    await expect(
+      service.register({ ...dto, store_slug: 'namez' }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 });
 
@@ -337,13 +395,20 @@ describe('AuthService.magicLogin', () => {
         email: 'a@b.se',
         role: 'CUSTOMER',
         status: 'ACTIVE',
+        store_id: 's1',
         password_hash: 'secret-hash',
       },
     });
     const res = await service.magicLogin(RAW_TOKEN);
     expect(magicLinks.consume).toHaveBeenCalledWith(RAW_TOKEN);
     expect(res).toEqual({
-      user: { id: 'u1', email: 'a@b.se', role: 'CUSTOMER', status: 'ACTIVE' },
+      user: {
+        id: 'u1',
+        email: 'a@b.se',
+        role: 'CUSTOMER',
+        status: 'ACTIVE',
+        store_id: 's1',
+      },
       access_token: 'jwt-u1',
       refresh_token: 'jwt-u1',
     });

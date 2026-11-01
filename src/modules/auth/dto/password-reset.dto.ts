@@ -10,10 +10,12 @@ export class ForgotPasswordDto {
   @IsEmail()
   email: string;
 
-  // When the request comes from a store storefront, the reset link is built on
-  // that store's domain so the customer stays in the same storefront.
+  // Storefront request: only the customer account of that store is meant and
+  // the reset link is built on the store's domain. Without a store context
+  // only staff accounts match.
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   store_slug?: string;
 
   // Markets app: the storefront host the request came from. Honoured only

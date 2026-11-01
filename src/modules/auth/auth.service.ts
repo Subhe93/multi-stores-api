@@ -1,5 +1,6 @@
 import {
   Injectable,
+  BadRequestException,
   ConflictException,
   UnauthorizedException,
   ForbiddenException,
@@ -23,6 +24,87 @@ import { AccountCredentialsService } from './account-credentials.service';
 /** Bcrypt cost of every password hash written by the auth flows. */
 const PASSWORD_BCRYPT_COST = 12;
 
+/** Claims of the access and refresh tokens. `store_id` is null for staff. */
+export interface AuthTokenPayload {
+  sub: string;
+  email: string;
+  role: UserRole;
+  store_id: string | null;
+}
+
+/** The fields of a user the tokens are built from. */
+type TokenSubject = Pick<User, 'id' | 'email' | 'role' | 'store_id'> &
+  Partial<Pick<User, 'tokens_valid_after'>>;
+
+/** Same body for every failed login, so no case reveals an account. */
+const INVALID_CREDENTIALS = {
+  code: 'AUTH_INVALID_CREDENTIALS',
+  message: 'Invalid credentials',
+} as const;
+
+const FORGOT_PASSWORD_MESSAGE =
+  'If the email exists, a reset link will be sent';
+
+/**
+ * Bcrypt hash compared against when no account matched a login, so a miss
+ * costs the same time as a wrong password (no timing-based enumeration).
+ * Built lazily once (same cost as real hashes, so the timing matches).
+ */
+let dummyHash: Promise<string> | null = null;
+function dummyPasswordHash(): Promise<string> {
+  dummyHash ??= bcrypt.hash('no-account-dummy-password', PASSWORD_BCRYPT_COST);
+  return dummyHash;
+}
+
+/**
+ * Whether a token's store claim fits the account. Staff: always (their
+ * store_id is null). Customer: the claim must exist and name the account's
+ * store; tokens issued before accounts were per store lack the claim and are
+ * rejected, which forces a fresh, store-scoped login.
+ */
+export function tokenStoreMatches(
+  payload: { store_id?: string | null },
+  user: { role: UserRole; store_id: string | null },
+): boolean {
+  if (user.role !== UserRole.CUSTOMER) return true;
+  return (
+    typeof payload.store_id === 'string' &&
+    user.store_id !== null &&
+    payload.store_id === user.store_id
+  );
+}
+
+/**
+ * Revocation cutoff (User.tokens_valid_after): a token whose `iat` (whole
+ * seconds) is at or before the cutoff second is dead. Blocking a user,
+ * resetting or changing the password moves the cutoff to "now", which kills
+ * every access and refresh token issued before it in one write.
+ */
+export function tokenIssuedAfterCutoff(
+  payload: { iat?: number },
+  user: { tokens_valid_after?: Date | null },
+): boolean {
+  const cutoff = user.tokens_valid_after;
+  if (!cutoff) return true;
+  if (typeof payload.iat !== 'number') return false;
+  return payload.iat > Math.floor(cutoff.getTime() / 1000);
+}
+
+/**
+ * `iat` for a token minted now: the current second, but never at or before
+ * the user's cutoff second, so a token issued right after a revocation (same
+ * second, e.g. change-password returning a fresh pair) is not born dead.
+ */
+export function issuedAtFor(
+  user: { tokens_valid_after?: Date | null },
+  nowMs = Date.now(),
+): number {
+  const now = Math.floor(nowMs / 1000);
+  const cutoff = user.tokens_valid_after;
+  if (!cutoff) return now;
+  return Math.max(now, Math.floor(cutoff.getTime() / 1000) + 1);
+}
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -42,38 +124,81 @@ export class AuthService {
     });
   }
 
-  /** Storefront context of a request, used only when the store is live. */
-  private async activeStore(
-    storeSlug?: string,
-    hostname?: string,
-  ): Promise<StoreLinkContext | null> {
-    const store = await this.links.resolveStore(storeSlug, hostname);
-    return store?.isActive ? store : null;
+  private storeRequired(): BadRequestException {
+    return new BadRequestException({
+      code: 'STORE_REQUIRED',
+      message: 'Customer accounts need a store (store_slug or hostname)',
+    });
   }
 
   /**
-   * Account lookup by email. New rows are stored normalised (see
+   * Account lookups by email. A CUSTOMER belongs to exactly one store and is
+   * found only within it; staff (ADMIN/CREATOR/PROVIDER) have store_id NULL
+   * and are found only without a store. New rows are stored normalised (see
    * normalizeEmail), so the unique index answers the common case; rows
    * created before normalisation may still be mixed case, hence the
-   * case-insensitive fallback. Existing rows are lower-cased by a separate
-   * one-off data migration, after which the fallback can go.
+   * case-insensitive fallback.
    */
-  private async findUserByEmail(email: string) {
+  private async findStoreCustomer(storeId: string, email: string) {
     const normalized = normalizeEmail(email);
     const exact = await this.prisma.user.findUnique({
-      where: { email: normalized },
+      where: { store_id_email: { store_id: storeId, email: normalized } },
     });
-    if (exact) return exact;
+    if (exact) return exact.role === UserRole.CUSTOMER ? exact : null;
     return this.prisma.user.findFirst({
-      where: { email: { equals: normalized, mode: 'insensitive' } },
+      where: {
+        store_id: storeId,
+        role: UserRole.CUSTOMER,
+        email: { equals: normalized, mode: 'insensitive' },
+      },
     });
   }
 
-  async register(dto: RegisterDto) {
-    const email = normalizeEmail(dto.email);
-    const existing = await this.findUserByEmail(email);
-    if (existing) throw this.emailExists();
+  private async findStaff(email: string) {
+    const normalized = normalizeEmail(email);
+    const where = { store_id: null, role: { not: UserRole.CUSTOMER } };
+    return (
+      (await this.prisma.user.findFirst({
+        where: { ...where, email: normalized },
+      })) ??
+      this.prisma.user.findFirst({
+        where: {
+          ...where,
+          email: { equals: normalized, mode: 'insensitive' },
+        },
+      })
+    );
+  }
 
+  /**
+   * Whether a staff registration would collide with the platform-wide
+   * unique index on email (`User_staff_email_key`, rows with store_id NULL).
+   */
+  private async staffEmailTaken(email: string): Promise<boolean> {
+    const row = await this.prisma.user.findFirst({
+      where: {
+        store_id: null,
+        email: { equals: normalizeEmail(email), mode: 'insensitive' },
+      },
+      select: { id: true },
+    });
+    return row !== null;
+  }
+
+  private isUniqueViolation(err: unknown): boolean {
+    return (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === 'P2002'
+    );
+  }
+
+  /**
+   * Self-registration. A CUSTOMER registers in one store (store_slug /
+   * hostname required, 400 STORE_REQUIRED otherwise) and the email only has
+   * to be free within that store. CREATOR / PROVIDER accounts stay
+   * platform-wide; a store context sent with them is ignored.
+   */
+  async register(dto: RegisterDto) {
     if (dto.role === UserRole.ADMIN) {
       throw new ForbiddenException({
         code: 'AUTH_CANNOT_REGISTER_ADMIN',
@@ -81,23 +206,47 @@ export class AuthService {
       });
     }
 
+    const email = normalizeEmail(dto.email);
+    const isCustomer = dto.role === UserRole.CUSTOMER;
+    const store = isCustomer
+      ? await this.links.resolveRequestStore(dto.store_slug, dto.hostname)
+      : null;
+    if (isCustomer && !store) throw this.storeRequired();
+
+    const taken = store
+      ? (await this.findStoreCustomer(store.id, email)) !== null
+      : await this.staffEmailTaken(email);
+    if (taken) throw this.emailExists();
+
     const password_hash = await bcrypt.hash(dto.password, PASSWORD_BCRYPT_COST);
 
-    const user = await this.prisma.user.create({
-      data: {
-        email,
-        password_hash,
-        role: dto.role,
-        status: 'ACTIVE',
-      },
-      select: {
-        id: true,
-        email: true,
-        role: true,
-        status: true,
-        created_at: true,
-      },
-    });
+    let user: Pick<
+      User,
+      'id' | 'email' | 'role' | 'status' | 'store_id' | 'created_at'
+    >;
+    try {
+      user = await this.prisma.user.create({
+        data: {
+          email,
+          password_hash,
+          role: dto.role,
+          status: 'ACTIVE',
+          store_id: store?.id ?? null,
+        },
+        select: {
+          id: true,
+          email: true,
+          role: true,
+          status: true,
+          store_id: true,
+          created_at: true,
+        },
+      });
+    } catch (err) {
+      // A concurrent signup with the same email won the unique index.
+      if (this.isUniqueViolation(err)) throw this.emailExists();
+      throw err;
+    }
 
     // Create role-specific profile record
     if (dto.role === UserRole.CUSTOMER) {
@@ -123,18 +272,23 @@ export class AuthService {
       });
     }
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
+    const tokens = await this.generateTokens(user);
 
     // Welcome email, best-effort and never blocking signup. A storefront
-    // signup (store_slug) gets the store's branding, domain and language; the
-    // user chose the password, so the email never contains one.
-    void this.sendRegisterWelcome(user.email, dto).catch(() => undefined);
+    // signup gets the store's branding, domain and language (only while the
+    // store is live); the user chose the password, so the email never
+    // contains one.
+    const live = store?.isActive ? store : null;
+    void this.sendRegisterWelcome(user.email, dto, live).catch(() => undefined);
 
     return { user, ...tokens };
   }
 
-  private async sendRegisterWelcome(email: string, dto: RegisterDto) {
-    const store = await this.activeStore(dto.store_slug, dto.hostname);
+  private async sendRegisterWelcome(
+    email: string,
+    dto: RegisterDto,
+    store: StoreLinkContext | null,
+  ) {
     const locale = dto.locale ?? store?.primaryLocale ?? undefined;
     const loginUrl = this.links.storefrontLink(
       store?.base,
@@ -155,14 +309,24 @@ export class AuthService {
    * password and mails it with a single-use magic login link. Returns the
    * same body as register (the shopper is logged in right away). The plain
    * password lives only in this call's memory and the outgoing email.
+   * The account belongs to the store of the request (400 STORE_REQUIRED
+   * without one); the email only has to be free within that store.
    */
   async guestRegister(dto: GuestRegisterDto) {
+    const store = await this.links.resolveRequestStore(
+      dto.store_slug,
+      dto.hostname,
+    );
+    if (!store) throw this.storeRequired();
     const email = normalizeEmail(dto.email);
-    if (await this.findUserByEmail(email)) throw this.emailExists();
+    if (await this.findStoreCustomer(store.id, email)) throw this.emailExists();
 
     const password = generateAccountPassword();
     const password_hash = await bcrypt.hash(password, PASSWORD_BCRYPT_COST);
-    let user: Pick<User, 'id' | 'email' | 'role' | 'status' | 'created_at'>;
+    let user: Pick<
+      User,
+      'id' | 'email' | 'role' | 'status' | 'store_id' | 'created_at'
+    >;
     try {
       user = await this.prisma.user.create({
         data: {
@@ -170,6 +334,7 @@ export class AuthService {
           password_hash,
           role: UserRole.CUSTOMER,
           status: 'ACTIVE',
+          store_id: store.id,
           customer: {
             create: {
               first_name: dto.first_name?.trim() || '',
@@ -183,35 +348,31 @@ export class AuthService {
           email: true,
           role: true,
           status: true,
+          store_id: true,
           created_at: true,
         },
       });
     } catch (err) {
       // A concurrent signup with the same email won the unique index.
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2002'
-      ) {
-        throw this.emailExists();
-      }
+      if (this.isUniqueViolation(err)) throw this.emailExists();
       throw err;
     }
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
+    const tokens = await this.generateTokens(user);
 
     // Credentials email off the response path; never fails the signup.
-    const created = user;
-    void (async () => {
-      const store = await this.activeStore(dto.store_slug, dto.hostname);
-      await this.credentials.send({
-        user: created,
+    // Branding and store-domain links only while the store is live.
+    const live = store.isActive ? store : null;
+    void this.credentials
+      .send({
+        user,
         name: dto.first_name,
         password,
-        store: store ? { id: store.id, name: store.name } : null,
-        storeBase: store?.base ?? null,
-        locale: dto.locale ?? store?.primaryLocale ?? null,
-      });
-    })().catch(() => undefined);
+        store: live ? { id: live.id, name: live.name } : null,
+        storeBase: live?.base ?? null,
+        locale: dto.locale ?? live?.primaryLocale ?? null,
+      })
+      .catch(() => undefined);
 
     return { user, ...tokens };
   }
@@ -219,46 +380,75 @@ export class AuthService {
   /**
    * Exchanges a magic login link for a session. Unknown, expired, used and
    * inactive-account links all get the same 401.
+   *
+   * With a store context (storefront: store_slug / hostname) the link must
+   * belong to a CUSTOMER of that store. A mismatch (another store's customer,
+   * a staff account, an unknown store) gets the same 401 and is checked
+   * BEFORE the atomic consume, so the link stays usable where it belongs.
+   * Without a context (dashboard) any account's link is accepted.
    */
-  async magicLogin(token: string) {
-    const user = await this.magicLinks.consume(token);
-    if (!user) {
-      throw new UnauthorizedException({
+  async magicLogin(
+    token: string,
+    context: { store_slug?: string; hostname?: string } = {},
+  ) {
+    const invalid = () =>
+      new UnauthorizedException({
         code: 'MAGIC_LINK_INVALID',
         message: 'This login link is invalid or has expired',
       });
+
+    if (context.store_slug?.trim() || context.hostname?.trim()) {
+      const store = await this.links
+        .resolveRequestStore(context.store_slug, context.hostname)
+        .catch(() => null);
+      const owner = await this.magicLinks.peek(token);
+      if (
+        !store ||
+        !owner ||
+        owner.role !== UserRole.CUSTOMER ||
+        owner.storeId !== store.id
+      ) {
+        throw invalid();
+      }
     }
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
+
+    const user = await this.magicLinks.consume(token);
+    if (!user) throw invalid();
+    const tokens = await this.generateTokens(user);
     return {
       user: {
         id: user.id,
         email: user.email,
         role: user.role,
         status: user.status,
+        store_id: user.store_id,
       },
       ...tokens,
     };
   }
 
+  /**
+   * With a store context (store_slug / hostname) only that store's CUSTOMER
+   * can log in; without one only staff (the dashboard and the platform
+   * login send no store). Every failing case answers the same 401.
+   */
   async login(dto: LoginDto) {
-    const user = await this.findUserByEmail(dto.email);
+    const store = await this.links.resolveRequestStore(
+      dto.store_slug,
+      dto.hostname,
+    );
+    const user = store
+      ? await this.findStoreCustomer(store.id, dto.email)
+      : await this.findStaff(dto.email);
 
-    if (!user) {
-      throw new UnauthorizedException({
-        code: 'AUTH_INVALID_CREDENTIALS',
-        message: 'Invalid credentials',
-      });
-    }
-
+    // A miss still runs one bcrypt compare, so the response time does not
+    // reveal whether the email exists.
     const passwordValid = await bcrypt.compare(
       dto.password,
-      user.password_hash,
+      user?.password_hash ?? (await dummyPasswordHash()),
     );
-    if (!passwordValid) {
-      throw new UnauthorizedException({
-        code: 'AUTH_INVALID_CREDENTIALS',
-        message: 'Invalid credentials',
-      });
+    if (!user || !passwordValid) {
+      throw new UnauthorizedException(INVALID_CREDENTIALS);
     }
 
     if (user.status !== 'ACTIVE') {
@@ -268,7 +458,7 @@ export class AuthService {
       });
     }
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
+    const tokens = await this.generateTokens(user);
 
     return {
       user: {
@@ -276,6 +466,7 @@ export class AuthService {
         email: user.email,
         role: user.role,
         status: user.status,
+        store_id: user.store_id,
       },
       ...tokens,
     };
@@ -283,9 +474,10 @@ export class AuthService {
 
   async refreshToken(refreshToken: string) {
     try {
-      const payload = this.jwtService.verify<{ sub: string }>(refreshToken, {
-        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
-      });
+      const payload = this.jwtService.verify<Partial<AuthTokenPayload>>(
+        refreshToken,
+        { secret: this.configService.get<string>('JWT_REFRESH_SECRET') },
+      );
 
       // logout() records the surrendered token as an expired session row. That
       // list was never consulted here, so a token stolen before logout stayed
@@ -304,8 +496,17 @@ export class AuthService {
       if (!user || user.status !== 'ACTIVE') {
         throw new UnauthorizedException();
       }
+      // Same rule as JwtStrategy: a customer token minted before accounts
+      // were per store (no store_id claim), or for another store, is dead.
+      if (!tokenStoreMatches(payload, user)) {
+        throw new UnauthorizedException();
+      }
+      // Issued before the last block / password reset / password change.
+      if (!tokenIssuedAfterCutoff(payload as { iat?: number }, user)) {
+        throw new UnauthorizedException();
+      }
 
-      return this.generateTokens(user.id, user.email, user.role);
+      return this.generateTokens(user);
     } catch {
       throw new UnauthorizedException({
         code: 'AUTH_INVALID_REFRESH_TOKEN',
@@ -336,12 +537,19 @@ export class AuthService {
     return { message: 'Logged out successfully' };
   }
 
+  /**
+   * With a store context: the customer of that store; without one: staff
+   * only. The answer is the same whether or not an account matched.
+   */
   async forgotPassword(email: string, storeSlug?: string, hostname?: string) {
-    const user = await this.findUserByEmail(email);
+    const store = await this.links.resolveRequestStore(storeSlug, hostname);
+    const user = store
+      ? await this.findStoreCustomer(store.id, email)
+      : await this.findStaff(email);
 
     // Never reveal whether the email exists — always return the same message.
     if (!user) {
-      return { message: 'If the email exists, a reset link will be sent' };
+      return { message: FORGOT_PASSWORD_MESSAGE };
     }
 
     // Create a reset token (valid for 1 hour).
@@ -368,7 +576,6 @@ export class AuthService {
     // The link points back at the store's own domain (market host, custom
     // domain or {slug}.{platform-host}) so the customer stays in the same
     // storefront; otherwise at the platform storefront ([locale] tree).
-    const store = await this.links.resolveStore(storeSlug, hostname);
     const resetUrl = this.links.storefrontLink(
       store?.base,
       '/auth/reset-password',
@@ -376,9 +583,14 @@ export class AuthService {
       'en',
     );
     const mailLocale = store?.primaryLocale ?? undefined;
-    await this.mail.sendPasswordReset(user.email, resetUrl, mailLocale);
+    // Off the response path: awaiting SMTP made a hit measurably slower than
+    // a miss (timing-based account enumeration), and a mail failure surfaced
+    // as a 500 only for existing accounts.
+    void this.mail
+      .sendPasswordReset(user.email, resetUrl, mailLocale)
+      .catch(() => undefined);
 
-    return { message: 'If the email exists, a reset link will be sent' };
+    return { message: FORGOT_PASSWORD_MESSAGE };
   }
 
   async resetPassword(token: string, newPassword: string) {
@@ -414,9 +626,10 @@ export class AuthService {
         PASSWORD_BCRYPT_COST,
       );
 
+      // The cutoff kills every access/refresh token issued so far.
       await this.prisma.user.update({
         where: { id: payload.sub },
-        data: { password_hash },
+        data: { password_hash, tokens_valid_after: new Date() },
       });
       // Mailed magic links must not outlive the old password.
       await this.magicLinks.invalidateForUser(payload.sub);
@@ -454,14 +667,17 @@ export class AuthService {
       });
 
     const password_hash = await bcrypt.hash(newPassword, PASSWORD_BCRYPT_COST);
-    await this.prisma.user.update({
+    // The cutoff signs out every other session (tokens issued so far); the
+    // caller keeps going with the fresh pair returned below.
+    const updated = await this.prisma.user.update({
       where: { id: userId },
-      data: { password_hash },
+      data: { password_hash, tokens_valid_after: new Date() },
     });
     // Mailed magic links must not outlive the old password.
     await this.magicLinks.invalidateForUser(userId);
 
-    return { message: 'Password changed successfully' };
+    const tokens = await this.generateTokens(updated);
+    return { message: 'Password changed successfully', ...tokens };
   }
 
   async getProfile(userId: string) {
@@ -473,6 +689,8 @@ export class AuthService {
         role: true,
         status: true,
         avatar_url: true,
+        store_id: true,
+        store: { select: { id: true, slug: true, name: true } },
         created_at: true,
         provider: true,
         // Never ship the Kustom shared secret, not even as ciphertext.
@@ -488,8 +706,15 @@ export class AuthService {
     return user;
   }
 
-  private async generateTokens(userId: string, email: string, role: UserRole) {
-    const payload = { sub: userId, email, role };
+  private async generateTokens(user: TokenSubject) {
+    // Explicit iat: never at or before the revocation cutoff second.
+    const payload: AuthTokenPayload & { iat: number } = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      store_id: user.store_id ?? null,
+      iat: issuedAtFor(user),
+    };
 
     const [access_token, refresh_token] = await Promise.all([
       this.jwtService.signAsync(payload, {

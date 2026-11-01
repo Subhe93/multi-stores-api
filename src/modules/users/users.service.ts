@@ -10,6 +10,11 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { UserRole, UserStatus, Prisma } from '@prisma/client';
 import { MagicLinkService } from '../auth/magic-link.service';
 import { AccountCredentialsService } from '../auth/account-credentials.service';
+import { AccountLinksService } from '../auth/account-links.service';
+import { normalizeEmail } from '../../common/email/email.util';
+
+/** Store summary shown next to a customer account in the admin lists. */
+const STORE_SUMMARY = { select: { id: true, name: true, slug: true } } as const;
 
 interface CreateUserPayload {
   email: string;
@@ -26,7 +31,8 @@ interface CreateUserPayload {
   // Creator
   display_name?: string;
   bio?: string;
-  // Customer
+  // Customer: the store the account belongs to (required for CUSTOMER).
+  store_id?: string;
   first_name?: string;
   last_name?: string;
   // Mail the login details (typed password + magic link) to the new user.
@@ -61,18 +67,25 @@ export class UsersService {
     private prisma: PrismaService,
     private readonly magicLinks: MagicLinkService,
     private readonly credentials: AccountCredentialsService,
+    private readonly links: AccountLinksService,
   ) {}
 
   async findAll(
     page = 1,
     limit = 20,
-    filters?: { role?: UserRole; status?: UserStatus; search?: string },
+    filters?: {
+      role?: UserRole;
+      status?: UserStatus;
+      search?: string;
+      store_id?: string;
+    },
   ) {
     const skip = (page - 1) * limit;
     const where: Prisma.UserWhereInput = {};
 
     if (filters?.role) where.role = filters.role;
     if (filters?.status) where.status = filters.status;
+    if (filters?.store_id) where.store_id = filters.store_id;
     if (filters?.search) {
       where.email = { contains: filters.search, mode: 'insensitive' };
     }
@@ -88,6 +101,8 @@ export class UsersService {
           role: true,
           status: true,
           avatar_url: true,
+          store_id: true,
+          store: STORE_SUMMARY,
           created_at: true,
           provider: { select: { company_name: true, verified: true } },
           creator: { select: { display_name: true, verified: true } },
@@ -113,6 +128,8 @@ export class UsersService {
         role: true,
         status: true,
         avatar_url: true,
+        store_id: true,
+        store: STORE_SUMMARY,
         created_at: true,
         updated_at: true,
         provider: true,
@@ -144,10 +161,30 @@ export class UsersService {
       });
     }
 
-    const existing = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
-    if (existing)
+    // Customer accounts belong to one store; staff to none.
+    const isCustomer = dto.role === UserRole.CUSTOMER;
+    if (isCustomer && !dto.store_id) {
+      throw new BadRequestException({
+        code: 'STORE_REQUIRED',
+        message: 'A customer account needs a store_id',
+      });
+    }
+    const store = isCustomer
+      ? await this.prisma.store.findUnique({
+          where: { id: dto.store_id },
+          select: { id: true, slug: true },
+        })
+      : null;
+    if (isCustomer && !store) {
+      throw new BadRequestException({
+        code: 'STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
+    }
+    const storeId = store?.id ?? null;
+    const email = normalizeEmail(dto.email);
+
+    if (await this.emailTaken(email, storeId))
       throw new ConflictException({
         code: 'USER_EMAIL_EXISTS',
         message: 'Email already registered',
@@ -155,23 +192,41 @@ export class UsersService {
 
     const password_hash = await bcrypt.hash(dto.password, 12);
 
-    const user = await this.prisma.user.create({
-      data: {
-        email: dto.email,
-        password_hash,
-        role: dto.role,
-        status: dto.status ?? UserStatus.ACTIVE,
-        avatar_url: dto.avatar_url,
-      },
-      select: {
-        id: true,
-        email: true,
-        role: true,
-        status: true,
-        avatar_url: true,
-        created_at: true,
-      },
-    });
+    let user: {
+      id: string;
+      email: string;
+      role: UserRole;
+      status: UserStatus;
+      avatar_url: string | null;
+      created_at: Date;
+    };
+    try {
+      user = await this.prisma.user.create({
+        data: {
+          email,
+          password_hash,
+          role: dto.role,
+          status: dto.status ?? UserStatus.ACTIVE,
+          avatar_url: dto.avatar_url,
+          store_id: storeId,
+        },
+        select: {
+          id: true,
+          email: true,
+          role: true,
+          status: true,
+          avatar_url: true,
+          created_at: true,
+        },
+      });
+    } catch (err) {
+      if (isUniqueViolation(err))
+        throw new ConflictException({
+          code: 'USER_EMAIL_EXISTS',
+          message: 'Email already registered',
+        });
+      throw err;
+    }
 
     if (dto.role === UserRole.PROVIDER) {
       await this.prisma.provider.create({
@@ -206,18 +261,25 @@ export class UsersService {
     }
 
     // Login details by email: the password the admin typed plus a one-click
-    // link (dashboard for staff roles, platform storefront for customers).
-    // No store context, so the platform sender is used. Off the response
-    // path and never echoed back.
+    // link (dashboard for staff roles, the customer's own store for
+    // customers, branded with that store while it is live). Off the
+    // response path and never echoed back.
     if (dto.send_credentials) {
-      void this.credentials.send({
-        user: { id: user.id, email: user.email, role: user.role },
-        name: dto.first_name || dto.display_name || dto.company_name || null,
-        password: dto.password,
-        store: null,
-        storeBase: null,
-        locale: dto.locale || 'en',
-      });
+      const name =
+        dto.first_name || dto.display_name || dto.company_name || null;
+      const created = user;
+      void (async () => {
+        const ctx = store ? await this.links.resolveStore(store.slug) : null;
+        const live = ctx?.isActive ? ctx : null;
+        await this.credentials.send({
+          user: { id: created.id, email: created.email, role: created.role },
+          name,
+          password: dto.password,
+          store: live ? { id: live.id, name: live.name } : null,
+          storeBase: live?.base ?? null,
+          locale: dto.locale || live?.primaryLocale || 'en',
+        });
+      })().catch(() => undefined);
     }
 
     return this.findById(user.id);
@@ -234,11 +296,12 @@ export class UsersService {
         message: 'User not found',
       });
 
-    if (dto.email && dto.email !== user.email) {
-      const conflict = await this.prisma.user.findUnique({
-        where: { email: dto.email },
-      });
-      if (conflict)
+    // The email only has to be free where the account lives: within its
+    // store for a customer, among staff otherwise.
+    const nextEmail =
+      dto.email !== undefined ? normalizeEmail(dto.email) : undefined;
+    if (nextEmail && nextEmail !== user.email) {
+      if (await this.emailTaken(nextEmail, user.store_id, id))
         throw new ConflictException({
           code: 'USER_EMAIL_IN_USE',
           message: 'Email already in use',
@@ -246,12 +309,27 @@ export class UsersService {
     }
 
     const userUpdate: Record<string, any> = {};
-    if (dto.email !== undefined) userUpdate.email = dto.email;
-    if (dto.status !== undefined) userUpdate.status = dto.status;
+    if (nextEmail) userUpdate.email = nextEmail;
+    if (dto.status !== undefined) {
+      userUpdate.status = dto.status;
+      // Any non-ACTIVE status revokes every token issued so far.
+      if (dto.status !== UserStatus.ACTIVE) {
+        userUpdate.tokens_valid_after = new Date();
+      }
+    }
     if (dto.avatar_url !== undefined) userUpdate.avatar_url = dto.avatar_url;
 
     if (Object.keys(userUpdate).length > 0) {
-      await this.prisma.user.update({ where: { id }, data: userUpdate });
+      try {
+        await this.prisma.user.update({ where: { id }, data: userUpdate });
+      } catch (err) {
+        if (isUniqueViolation(err))
+          throw new ConflictException({
+            code: 'USER_EMAIL_IN_USE',
+            message: 'Email already in use',
+          });
+        throw err;
+      }
     }
 
     if (user.role === UserRole.PROVIDER && user.provider) {
@@ -313,7 +391,12 @@ export class UsersService {
 
     return this.prisma.user.update({
       where: { id },
-      data: { status },
+      // Any non-ACTIVE status revokes every token issued so far, so a later
+      // re-activation does not bring the old sessions back.
+      data:
+        status === UserStatus.ACTIVE
+          ? { status }
+          : { status, tokens_valid_after: new Date() },
       select: {
         id: true,
         email: true,
@@ -341,7 +424,7 @@ export class UsersService {
 
     await this.prisma.user.update({
       where: { id },
-      data: { password_hash },
+      data: { password_hash, tokens_valid_after: new Date() },
     });
 
     // Invalidate all active sessions so the user is forced to re-login, and
@@ -471,6 +554,27 @@ export class UsersService {
     });
   }
 
+  /**
+   * Whether `email` is used by another account in the same scope: the
+   * customers of `storeId`, or the staff accounts (store_id NULL, which is
+   * what the partial unique index `User_staff_email_key` covers).
+   */
+  private async emailTaken(
+    email: string,
+    storeId: string | null,
+    exceptId?: string,
+  ): Promise<boolean> {
+    const row = await this.prisma.user.findFirst({
+      where: {
+        store_id: storeId,
+        email: { equals: email, mode: 'insensitive' },
+        ...(exceptId ? { id: { not: exceptId } } : {}),
+      },
+      select: { id: true },
+    });
+    return row !== null;
+  }
+
   async getRecentUsers(limit = 5) {
     return this.prisma.user.findMany({
       take: limit,
@@ -480,6 +584,8 @@ export class UsersService {
         email: true,
         role: true,
         status: true,
+        store_id: true,
+        store: STORE_SUMMARY,
         created_at: true,
         provider: { select: { company_name: true } },
         creator: { select: { display_name: true } },
@@ -487,4 +593,10 @@ export class UsersService {
       },
     });
   }
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'
+  );
 }

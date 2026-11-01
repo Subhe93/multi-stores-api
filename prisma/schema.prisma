@@ -13,22 +13,34 @@ datasource db {
 
 model User {
   id            String     @id @default(uuid())
-  email         String     @unique
+  // Unique per store for customers, platform-wide for staff. Staff uniqueness
+  // is a raw-SQL partial index ("User_staff_email_key" WHERE store_id IS NULL).
+  email         String
   password_hash String
   role          UserRole
   status        UserStatus @default(PENDING)
   avatar_url    String?
+  // Store a CUSTOMER account belongs to; NULL for staff (ADMIN/CREATOR/PROVIDER).
+  // Raw-SQL CHECK "User_customer_store_chk": (role = CUSTOMER) = (store_id IS NOT NULL).
+  store_id      String?
+  // Revocation cutoff: access/refresh tokens issued at or before this instant
+  // (JWT iat, whole seconds) are rejected. Set on block, password reset and
+  // password change.
+  tokens_valid_after DateTime?
   created_at    DateTime   @default(now())
   updated_at    DateTime   @updatedAt
 
+  store        Store?    @relation("StoreCustomers", fields: [store_id], references: [id], onDelete: Restrict)
   provider     Provider?
   creator      Creator?
   customer     Customer?
   sessions     Session[]
   login_tokens LoginToken[]
 
+  @@unique([store_id, email])
   @@index([email])
   @@index([role, status])
+  @@index([store_id, created_at])
 }
 
 model Session {
@@ -1154,6 +1166,7 @@ model Store {
   designs                   Design[]
   product_designers         ProductDesigner[]
   login_tokens              LoginToken[]
+  customers                 User[]         @relation("StoreCustomers")
 
   @@index([slug])
 }

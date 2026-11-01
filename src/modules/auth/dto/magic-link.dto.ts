@@ -11,6 +11,19 @@ export class MagicLoginDto {
   @IsString()
   @MaxLength(256)
   token: string;
+
+  // Storefront context: when present, the link must belong to a customer of
+  // this store (checked before the link is consumed). The dashboard sends
+  // none.
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  store_slug?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(253)
+  hostname?: string;
 }
 
 /**
@@ -37,8 +50,9 @@ export class GuestRegisterDto {
   @MaxLength(40)
   phone?: string;
 
-  // Store the checkout ran on: brands the email and builds the links on the
-  // store domain (resolved server-side, like forgot-password).
+  // Store the checkout ran on (required: store_slug or hostname, else 400
+  // STORE_REQUIRED). The account belongs to that store; it also brands the
+  // email and builds the links on the store domain.
   @IsOptional()
   @IsString()
   @MaxLength(100)

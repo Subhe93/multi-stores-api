@@ -28,11 +28,12 @@ export class UsersController {
     @Query('role') role?: UserRole,
     @Query('status') status?: UserStatus,
     @Query('search') search?: string,
+    @Query('store_id') store_id?: string,
   ) {
     return this.usersService.findAll(
       page ? +page : undefined,
       limit ? +limit : undefined,
-      { role, status, search },
+      { role, status, search, store_id },
     );
   }
 
@@ -69,6 +70,8 @@ export class UsersController {
       bio?: string;
       first_name?: string;
       last_name?: string;
+      // Required for role CUSTOMER (400 STORE_REQUIRED / STORE_NOT_FOUND).
+      store_id?: string;
       // Email the login details (password + magic link) to the new user.
       send_credentials?: boolean;
       locale?: string;
