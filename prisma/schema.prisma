@@ -991,7 +991,7 @@ model PlatformConfig {
   supported_locales String[] @default(["en"])
 
   // Platform Info
-  platform_name String  @default("Multi Stores")
+  platform_name String  @default("ShopsDoor")
   support_email String?
 
   // Order Limits

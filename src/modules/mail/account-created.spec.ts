@@ -64,7 +64,7 @@ describe('accountCreatedEmail (bundled builder)', () => {
 
   it('renders German, and an unknown locale falls back to English', () => {
     expect(accountCreatedEmail(data, undefined, 'de-AT').subject).toBe(
-      'Ihr Konto bei Multi Stores',
+      'Ihr Konto bei ShopsDoor',
     );
     const unknown = accountCreatedEmail(data, { platformName: 'P' }, 'xx');
     expect(unknown.subject).toBe('Your account at P');

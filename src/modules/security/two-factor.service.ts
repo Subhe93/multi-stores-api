@@ -528,7 +528,7 @@ export class TwoFactorService {
     const cfg = await this.prisma.platformConfig.findFirst({
       select: { platform_name: true },
     });
-    const issuer = cfg?.platform_name?.trim() || 'Multi Stores';
+    const issuer = cfg?.platform_name?.trim() || 'ShopsDoor';
     const url = otpauthUrl(secret, user.email, issuer);
     const qr_data_url = await QRCode.toDataURL(url, { margin: 1, width: 240 });
     return { secret, otpauth_url: url, qr_data_url };

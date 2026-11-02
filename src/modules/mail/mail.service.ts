@@ -320,7 +320,7 @@ export class MailService {
 
     // The admin-configurable platform name doubles as the sender display name
     // for every platform-sent email (Admin → Settings → Platform Info).
-    const platformName = cfg?.platform_name?.trim() || 'Multi Stores';
+    const platformName = cfg?.platform_name?.trim() || 'ShopsDoor';
 
     // Pick a single source so host/port/secure/user/pass never mix DB + env:
     // if the admin has saved a host in the DB, the whole SMTP config comes from
@@ -405,7 +405,7 @@ export class MailService {
     const cfg = await this.prisma.platformConfig.findFirst({
       select: { platform_name: true },
     });
-    return cfg?.platform_name?.trim() || 'Multi Stores';
+    return cfg?.platform_name?.trim() || 'ShopsDoor';
   }
 
   async send(opts: {

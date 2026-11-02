@@ -606,7 +606,7 @@ export class StorefrontService {
     const cfg = await this.prisma.platformConfig.findFirst({
       select: { platform_name: true },
     });
-    return { platform_name: cfg?.platform_name?.trim() || 'Multi Stores' };
+    return { platform_name: cfg?.platform_name?.trim() || 'ShopsDoor' };
   }
 
   // Lightweight read so the storefront can decide caching without pulling the

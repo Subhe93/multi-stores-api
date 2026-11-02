@@ -10,7 +10,7 @@ interface EmailParts {
   text: string;
 }
 
-const BRAND = 'Multi Stores';
+const BRAND = 'ShopsDoor';
 
 // Escape interpolated values as defense-in-depth, so a future user-controlled
 // field can't inject markup into the email body or break out of an attribute.

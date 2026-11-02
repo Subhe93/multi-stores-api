@@ -385,7 +385,7 @@ async function seedLegalPages() {
 // Idempotent (upsert with `update: {}`). Bodies use {{var}} placeholders the
 // MailService substitutes at send time.
 async function seedNotificationTemplates() {
-  const BRAND = 'Multi Stores';
+  const BRAND = 'ShopsDoor';
   const layout = (title: string, body: string) => `<!doctype html>
 <html>
   <body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,Helvetica,sans-serif;color:#18181b;">
