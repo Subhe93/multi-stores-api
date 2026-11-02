@@ -7,6 +7,10 @@ import {
 import { rewritePageMenuItems } from '../menus/page-menu-links';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
+  tagRuleCustomProductWhere,
+  tagRuleProductWhere,
+} from '../creator-categories/tag-rule';
+import {
   findBySlugTolerant,
   slugLookupFilters,
 } from '../../common/slug/wp-slug';
@@ -156,19 +160,29 @@ export function publicCreatorCategory<
     creator_id?: unknown;
     match_rule?: unknown;
     match_tags?: unknown;
+    match_tag_ids?: unknown;
   },
->(c: T): Omit<T, 'external_ref' | 'creator_id' | 'match_rule' | 'match_tags'> {
+>(
+  c: T,
+): Omit<
+  T,
+  'external_ref' | 'creator_id' | 'match_rule' | 'match_tags' | 'match_tag_ids'
+> {
+  // Tags rename: `match_tag_ids` is the owner-API alias of `match_tags`;
+  // neither is public (a TAGS rule lists INTERNAL ids).
   const {
     external_ref: _ref,
     creator_id: _owner,
     match_rule: _rule,
     match_tags: _tags,
+    match_tag_ids: _tagIds,
     ...rest
   } = c;
   void _ref;
   void _owner;
   void _rule;
   void _tags;
+  void _tagIds;
   return rest;
 }
 
@@ -290,6 +304,7 @@ const UUID_RE =
 export interface CollectionFilter {
   id: string;
   match_rule: 'MANUAL' | 'TAGS';
+  /** TAGS rule: INTERNAL CreatorCategory ids (tags) the product must link to. */
   match_tags: string[];
 }
 
@@ -899,10 +914,13 @@ export class StorefrontService {
     }
     if (creatorCategory) {
       if (creatorCategory.match_rule === 'TAGS') {
+        // Linked to any of the listed INTERNAL rows (tags); an empty rule
+        // lists nothing.
         if (!creatorCategory.match_tags.length) return [];
-        ownWhere.tags = {
-          some: { tag: { in: creatorCategory.match_tags } },
-        };
+        Object.assign(
+          ownWhere,
+          tagRuleProductWhere(creatorCategory.match_tags),
+        );
       } else {
         ownWhere.creator_categories = {
           some: { creator_category_id: creatorCategory.id },
@@ -945,11 +963,12 @@ export class StorefrontService {
     }
     if (creatorCategory) {
       if (creatorCategory.match_rule === 'TAGS') {
-        // Tag membership lives on the underlying provider Product.
-        customWhere.product = {
-          ...(customWhere.product as Prisma.ProductWhereInput | undefined),
-          tags: { some: { tag: { in: creatorCategory.match_tags } } },
-        };
+        // Custom products link to tags (INTERNAL rows) directly, like a
+        // manual collection — never through the base provider product.
+        Object.assign(
+          customWhere,
+          tagRuleCustomProductWhere(creatorCategory.match_tags),
+        );
       } else {
         // Manual collections link the CustomProduct directly via
         // CustomProductCreatorCategory — not the underlying base Product.
@@ -1275,7 +1294,6 @@ export class StorefrontService {
             include: { template: { include: { translations: true } } },
           },
           variants: { where: { is_active: true }, include: { images: true } },
-          tags: true,
           category: { include: { translations: true } },
           creator_categories: {
             include: { creator_category: { include: { translations: true } } },
@@ -1370,6 +1388,7 @@ export class StorefrontService {
       );
 
       // cost_price is a merchant-only margin input; never serve it publicly.
+      // Legacy ProductTag rows (`tags`) are retired: not read, not served.
       const {
         cost_price: _costPrice,
         external_ref: _externalRef,
@@ -1482,7 +1501,6 @@ export class StorefrontService {
               include: { template: { include: { translations: true } } },
             },
             variants: { where: { is_active: true }, include: { images: true } },
-            tags: true,
             category: { include: { translations: true } },
             provider: {
               select: { id: true, company_name: true, logo_url: true },
@@ -1586,7 +1604,6 @@ export class StorefrontService {
           : baseProduct.images,
       attributes: baseProduct.attributes,
       variants,
-      tags: baseProduct.tags,
       category: baseProduct.category,
       ...(await this.primaryCollectionFields(
         customProduct.creator_id,

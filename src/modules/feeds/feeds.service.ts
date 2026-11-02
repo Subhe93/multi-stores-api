@@ -761,11 +761,16 @@ export class FeedsService {
     return `${base}/store/${store.slug}`;
   }
 
+  /**
+   * PUBLIC collections only: INTERNAL rows (tags) must never leak into
+   * product_type / custom_label_0, so a product linked only to INTERNAL rows
+   * yields no collection path at all (collectionPath skips unknown ids).
+   */
   private async loadCollections(
     creatorId: string,
   ): Promise<Map<string, CollectionNode>> {
     const rows = await this.prisma.creatorCategory.findMany({
-      where: { creator_id: creatorId },
+      where: { creator_id: creatorId, visibility: 'PUBLIC' },
       select: {
         id: true,
         parent_id: true,

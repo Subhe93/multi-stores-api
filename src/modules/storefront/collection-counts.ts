@@ -1,4 +1,8 @@
 import type { PrismaService } from '../../prisma/prisma.service';
+import {
+  tagRuleCustomProductWhere,
+  tagRuleProductWhere,
+} from '../creator-categories/tag-rule';
 
 // Published-product counts per creator collection (M4.4). Only used for
 // collections flagged `noindex_when_empty`, so stores without such a flag
@@ -6,14 +10,15 @@ import type { PrismaService } from '../../prisma/prisma.service';
 
 export interface CountableCollection {
   id: string;
-  match_rule: 'MANUAL' | 'TAGS' | string;
+  match_rule: string;
+  /** TAGS rule: INTERNAL CreatorCategory ids (tags). */
   match_tags: string[];
 }
 
 /**
  * Number of PUBLISHED products listed by each collection, using the same
- * membership rules as the storefront listing (MANUAL = link rows, TAGS = tag
- * match). Custom products count only for non-independent stores. Market
+ * membership rules as the storefront listing (MANUAL = link rows, TAGS =
+ * linked to any of the listed INTERNAL rows). Custom products count only for non-independent stores. Market
  * availability is not considered (a market-hidden product still counts), so
  * the count can only err towards "not empty".
  */
@@ -70,7 +75,7 @@ export async function countPublishedInCollections(
           where: {
             creator_id: creatorId,
             status: 'PUBLISHED',
-            tags: { some: { tag: { in: c.match_tags } } },
+            ...tagRuleProductWhere(c.match_tags),
           },
         }),
         includeCustomProducts
@@ -78,7 +83,7 @@ export async function countPublishedInCollections(
               where: {
                 creator_id: creatorId,
                 status: 'PUBLISHED',
-                product: { tags: { some: { tag: { in: c.match_tags } } } },
+                ...tagRuleCustomProductWhere(c.match_tags),
               },
             })
           : Promise.resolve(0),

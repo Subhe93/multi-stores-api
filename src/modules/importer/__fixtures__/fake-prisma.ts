@@ -125,6 +125,7 @@ const DEFAULTS: Record<string, () => Row> = {
     external_ref: null,
     noindex_when_empty: false,
     match_tags: [],
+    visibility: 'PUBLIC',
   }),
   creatorCategoryTranslation: () => ({
     description: null,

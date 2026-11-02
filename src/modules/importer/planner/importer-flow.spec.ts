@@ -215,8 +215,35 @@ describe('importer flow (Namez slice)', () => {
       h.uploads.storeBuffer.mock.calls.every((c: any[]) => c[2] === 'imports'),
     ).toBe(true);
     // Collections: all of them, active, in catalog order with SEO.
-    expect(h.db.creatorCategory.rows).toHaveLength(56);
+    const collections = h.db.creatorCategory.rows.filter(
+      (c: any) => c.visibility === 'PUBLIC',
+    );
+    expect(collections).toHaveLength(56);
     expect(h.db.creatorCategory.rows.every((c: any) => c.is_active)).toBe(true);
+    // Tags rename: product_tag terms are INTERNAL rows linked like
+    // collections; legacy ProductTag rows are never written any more.
+    const tagRows = h.db.creatorCategory.rows.filter(
+      (c: any) => c.visibility === 'INTERNAL',
+    );
+    expect(tagRows.length).toBeGreaterThan(0);
+    expect(
+      tagRows.every(
+        (c: any) =>
+          /^woo:namez\.se:product_tag:\d+$/.test(c.external_ref) &&
+          c.parent_id === null,
+      ),
+    ).toBe(true);
+    const tagIds = new Set(tagRows.map((c: any) => c.id));
+    const tagLinks = h.db.productCreatorCategory.rows.filter((l: any) =>
+      tagIds.has(l.creator_category_id),
+    );
+    expect(tagLinks.length).toBeGreaterThan(0);
+    expect(h.db.productTag.rows).toHaveLength(0);
+    const plannedTags = h
+      .itemsOf(run.id, 'PLAN')
+      .filter((i: any) => i.entity_type === 'TAG');
+    expect(plannedTags).toHaveLength(tagRows.length);
+    expect(plannedTags.every((i: any) => i.action === 'CREATE')).toBe(true);
   });
 
   it('re-run: every entity UNCHANGED and zero target writes (D6)', async () => {

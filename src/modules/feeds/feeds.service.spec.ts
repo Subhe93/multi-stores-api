@@ -177,24 +177,39 @@ function build(w: Partial<World> = {}) {
       ),
     },
     creatorCategory: {
-      findMany: jest.fn(async () => [
-        {
-          id: 'cc-root',
-          parent_id: null,
-          translations: [
-            { locale: 'sv', name: 'Kläder' },
-            { locale: 'en', name: 'Clothing' },
-          ],
-        },
-        {
-          id: 'cc-child',
-          parent_id: 'cc-root',
-          translations: [
-            { locale: 'sv', name: 'Tröjor' },
-            { locale: 'en', name: 'Tees' },
-          ],
-        },
-      ]),
+      // Honours `where.visibility` so the INTERNAL-leak tests can assert
+      // that only PUBLIC rows ever reach the feed.
+      findMany: jest.fn(
+        async ({ where }: { where?: { visibility?: string } } = {}) =>
+          [
+            {
+              id: 'cc-root',
+              parent_id: null,
+              visibility: 'PUBLIC',
+              translations: [
+                { locale: 'sv', name: 'Kläder' },
+                { locale: 'en', name: 'Clothing' },
+              ],
+            },
+            {
+              id: 'cc-child',
+              parent_id: 'cc-root',
+              visibility: 'PUBLIC',
+              translations: [
+                { locale: 'sv', name: 'Tröjor' },
+                { locale: 'en', name: 'Tees' },
+              ],
+            },
+            {
+              id: 'cc-internal',
+              parent_id: null,
+              visibility: 'INTERNAL',
+              translations: [{ locale: 'sv', name: 'Hemlig tagg' }],
+            },
+          ].filter(
+            (r) => !where?.visibility || r.visibility === where.visibility,
+          ),
+      ),
     },
     platformConfig: {
       findFirst: jest.fn(async () => ({
@@ -356,6 +371,43 @@ describe('FeedsService.publicFeed (M5.6)', () => {
     );
     expect(xml).toContain('<g:custom_label_0>Tröjor</g:custom_label_0>');
     expect(xml).not.toContain('g:shipping');
+  });
+
+  it('never derives product_type / custom_label_0 from INTERNAL rows (tags)', async () => {
+    const { service, prisma } = build({
+      products: [
+        // Linked only to an INTERNAL row: no collection path at all.
+        product({
+          id: 'p-int',
+          creator_categories: [{ creator_category_id: 'cc-internal' }],
+        }),
+        // INTERNAL listed first, PUBLIC second: the PUBLIC link wins.
+        product({
+          id: 'p-mixed',
+          creator_categories: [
+            { creator_category_id: 'cc-internal' },
+            { creator_category_id: 'cc-child' },
+          ],
+        }),
+      ],
+    });
+    const feed = await service.publicFeed('namz', TOKEN, 'google');
+    const xml = feed.body;
+    const findMany = prisma.creatorCategory.findMany as jest.Mock;
+    const [firstCall] = findMany.mock.calls as [
+      [{ where: { visibility?: string } }],
+    ];
+    expect(firstCall[0].where.visibility).toBe('PUBLIC');
+    expect(xml).not.toContain('Hemlig tagg');
+    const items = xml.split('<item>').slice(1);
+    const intItem = items.find((i) => i.includes('<g:id>p-int</g:id>'));
+    const mixedItem = items.find((i) => i.includes('<g:id>p-mixed</g:id>'));
+    expect(intItem).toBeDefined();
+    expect(intItem).not.toContain('g:product_type');
+    expect(intItem).not.toContain('g:custom_label_0');
+    expect(mixedItem).toContain(
+      '<g:product_type>Kläder &gt; Tröjor</g:product_type>',
+    );
   });
 
   it('uses the default brand, shipping label and identifier_exists for bare products', async () => {

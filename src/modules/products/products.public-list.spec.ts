@@ -172,6 +172,7 @@ describe('redactProductForNonOwner', () => {
             creator_id: 'c1',
             match_rule: 'MANUAL',
             match_tags: ['x'],
+            match_tag_ids: ['x'],
           },
         },
       ],
@@ -207,6 +208,7 @@ describe('storefront public shapes', () => {
         creator_id: 'c1',
         match_rule: 'TAGS',
         match_tags: ['a'],
+        match_tag_ids: ['a'],
       }),
     ).toEqual({
       id: 'cc1',

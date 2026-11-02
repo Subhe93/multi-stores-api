@@ -49,7 +49,7 @@ function setup(customFields: Row[]) {
   const tx = {
     product: { create: jest.fn(() => Promise.resolve({ id: 'new-product' })) },
     productTranslation: { createMany: jest.fn() },
-    productTag: { createMany: jest.fn() },
+    productCreatorCategory: { createMany: jest.fn() },
     productAttribute: { createMany: jest.fn() },
     productVariant: { create: jest.fn() },
     productImage: { createMany: jest.fn() },
@@ -70,7 +70,7 @@ function setup(customFields: Row[]) {
           images: [],
           attributes: [],
           variants: [],
-          tags: [],
+          creator_categories: [],
           faqs: [],
           custom_fields: customFields,
           shipping_profile_id: null,

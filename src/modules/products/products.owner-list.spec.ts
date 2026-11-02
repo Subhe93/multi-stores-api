@@ -36,12 +36,25 @@ describe('owner-list helpers', () => {
     expect(searchWhere('   ')).toBeUndefined();
   });
 
-  it('builds collection membership by rule', () => {
-    expect(noCollectionWhere([])).toEqual({ creator_categories: { none: {} } });
+  it('builds collection membership by rule (TAGS = linked to INTERNAL rows)', () => {
+    // "No collection" = no PUBLIC link; a product that only carries tags
+    // (INTERNAL rows) no smart collection lists is in no collection.
+    const noPublicLink = {
+      creator_categories: {
+        none: { creator_category: { visibility: 'PUBLIC' } },
+      },
+    };
+    expect(noCollectionWhere([])).toEqual(noPublicLink);
     // Tag-rule members are in a collection too.
-    expect(noCollectionWhere(['gift'])).toEqual({
-      creator_categories: { none: {} },
-      NOT: { tags: { some: { tag: { in: ['gift'] } } } },
+    expect(noCollectionWhere(['tag-1'])).toEqual({
+      AND: [
+        noPublicLink,
+        {
+          creator_categories: {
+            none: { creator_category_id: { in: ['tag-1'] } },
+          },
+        },
+      ],
     });
     expect(
       collectionWhere({ id: 'c1', match_rule: 'MANUAL', match_tags: [] }),
@@ -51,7 +64,7 @@ describe('owner-list helpers', () => {
     expect(
       collectionWhere({ id: 'c2', match_rule: 'TAGS', match_tags: ['a'] }),
     ).toEqual({
-      tags: { some: { tag: { in: ['a'] } } },
+      creator_categories: { some: { creator_category_id: { in: ['a'] } } },
     });
     expect(
       collectionWhere({ id: 'c3', match_rule: 'TAGS', match_tags: [] }),
@@ -185,8 +198,18 @@ describe('ProductsService.findMine', () => {
     prisma.product.findMany.mockResolvedValue([]);
     await service.findMine('u1', UserRole.CREATOR, { collection: 'none' });
     expect(findManyArg(prisma.product.findMany, 0).where.AND[2]).toEqual({
-      creator_categories: { none: {} },
-      NOT: { tags: { some: { tag: { in: ['a', 'b'] } } } },
+      AND: [
+        {
+          creator_categories: {
+            none: { creator_category: { visibility: 'PUBLIC' } },
+          },
+        },
+        {
+          creator_categories: {
+            none: { creator_category_id: { in: ['a', 'b'] } },
+          },
+        },
+      ],
     });
   });
 

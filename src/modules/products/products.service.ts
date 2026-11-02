@@ -158,6 +158,7 @@ export function redactProductForNonOwner<
         creator_id?: unknown;
         match_rule?: unknown;
         match_tags?: unknown;
+        match_tag_ids?: unknown;
       } | null;
     }[];
   },
@@ -182,12 +183,15 @@ export function redactProductForNonOwner<
         creator_id: _owner,
         match_rule: _rule,
         match_tags: _tags,
+        // Tags rename: owner-API alias of match_tags, never public.
+        match_tag_ids: _tagIds,
         ...pub
       } = cc;
       void _cref;
       void _owner;
       void _rule;
       void _tags;
+      void _tagIds;
       return { ...link, creator_category: pub };
     });
   }
@@ -665,7 +669,8 @@ export class ProductsService {
     const {
       translations,
       attributes,
-      tags,
+      // Deprecated legacy ProductTag input: accepted, ignored (tags rename).
+      tags: _legacyTags,
       bundle_ids,
       creator_category_ids,
       primary_creator_category_id,
@@ -673,6 +678,7 @@ export class ProductsService {
       images,
       ...data
     } = dto;
+    void _legacyTags;
 
     const productData: Prisma.ProductUncheckedCreateInput = {
       ...data,
@@ -763,16 +769,6 @@ export class ProductsService {
           product_id: product.id,
           template_id: attr.template_id,
           value: attr.value,
-        })),
-      });
-    }
-
-    // إضافة الـ tags
-    if (tags?.length) {
-      await this.prisma.productTag.createMany({
-        data: tags.map((tag) => ({
-          product_id: product.id,
-          tag,
         })),
       });
     }
@@ -1034,6 +1030,7 @@ export class ProductsService {
     const collectionId = single(filters.collection);
     if (collectionId && creatorId) {
       if (collectionId === NO_COLLECTION) {
+        // Tags rename: `match_tags` holds INTERNAL row ids (tags).
         const tagRules = await this.prisma.creatorCategory.findMany({
           where: { creator_id: creatorId, match_rule: 'TAGS' },
           select: { match_tags: true },
@@ -1185,7 +1182,8 @@ export class ProductsService {
     const {
       translations,
       attributes,
-      tags,
+      // Deprecated legacy ProductTag input: accepted, ignored (tags rename).
+      tags: _legacyTags,
       bundle_ids,
       creator_category_ids,
       primary_creator_category_id,
@@ -1193,6 +1191,7 @@ export class ProductsService {
       images,
       ...data
     } = dto;
+    void _legacyTags;
 
     // Feed fields: absent keys are not in `data`, so the stored values are
     // kept (X19 carry-over); '' / null clears them.
@@ -1344,16 +1343,6 @@ export class ProductsService {
       });
     }
 
-    // تحديث الـ tags
-    if (tags) {
-      await this.prisma.productTag.deleteMany({
-        where: { product_id: id },
-      });
-      await this.prisma.productTag.createMany({
-        data: tags.map((tag) => ({ product_id: id, tag })),
-      });
-    }
-
     await releaseLiveProductPaths(this.prisma, this.redirects, {
       productId: id,
     });
@@ -1429,7 +1418,9 @@ export class ProductsService {
         images: true,
         attributes: true,
         variants: true,
-        tags: true,
+        creator_categories: {
+          select: { creator_category_id: true, sort_order: true },
+        },
         custom_fields: {
           include: { translations: true },
           orderBy: [{ sort_order: 'asc' as const }, { id: 'asc' as const }],
@@ -1479,6 +1470,8 @@ export class ProductsService {
           google_product_category: source.google_product_category,
           condition: source.condition,
           feed_excluded: source.feed_excluded,
+          // Tags rename: the primary collection is copied with the links.
+          primary_creator_category_id: source.primary_creator_category_id,
           // Force safe defaults for the clone.
           status: ProductStatus.DRAFT,
           is_featured: false,
@@ -1520,13 +1513,18 @@ export class ProductsService {
         });
       }
 
-      // Tags — flat copy.
-      if (source.tags.length > 0) {
-        await tx.productTag.createMany({
-          data: source.tags.map((t) => ({
+      // Collections and tags (ProductCreatorCategory, every visibility) —
+      // flat copy with the same sort_order. Legacy ProductTag rows are
+      // retired and no longer copied.
+      const links = source.creator_categories ?? [];
+      if (links.length > 0) {
+        await tx.productCreatorCategory.createMany({
+          data: links.map((l) => ({
             product_id: created.id,
-            tag: t.tag,
+            creator_category_id: l.creator_category_id,
+            sort_order: l.sort_order,
           })),
+          skipDuplicates: true,
         });
       }
 

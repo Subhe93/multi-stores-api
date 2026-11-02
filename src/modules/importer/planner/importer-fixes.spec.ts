@@ -238,7 +238,9 @@ describe('fix 3 — category UPDATE', () => {
       .itemsOf(run.id, 'APPLY')
       .filter((i: any) => i.entity_type === 'CATEGORY' && i.action === 'ERROR');
     expect(errs.map((i: any) => i.external_ref)).toEqual([CAT147]);
-    expect(h.db.creatorCategory.rows).toHaveLength(55);
+    expect(
+      h.db.creatorCategory.rows.filter((c: any) => c.visibility === 'PUBLIC'),
+    ).toHaveLength(55);
     expect(done.status).toBe('FAILED');
     expect(done.error).toMatch(/^IMPORT_RUN_ERRORS: IMPORT_CATEGORY_ERRORS:1/);
     expect((done.summary as any).apply.outcome.failed).toBe(true);

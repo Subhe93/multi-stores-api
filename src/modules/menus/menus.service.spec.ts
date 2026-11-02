@@ -17,12 +17,20 @@ type Row = {
   open_in_new_tab: boolean;
 };
 
-function build(stored: Row[]) {
+function build(stored: Row[], internalIds = new Set<string>()) {
   let rows = [...stored];
   let seq = 0;
   const prisma = {
     creator: { findUnique: jest.fn(() => Promise.resolve({ id: 'c1' })) },
     store: { findUnique: jest.fn(() => Promise.resolve({ id: 's1' })) },
+    // Tags rename: `internalIds` are INTERNAL collections (tags).
+    creatorCategory: {
+      findMany: jest.fn(({ where }: { where: { id: { in: string[] } } }) =>
+        Promise.resolve(
+          where.id.in.filter((id) => internalIds.has(id)).map((id) => ({ id })),
+        ),
+      ),
+    },
     menu: {
       findUnique: jest.fn(() =>
         Promise.resolve({ id: 'm1', store_id: 's1', items: rows }),
@@ -145,6 +153,37 @@ describe('MenusService.setItems (M6 kind / resource_id / MENU_MAX_DEPTH)', () =>
       resource_id: 'cat-1',
     });
     expect(items()[1]).toMatchObject({ kind: 'CUSTOM', resource_id: null });
+  });
+
+  it('rejects a COLLECTION item that points at a tag (INTERNAL row), nested too', async () => {
+    const built = build([HOME], new Set(['tag-1']));
+    const { service, items } = built;
+    const prisma = built.prisma as { menuItem: { deleteMany: jest.Mock } };
+    await expect(
+      service.setItems('u1', 'm1', {
+        items: [
+          {
+            label: 'Shop',
+            url: '/collections/shop',
+            kind: 'COLLECTION',
+            resource_id: 'cat-1',
+            children: [
+              {
+                label: 'Hidden',
+                url: '/collections/hidden',
+                kind: 'COLLECTION',
+                resource_id: 'tag-1',
+              },
+            ],
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      response: { code: 'MENU_ITEM_INTERNAL_COLLECTION', ids: ['tag-1'] },
+    });
+    // Rejected before the transaction: the stored items are untouched.
+    expect(prisma.menuItem.deleteMany).not.toHaveBeenCalled();
+    expect(items().map((r) => r.id)).toEqual(['item-home']);
   });
 
   it('accepts three levels and rejects a fourth before touching the rows', async () => {

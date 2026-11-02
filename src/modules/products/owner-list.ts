@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { tagRuleProductWhere } from '../creator-categories/tag-rule';
 
 // Dashboard product list (`GET /products/mine`): the extra filters and sort
 // orders an owner gets on top of the shared catalogue filters.
@@ -78,7 +79,12 @@ export function stockWhere(
   return undefined;
 }
 
-/** Membership of one collection, by the same rule as the storefront listing. */
+/**
+ * Membership of one collection, by the same rule as the storefront listing.
+ * `match_tags` holds INTERNAL CreatorCategory ids (tags) for a TAGS rule;
+ * the same `?collection=<id>` filter also works for an INTERNAL row itself
+ * (the dashboard "Tags" filter), which is a plain link lookup.
+ */
 export function collectionWhere(collection: {
   id: string;
   match_rule: string;
@@ -86,9 +92,7 @@ export function collectionWhere(collection: {
 }): Prisma.ProductWhereInput {
   if (collection.match_rule === 'TAGS') {
     // An empty tag rule lists nothing on the storefront either.
-    return collection.match_tags.length
-      ? { tags: { some: { tag: { in: collection.match_tags } } } }
-      : { id: { in: [] } };
+    return tagRuleProductWhere(collection.match_tags);
   }
   return {
     creator_categories: { some: { creator_category_id: collection.id } },
@@ -96,18 +100,30 @@ export function collectionWhere(collection: {
 }
 
 /**
- * Products listed by no collection: no manual link rows and none of the tags
- * used by the store's tag-rule collections.
+ * Products listed by no collection: no link to a PUBLIC collection and no
+ * link to a tag (INTERNAL row) that a TAGS-rule collection lists. A product
+ * that only carries tags no smart collection uses is "in no collection".
  */
 export function noCollectionWhere(
-  tagRuleTags: string[],
+  tagRuleTagIds: string[],
 ): Prisma.ProductWhereInput {
-  return tagRuleTags.length
+  const noPublicLink: Prisma.ProductWhereInput = {
+    creator_categories: {
+      none: { creator_category: { visibility: 'PUBLIC' } },
+    },
+  };
+  return tagRuleTagIds.length
     ? {
-        creator_categories: { none: {} },
-        NOT: { tags: { some: { tag: { in: tagRuleTags } } } },
+        AND: [
+          noPublicLink,
+          {
+            creator_categories: {
+              none: { creator_category_id: { in: tagRuleTagIds } },
+            },
+          },
+        ],
       }
-    : { creator_categories: { none: {} } };
+    : noPublicLink;
 }
 
 /** Query-string value, or undefined when absent or repeated (array). */

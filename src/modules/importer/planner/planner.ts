@@ -2,6 +2,7 @@ import { summarizeCatalog, type DryRunSummary } from '../model/dry-run-summary';
 import { W_HTML_SANITIZER_FALLBACK } from '../html/html-sanitizer';
 import { createPlanContext, type PlanContext } from './plan-context';
 import { planCategories } from './plan-categories';
+import { planTags } from './plan-tags';
 import { planMedia } from './plan-media';
 import { planPages } from './plan-pages';
 import { planProducts } from './plan-products';
@@ -84,7 +85,8 @@ export function planImport(input: PlanInput): ImportPlan {
 
   const blockers = planStoreChecks(ctx);
   const categories = planCategories(ctx);
-  const products = planProducts(ctx, categories);
+  const tags = planTags(ctx, categories);
+  const products = planProducts(ctx, categories, tags);
   const shippingWork: PlanWork['shipping'] = products.shippingOn
     ? planShipping(ctx, products.shippingProfiles)
     : null;
@@ -122,7 +124,9 @@ export function planImport(input: PlanInput): ImportPlan {
     for (const p of products.planned) {
       const a = p.action;
       count('IMAGE', a, p.mapped.images.length);
-      count('TAG', a, p.mapped.tags.length);
+      // TAG rows are counted from their own plan items (one per term);
+      // product → tag links are reported as PRODUCT_TAG.
+      count('PRODUCT_TAG', a, p.tag_refs.length);
       count('FAQ', a, p.mapped.faqs.length);
       count('PRODUCT_CATEGORY', a, p.mapped.category_refs.length);
       if (p.mapped.option_config) count('OPTION_CONFIG', a);
@@ -183,6 +187,7 @@ export function planImport(input: PlanInput): ImportPlan {
 
   const work: PlanWork = {
     categories: scopes.categories ? categories.planned : [],
+    tags: tags.planned,
     products: scopes.products ? products.planned : [],
     skipped: scopes.products
       ? products.skipped.map((p) => ({

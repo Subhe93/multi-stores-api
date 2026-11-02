@@ -32,6 +32,7 @@ import {
 } from '@prisma/client';
 import { sanitizeCreatorHtml } from '../../common/html/creator-html';
 import { CREATOR_CATEGORY_MAX_DEPTH } from './primary-collection';
+import { tagRuleProductWhere, withMatchTagIds } from './tag-rule';
 import {
   compareManualOrder,
   computeLinkSortOrders,
@@ -302,10 +303,15 @@ export class CreatorCategoriesService {
       product_ids,
       custom_product_ids,
       product_order,
-      match_tags,
+      match_tag_ids,
+      match_tags: match_tags_alias,
       parent_id,
       ...data
     } = dto;
+    const match_tags = await this.resolveMatchTagIds(
+      creatorId,
+      match_tag_ids ?? match_tags_alias,
+    );
 
     if (parent_id) {
       const parent = await this.prisma.creatorCategory.findUnique({
@@ -381,9 +387,11 @@ export class CreatorCategoriesService {
       orderBy: [{ parent_id: 'asc' }, { sort_order: 'asc' }],
     });
     // Build tree
-    type Node = (typeof rows)[number] & { children: Node[] };
+    type Node = ReturnType<typeof withMatchTagIds<(typeof rows)[number]>> & {
+      children: Node[];
+    };
     const map = new Map<string, Node>();
-    rows.forEach((r) => map.set(r.id, { ...r, children: [] }));
+    rows.forEach((r) => map.set(r.id, { ...withMatchTagIds(r), children: [] }));
     const roots: Node[] = [];
     for (const node of map.values()) {
       if (node.parent_id && map.has(node.parent_id)) {
@@ -455,7 +463,7 @@ export class CreatorCategoriesService {
         created_at: l.custom_product?.created_at,
       })),
     );
-    return { ...cc, product_order };
+    return { ...withMatchTagIds(cc), product_order };
   }
 
   async update(id: string, userId: string, dto: UpdateCreatorCategoryDto) {
@@ -468,9 +476,14 @@ export class CreatorCategoriesService {
       custom_product_ids,
       product_order,
       parent_id,
-      match_tags,
+      match_tag_ids,
+      match_tags: match_tags_alias,
       ...data
     } = dto;
+    const match_tags = await this.resolveMatchTagIds(
+      creatorId,
+      match_tag_ids ?? match_tags_alias,
+    );
 
     // M6.3: the visibility the row will have after this update, and the
     // parent it will end up with (`undefined` = unchanged).
@@ -739,9 +752,49 @@ export class CreatorCategoriesService {
   }
 
   /**
+   * Tags rename (2026-11-02): the ids a TAGS-rule collection lists must be
+   * INTERNAL rows (tags) of this creator. `undefined` = not sent (left as
+   * stored); duplicates are dropped; PUBLIC or foreign ids are rejected.
+   */
+  private async resolveMatchTagIds(
+    creatorId: string,
+    ids: string[] | undefined,
+  ): Promise<string[] | undefined> {
+    if (ids === undefined) return undefined;
+    const unique = [...new Set(ids.map((s) => s.trim()).filter(Boolean))];
+    if (!unique.length) return [];
+    const rows: { id: string; visibility: CreatorCategoryVisibility }[] =
+      await this.prisma.creatorCategory.findMany({
+        where: { id: { in: unique }, creator_id: creatorId },
+        select: { id: true, visibility: true },
+      });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const unknown = unique.filter((id) => !byId.has(id));
+    if (unknown.length) {
+      throw new BadRequestException({
+        code: 'CREATOR_CATEGORY_MATCH_TAG_UNKNOWN',
+        message: 'match_tag_ids must be tags of this store',
+        ids: unknown,
+      });
+    }
+    const notInternal = unique.filter(
+      (id) => byId.get(id)!.visibility !== CreatorCategoryVisibility.INTERNAL,
+    );
+    if (notInternal.length) {
+      throw new BadRequestException({
+        code: 'CREATOR_CATEGORY_MATCH_TAG_NOT_INTERNAL',
+        message: 'match_tag_ids must reference tags (internal rows only)',
+        ids: notInternal,
+      });
+    }
+    return unique;
+  }
+
+  /**
    * Resolve the products that belong to a collection, honoring MANUAL vs TAGS
-   * rules. For TAGS, matches any product owned by the creator whose tag set
-   * intersects match_tags.
+   * rules. For TAGS, matches any own product of the creator linked to any of
+   * the listed INTERNAL rows (tags); custom products are not part of this
+   * owner view (same as before).
    */
   async getProducts(id: string, userId: string) {
     const creatorId = await this.getCreatorIdOrThrow(userId);
@@ -762,7 +815,7 @@ export class CreatorCategoriesService {
       return this.prisma.product.findMany({
         where: {
           creator_id: creatorId,
-          tags: { some: { tag: { in: cc.match_tags } } },
+          ...tagRuleProductWhere(cc.match_tags),
         },
         include: {
           translations: true,

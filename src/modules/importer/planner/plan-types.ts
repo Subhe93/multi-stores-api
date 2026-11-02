@@ -13,6 +13,7 @@ import type { NormalizedCatalog, NPage, NTemplate } from '../model/normalized';
 import type { PresetDescriptor } from '../model/presets';
 import { hashOf } from '../mapping/hash';
 import type { MappedCategory } from '../mapping/map-category';
+import type { MappedTag } from '../mapping/map-tag';
 import type { MappedProduct, MappedVariant } from '../mapping/map-product';
 import type {
   MappedShippingMethod,
@@ -56,6 +57,15 @@ export interface PlannedCategory extends Planned {
   adopt: boolean;
 }
 
+/** A WooCommerce product_tag term → INTERNAL CreatorCategory row (tags rename). */
+export interface PlannedTag extends Planned {
+  mapped: MappedTag;
+  /** The slug the row carries after the run (WP `-2` suffix when taken). */
+  final_slug: string;
+  /** Adopt an existing INTERNAL row of the same slug (D25). */
+  adopt: boolean;
+}
+
 export interface PlannedVariant extends Planned {
   mapped: MappedVariant;
 }
@@ -78,6 +88,12 @@ export interface PlannedProduct extends Planned {
   fallback: { ref: string; action: PlanAction } | null;
   /** Category ref → position in that collection (D24). */
   positions: Record<string, number>;
+  /**
+   * Tag refs (`product_tag` terms of the catalog) the product links to as
+   * INTERNAL rows; not part of the source hash, so an existing product only
+   * becomes UPDATE through the incomplete check when a link is missing.
+   */
+  tag_refs: string[];
   /** Shipping profile ref, when the shipping phase runs. */
   shipping_profile_ref: string | null;
   /** Warning code of a SKIP (merchant edit, untracked, archived). */
@@ -161,6 +177,8 @@ export interface PlanRedirectWork {
 
 export interface PlanWork {
   categories: PlannedCategory[];
+  /** INTERNAL rows for the product_tag terms (tags rename, 2026-11-02). */
+  tags: PlannedTag[];
   products: PlannedProduct[];
   /** Products skipped by rule (skip list, drafts excluded): SKIP items only. */
   skipped: { ref: string; target_id: string | null; title: string }[];
@@ -262,6 +280,7 @@ export function planFingerprint(
     ? {
         products: work.products.map((p) => [p.mapped.ref, p.source_hash]),
         categories: work.categories.map((c) => [c.mapped.ref, c.source_hash]),
+        tags: work.tags.map((t) => [t.mapped.ref, t.source_hash]),
         redirects:
           work.redirects?.plan.items.map((r) => [r.from_path, r.to_path]) ?? [],
         redirects_off: work.redirects?.deactivate.map((r) => r.id) ?? [],

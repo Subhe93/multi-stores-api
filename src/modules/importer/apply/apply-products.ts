@@ -317,7 +317,8 @@ async function writeProductRows(
       await tx.productImage.deleteMany({
         where: { product_id: productId, variant_id: null },
       });
-    await tx.productTag.deleteMany({ where: { product_id: productId } });
+    // Legacy ProductTag rows are retired: neither written nor deleted here
+    // (an old run's rows stay until the DB cleanup step).
     const faqs = await tx.productFaq.findMany({
       where: { product_id: productId },
       select: { id: true },
@@ -343,17 +344,21 @@ async function writeProductRows(
       })),
     });
   }
-  if (m.tags.length) {
-    await tx.productTag.createMany({
-      data: m.tags.map((tag) => ({ product_id: productId, tag })),
-    });
-  }
+  // Collections (positions, D24) and tags (INTERNAL rows, sort_order 0):
+  // both are ProductCreatorCategory links; `categoryIdByRef` holds every
+  // imported row of the creator, product_cat and product_tag alike.
   const wanted = new Map<string, number>();
   const missingCategories: string[] = [];
   for (const ref of m.category_refs) {
     const id = lookups.categoryIdByRef.get(ref);
     if (id) wanted.set(id, pp.positions[ref] ?? 0);
     else missingCategories.push(ref);
+  }
+  for (const ref of pp.tag_refs) {
+    const id = lookups.categoryIdByRef.get(ref);
+    if (id) {
+      if (!wanted.has(id)) wanted.set(id, 0);
+    } else missingCategories.push(ref);
   }
   if (!creating) {
     const stale = [...lookups.importedCategoryIds].filter(

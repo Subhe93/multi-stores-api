@@ -64,10 +64,18 @@ describeIfExport('Namez full export — dry run, apply, re-run (§12.3)', () => 
     expect(
       h.db.productVariant.rows.filter((v: any) => !v.is_active),
     ).toHaveLength(1);
-    expect(h.db.creatorCategory.rows).toHaveLength(78);
+    expect(
+      h.db.creatorCategory.rows.filter((x: any) => x.visibility === 'PUBLIC'),
+    ).toHaveLength(78);
+    // Tags rename: the 11 product_tag terms are INTERNAL rows.
+    expect(
+      h.db.creatorCategory.rows.filter((x: any) => x.visibility === 'INTERNAL'),
+    ).toHaveLength(11);
+    expect(h.db.productTag.rows).toHaveLength(0);
     expect(
       h.db.creatorCategory.rows.every(
-        (x: any) => x.is_active && x.noindex_when_empty,
+        (x: any) =>
+          x.is_active && (x.visibility === 'INTERNAL' || x.noindex_when_empty),
       ),
     ).toBe(true);
     expect(h.db.storeRedirect.rows).toHaveLength(194 + SYSTEM_ROWS.length);

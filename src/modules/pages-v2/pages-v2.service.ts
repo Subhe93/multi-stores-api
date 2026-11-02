@@ -609,7 +609,6 @@ export class PagesV2Service {
                 show_trust_badges: true,
                 show_shipping: true,
                 show_tabs: true,
-                show_tags: true,
                 button_style: 'solid',
               } as Prisma.InputJsonValue,
             },

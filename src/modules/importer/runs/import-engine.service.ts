@@ -46,6 +46,7 @@ import {
   type PersonalizationPresetPort,
 } from '../ports/personalization.port';
 import { applyCategories } from '../apply/apply-categories';
+import { applyTags } from '../apply/apply-tags';
 import {
   applyProducts,
   applyRemovals,
@@ -79,6 +80,7 @@ import {
 export const APPLY_PHASES = [
   'media',
   'categories',
+  'tags',
   'shipping',
   'products',
   'templates',
@@ -532,6 +534,7 @@ export class ImportEngineService {
     const a = await this.loadApplyRun(runId, control);
     await this.applyMediaPhase(a);
     await this.applyCategoriesPhase(a);
+    await this.applyTagsPhase(a);
     await this.applyShippingPhase(a);
     await this.applyProductsPhase(a);
     await this.applyTemplatesPhase(a);
@@ -772,6 +775,19 @@ export class ImportEngineService {
           next,
           plan.work.categories.length,
         ),
+    );
+    a.errors += res.errors;
+    await this.saveCursor(a, 'tags', 0, 0, (plan.work.tags ?? []).length);
+  }
+
+  /** Tags rename: product_tag terms → INTERNAL collection rows, before products link to them. */
+  private async applyTagsPhase(a: ApplyRun): Promise<void> {
+    const start = this.startOf(a, 'tags');
+    if (start === null) return;
+    const { plan } = a;
+    const tags = plan.work.tags ?? [];
+    const res = await applyTags(a.ctx, tags, start, (next) =>
+      this.saveCursor(a, 'tags', next, next, tags.length),
     );
     a.errors += res.errors;
     await this.saveCursor(

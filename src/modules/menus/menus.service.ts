@@ -5,7 +5,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MenuItemKind, Prisma } from '@prisma/client';
+import {
+  CreatorCategoryVisibility,
+  MenuItemKind,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { CreateMenuDto, SetMenuItemsDto, UpdateMenuDto } from './dto/menus.dto';
@@ -27,6 +31,22 @@ export function assertMenuDepth(
     });
   }
   for (const n of nodes) assertMenuDepth(n.children, level + 1);
+}
+
+/** Distinct `resource_id`s of COLLECTION items anywhere in the sent tree. */
+export function collectionResourceIds(
+  nodes: SetMenuItemsDto['items'] | undefined,
+): string[] {
+  const out = new Set<string>();
+  const walk = (list: SetMenuItemsDto['items'] | undefined) => {
+    for (const n of list ?? []) {
+      if (n.kind === MenuItemKind.COLLECTION && n.resource_id)
+        out.add(n.resource_id);
+      walk(n.children);
+    }
+  };
+  walk(nodes);
+  return [...out];
 }
 
 /** A stored `label_i18n` JSON as a locale → label map (anything else = empty). */
@@ -201,8 +221,36 @@ export class MenusService {
    * so an editor that saves one language never wipes the others. The row
    * is recreated under the same id, so the next save still matches it.
    */
+  /**
+   * Tags rename (2026-11-02): an INTERNAL collection (tag) has no storefront
+   * page, so a menu item may never point at one
+   * (MENU_ITEM_INTERNAL_COLLECTION). Unknown ids are left to the storefront,
+   * which drops items whose collection is not served.
+   */
+  private async assertNoInternalCollections(
+    nodes: SetMenuItemsDto['items'] | undefined,
+  ): Promise<void> {
+    const ids = collectionResourceIds(nodes);
+    if (!ids.length) return;
+    const internal = await this.prisma.creatorCategory.findMany({
+      where: {
+        id: { in: ids },
+        visibility: CreatorCategoryVisibility.INTERNAL,
+      },
+      select: { id: true },
+    });
+    if (internal.length) {
+      throw new BadRequestException({
+        code: 'MENU_ITEM_INTERNAL_COLLECTION',
+        message: 'A tag (internal collection) cannot be linked from a menu',
+        ids: internal.map((c) => c.id),
+      });
+    }
+  }
+
   async setItems(userId: string, menuId: string, dto: SetMenuItemsDto) {
     assertMenuDepth(dto.items);
+    await this.assertNoInternalCollections(dto.items);
     const storeId = await this.resolveCreatorStoreId(userId);
     await this.assertMenuBelongsToStore(menuId, storeId);
 

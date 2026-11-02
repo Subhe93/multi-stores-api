@@ -28,6 +28,7 @@ export type SummaryEntityType =
   | 'CATEGORY'
   | 'PRODUCT_CATEGORY'
   | 'TAG'
+  | 'PRODUCT_TAG'
   | 'IMAGE'
   | 'FAQ'
   | 'OPTION_CONFIG'
@@ -802,8 +803,10 @@ export function summarizeCatalog(
     (c) => (publishedCategoryRefs.get(c.ext_id) ?? 0) > 0,
   ).length;
 
-  // Tags.
-  count('TAG', 'CREATE', tagLinks.links);
+  // Tags (tags rename): one INTERNAL CreatorCategory row per term, one
+  // PRODUCT_TAG link per product → term.
+  count('TAG', 'CREATE', catalog.tags.length);
+  count('PRODUCT_TAG', 'CREATE', tagLinks.links);
   for (const t of catalog.tags) {
     const cleaned = cleanText(t.name);
     if (cleaned !== t.name)

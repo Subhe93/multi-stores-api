@@ -158,8 +158,11 @@ export async function rollbackRun(deps: RollbackDeps): Promise<RollbackResult> {
   await rollbackCreatedProducts(s);
   await rollbackCreatedVariants(s);
   await rollbackUpdatedProducts(s);
-  await rollbackCreatedCategories(s);
-  await rollbackUpdatedCategories(s);
+  await rollbackCreatedCategories(s, 'CATEGORY');
+  await rollbackUpdatedCategories(s, 'CATEGORY');
+  // Tags rename: INTERNAL rows the run created / updated (same shape).
+  await rollbackCreatedCategories(s, 'TAG');
+  await rollbackUpdatedCategories(s, 'TAG');
   await rollbackShipping(s);
   await rollbackTemplates(s);
   await rollbackPages(s);
@@ -639,11 +642,15 @@ async function rollbackUpdatedProducts(s: RollbackState): Promise<void> {
   await s.flush();
 }
 
-// 4. Collections (children before parents).
-async function rollbackCreatedCategories(s: RollbackState): Promise<void> {
+// 4. Collections (children before parents); `type` = 'CATEGORY' or 'TAG'
+// (INTERNAL rows, counted with the collections in the result).
+async function rollbackCreatedCategories(
+  s: RollbackState,
+  type: 'CATEGORY' | 'TAG',
+): Promise<void> {
   const { prisma, locale, out, items } = s;
   const cats = s
-    .ofType('CATEGORY')
+    .ofType(type)
     .filter((e) => e.target_id)
     .reverse();
   const keptCats = new Set<string>();
@@ -663,13 +670,13 @@ async function rollbackCreatedCategories(s: RollbackState): Promise<void> {
         keptCats.add(e.id);
         out.categories_kept++;
         out.skipped_edited.push({
-          entity_type: 'CATEGORY',
+          entity_type: type,
           external_ref: e.external_ref,
           target_id: id,
           title: null,
         });
         items.push({
-          entity_type: 'CATEGORY',
+          entity_type: type,
           external_ref: e.external_ref,
           action: 'SKIP',
           target_id: id,
@@ -686,7 +693,7 @@ async function rollbackCreatedCategories(s: RollbackState): Promise<void> {
         keptCats.add(e.id);
         out.categories_kept++;
         items.push({
-          entity_type: 'CATEGORY',
+          entity_type: type,
           external_ref: e.external_ref,
           action: 'SKIP',
           target_id: id,
@@ -709,14 +716,14 @@ async function rollbackCreatedCategories(s: RollbackState): Promise<void> {
       });
       out.categories_deleted++;
       items.push({
-        entity_type: 'CATEGORY',
+        entity_type: type,
         external_ref: e.external_ref,
         action: 'DELETE',
         target_id: id,
       });
     } catch (err) {
       keptCats.add(e.id);
-      recordError(s, 'CATEGORY', e.external_ref, id, err);
+      recordError(s, type, e.external_ref, id, err);
     }
     if (items.length >= FLUSH_EVERY) await s.flush();
   }
@@ -727,9 +734,12 @@ async function rollbackCreatedCategories(s: RollbackState): Promise<void> {
 }
 
 // 4b. Updated / adopted collections: prior fields back (D7, fix 6).
-async function rollbackUpdatedCategories(s: RollbackState): Promise<void> {
+async function rollbackUpdatedCategories(
+  s: RollbackState,
+  type: 'CATEGORY' | 'TAG',
+): Promise<void> {
   const { prisma, runId, locale, out, items } = s;
-  for (const it of s.updatedOf('CATEGORY')) {
+  for (const it of s.updatedOf(type)) {
     await s.beat();
     const id = it.target_id!;
     try {
@@ -741,7 +751,7 @@ async function rollbackUpdatedCategories(s: RollbackState): Promise<void> {
       if (!exists) continue;
       if (!before) {
         items.push({
-          entity_type: 'CATEGORY',
+          entity_type: type,
           external_ref: it.external_ref,
           action: 'SKIP',
           target_id: id,
@@ -749,7 +759,7 @@ async function rollbackUpdatedCategories(s: RollbackState): Promise<void> {
         });
         continue;
       }
-      const ledger = await s.ledgerRow('CATEGORY', it.external_ref);
+      const ledger = await s.ledgerRow(type, it.external_ref);
       const current = await categoryHash(prisma, id, locale);
       if (
         !ledger ||
@@ -758,13 +768,13 @@ async function rollbackUpdatedCategories(s: RollbackState): Promise<void> {
         ledger.applied_hash !== current
       ) {
         out.skipped_edited.push({
-          entity_type: 'CATEGORY',
+          entity_type: type,
           external_ref: it.external_ref,
           target_id: id,
           title: titleOf(it.diff),
         });
         items.push({
-          entity_type: 'CATEGORY',
+          entity_type: type,
           external_ref: it.external_ref,
           action: 'SKIP',
           target_id: id,
@@ -798,7 +808,7 @@ async function rollbackUpdatedCategories(s: RollbackState): Promise<void> {
       });
       out.categories_restored++;
       items.push({
-        entity_type: 'CATEGORY',
+        entity_type: type,
         external_ref: it.external_ref,
         action: 'UPDATE',
         target_id: id,

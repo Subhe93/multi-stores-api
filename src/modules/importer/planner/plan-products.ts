@@ -14,6 +14,7 @@ import {
 import { firstFreeSlug } from '../mapping/slug';
 import { incompleteOf } from './target-snapshot';
 import type { CategoryPlan } from './plan-categories';
+import type { TagPlan } from './plan-tags';
 import type { PlanContext } from './plan-context';
 import {
   decide,
@@ -48,6 +49,7 @@ export interface ProductPlan {
 export function planProducts(
   ctx: PlanContext,
   categories: CategoryPlan,
+  tags: TagPlan = { planned: [], byRef: new Map(), tagFor: () => null },
 ): ProductPlan {
   const { catalog, options, snapshot, sanitizer, scopes, now, warn, push } =
     ctx;
@@ -105,8 +107,17 @@ export function planProducts(
   const assignedSlugs = new Map<string, string>(); // slug → product ref
   const assignedSkus = new Set<string>();
   const plannedProducts: PlannedProduct[] = [];
+  const sourceByRef = new Map(imported.map((p) => [p.ext_id, p]));
   for (const m of mapped) {
     const existing = snapshot.productsByRef.get(m.ref);
+    // Tags rename: the product_tag terms of the catalog this product carries.
+    const tagRefs = [
+      ...new Set(
+        (sourceByRef.get(m.ref)?.tag_ext_ids ?? []).filter((r) =>
+          tags.byRef.has(r),
+        ),
+      ),
+    ];
     const ownId = existing?.id;
     // D25 slug suffixing against non-imported products and this plan.
     const { slug: finalSlug, suffixed } = firstFreeSlug(m.slug, (s) => {
@@ -174,6 +185,12 @@ export function planProducts(
       const linked = snapshot.productCategoryLinks.get(existing.id);
       for (const ref of m.category_refs) {
         const id = collectionFor(ref);
+        if (id && (id === 'new' || !linked?.has(id))) incomplete = true;
+      }
+      // A missing tag link (first run after the tags rename, a new term) is
+      // repaired the same way: the product becomes UPDATE.
+      for (const ref of tagRefs) {
+        const id = tags.tagFor(ref);
         if (id && (id === 'new' || !linked?.has(id))) incomplete = true;
       }
     }
@@ -360,6 +377,7 @@ export function planProducts(
       presets,
       fallback,
       positions: pos,
+      tag_refs: tagRefs,
       shipping_profile_ref: shippingProfileRef,
       skip_reason: action === 'SKIP' ? message : null,
       current_status: existing?.status ?? null,

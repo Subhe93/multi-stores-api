@@ -69,6 +69,16 @@ export class CreateCreatorCategoryDto {
   @IsEnum(CreatorCategoryMatchRule)
   match_rule?: CreatorCategoryMatchRule;
 
+  // Tags rename (2026-11-02): ids of INTERNAL CreatorCategory rows (tags) of
+  // this creator that a `match_rule = TAGS` collection lists. Stored in the
+  // `match_tags` column (kept, no migration).
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  match_tag_ids?: string[];
+
+  // Deprecated alias of `match_tag_ids` for one deploy window (older
+  // dashboards); same validation, ignored when `match_tag_ids` is sent.
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
@@ -139,6 +149,16 @@ export class UpdateCreatorCategoryDto {
   @IsEnum(CreatorCategoryMatchRule)
   match_rule?: CreatorCategoryMatchRule;
 
+  // Tags rename (2026-11-02): ids of INTERNAL CreatorCategory rows (tags) of
+  // this creator that a `match_rule = TAGS` collection lists. Stored in the
+  // `match_tags` column (kept, no migration).
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  match_tag_ids?: string[];
+
+  // Deprecated alias of `match_tag_ids` for one deploy window (older
+  // dashboards); same validation, ignored when `match_tag_ids` is sent.
   @IsOptional()
   @IsArray()
   @IsString({ each: true })

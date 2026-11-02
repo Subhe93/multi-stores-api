@@ -237,6 +237,9 @@ export class CreateProductDto {
   @IsEnum(ProductStatus)
   status?: ProductStatus;
 
+  // Deprecated (tags rename, 2026-11-02): legacy ProductTag strings are no
+  // longer written. Accepted during the deploy window so old clients do not
+  // get a whitelist 400; the value is ignored by the service.
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
@@ -402,6 +405,9 @@ export class UpdateProductDto {
   @Type(() => ProductAttributeValueDto)
   attributes?: ProductAttributeValueDto[];
 
+  // Deprecated (tags rename, 2026-11-02): legacy ProductTag strings are no
+  // longer written. Accepted during the deploy window so old clients do not
+  // get a whitelist 400; the value is ignored by the service.
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
