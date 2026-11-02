@@ -366,9 +366,14 @@ describe('AuthService.register with store context', () => {
     expect(prisma.user.create).not.toHaveBeenCalled();
   });
 
-  it('a creator without a store: platform welcome on the [locale] login page', async () => {
-    const { service, mail, prisma } = build();
-    await service.register({ ...dto, role: UserRole.CREATOR });
+  it('a creator without a store: dashboard welcome link and a single-use dashboard sign-in', async () => {
+    const { service, mail, prisma, magicLinks } = build();
+    const res = await service.register({ ...dto, role: UserRole.CREATOR });
+    // The browser follows this straight away, so the link is short-lived.
+    expect(magicLinks.issue).toHaveBeenCalledWith('u-new', { ttlHours: 0.25 });
+    expect(res.dashboard_login_url).toBe(
+      `https://dash.example.com/auth/magic#token=${RAW_TOKEN}`,
+    );
     expect(
       (
         prisma.user.create.mock.calls[0] as unknown as [
@@ -379,7 +384,7 @@ describe('AuthService.register with store context', () => {
     await waitFor(() => mail.sendWelcome.mock.calls.length === 1);
     expect(mail.sendWelcome).toHaveBeenCalledWith(
       'anna@example.com',
-      { name: 'Anna', loginUrl: 'https://stores.example.com/en/auth/login' },
+      { name: 'Anna', loginUrl: 'https://dash.example.com/auth/login' },
       undefined,
       undefined,
     );

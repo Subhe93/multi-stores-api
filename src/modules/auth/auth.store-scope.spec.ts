@@ -178,7 +178,7 @@ function build() {
     jwt as unknown as JwtService,
     config as unknown as ConfigService,
     mail as unknown as MailService,
-    {} as MagicLinkService,
+    { issue: jest.fn(() => Promise.resolve('raw-token')) } as unknown as MagicLinkService,
     links,
     {
       send: jest.fn(() => Promise.resolve()),

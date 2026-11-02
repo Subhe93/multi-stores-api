@@ -26,6 +26,10 @@ import type { RequestMeta } from '../security/request-meta';
 /** Bcrypt cost of every password hash written by the auth flows. */
 const PASSWORD_BCRYPT_COST = 12;
 
+// Lifetime of the single-use link that signs a freshly registered staff
+// account in on the dashboard (the browser follows it right away).
+const REGISTER_HANDOFF_TTL_HOURS = 0.25;
+
 /** Claims of the access and refresh tokens. `store_id` is null for staff. */
 export interface AuthTokenPayload {
   sub: string;
@@ -277,6 +281,19 @@ export class AuthService {
 
     const tokens = await this.generateTokens(user);
 
+    // Staff sign-ups continue on the dashboard, a separate origin that never
+    // sees this response's tokens. A short-lived single-use magic link signs
+    // the new account in there, so nobody has to log in twice.
+    let dashboard_login_url: string | undefined;
+    if (!isCustomer) {
+      const raw = await this.magicLinks.issue(user.id, {
+        ttlHours: REGISTER_HANDOFF_TTL_HOURS,
+      });
+      dashboard_login_url = this.links.accountLinks(raw, {
+        role: user.role,
+      }).magicUrl;
+    }
+
     // Welcome email, best-effort and never blocking signup. A storefront
     // signup gets the store's branding, domain and language (only while the
     // store is live); the user chose the password, so the email never
@@ -284,7 +301,11 @@ export class AuthService {
     const live = store?.isActive ? store : null;
     void this.sendRegisterWelcome(user.email, dto, live).catch(() => undefined);
 
-    return { user, ...tokens };
+    return {
+      user,
+      ...tokens,
+      ...(dashboard_login_url ? { dashboard_login_url } : {}),
+    };
   }
 
   private async sendRegisterWelcome(
@@ -293,12 +314,16 @@ export class AuthService {
     store: StoreLinkContext | null,
   ) {
     const locale = dto.locale ?? store?.primaryLocale ?? undefined;
-    const loginUrl = this.links.storefrontLink(
-      store?.base,
-      '/auth/login',
-      undefined,
-      locale,
-    );
+    // Staff sign in on the dashboard; customers on their store.
+    const loginUrl =
+      dto.role === UserRole.CUSTOMER
+        ? this.links.storefrontLink(
+            store?.base,
+            '/auth/login',
+            undefined,
+            locale,
+          )
+        : `${this.links.dashboardUrl()}/auth/login`;
     await this.mail.sendWelcome(
       email,
       { name: dto.first_name, loginUrl },
