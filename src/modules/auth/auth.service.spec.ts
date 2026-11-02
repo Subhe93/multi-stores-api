@@ -100,6 +100,8 @@ function build(
     sendWelcome: jest.fn(() => Promise.resolve()),
     sendAccountCreated: jest.fn(() => Promise.resolve()),
     sendPasswordReset: jest.fn(() => Promise.resolve()),
+    sendOnboarding: jest.fn(() => Promise.resolve({ sent: true })),
+    adminRecipients: jest.fn(() => Promise.resolve([])),
   };
   const magicLinks = {
     issue: jest.fn(() => Promise.resolve(RAW_TOKEN)),
@@ -366,9 +368,14 @@ describe('AuthService.register with store context', () => {
     expect(prisma.user.create).not.toHaveBeenCalled();
   });
 
-  it('a creator without a store: dashboard welcome link and a single-use dashboard sign-in', async () => {
+  it('a creator without a store: verification email and a single-use dashboard sign-in', async () => {
     const { service, mail, prisma, magicLinks } = build();
-    const res = await service.register({ ...dto, role: UserRole.CREATOR });
+    const res = await service.register({
+      ...dto,
+      role: UserRole.CREATOR,
+      account_kind: 'independent',
+      accept_terms: true,
+    });
     // The browser follows this straight away, so the link is short-lived.
     expect(magicLinks.issue).toHaveBeenCalledWith('u-new', { ttlHours: 0.25 });
     expect(res.dashboard_login_url).toBe(
@@ -381,13 +388,13 @@ describe('AuthService.register with store context', () => {
         ]
       )[0].data.store_id,
     ).toBeNull();
-    await waitFor(() => mail.sendWelcome.mock.calls.length === 1);
-    expect(mail.sendWelcome).toHaveBeenCalledWith(
-      'anna@example.com',
-      { name: 'Anna', loginUrl: 'https://dash.example.com/auth/login' },
-      undefined,
-      undefined,
-    );
+    // The welcome follows verification (SPEC §2); the first mail is the
+    // verification link.
+    await waitFor(() => mail.sendOnboarding.mock.calls.length >= 1);
+    expect(mail.sendWelcome).not.toHaveBeenCalled();
+    expect(
+      (mail.sendOnboarding.mock.calls[0] as unknown as [string, string])[0],
+    ).toBe('email_verification');
   });
 
   it('still rejects an existing email in the store with AUTH_EMAIL_EXISTS', async () => {

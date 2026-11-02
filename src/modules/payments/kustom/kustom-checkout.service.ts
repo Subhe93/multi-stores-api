@@ -14,6 +14,7 @@ import type { KustomCheckoutSession } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { storeNotLive } from '../../../common/stores/store-gate';
 import { assertCustomerStore } from '../../../common/customers/customer-store';
 import { MailService } from '../../mail/mail.service';
 import { OrdersService, type OrderQuote } from '../../orders/orders.service';
@@ -900,12 +901,14 @@ export class KustomCheckoutService {
     dto: CreateKustomCheckoutSessionDto,
   ) {
     let ctx = await this.kustom.loadStoreContextBySlug(dto.store_slug);
-    if (!ctx || !ctx.is_active) {
+    if (!ctx) {
       throw new NotFoundException({
         code: 'STOREFRONT_STORE_NOT_FOUND',
         message: 'Store not found',
       });
     }
+    // Public gate (SPEC §3): is_active is derived from Store.status (LIVE).
+    if (!ctx.is_active) throw storeNotLive();
     // Markets app: null when off (today's code below), else the market the
     // storefront resolved (404 for an unknown or draft key) — its currency,
     // default locale and the validated host shape the session and the

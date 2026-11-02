@@ -8,6 +8,7 @@ import {
 import { BundleOffer, CartItem, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { customerStoreMismatch } from '../../common/customers/customer-store';
+import { storeClosed, storeNotLive } from '../../common/stores/store-gate';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
@@ -387,6 +388,20 @@ export class CartService {
       select: { id: true },
     });
     return store?.id ?? null;
+  }
+
+  /**
+   * Public gate (SPEC §3): only a LIVE store takes cart lines; anything
+   * else is 409 STORE_NOT_LIVE. Judged on the customer's own store
+   * (per-store accounts); order creation re-checks the store of the lines.
+   */
+  private async assertStoreLive(storeId: string | null): Promise<void> {
+    if (!storeId) return;
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { is_active: true, status: true },
+    });
+    if (storeClosed(store)) throw storeNotLive();
   }
 
   /**
@@ -1443,6 +1458,7 @@ export class CartService {
       await this.assertVariantOfProduct(dto.product_id, dto.variant_id);
     }
     await this.assertLineInAccountStore(cart.account_store_id, dto);
+    await this.assertStoreLive(cart.account_store_id);
     await this.assertAvailableInMarket(dto, locale, marketKey, preview);
     // M4.2 designer (C29 step 2): a line with a design, or of a product the
     // designer is active for, is validated (and the design claimed for this

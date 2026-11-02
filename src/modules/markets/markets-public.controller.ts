@@ -4,13 +4,16 @@ import {
   NotFoundException,
   Param,
   Query,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MarketsContextService } from './markets-context.service';
 import { toMarketRoute } from './market-context';
 import type { MarketContextResponse } from './market.types';
 import { RedirectsService } from '../redirects/redirects.service';
+import { StorefrontGateService } from '../storefront/storefront-gate.service';
 
 // Public resolution used by the storefront proxy for platform-subdomain
 // hosts. Deliberately NOT decorated with @RequireApp: it answers
@@ -21,23 +24,29 @@ export class MarketsPublicController {
     private readonly prisma: PrismaService,
     private readonly markets: MarketsContextService,
     private readonly redirects: RedirectsService,
+    private readonly gate: StorefrontGateService,
   ) {}
 
   // `?market=<key>&preview=1` (market-preview host `<slug>--<key>.<platform
   // host>`): the named market answers even while DRAFT, flagged `preview`.
   // The param pair is only honoured together; a bare `market` is ignored.
+  // No route-level guard here (the global ThrottlerGuard must run once):
+  // the optional viewer is resolved inline.
   @Get(':slug/market-context')
   @Throttle({ default: { limit: 120, ttl: 60_000 } })
   async marketContext(
+    @Req() req: Request,
     @Param('slug') slug: string,
     @Query('market') market?: string,
     @Query('preview') preview?: string,
   ): Promise<MarketContextResponse> {
     const store = await this.prisma.store.findUnique({
       where: { slug },
-      select: { id: true, is_active: true, custom_domain: true },
+      select: { id: true, status: true, custom_domain: true },
     });
-    if (!store || !store.is_active) {
+    // Non-LIVE: 404 unless the owner / an admin previews (SPEC §3).
+    const viewer = await this.gate.viewerFromRequest(req);
+    if (!store || !(await this.gate.allows(store, viewer))) {
       throw new NotFoundException({
         code: 'STORE_NOT_FOUND',
         message: 'Store not found',

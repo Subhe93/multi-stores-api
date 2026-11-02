@@ -44,6 +44,10 @@ model User {
   // apart so a stolen token cannot lock the owner out of signing in.
   reauth_failed_count  Int       @default(0)
   reauth_locked_until  DateTime?
+  // When the account's email was verified (verification link clicked, or
+  // backfilled for staff created before verification existed). Null while a
+  // self-registered staff account is PENDING.
+  email_verified_at    DateTime?
   created_at    DateTime   @default(now())
   updated_at    DateTime   @updatedAt
 
@@ -124,6 +128,7 @@ model LoginToken {
 
 enum LoginTokenPurpose {
   MAGIC_LOGIN
+  EMAIL_VERIFY
 }
 
 enum UserRole {
@@ -151,7 +156,10 @@ model Provider {
   description                    String?
   logo_url                       String?
   phone                          String?
-  country                        String
+  // Contact person named at sign-up (first + last name).
+  contact_name                   String?
+  // ISO2 from the sign-up form; null when unknown (no more 'US' default).
+  country                        String?
   stripe_account_id              String?
   // Stripe Connect onboarding state, kept in sync via the account.updated webhook.
   stripe_charges_enabled         Boolean   @default(false)
@@ -175,10 +183,16 @@ model Creator {
   id                             String    @id @default(uuid())
   user_id                        String    @unique
   display_name                   String
+  // Last name from the sign-up form (display_name carries the first name).
+  last_name                      String?
   bio                            String?
   avatar_url                     String?
   cover_url                      String?
   phone                          String?
+  // Sign-up / onboarding survey: { account_kind: 'independent'|'marketplace',
+  // sells?, stage?, country?, completed_at? }. Personalises the checklist and
+  // pre-selects the store type; nothing is gated on it.
+  onboarding_profile             Json?
   stripe_account_id              String?
   // Connected account type: 'express' (marketplace transfers model) or
   // 'standard' (independent stores charging directly on their own account).
@@ -1126,6 +1140,15 @@ enum StoreType {
   INDEPENDENT
 }
 
+enum StoreStatus {
+  DRAFT
+  PENDING_REVIEW
+  CHANGES_REQUESTED
+  LIVE
+  PAUSED
+  SUSPENDED
+}
+
 model Store {
   id                      String         @id @default(uuid())
   creator_id              String         @unique
@@ -1145,6 +1168,17 @@ model Store {
   theme_key               String         @default("minimal")
   theme_customizations    Json           @default("{}")
   theme_config            Json           @default("{}")
+  // Lifecycle (plans/platform-onboarding): only LIVE is public. is_active is
+  // DERIVED (= status = LIVE), written by StoresService.setStatus only.
+  status                  StoreStatus    @default(DRAFT)
+  // Admin's reason for CHANGES_REQUESTED / SUSPENDED.
+  status_reason           String?
+  went_live_at            DateTime?
+  golive_requested_at     DateTime?
+  // Legal trader identity (e-handelslagen 8 §): { legal_name, business_type,
+  // org_number, vat_number?, address_line1, address_line2?, postal_code, city,
+  // country, phone, support_email, completed_at }. See stores/trader-details.ts.
+  trader_details          Json?
   is_active               Boolean        @default(true)
   // When false, the storefront serves this store uncached (always fresh).
   cache_enabled           Boolean        @default(true)
@@ -1214,6 +1248,7 @@ model Store {
   customers                 User[]         @relation("StoreCustomers")
 
   @@index([slug])
+  @@index([status])
 }
 
 // Kustom-first checkout: the Kustom iframe is shown before any order exists.

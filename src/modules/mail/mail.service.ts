@@ -68,6 +68,12 @@ import { deriveNetTotals } from '../taxes/tax.service';
 import { SUPPORTED_LOCALES } from '../markets/market.types';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { loadPublicHost } from '../stores/storefront-hosts';
+import {
+  onboardingEmail,
+  ONBOARDING_EVENT_VARIABLES,
+  type OnboardingEvent,
+} from './onboarding-templates';
+import { UserRole } from '@prisma/client';
 
 /** Delivery log retention. */
 const EMAIL_LOG_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
@@ -1214,6 +1220,70 @@ export class MailService {
       event: 'welcome',
       ...(brand?.storeId ? { storeId: brand.storeId } : {}),
     });
+  }
+
+  /**
+   * Platform onboarding emails (SPEC §5): email_verification, welcome_owner,
+   * store_live, admin_golive_request, … Rendered from the admin DB template
+   * when one exists, else the bundled six-locale wording; always through
+   * the platform sender (no store override: these are account/platform
+   * messages). `sensitive` masks link secrets out of the logs. Best-effort:
+   * never throws.
+   */
+  async sendOnboarding(
+    event: OnboardingEvent,
+    to: string,
+    vars: Record<string, string | undefined>,
+    locale?: string | null,
+    opts: { sensitive?: string[] } = {},
+  ): Promise<{ sent: boolean }> {
+    try {
+      const platformName = await this.platformDisplayName();
+      const lang = supportedLang(locale) ?? 'en';
+      const plain: Record<string, string> = { platform_name: platformName };
+      for (const key of ONBOARDING_EVENT_VARIABLES[event]) {
+        plain[key] = vars[key] ?? plain[key] ?? '';
+      }
+      const templateVars: Record<string, string> = { ...plain };
+      for (const [key, value] of Object.entries(plain)) {
+        templateVars[`${HTML_VAR_PREFIX}${key}`] = esc(value);
+      }
+      const parts =
+        (await this.templates.render(event, lang, templateVars)) ??
+        onboardingEmail(event, plain, lang, { platformName });
+      return await this.send({
+        to,
+        ...parts,
+        event,
+        sensitive: opts.sensitive,
+        platformSenderOnly: true,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `${event} email to ${to} failed: ${redactSecrets(
+          err instanceof Error ? err.message : String(err),
+          opts.sensitive,
+        )}`,
+      );
+      return { sent: false };
+    }
+  }
+
+  /**
+   * Who receives admin notifications (D4): PlatformConfig.support_email,
+   * else every ACTIVE admin account.
+   */
+  async adminRecipients(): Promise<string[]> {
+    const cfg = await this.prisma.platformConfig.findFirst({
+      select: { support_email: true },
+    });
+    const support = cfg?.support_email?.trim();
+    if (support) return [support];
+    const admins = await this.prisma.user.findMany({
+      where: { role: UserRole.ADMIN, status: 'ACTIVE', store_id: null },
+      select: { email: true },
+    });
+    return [...new Set(admins.map((a) => a.email))];
   }
 
   /**

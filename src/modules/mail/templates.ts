@@ -4,7 +4,7 @@
 
 import type { MailAttachment } from './order-mail.helpers';
 
-interface EmailParts {
+export interface EmailParts {
   subject: string;
   html: string;
   text: string;
@@ -77,6 +77,10 @@ function layout(
 function button(label: string, url: string): string {
   return `<a href="${esc(url)}" style="display:inline-block;background:#18181b;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 20px;border-radius:8px;">${esc(label)}</a>`;
 }
+
+/** The shared layout / button, for builders living in other files. */
+export const layoutEmail = layout;
+export const emailButton = button;
 
 /**
  * Built-in wording of the account emails per locale (the admin DB templates

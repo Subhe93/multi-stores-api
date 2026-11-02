@@ -8,10 +8,10 @@ type Row = Record<string, unknown>;
 
 function setup() {
   const create = jest.fn((args: { data: Row }) =>
-    Promise.resolve({ id: 's1', slug: 'shop', ...args.data }),
+    Promise.resolve({ id: 's1', slug: 'my-shop', ...args.data }),
   );
   const update = jest.fn((args: { data: Row }) =>
-    Promise.resolve({ id: 's1', slug: 'shop', ...args.data }),
+    Promise.resolve({ id: 's1', slug: 'my-shop', ...args.data }),
   );
   const prisma = {
     creator: { findUnique: jest.fn(() => Promise.resolve({ id: 'c1' })) },
@@ -58,7 +58,7 @@ describe('StoresService HTML sanitizing on write', () => {
   it('create() stores a sanitized description', async () => {
     const { svc, create } = setup();
     await svc.create('u1', {
-      slug: 'shop',
+      slug: 'my-shop',
       name: 'Shop',
       description: '<p>Hi</p><iframe src="https://evil.example"></iframe>',
     });

@@ -124,7 +124,7 @@ function build(initial: Partial<Row> = {}) {
       { secret, expiresIn: '1h' },
     );
   const access = (token: string) =>
-    strategy.validate(jwt.verify(token, { secret: SECRET }));
+    strategy.validate(undefined, jwt.verify(token, { secret: SECRET }));
   return {
     service,
     strategy,

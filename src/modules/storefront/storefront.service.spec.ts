@@ -1,5 +1,9 @@
-import { StoreType } from '@prisma/client';
-import { StorefrontService } from './storefront.service';
+import { StoreStatus, StoreType } from '@prisma/client';
+import { StorefrontService, type StoreClosedPayload } from './storefront.service';
+
+/** The full (LIVE) payload; the fixture store is LIVE so the gate passes. */
+const live = <T>(p: Promise<T>) =>
+  p as Promise<Exclude<T, StoreClosedPayload>>;
 import { PrismaService } from '../../prisma/prisma.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { MarketsContextService } from '../markets/markets-context.service';
@@ -43,6 +47,7 @@ function build(
     store_type: StoreType.INDEPENDENT,
     currency: 'EUR',
     is_active: true,
+    status: StoreStatus.LIVE,
     theme_config: {},
     theme_key: 'minimal',
     theme_customizations: {},
@@ -131,7 +136,7 @@ function build(
 describe('StorefrontService.getStore payload', () => {
   it('app off: no market keys, language_config and currency exactly as stored', async () => {
     const { service, markets } = build(null);
-    const payload = await service.getStore('namez', 'se');
+    const payload = await live(service.getStore('namez', 'se'));
     expect(markets.resolve).toHaveBeenCalledWith('s1', 'se');
     expect(Object.keys(payload)).not.toContain('market');
     expect(Object.keys(payload)).not.toContain('markets');
@@ -170,7 +175,7 @@ describe('StorefrontService.getStore payload', () => {
 
   it('with a market: D3 overrides currency and locales and adds the routes', async () => {
     const { service } = build(seMarket);
-    const payload = await service.getStore('namez', 'se');
+    const payload = await live(service.getStore('namez', 'se'));
     expect(payload.currency).toBe('SEK');
     expect(payload.language_config).toMatchObject({
       id: 'lc1',
@@ -203,7 +208,7 @@ describe('StorefrontService.getStore checkout settings (M5.1)', () => {
   it('G0: no column value (legacy row / NULL) → neither checkout nor checkout_settings key', async () => {
     for (const over of [{}, { checkout_settings: null }]) {
       const { service } = build(null, over);
-      const payload = await service.getStore('namez');
+      const payload = await live(service.getStore('namez'));
       expect(Object.keys(payload)).not.toContain('checkout');
       expect(Object.keys(payload)).not.toContain('checkout_settings');
     }
@@ -219,7 +224,7 @@ describe('StorefrontService.getStore checkout settings (M5.1)', () => {
         coupon_autoapply: false,
       },
     });
-    const payload = await service.getStore('namez');
+    const payload = await live(service.getStore('namez'));
     expect(Object.keys(payload)).not.toContain('checkout');
   });
 

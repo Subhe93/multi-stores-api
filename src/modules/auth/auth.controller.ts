@@ -7,7 +7,10 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
+import { clientIp } from '../../common/security/signup-rate-limit';
 import { AuthGuard } from '@nestjs/passport';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
@@ -19,6 +22,7 @@ import {
   ResetPasswordDto,
   MagicLoginDto,
   GuestRegisterDto,
+  VerifyEmailDto,
 } from './dto';
 import { CurrentUser } from '../../common/decorators';
 
@@ -28,10 +32,30 @@ export class AuthController {
 
   // Tighter than the global default: these are the credential-stuffing and
   // mass-signup targets, and the checkout auto-registers guests through them.
+  // Staff sign-ups are additionally capped at 5 per IP per hour inside the
+  // service (SPEC §2), so storefront customers behind one NAT are not.
   @Post('register')
   @Throttle({ default: { limit: 10, ttl: 60000 } })
-  register(@Body() dto: RegisterDto) {
-    return this.authService.register(dto);
+  register(@Body() dto: RegisterDto, @Req() req: Request) {
+    return this.authService.register(dto, { ip: clientIp(req) });
+  }
+
+  // Email verification link (dashboard /auth/verify#token=): activates a
+  // PENDING account and returns a session. 401 EMAIL_VERIFY_INVALID.
+  @Post('verify-email')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  verifyEmail(@Body() dto: VerifyEmailDto) {
+    return this.authService.verifyEmail(dto.token);
+  }
+
+  // New verification link for a PENDING account (3/hour/user in the service).
+  @Post('resend-verification')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AuthGuard('jwt'))
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  resendVerification(@CurrentUser('id') userId: string) {
+    return this.authService.resendVerification(userId);
   }
 
   // Storefront guest checkout: the server generates the password and mails

@@ -165,6 +165,8 @@ function build() {
   const config = { get: jest.fn((k: string) => env[k]) };
   const mail = {
     sendWelcome: jest.fn(() => Promise.resolve()),
+    sendOnboarding: jest.fn(() => Promise.resolve({ sent: true })),
+    adminRecipients: jest.fn(() => Promise.resolve([])),
     sendPasswordReset: jest.fn(() => Promise.resolve()),
   };
   const storeApps = { isEnabled: jest.fn(() => Promise.resolve(false)) };
@@ -455,6 +457,8 @@ describe('register / guest-register are store scoped', () => {
         email: 'anna@x.se',
         password: 'creator-pw-1',
         role: UserRole.CREATOR,
+        account_kind: 'independent',
+        accept_terms: true,
       }),
     ).resolves.toMatchObject({ user: { store_id: null } });
     // A second staff account with the same email is still a conflict.
@@ -463,6 +467,9 @@ describe('register / guest-register are store scoped', () => {
         email: 'owner@x.se',
         password: 'creator-pw-2',
         role: UserRole.PROVIDER,
+        account_kind: 'supplier',
+        company_name: 'Acme',
+        accept_terms: true,
       }),
     ).rejects.toBeInstanceOf(ConflictException);
   });
@@ -544,7 +551,7 @@ describe('tokens without a store claim', () => {
     });
 
     await expect(
-      t.strategy.validate({
+      t.strategy.validate(undefined, {
         sub: 'ca',
         role: UserRole.CUSTOMER,
         store_id: 'sa',
@@ -557,15 +564,15 @@ describe('tokens without a store claim', () => {
       storeId: 'sa',
     });
     await expect(
-      t.strategy.validate({ sub: 'ca', role: UserRole.CUSTOMER }),
+      t.strategy.validate(undefined, { sub: 'ca', role: UserRole.CUSTOMER }),
     ).rejects.toBeInstanceOf(UnauthorizedException);
     // Staff tokens from before the change keep working.
     await expect(
-      t.strategy.validate({ sub: 'cr', role: UserRole.CREATOR }),
+      t.strategy.validate(undefined, { sub: 'cr', role: UserRole.CREATOR }),
     ).resolves.toMatchObject({ id: 'cr', storeId: null });
     // A password-reset token is never an access token.
     await expect(
-      t.strategy.validate({ sub: 'cr', type: 'password_reset' }),
+      t.strategy.validate(undefined, { sub: 'cr', type: 'password_reset' }),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 

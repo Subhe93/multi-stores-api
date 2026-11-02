@@ -22,7 +22,7 @@ import { DirectoryRunDto } from '../importer/dto/run.dto';
 // importer identities; non-owner product reads are redacted; storefront
 // payload helpers drop external_ref and collection internals.
 
-function setup() {
+function setup(approvalRequired = false) {
   const findMany = jest.fn((_args: unknown) => Promise.resolve([{ id: 'p1' }]));
   const count = jest.fn((_args: unknown) => Promise.resolve(1));
   const prisma = {
@@ -35,6 +35,11 @@ function setup() {
     provider: {
       findUnique: jest.fn(({ where }: { where: { user_id: string } }) =>
         Promise.resolve(where.user_id === 'u-provider' ? { id: 'pr1' } : null),
+      ),
+    },
+    platformConfig: {
+      findFirst: jest.fn(() =>
+        Promise.resolve({ require_provider_approval: approvalRequired }),
       ),
     },
   };
@@ -74,6 +79,17 @@ describe('GET /products (listForViewer)', () => {
       provider_id: { not: null },
     });
     expect(args.where).not.toHaveProperty('creator_id');
+  });
+
+  it('hides unverified providers while the platform requires approval (SPEC §4)', async () => {
+    const gated = setup(true);
+    await gated.svc.listForViewer({ owner_type: 'provider' });
+    expect(gated.lastArgs().where).toMatchObject({
+      provider: { verified: true },
+    });
+    const open = setup(false);
+    await open.svc.listForViewer({ owner_type: 'provider' });
+    expect(open.lastArgs().where).not.toHaveProperty('provider');
   });
 
   it('the public select has no cost price or importer identity', () => {

@@ -237,7 +237,8 @@ export class UsersService {
           user_id: user.id,
           company_name: dto.company_name || 'New Company',
           description: dto.description,
-          country: dto.country || 'US',
+          // No default country any more (SPEC §1); null when not given.
+          country: dto.country || null,
           phone: dto.phone,
           verified: dto.verified ?? false,
         },

@@ -4,6 +4,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  ONBOARDING_EVENTS,
+  ONBOARDING_EVENT_VARIABLES,
+} from '../mail/onboarding-templates';
 import { UpdateNotificationTemplateDto } from './dto/notification-template.dto';
 
 type Localized = Record<string, string>;
@@ -34,6 +38,19 @@ export const HTML_VAR_PREFIX = 'html:';
 export const PLATFORM_ONLY_EVENTS: ReadonlySet<string> = new Set([
   'account_created',
   'customer_login_link',
+  // Platform onboarding (SPEC §5): account / store lifecycle messages that
+  // belong to the platform, not to a store's own branding.
+  'email_verification',
+  'welcome_owner',
+  'welcome_supplier',
+  'verify_reminder',
+  'golive_requested',
+  'store_live',
+  'store_changes_requested',
+  'store_suspended',
+  'supplier_approved',
+  'admin_new_signup',
+  'admin_golive_request',
 ]);
 
 /** The variables as the HTML body sees them (`html:` overrides applied). */
@@ -322,6 +339,12 @@ export class NotificationTemplatesService {
           'expires_hours',
         ],
       },
+      // Platform onboarding emails (SPEC §5); bundled wording in
+      // mail/onboarding-templates.ts.
+      ...ONBOARDING_EVENTS.map((event) => ({
+        event,
+        variables: ONBOARDING_EVENT_VARIABLES[event],
+      })),
     ];
 
   events() {

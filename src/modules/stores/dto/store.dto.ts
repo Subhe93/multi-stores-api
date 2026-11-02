@@ -10,7 +10,7 @@ import {
   MinLength,
   MaxLength,
 } from 'class-validator';
-import { StoreType } from '@prisma/client';
+import { StoreStatus, StoreType } from '@prisma/client';
 import { SUPPORTED_CURRENCIES } from '../../../common/money/currency.util';
 
 const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
@@ -60,12 +60,113 @@ export class CreateStoreDto {
   @IsString({ each: true })
   secondary_locales?: string[];
 
-  // MARKETPLACE (default) or INDEPENDENT (creator-only products, direct
-  // charges). Chosen once at creation — creators cannot change it afterwards;
-  // only an admin can via PUT /stores/by-creator/:creatorId.
+  // MARKETPLACE or INDEPENDENT (creator-only products, direct charges).
+  // Omitted: derived from the creator's onboarding_profile.account_kind
+  // (marketplace → MARKETPLACE, else INDEPENDENT). Chosen once at creation —
+  // creators cannot change it afterwards; only an admin can via
+  // PUT /stores/by-creator/:creatorId.
   @IsOptional()
   @IsEnum(StoreType)
   store_type?: StoreType;
+}
+
+/**
+ * PUT /stores/my/trader-details. Shape-checked here; the real rules (Luhn
+ * checksum, VAT format, required fields) live in trader-details.ts and
+ * answer 400 TRADER_DETAILS_INVALID with the offending `fields`.
+ */
+export class TraderDetailsDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  legal_name?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['company', 'private'])
+  business_type?: 'company' | 'private';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  org_number?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  vat_number?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  address_line1?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  address_line2?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  postal_code?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  city?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2)
+  country?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  phone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(254)
+  support_email?: string;
+}
+
+/** PUT /admin/stores/:id/status */
+export class AdminStoreStatusDto {
+  @IsEnum(StoreStatus)
+  @IsIn([
+    StoreStatus.LIVE,
+    StoreStatus.CHANGES_REQUESTED,
+    StoreStatus.SUSPENDED,
+    StoreStatus.PAUSED,
+  ])
+  status: 'LIVE' | 'CHANGES_REQUESTED' | 'SUSPENDED' | 'PAUSED';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  reason?: string;
+}
+
+/** GET /admin/stores */
+export class AdminStoresQueryDto {
+  @IsOptional()
+  @IsString()
+  status?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  q?: string;
+
+  @IsOptional()
+  @IsString()
+  page?: string;
+
+  @IsOptional()
+  @IsString()
+  limit?: string;
 }
 
 export class UpdateStoreDto {
@@ -98,6 +199,9 @@ export class UpdateStoreDto {
   @Matches(DOMAIN_REGEX, { message: DOMAIN_MESSAGE })
   custom_domain?: string;
 
+  // Creator "Store active" toggle: reinterpreted as LIVE↔PAUSED only
+  // (409 STORE_STATUS_TRANSITION from any other status). Never written as a
+  // column directly — it is derived from `status`.
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;

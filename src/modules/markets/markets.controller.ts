@@ -13,6 +13,8 @@ import { AuthGuard } from '@nestjs/passport';
 import { MarketStatus, UserRole } from '@prisma/client';
 import { CurrentUser, RequireApp, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { VerifiedAccountGuard } from '../../common/guards/verified-account.guard';
+import { VerifiedAccount } from '../../common/decorators';
 import { RequireAppGuard } from '../../common/guards/require-app.guard';
 import { MarketsService } from './markets.service';
 import { DomainsService } from './domains.service';
@@ -108,7 +110,10 @@ export class MarketsController {
     return this.markets.runPaymentCheck(userId, id);
   }
 
+  // Custom-domain connect is locked until the email is verified (SPEC §2).
   @Post(':id/domains')
+  @UseGuards(VerifiedAccountGuard)
+  @VerifiedAccount()
   addDomain(
     @CurrentUser('id') userId: string,
     @Param('id') id: string,

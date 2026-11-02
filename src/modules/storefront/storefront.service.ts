@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -20,7 +21,14 @@ import { MarketsContextService } from '../markets/markets-context.service';
 import { MarketPricingService } from '../markets/market-pricing.service';
 import { marketizeBundles, marketizePromotions } from './market-offers';
 import { toMarketRoute, type MarketContext } from '../markets/market-context';
-import { PricingType, Prisma, ProductVariant, StoreType } from '@prisma/client';
+import {
+  PricingType,
+  Prisma,
+  ProductVariant,
+  StoreStatus,
+  StoreType,
+  UserRole,
+} from '@prisma/client';
 import { resolveStoreCurrency } from '../../common/money/currency.util';
 import {
   TaxService,
@@ -46,6 +54,10 @@ import { DesignerTemplatesService } from '../designer/designer-templates.service
 import { countPublishedInCollections } from './collection-counts';
 import { publicCheckoutSettings } from '../stores/checkout-settings';
 import { sanitizeAuthPagesConfig } from '../stores/theme-config';
+import {
+  StorefrontGateService,
+  type StorefrontViewer,
+} from './storefront-gate.service';
 import { compareManualOrder } from '../creator-categories/product-order';
 
 /** The legacy freeform Store.theme_config JSON as getStore() reads it. */
@@ -77,6 +89,76 @@ type PricedVariant = ProductVariant & { _custom_price?: number };
  * condition / feed_excluded never reach the storefront, and `brand` is
  * served only when set (products without it keep their pre-feeds payload).
  */
+/**
+ * The public payload of a store that is not LIVE (SPEC §3): enough for the
+ * web to render a branded "coming soon" / "temporarily closed" page (name,
+ * logo, theme tokens, locales) and nothing of the catalog. `indexing` tells
+ * the storefront to emit noindex.
+ */
+export function storeClosedPayload(
+  slug: string,
+  store: {
+    status: StoreStatus;
+    name: string;
+    logo_url: string | null;
+    theme_key: string;
+    theme_customizations: unknown;
+    theme_config: unknown;
+    language_config: {
+      primary_locale: string;
+      secondary_locales: string[];
+    } | null;
+  },
+) {
+  const themeConfig = (store.theme_config as LegacyThemeConfig | null) || {};
+  const paused = store.status === StoreStatus.PAUSED;
+  return {
+    slug,
+    name: store.name,
+    logo_url: store.logo_url,
+    status: store.status,
+    coming_soon: !paused,
+    paused,
+    is_active: false,
+    indexing: 'noindex' as const,
+    language_config: store.language_config
+      ? {
+          primary_locale: store.language_config.primary_locale,
+          secondary_locales: store.language_config.secondary_locales,
+        }
+      : null,
+    theme_key: store.theme_key || 'minimal',
+    theme_customizations: store.theme_customizations || {},
+    theme: {
+      primaryColor: themeConfig.primaryColor || null,
+      secondaryColor: themeConfig.secondaryColor || null,
+      fontFamily: themeConfig.fontFamily || undefined,
+      typography: themeConfig.typography || {},
+      socials: themeConfig.socials || {},
+      contact: themeConfig.contact || {},
+    },
+    pages: [],
+    apps: {},
+  };
+}
+
+export type StoreClosedPayload = ReturnType<typeof storeClosedPayload>;
+
+/** Sitemap of a store that must not be indexed: no URLs at all. */
+export function emptySitemap(primaryLocale: string, secondary: string[]) {
+  return {
+    locales: Array.from(new Set([primaryLocale, ...secondary])),
+    primaryLocale,
+    indexing: 'noindex' as const,
+    home: null,
+    static_pages: [],
+    landing_pages: [],
+    products: [],
+    collections: [],
+    legal_pages: [],
+  };
+}
+
 export function withoutFeedFields<
   T extends {
     gtin?: unknown;
@@ -377,7 +459,30 @@ export class StorefrontService {
     // M4.2 designer app: optional and trailing (positional tests). Absent or
     // app off = no `designer` key in the product payload.
     @Optional() private readonly designerTemplates?: DesignerTemplatesService,
+    // Public gate / owner preview (SPEC §3): optional and trailing. Absent
+    // = status alone decides (LIVE or no status column = open).
+    @Optional() private readonly gate?: StorefrontGateService,
   ) {}
+
+  /**
+   * Whether a loaded store may be served to the viewer: LIVE (or a lean
+   * row without status) always; otherwise only the owner / an admin
+   * (preview). Every public read below asks this once.
+   */
+  private async open(
+    store: { id: string; status?: StoreStatus },
+    viewer?: StorefrontViewer | null,
+  ): Promise<boolean> {
+    if (this.gate) return this.gate.allows(store, viewer);
+    return store.status === undefined || store.status === StoreStatus.LIVE;
+  }
+
+  private storeNotFound(): NotFoundException {
+    return new NotFoundException({
+      code: 'STOREFRONT_STORE_NOT_FOUND',
+      message: 'Store not found',
+    });
+  }
 
   /**
    * Personalization app (D2/D10): whether a creator's own product gets the
@@ -619,9 +724,64 @@ export class StorefrontService {
     return { enabled: store?.cache_enabled ?? true };
   }
 
-  async getStore(slug: string, marketKey?: string, preview?: boolean) {
-    const store = await this.prisma.store.findUnique({
-      where: { slug, is_active: true },
+  /**
+   * Public gate (SPEC §3): only a LIVE store serves its catalog. DRAFT /
+   * PENDING_REVIEW / CHANGES_REQUESTED answer a "coming soon" shell, PAUSED
+   * a "temporarily closed" one (both 200, no catalog), SUSPENDED and
+   * unknown slugs 404. The owner / an admin (`viewer`) gets the full
+   * payload of a non-LIVE store; `ownerPreview` is the explicit variant.
+   */
+  async getStore(
+    slug: string,
+    marketKey?: string,
+    preview?: boolean,
+    viewer?: StorefrontViewer | null,
+  ) {
+    // One row read serves both the gate and the full payload, so a LIVE
+    // store costs exactly the queries it did before the gate existed.
+    const row = await this.loadStoreRow(slug);
+    if (!row || row.status === StoreStatus.SUSPENDED) {
+      throw this.storeNotFound();
+    }
+    if (row.status !== StoreStatus.LIVE) {
+      if (!(await this.open(row, viewer))) {
+        return storeClosedPayload(slug, row);
+      }
+      return { ...(await this.fullStore(slug, marketKey, preview, row)), preview: true };
+    }
+    return this.fullStore(slug, marketKey, preview, row);
+  }
+
+  /**
+   * GET /storefront/:slug/preview (owner JWT or admin): the full payload
+   * regardless of status, so the owner can see a DRAFT store as the public
+   * will. 403 for anyone else.
+   */
+  async ownerPreview(
+    slug: string,
+    viewer: { id: string; role: UserRole },
+    marketKey?: string,
+  ) {
+    if (viewer.role !== UserRole.ADMIN) {
+      const own = await this.prisma.store.findFirst({
+        where: { slug, creator: { user_id: viewer.id } },
+        select: { id: true },
+      });
+      if (!own) {
+        throw new ForbiddenException({
+          code: 'STOREFRONT_PREVIEW_FORBIDDEN',
+          message: 'Only the store owner can preview this store',
+        });
+      }
+    }
+    const full = await this.fullStore(slug, marketKey, true);
+    return { ...full, preview: true };
+  }
+
+  /** The store row of the public payload (null for an unknown slug). */
+  private loadStoreRow(slug: string) {
+    return this.prisma.store.findUnique({
+      where: { slug },
       include: {
         language_config: true,
         static_pages: {
@@ -642,11 +802,16 @@ export class StorefrontService {
         },
       },
     });
-    if (!store)
-      throw new NotFoundException({
-        code: 'STOREFRONT_STORE_NOT_FOUND',
-        message: 'Store not found',
-      });
+  }
+
+  private async fullStore(
+    slug: string,
+    marketKey?: string,
+    preview?: boolean,
+    loaded?: NonNullable<Awaited<ReturnType<StorefrontService['loadStoreRow']>>>,
+  ) {
+    const store = loaded ?? (await this.loadStoreRow(slug));
+    if (!store) throw this.storeNotFound();
     const themeConfig = (store.theme_config as LegacyThemeConfig | null) || {};
     const platformConfig = await this.prisma.platformConfig.findFirst();
     const taxContext = buildTaxContext(store, platformConfig);
@@ -876,16 +1041,16 @@ export class StorefrontService {
     },
     marketKey?: string,
     preview?: boolean,
+    viewer?: StorefrontViewer | null,
   ) {
     const store = await this.prisma.store.findUnique({
       where: { slug },
       include: { creator: true },
     });
-    if (!store)
-      throw new NotFoundException({
-        code: 'STOREFRONT_STORE_NOT_FOUND',
-        message: 'Store not found',
-      });
+    if (!store) throw this.storeNotFound();
+    // Closed store (SPEC §3): nothing listed unless the owner / admin
+    // previews (same plain-array shape as an empty catalog).
+    if (!(await this.open(store, viewer))) return [];
 
     const market = await this.resolveMarket(store.id, marketKey, preview);
 
@@ -1265,16 +1430,15 @@ export class StorefrontService {
     _locale?: string,
     marketKey?: string,
     preview?: boolean,
+    viewer?: StorefrontViewer | null,
   ) {
     const store = await this.prisma.store.findUnique({
       where: { slug },
       include: { creator: true },
     });
-    if (!store)
-      throw new NotFoundException({
-        code: 'STOREFRONT_STORE_NOT_FOUND',
-        message: 'Store not found',
-      });
+    if (!store) throw this.storeNotFound();
+    // Closed store: a product page is 404 unless the owner / admin previews.
+    if (!(await this.open(store, viewer))) throw this.storeNotFound();
 
     const market = await this.resolveMarket(store.id, marketKey, preview);
 
@@ -1689,16 +1853,13 @@ export class StorefrontService {
     );
   }
 
-  async getCategories(slug: string) {
+  async getCategories(slug: string, viewer?: StorefrontViewer | null) {
     const store = await this.prisma.store.findUnique({
       where: { slug },
       include: { creator: true },
     });
-    if (!store)
-      throw new NotFoundException({
-        code: 'STOREFRONT_STORE_NOT_FOUND',
-        message: 'Store not found',
-      });
+    if (!store) throw this.storeNotFound();
+    if (!(await this.open(store, viewer))) return [];
 
     // Independent stores never expose custom products, so their categories
     // come from the creator's own products only (mirrors getProducts).
@@ -1851,16 +2012,13 @@ export class StorefrontService {
    * short `description` (hero) and the M6.2 `long_description` (below the
    * products).
    */
-  async getCreatorCategories(slug: string) {
+  async getCreatorCategories(slug: string, viewer?: StorefrontViewer | null) {
     const store = await this.prisma.store.findUnique({
       where: { slug },
       include: { creator: true },
     });
-    if (!store)
-      throw new NotFoundException({
-        code: 'STOREFRONT_STORE_NOT_FOUND',
-        message: 'Store not found',
-      });
+    if (!store) throw this.storeNotFound();
+    if (!(await this.open(store, viewer))) return [];
 
     const rows = await this.prisma.creatorCategory.findMany({
       where: {
@@ -1917,8 +2075,13 @@ export class StorefrontService {
     return roots;
   }
 
-  async getPage(slug: string, pageSlug: string) {
+  async getPage(
+    slug: string,
+    pageSlug: string,
+    viewer?: StorefrontViewer | null,
+  ) {
     const store = await this.prisma.store.findUnique({ where: { slug } });
+    if (store && !(await this.open(store, viewer))) throw this.storeNotFound();
     if (!store)
       throw new NotFoundException({
         code: 'STOREFRONT_STORE_NOT_FOUND',
@@ -1959,6 +2122,7 @@ export class StorefrontService {
     storeSlug: string,
     marketKey?: string,
     preview?: boolean,
+    viewer?: StorefrontViewer | null,
   ) {
     const store = await this.prisma.store.findUnique({
       where: { slug: storeSlug },
@@ -1972,6 +2136,14 @@ export class StorefrontService {
         code: 'STOREFRONT_STORE_NOT_FOUND',
         message: 'Store not found',
       });
+    // Non-LIVE stores are not indexable: an empty sitemap (SPEC §3), except
+    // for the owner / admin preview.
+    if (!(await this.open(store, viewer))) {
+      return emptySitemap(
+        store.language_config?.primary_locale || 'en',
+        store.language_config?.secondary_locales || [],
+      );
+    }
 
     // With a market, its locales drive the sitemap and hidden products are
     // left out; without one (app off) the output is unchanged.
@@ -2141,16 +2313,16 @@ export class StorefrontService {
     };
   }
 
-  async getSampleProduct(storeSlug: string) {
+  async getSampleProduct(
+    storeSlug: string,
+    viewer?: StorefrontViewer | null,
+  ) {
     const store = await this.prisma.store.findUnique({
       where: { slug: storeSlug },
       include: { creator: true },
     });
-    if (!store)
-      throw new NotFoundException({
-        code: 'STOREFRONT_STORE_NOT_FOUND',
-        message: 'Store not found',
-      });
+    if (!store) throw this.storeNotFound();
+    if (!(await this.open(store, viewer))) return null;
 
     const own = await this.prisma.product.findFirst({
       where: { creator_id: store.creator.id, status: 'PUBLISHED' },
@@ -2218,16 +2390,13 @@ export class StorefrontService {
    * not touched). A PAGE item's `url` is its linked page's current
    * `/<slug>` (one query per page system, only when some item links a page).
    */
-  async getMenus(storeSlug: string) {
+  async getMenus(storeSlug: string, viewer?: StorefrontViewer | null) {
     const store = await this.prisma.store.findUnique({
       where: { slug: storeSlug },
-      select: { id: true, creator_id: true },
+      select: { id: true, creator_id: true, status: true },
     });
-    if (!store)
-      throw new NotFoundException({
-        code: 'STOREFRONT_STORE_NOT_FOUND',
-        message: 'Store not found',
-      });
+    if (!store) throw this.storeNotFound();
+    if (!(await this.open(store, viewer))) return [];
     const menus = await this.prisma.menu.findMany({
       where: { store_id: store.id },
       include: {
@@ -2331,15 +2500,15 @@ export class StorefrontService {
       | { type: 'STATIC' | 'LANDING'; slug: string }
       // Either slugged type (M6.6: landing pages are served at the root too).
       | { type: 'SLUG'; slug: string },
+    viewer?: StorefrontViewer | null,
   ) {
     const store = await this.prisma.store.findUnique({
       where: { slug: storeSlug },
     });
-    if (!store)
-      throw new NotFoundException({
-        code: 'STOREFRONT_STORE_NOT_FOUND',
-        message: 'Store not found',
-      });
+    if (!store) throw this.storeNotFound();
+    // Closed store: no published snapshot for the public (null = "nothing
+    // published yet" on the storefront), full for the owner / admin.
+    if (!(await this.open(store, viewer))) return null;
 
     // Only rows with a published snapshot qualify. Singleton types are
     // looked up by (store, type) alone, so if a duplicate draft row ever

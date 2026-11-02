@@ -1,7 +1,12 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
+import type { Request } from 'express';
 import { PrismaService } from '../../../prisma/prisma.service';
 import type { RequestUser } from '../../../common/decorators/current-user.decorator';
 import {
@@ -9,6 +14,13 @@ import {
   tokenStoreMatches,
   type AuthTokenPayload,
 } from '../auth.service';
+import { loginAllowed } from '../magic-link.service';
+import {
+  ACCOUNT_EMAIL_UNVERIFIED_EXPIRED,
+  graceExempt,
+  graceExpired,
+  isUnverifiedStaff,
+} from '../../../common/guards/verified-account.guard';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -20,10 +32,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       secretOrKey: configService.get<string>('JWT_SECRET')!,
+      // The request is needed for the grace-period rule (method + path).
+      passReqToCallback: true,
     });
   }
 
   async validate(
+    req: Pick<Request, 'method' | 'originalUrl' | 'url'> | undefined,
     payload: Partial<AuthTokenPayload> & { type?: string; iat?: number },
   ): Promise<RequestUser> {
     // Purpose tokens signed with the same secret (password reset carries
@@ -41,10 +56,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         status: true,
         store_id: true,
         tokens_valid_after: true,
+        email_verified_at: true,
+        created_at: true,
       },
     });
 
-    if (!user || user.status !== 'ACTIVE') {
+    // ACTIVE, or PENDING for staff (email unverified, SPEC §2).
+    if (!user || !loginAllowed(user)) {
       throw new UnauthorizedException();
     }
     // A customer token without the store_id claim predates per-store
@@ -55,6 +73,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // Issued before the last block / password reset / password change.
     if (!tokenIssuedAfterCutoff(payload, user)) {
       throw new UnauthorizedException();
+    }
+
+    // Grace period over: a PENDING staff account may only read, verify,
+    // resend, log out and read its profile.
+    if (
+      isUnverifiedStaff(user) &&
+      graceExpired(user.created_at) &&
+      req &&
+      !graceExempt(req.method ?? 'GET', req.originalUrl ?? req.url ?? '')
+    ) {
+      throw new ForbiddenException(ACCOUNT_EMAIL_UNVERIFIED_EXPIRED);
     }
 
     return {

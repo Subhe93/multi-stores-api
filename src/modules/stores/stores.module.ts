@@ -1,11 +1,13 @@
 import { Module } from '@nestjs/common';
-import { StoresController } from './stores.controller';
+import { StoresController, AdminStoresController } from './stores.controller';
 import { StoresService } from './stores.service';
+import { StoreLifecycleService } from './store-lifecycle.service';
 import { OrdersModule } from '../orders/orders.module';
 import { MarketsModule } from '../markets/markets.module';
 import { RedirectsModule } from '../redirects/redirects.module';
 import { EditHintTokenModule } from '../storefront/edit-hint/edit-hint-token.module';
 import { CorsModule } from '../../common/cors/cors.module';
+import { StorefrontGateModule } from '../storefront/storefront-gate.service';
 
 @Module({
   // OrdersModule: an admin store-type switch re-derives the commission split of
@@ -21,9 +23,11 @@ import { CorsModule } from '../../common/cors/cors.module';
     RedirectsModule,
     EditHintTokenModule,
     CorsModule,
+    // GET /stores/:slug honours the owner preview of a non-LIVE store.
+    StorefrontGateModule,
   ],
-  controllers: [StoresController],
-  providers: [StoresService],
-  exports: [StoresService],
+  controllers: [StoresController, AdminStoresController],
+  providers: [StoresService, StoreLifecycleService],
+  exports: [StoresService, StoreLifecycleService],
 })
 export class StoresModule {}

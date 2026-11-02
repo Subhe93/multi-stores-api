@@ -11,6 +11,8 @@ import { AuthGuard } from '@nestjs/passport';
 import { UserRole } from '@prisma/client';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { VerifiedAccountGuard } from '../../common/guards/verified-account.guard';
+import { VerifiedAccount } from '../../common/decorators';
 import { StoreAppsService } from './store-apps.service';
 import {
   AdminStoreAppsQueryDto,
@@ -32,9 +34,15 @@ export class StoreAppsController {
 
   // Creator — toggle an app and/or replace its settings; returns the full
   // refreshed list (siblings' can_enable / blocked_reason change too)
+  // Enabling the feeds app is locked until the email is verified (SPEC §2).
   @Put('my/apps/:appKey')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(AuthGuard('jwt'), RolesGuard, VerifiedAccountGuard)
   @Roles(UserRole.CREATOR)
+  @VerifiedAccount({
+    when: (req) =>
+      req.params?.appKey === 'feeds' &&
+      (req.body as { enabled?: boolean } | undefined)?.enabled === true,
+  })
   updateMine(
     @CurrentUser('id') userId: string,
     @Param('appKey') appKey: string,

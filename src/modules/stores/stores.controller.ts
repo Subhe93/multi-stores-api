@@ -6,8 +6,10 @@ import {
   Delete,
   Param,
   Body,
+  Query,
   HttpCode,
   UseGuards,
+  NotFoundException,
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { AuthGuard } from '@nestjs/passport';
@@ -19,17 +21,36 @@ import {
   UpdateThemeDto,
   UpdateThemeSelectionDto,
   UpdateLanguageDto,
+  TraderDetailsDto,
+  AdminStoreStatusDto,
+  AdminStoresQueryDto,
 } from './dto/store.dto';
-import { CurrentUser, Roles } from '../../common/decorators';
+import {
+  CurrentUser,
+  Roles,
+  VerifiedAccount,
+  type RequestUser,
+} from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { VerifiedAccountGuard } from '../../common/guards/verified-account.guard';
 import { UserRole } from '@prisma/client';
 import { EditHintTokenService } from '../storefront/edit-hint/edit-hint-token.service';
+import { StoreLifecycleService } from './store-lifecycle.service';
+import {
+  StorefrontGateService,
+  StorefrontViewerGuard,
+  Viewer,
+  type StorefrontViewer,
+} from '../storefront/storefront-gate.service';
+import { ReqMeta, type RequestMeta } from '../security/request-meta';
 
 @Controller('stores')
 export class StoresController {
   constructor(
     private storesService: StoresService,
     private editHintTokens: EditHintTokenService,
+    private lifecycle: StoreLifecycleService,
+    private gate: StorefrontGateService,
   ) {}
 
   // Admin — Get a creator's store by creator id
@@ -70,10 +91,22 @@ export class StoresController {
     return this.storesService.findSlugByCustomDomain(host);
   }
 
-  // Public — Get a store by its slug
+  // Public — Get a store by its slug. A non-LIVE store is 404 unless the
+  // bearer token is the owner's / an admin's (SPEC §3 owner preview).
   @Get(':slug')
-  findBySlug(@Param('slug') slug: string) {
-    return this.storesService.findBySlug(slug);
+  @UseGuards(StorefrontViewerGuard)
+  async findBySlug(
+    @Viewer() viewer: StorefrontViewer | null,
+    @Param('slug') slug: string,
+  ) {
+    const store = await this.storesService.findBySlug(slug);
+    if (!(await this.gate.allows(store, viewer))) {
+      throw new NotFoundException({
+        code: 'STORE_NOT_FOUND',
+        message: 'Store not found',
+      });
+    }
+    return store;
   }
 
   // Creator — Create a store
@@ -105,12 +138,39 @@ export class StoresController {
     return this.storesService.findByCreator(userId);
   }
 
-  // Creator — Update the store
+  // Creator — Update the store. Status changes (is_active toggle) and the
+  // custom domain are locked until the email is verified.
   @Put('my/store')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(AuthGuard('jwt'), RolesGuard, VerifiedAccountGuard)
   @Roles(UserRole.CREATOR)
+  @VerifiedAccount({ fields: ['is_active', 'custom_domain'] })
   update(@CurrentUser('id') userId: string, @Body() dto: UpdateStoreDto) {
     return this.storesService.update(userId, dto);
+  }
+
+  // Creator — Legal trader details (validated: Luhn org number, VAT format)
+  @Put('my/trader-details')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.CREATOR)
+  updateTraderDetails(
+    @CurrentUser('id') userId: string,
+    @Body() dto: TraderDetailsDto,
+  ) {
+    return this.lifecycle.updateTraderDetails(
+      userId,
+      dto as Record<string, unknown>,
+    );
+  }
+
+  // Creator — Request go-live (auto-approved when the platform allows it)
+  @Post('my/golive')
+  @HttpCode(200)
+  @UseGuards(AuthGuard('jwt'), RolesGuard, VerifiedAccountGuard)
+  @Roles(UserRole.CREATOR)
+  @VerifiedAccount()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  requestGoLive(@CurrentUser('id') userId: string) {
+    return this.lifecycle.requestGoLive(userId);
   }
 
   // Creator — Detach the legacy external domain (allowed with Markets on too)
@@ -157,5 +217,29 @@ export class StoresController {
   @Roles(UserRole.CREATOR)
   flushCache(@CurrentUser('id') userId: string) {
     return this.storesService.flushCache(userId);
+  }
+}
+
+
+// Admin store queue (SPEC §3): list by status and change a store's status.
+@Controller('admin/stores')
+@UseGuards(AuthGuard('jwt'), RolesGuard)
+@Roles(UserRole.ADMIN)
+export class AdminStoresController {
+  constructor(private lifecycle: StoreLifecycleService) {}
+
+  @Get()
+  list(@Query() query: AdminStoresQueryDto) {
+    return this.lifecycle.adminList(query);
+  }
+
+  @Put(':id/status')
+  setStatus(
+    @CurrentUser() admin: RequestUser,
+    @ReqMeta() meta: RequestMeta,
+    @Param('id') id: string,
+    @Body() dto: AdminStoreStatusDto,
+  ) {
+    return this.lifecycle.adminSetStatus(id, dto.status, dto.reason, admin, meta);
   }
 }

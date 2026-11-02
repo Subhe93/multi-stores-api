@@ -1,5 +1,9 @@
 import { Prisma, PrismaClient, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import {
+  ONBOARDING_EVENTS,
+  ONBOARDING_TEXT,
+} from '../src/modules/mail/onboarding-templates';
 
 const prisma = new PrismaClient();
 
@@ -11,7 +15,12 @@ async function upsertStaff(data: Prisma.UserCreateInput) {
   const existing = await prisma.user.findFirst({
     where: { email: data.email, store_id: null },
   });
-  return existing ?? prisma.user.create({ data });
+  // Seeded staff are verified: the onboarding guard / checklist never
+  // locks a dev account.
+  return (
+    existing ??
+    prisma.user.create({ data: { email_verified_at: new Date(), ...data } })
+  );
 }
 
 async function main() {
@@ -74,6 +83,8 @@ async function main() {
         name: 'Ahmed Design Store',
         slug: 'ahmed-design',
         description: 'Custom designed products by Ahmed',
+        // is_active is derived from status (LIVE) — keep both in step.
+        status: 'LIVE',
         is_active: true,
         language_config: {
           create: {
@@ -744,6 +755,80 @@ async function seedNotificationTemplates() {
     };
   }
   TEMPLATES.account_created = accountCreated;
+
+  // Platform onboarding emails (plans/platform-onboarding SPEC §5), en + ar
+  // from the bundled wording (src/modules/mail/onboarding-templates.ts); the
+  // other locales fall back to the bundled builder at send time. Phrase
+  // tokens map onto {{var}} placeholders the MailService substitutes.
+  const ONBOARDING_TOKEN_VARS: Record<string, string> = {
+    platform: 'platform_name',
+    name: 'name',
+    store: 'store_name',
+    store_slug: 'store_slug',
+    store_url: 'store_url',
+    dashboard_url: 'dashboard_url',
+    support_email: 'support_email',
+    reason: 'reason',
+    company: 'company_name',
+    hours: 'expires_hours',
+    days_left: 'days_left',
+    email: 'email',
+    owner_email: 'owner_email',
+    account_kind: 'account_kind',
+    country: 'country',
+    disposable: 'disposable',
+    checklist: 'checklist',
+    verify_url: 'verify_url',
+    admin_url: 'admin_url',
+    review_url: 'review_url',
+  };
+  const ONBOARDING_BUTTON_VAR: Record<string, string> = {
+    email_verification: 'verify_url',
+    welcome_owner: 'dashboard_url',
+    welcome_supplier: 'dashboard_url',
+    verify_reminder: 'verify_url',
+    golive_requested: 'dashboard_url',
+    store_live: 'store_url',
+    store_changes_requested: 'dashboard_url',
+    supplier_approved: 'dashboard_url',
+    admin_new_signup: 'admin_url',
+    admin_golive_request: 'review_url',
+  };
+  const onboardingPlaceholders = (phrase: string) =>
+    Object.entries(ONBOARDING_TOKEN_VARS).reduce(
+      (out, [token, v]) => out.split(`{${token}}`).join(`{{${v}}}`),
+      phrase,
+    );
+  const NL = String.fromCharCode(10);
+  for (const event of ONBOARDING_EVENTS) {
+    const perLocale: Record<string, { subject: string; body_html: string; body_text: string }> = {};
+    for (const loc of ['en', 'ar']) {
+      const t = ONBOARDING_TEXT[event][loc];
+      const p = 'font-size:14px;line-height:1.6;color:#3f3f46;margin:0 0 12px;';
+      const small = 'font-size:12px;line-height:1.6;color:#71717a;margin:12px 0 0;';
+      const urlVar = ONBOARDING_BUTTON_VAR[event];
+      const cta =
+        t.button && urlVar
+          ? `<p style="margin:20px 0 0;"><a href="{{${urlVar}}}" style="display:inline-block;background:#18181b;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 20px;border-radius:8px;">${t.button}</a></p>`
+          : '';
+      perLocale[loc] = {
+        subject: onboardingPlaceholders(t.subject),
+        body_html: accountLayout(
+          onboardingPlaceholders(t.title),
+          t.body.map((line) => `<p style="${p}">${onboardingPlaceholders(line)}</p>`).join(NL) +
+            cta +
+            (t.footer ? `<p style="${small}">${t.footer}</p>` : ''),
+          loc === 'ar',
+        ),
+        body_text: [
+          ...t.body.map((line) => onboardingPlaceholders(line)),
+          ...(t.button && urlVar ? ['', `${t.button}: {{${urlVar}}}`] : []),
+          ...(t.footer ? ['', t.footer] : []),
+        ].join(NL),
+      };
+    }
+    TEMPLATES[event] = perLocale;
+  }
 
   let created = 0;
   for (const [event, perLocale] of Object.entries(TEMPLATES)) {

@@ -23,6 +23,8 @@ import {
 } from './dto/payments.dto';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { VerifiedAccountGuard } from '../../common/guards/verified-account.guard';
+import { VerifiedAccount } from '../../common/decorators';
 import { UserRole } from '@prisma/client';
 import type { RequestUser } from '../../common/decorators/current-user.decorator';
 import { PaymentKeysGuardService } from '../security/payment-keys-guard.service';
@@ -90,9 +92,11 @@ export class PaymentsController {
 
   // ── Stripe Connect (creator onboarding) ────────────────────────────────────
 
+  // Locked until the email is verified (SPEC §2: payment keys / accounts).
   @Post('connect/account')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(AuthGuard('jwt'), RolesGuard, VerifiedAccountGuard)
   @Roles(UserRole.CREATOR, UserRole.PROVIDER)
+  @VerifiedAccount()
   async createConnectAccount(
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: UserRole,

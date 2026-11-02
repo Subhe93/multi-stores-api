@@ -12,6 +12,7 @@ import {
 import { randomBytes, randomUUID } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
+import { storeNotLive } from '../../common/stores/store-gate';
 import {
   CommissionStatus,
   FulfillerType,
@@ -838,12 +839,8 @@ export class OrdersService {
         message: 'Store not found',
       });
     }
-    if (!orderStore.is_active) {
-      throw new BadRequestException({
-        code: 'ORDER_STORE_INACTIVE',
-        message: 'This store is not accepting orders right now.',
-      });
-    }
+    // Public gate (SPEC §3): is_active is derived from Store.status (LIVE).
+    if (!orderStore.is_active) throw storeNotLive();
     const { language_config, ...store } = orderStore;
     // Markets app: null when off (every pricing step below then runs the
     // pre-markets code); 404 for an unknown or draft key (draft allowed for

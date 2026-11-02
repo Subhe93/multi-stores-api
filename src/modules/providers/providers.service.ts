@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
+import { MailService } from '../mail/mail.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { loadStorefrontHosts } from '../stores/storefront-hosts';
 import {
@@ -12,6 +14,8 @@ export class ProvidersService {
   constructor(
     private prisma: PrismaService,
     private readonly storeApps: StoreAppsService,
+    private readonly mail: MailService,
+    private readonly config: ConfigService,
   ) {}
 
   async create(userId: string, dto: CreateProviderDto) {
@@ -23,6 +27,10 @@ export class ProvidersService {
     });
   }
 
+  /**
+   * GET /providers/me: the profile plus `approval_required` (SPEC §4), so
+   * the dashboard can show the "products hidden until approved" banner.
+   */
   async findByUserId(userId: string) {
     const provider = await this.prisma.provider.findUnique({
       where: { user_id: userId },
@@ -32,7 +40,14 @@ export class ProvidersService {
         code: 'PROVIDER_PROFILE_NOT_FOUND',
         message: 'Provider profile not found',
       });
-    return provider;
+    const cfg = await this.prisma.platformConfig.findFirst({
+      select: { require_provider_approval: true },
+    });
+    return {
+      ...provider,
+      verified: provider.verified,
+      approval_required: cfg?.require_provider_approval ?? true,
+    };
   }
 
   async findById(id: string) {
@@ -72,11 +87,40 @@ export class ProvidersService {
     };
   }
 
+  /** Admin approval; emails `supplier_approved` the first time. */
   async verify(id: string) {
-    return this.prisma.provider.update({
+    const before = await this.prisma.provider.findUnique({
+      where: { id },
+      select: { verified: true },
+    });
+    const updated = await this.prisma.provider.update({
       where: { id },
       data: { verified: true },
+      include: { user: { select: { email: true } } },
     });
+    if (!before?.verified) {
+      const cfg = await this.prisma.platformConfig.findFirst({
+        select: { default_locale: true },
+      });
+      const dashboard = (
+        this.config.get<string>('DASHBOARD_URL') || 'http://localhost:3002'
+      ).replace(/\/$/, '');
+      void this.mail
+        .sendOnboarding(
+          'supplier_approved',
+          updated.user.email,
+          {
+            name: updated.contact_name ?? '',
+            company_name: updated.company_name,
+            dashboard_url: dashboard,
+          },
+          cfg?.default_locale,
+        )
+        .catch(() => undefined);
+    }
+    const { user: _user, ...provider } = updated;
+    void _user;
+    return provider;
   }
 
   /** List stores that use products from this provider (via custom products). */

@@ -7,7 +7,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { CorsOriginService } from '../../common/cors/cors-origin.service';
-import { Prisma, StoreType } from '@prisma/client';
+import { Prisma, StoreStatus, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { sanitizeTitle } from '@multi-stores/core/slug';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
@@ -19,6 +19,8 @@ import { toMarketRoute } from '../markets/market-context';
 import type { StoreByDomainResponse } from '../markets/market.types';
 import { RedirectsService } from '../redirects/redirects.service';
 import { isReservedDomain } from '../../common/domains/reserved-hosts';
+import { isReservedStoreSlug } from '../../common/slug/reserved-store-slugs';
+import { StoreLifecycleService } from './store-lifecycle.service';
 import { stripBrandFromThemeConfig } from './theme-config';
 import {
   loadStorefrontHosts,
@@ -57,7 +59,16 @@ export class StoresService {
     private readonly redirects: RedirectsService,
     // Optional so lean unit wiring stays valid; StoresModule imports CorsModule.
     @Optional() private readonly corsOrigins?: CorsOriginService,
+    // Store lifecycle (status, checklist); optional for the same reason.
+    @Optional() private readonly lifecycle?: StoreLifecycleService,
   ) {}
+
+  private lifecycleOrThrow(): StoreLifecycleService {
+    if (!this.lifecycle) {
+      throw new Error('StoreLifecycleService is not wired');
+    }
+    return this.lifecycle;
+  }
 
   async create(userId: string, dto: CreateStoreDto) {
     const creator = await this.prisma.creator.findUnique({
@@ -67,6 +78,12 @@ export class StoresService {
       throw new NotFoundException({
         code: 'STORE_CREATOR_PROFILE_NOT_FOUND',
         message: 'Creator profile not found',
+      });
+
+    if (isReservedStoreSlug(dto.slug))
+      throw new BadRequestException({
+        code: 'STORE_SLUG_RESERVED',
+        message: 'This store address is reserved by the platform',
       });
 
     const existing = await this.prisma.store.findUnique({
@@ -79,6 +96,15 @@ export class StoresService {
       });
 
     const { primary_locale, secondary_locales, ...storeData } = dto;
+    // Store type: explicit, else from the sign-up card (onboarding profile).
+    const profile = (creator.onboarding_profile ?? {}) as {
+      account_kind?: string;
+    };
+    const store_type =
+      storeData.store_type ??
+      (profile.account_kind === 'marketplace'
+        ? StoreType.MARKETPLACE
+        : StoreType.INDEPENDENT);
     // Seeded page slugs go through the same WP rule as every page slug (a
     // new store has no pages yet, so they are unique as they are).
     const seedSlug = (slug: string) =>
@@ -88,6 +114,10 @@ export class StoresService {
       data: {
         creator_id: creator.id,
         ...storeData,
+        store_type,
+        // New stores start as DRAFT (coming soon); is_active is derived.
+        status: StoreStatus.DRAFT,
+        is_active: false,
         ...(storeData.description !== undefined && {
           description: sanitizeCreatorHtml(storeData.description),
         }),
@@ -198,7 +228,14 @@ export class StoresService {
         code: 'STORE_NOT_FOUND',
         message: 'Store not found',
       });
-    return { ...store, ...(await this.storefrontHostsOf(store)) };
+    const golive_checklist = this.lifecycle
+      ? await this.lifecycle.checklist(store.id)
+      : undefined;
+    return {
+      ...store,
+      ...(await this.storefrontHostsOf(store)),
+      ...(golive_checklist ? { golive_checklist } : {}),
+    };
   }
 
   /**
@@ -331,7 +368,23 @@ export class StoresService {
         });
     }
 
-    const data = normalizeStoreUpdate(dto);
+    const { is_active: toggleActive, ...rest } = dto;
+    const data = normalizeStoreUpdate(rest as UpdateStoreDto);
+
+    // "Store active" toggle: LIVE↔PAUSED through the lifecycle service only
+    // (409 STORE_STATUS_TRANSITION otherwise); the column itself is derived.
+    if (toggleActive !== undefined) {
+      const current = await this.prisma.store.findUnique({
+        where: { creator_id: creator.id },
+        select: { id: true },
+      });
+      if (!current)
+        throw new NotFoundException({
+          code: 'STORE_NOT_FOUND',
+          message: 'Store not found',
+        });
+      await this.lifecycleOrThrow().toggleActive(current.id, toggleActive);
+    }
 
     // Only an independent store owns its presentment currency: it charges on
     // the creator's own connected account. A marketplace order is charged on
@@ -633,7 +686,13 @@ export class StoresService {
         });
     }
 
-    const data = normalizeStoreUpdate(dto);
+    const { is_active: toggleActive, ...rest } = dto;
+    const data = normalizeStoreUpdate(rest as UpdateStoreDto);
+    // Admin is_active: same LIVE↔PAUSED rule; other transitions go through
+    // PUT /admin/stores/:id/status.
+    if (toggleActive !== undefined) {
+      await this.lifecycleOrThrow().toggleActive(store.id, toggleActive);
+    }
 
     // Same rule as the creator path: only an independent store owns its
     // currency. Judged against the type the store will have AFTER this update.

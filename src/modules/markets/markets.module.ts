@@ -10,6 +10,7 @@ import { DomainsService } from './domains.service';
 import { FxService } from './fx.service';
 import { PaymentCheckService } from './payment-check.service';
 import { RedirectsModule } from '../redirects/redirects.module';
+import { StorefrontGateModule } from '../storefront/storefront-gate.service';
 
 // Regular (non-global) module. It depends only on the global Prisma /
 // StoreApps / Revalidation / Crypto modules, so Storefront, Cart, Orders,
@@ -18,7 +19,7 @@ import { RedirectsModule } from '../redirects/redirects.module';
 // imports OrdersModule, which imports this module).
 @Module({
   // RedirectsModule: market-context answers `redirects_version` (M4.4).
-  imports: [ConfigModule, RedirectsModule],
+  imports: [ConfigModule, RedirectsModule, StorefrontGateModule],
   controllers: [
     MarketsAdminController,
     MarketsPublicController,

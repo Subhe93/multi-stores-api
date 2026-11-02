@@ -15,6 +15,8 @@ import { SkipThrottle } from '@nestjs/throttler';
 import { UserRole } from '@prisma/client';
 import { CurrentUser, Roles } from '../../../common/decorators';
 import { RolesGuard } from '../../../common/guards/roles.guard';
+import { VerifiedAccountGuard } from '../../../common/guards/verified-account.guard';
+import { VerifiedAccount } from '../../../common/decorators';
 import { KustomService } from './kustom.service';
 import type { RequestUser } from '../../../common/decorators/current-user.decorator';
 import { PaymentKeysGuardService } from '../../security/payment-keys-guard.service';
@@ -105,9 +107,11 @@ export class KustomController {
     return this.kustom.getSettings(userId);
   }
 
+  // Locked until the email is verified (SPEC §2: payment keys).
   @Put('settings')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @UseGuards(AuthGuard('jwt'), RolesGuard, VerifiedAccountGuard)
   @Roles(UserRole.CREATOR)
+  @VerifiedAccount()
   updateSettings(
     @CurrentUser() user: RequestUser,
     @Body() dto: UpdateKustomSettingsDto,

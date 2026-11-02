@@ -23,6 +23,8 @@ export const SECURITY_ACTIONS = [
   'user.password_reset_by_admin',
   'user.status_changed',
   'user.deleted_by_admin',
+  // Platform onboarding: admin changed a store's lifecycle status.
+  'store.status_changed',
 ] as const;
 export type SecurityAction = (typeof SECURITY_ACTIONS)[number];
 
@@ -35,7 +37,7 @@ export interface SecurityActor {
 export interface SecurityEventInput {
   actor: SecurityActor;
   action: SecurityAction;
-  targetType?: 'platform' | 'creator' | 'provider' | 'user';
+  targetType?: 'platform' | 'creator' | 'provider' | 'user' | 'store';
   targetId?: string | null;
   targetLabel?: string | null;
   /** Field NAMES only — never pass a secret value here. */

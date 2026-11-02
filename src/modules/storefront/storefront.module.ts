@@ -8,6 +8,7 @@ import { DesignerCoreModule } from '../designer/designer-core.module';
 import { EditHintTokenModule } from './edit-hint/edit-hint-token.module';
 import { StorefrontEditHintController } from './edit-hint/storefront-edit-hint.controller';
 import { StorefrontEditTargetService } from './edit-hint/storefront-edit-target.service';
+import { StorefrontGateModule } from './storefront-gate.service';
 
 // TaxesModule has no imports of its own (no cycle); the b2b app needs the
 // engine to estimate each product's rate for the company price display.
@@ -22,6 +23,8 @@ import { StorefrontEditTargetService } from './edit-hint/storefront-edit-target.
     DesignerCoreModule,
     // Owner edit button: verifies the dashboard-issued edit-hint token.
     EditHintTokenModule,
+    // Public gate / owner preview of non-LIVE stores (SPEC §3).
+    StorefrontGateModule,
   ],
   controllers: [StorefrontController, StorefrontEditHintController],
   providers: [StorefrontService, StorefrontEditTargetService],

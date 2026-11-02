@@ -828,6 +828,14 @@ export class ProductsService {
     return this.findById(product.id);
   }
 
+  /** PlatformConfig.require_provider_approval (true when no row exists). */
+  private async providerApprovalRequired(): Promise<boolean> {
+    const cfg = await this.prisma.platformConfig.findFirst({
+      select: { require_provider_approval: true },
+    });
+    return cfg?.require_provider_approval ?? true;
+  }
+
   /**
    * `GET /products`. Admins and owners filtering their own catalogue
    * (`creator_id` / `provider_id` of the caller) get the full rows; everyone
@@ -883,6 +891,11 @@ export class ProductsService {
       creator_id: undefined,
     });
     where.provider_id = filters.provider_id ?? { not: null };
+    // SPEC §4: while the platform requires provider approval, products of
+    // unverified providers stay out of the creator catalog.
+    if (await this.providerApprovalRequired()) {
+      where.provider = { verified: true };
+    }
     const [data, total] = await Promise.all([
       this.prisma.product.findMany({
         skip: (page - 1) * limit,

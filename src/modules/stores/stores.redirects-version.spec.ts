@@ -1,5 +1,6 @@
 import { StoresService } from './stores.service';
 import { MarketsPublicController } from '../markets/markets-public.controller';
+import type { StorefrontGateService } from '../storefront/storefront-gate.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { RedirectsService } from '../redirects/redirects.service';
 import type { MarketsContextService } from '../markets/markets-context.service';
@@ -109,37 +110,42 @@ describe('MarketsPublicController.marketContext redirects_version', () => {
       prisma as unknown as PrismaService,
       markets as unknown as MarketsContextService,
       redirects(version),
+      // Gate: the fixture store has no status column → treated as LIVE.
+      {
+        allows: () => Promise.resolve(true),
+        viewerFromRequest: () => Promise.resolve(null),
+      } as unknown as StorefrontGateService,
     );
   }
 
   it('app off, no redirects: exactly {enabled:false}', async () => {
-    expect(await ctrl(null, false).marketContext('namez')).toEqual({
+    expect(await ctrl(null, false).marketContext({ headers: {} } as never, 'namez')).toEqual({
       enabled: false,
     });
   });
 
   it('app off with redirects: {enabled:false, redirects_version}', async () => {
-    expect(await ctrl('1-x', false).marketContext('namez')).toEqual({
+    expect(await ctrl('1-x', false).marketContext({ headers: {} } as never, 'namez')).toEqual({
       enabled: false,
       redirects_version: '1-x',
     });
   });
 
   it('app on with redirects: the version rides along', async () => {
-    const res = await ctrl('1-x', true).marketContext('namez');
+    const res = await ctrl('1-x', true).marketContext({ headers: {} } as never, 'namez');
     expect(res).toMatchObject({ enabled: true, redirects_version: '1-x' });
   });
 
   it('app on without redirects: no key', async () => {
-    const res = await ctrl(null, true).marketContext('namez');
+    const res = await ctrl(null, true).marketContext({ headers: {} } as never, 'namez');
     expect(res.enabled).toBe(true);
     expect('redirects_version' in res).toBe(false);
   });
 
   it('app on: the legacy custom_domain rides along (M6.1); app off: not present', async () => {
-    const on = await ctrl(null, true).marketContext('namez');
+    const on = await ctrl(null, true).marketContext({ headers: {} } as never, 'namez');
     expect(on).toMatchObject({ enabled: true, custom_domain: 'resumely.net' });
-    const off = await ctrl(null, false).marketContext('namez');
+    const off = await ctrl(null, false).marketContext({ headers: {} } as never, 'namez');
     expect('custom_domain' in off).toBe(false);
   });
 });

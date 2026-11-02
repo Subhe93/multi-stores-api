@@ -50,6 +50,7 @@ function build(
         Promise.resolve({
           id: 's1',
           slug: 'namez',
+          status: 'LIVE',
           store_type: storeType,
           creator: { id: 'c1' },
           language_config: { primary_locale: 'sv', secondary_locales: [] },

@@ -4,17 +4,36 @@ import {
   ConflictException,
   UnauthorizedException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RegisterDto, LoginDto, GuestRegisterDto } from './dto';
-import { Prisma, UserRole, type User } from '@prisma/client';
+import {
+  LoginTokenPurpose,
+  Prisma,
+  UserRole,
+  UserStatus,
+  type User,
+} from '@prisma/client';
 import { MailService } from '../mail/mail.service';
 import { normalizeEmail } from '../../common/email/email.util';
+import { isDisposableEmail } from '../../common/email/disposable-domains';
 import { generateAccountPassword } from '../../common/security/account-password';
-import { MagicLinkService } from './magic-link.service';
+import {
+  EMAIL_VERIFY_TTL_HOURS,
+  MagicLinkService,
+  loginAllowed,
+} from './magic-link.service';
+import { verificationDeadline } from '../../common/guards/verified-account.guard';
+import {
+  SIGNUP_RATE_LIMIT,
+  SIGNUP_RATE_WINDOW_MS,
+  SlidingWindowLimiter,
+} from '../../common/security/signup-rate-limit';
 import {
   AccountLinksService,
   type StoreLinkContext,
@@ -113,6 +132,12 @@ export function issuedAtFor(
 
 @Injectable()
 export class AuthService {
+  /** Staff sign-ups per client IP (SPEC §2: 5 per hour), process-local. */
+  readonly signupLimiter = new SlidingWindowLimiter(
+    SIGNUP_RATE_LIMIT,
+    SIGNUP_RATE_WINDOW_MS,
+  );
+
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
@@ -202,11 +227,33 @@ export class AuthService {
   /**
    * Self-registration. A CUSTOMER registers in one store (store_slug /
    * hostname required, 400 STORE_REQUIRED otherwise) and the email only has
-   * to be free within that store. CREATOR / PROVIDER accounts stay
-   * platform-wide; a store context sent with them is ignored.
+   * to be free within that store; that path is unchanged. Staff sign-ups
+   * (SPEC §2) send `account_kind` (independent / marketplace → CREATOR,
+   * supplier → PROVIDER), must accept the terms, are refused for disposable
+   * email domains, start PENDING (email unverified) and get the verification
+   * email instead of the welcome one. `meta.ip` keys the staff sign-up rate
+   * limit (429 AUTH_SIGNUP_RATE_LIMITED after 5 attempts per hour).
    */
-  async register(dto: RegisterDto) {
-    if (dto.role === UserRole.ADMIN) {
+  async register(dto: RegisterDto, meta: { ip?: string | null } = {}) {
+    // Honeypot: a bot filled the hidden field. Answer like a success and
+    // create nothing (the body carries no usable session).
+    if (dto.website?.trim()) {
+      return {
+        user: {
+          id: 'pending',
+          email: normalizeEmail(dto.email),
+          role: dto.role ?? UserRole.CREATOR,
+          status: UserStatus.PENDING,
+          store_id: null,
+          created_at: new Date(),
+        },
+        access_token: '',
+        refresh_token: '',
+      };
+    }
+
+    const role = this.resolveRole(dto);
+    if (role === UserRole.ADMIN) {
       throw new ForbiddenException({
         code: 'AUTH_CANNOT_REGISTER_ADMIN',
         message: 'Cannot register as admin',
@@ -214,7 +261,20 @@ export class AuthService {
     }
 
     const email = normalizeEmail(dto.email);
-    const isCustomer = dto.role === UserRole.CUSTOMER;
+    const isCustomer = role === UserRole.CUSTOMER;
+    if (!isCustomer) {
+      if (!this.signupLimiter.hit(meta.ip)) {
+        throw new HttpException(
+          {
+            code: 'AUTH_SIGNUP_RATE_LIMITED',
+            message: 'Too many sign-ups from this address. Try again later.',
+          },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+      this.assertStaffSignup(dto, email);
+    }
+
     const store = isCustomer
       ? await this.links.resolveRequestStore(dto.store_slug, dto.hostname)
       : null;
@@ -236,8 +296,10 @@ export class AuthService {
         data: {
           email,
           password_hash,
-          role: dto.role,
-          status: 'ACTIVE',
+          role,
+          // Staff: PENDING until the verification link is clicked.
+          status: isCustomer ? UserStatus.ACTIVE : UserStatus.PENDING,
+          email_verified_at: isCustomer ? new Date() : null,
           store_id: store?.id ?? null,
         },
         select: {
@@ -255,27 +317,43 @@ export class AuthService {
       throw err;
     }
 
+    const firstName = dto.first_name?.trim() || '';
+    const lastName = dto.last_name?.trim() || '';
+    const country = dto.country?.trim().toUpperCase() || null;
+
     // Create role-specific profile record
-    if (dto.role === UserRole.CUSTOMER) {
+    if (role === UserRole.CUSTOMER) {
       await this.prisma.customer.create({
         data: {
           user_id: user.id,
-          first_name: dto.first_name || '',
-          last_name: dto.last_name || '',
+          first_name: firstName,
+          last_name: lastName,
           ...(dto.phone ? { phone: dto.phone } : {}),
         },
       });
-    } else if (dto.role === UserRole.PROVIDER) {
+    } else if (role === UserRole.PROVIDER) {
       await this.prisma.provider.create({
         data: {
           user_id: user.id,
-          company_name: dto.first_name || 'My Company',
-          country: 'US',
+          company_name: dto.company_name?.trim() || firstName || 'My Company',
+          contact_name: [firstName, lastName].filter(Boolean).join(' ') || null,
+          // From the sign-up form; null when not given (no 'US' default).
+          country,
+          ...(dto.phone ? { phone: dto.phone } : {}),
         },
       });
-    } else if (dto.role === UserRole.CREATOR) {
+    } else if (role === UserRole.CREATOR) {
       await this.prisma.creator.create({
-        data: { user_id: user.id, display_name: dto.first_name || 'Creator' },
+        data: {
+          user_id: user.id,
+          display_name: firstName || 'Creator',
+          last_name: lastName || null,
+          ...(dto.phone ? { phone: dto.phone } : {}),
+          onboarding_profile: {
+            account_kind: dto.account_kind ?? 'independent',
+            ...(country ? { country } : {}),
+          },
+        },
       });
     }
 
@@ -294,12 +372,24 @@ export class AuthService {
       }).magicUrl;
     }
 
-    // Welcome email, best-effort and never blocking signup. A storefront
-    // signup gets the store's branding, domain and language (only while the
-    // store is live); the user chose the password, so the email never
-    // contains one.
-    const live = store?.isActive ? store : null;
-    void this.sendRegisterWelcome(user.email, dto, live).catch(() => undefined);
+    // Emails, best-effort and never blocking signup. A storefront signup
+    // gets the store-branded welcome (only while the store is live); the
+    // user chose the password, so no email ever contains one. Staff get the
+    // verification email (the welcome follows verification) and the admins
+    // a new-signup notice.
+    if (isCustomer) {
+      const live = store?.isActive ? store : null;
+      void this.sendRegisterWelcome(user.email, dto, live).catch(
+        () => undefined,
+      );
+    } else {
+      void this.sendVerificationEmail(user, firstName, dto.locale).catch(
+        () => undefined,
+      );
+      void this.notifyAdminsNewSignup(user, dto, firstName, lastName).catch(
+        () => undefined,
+      );
+    }
 
     return {
       user,
@@ -308,22 +398,234 @@ export class AuthService {
     };
   }
 
+  /** The role a sign-up asks for: the account kind wins over `role`. */
+  private resolveRole(dto: RegisterDto): UserRole {
+    if (dto.account_kind === 'supplier') return UserRole.PROVIDER;
+    if (dto.account_kind) return UserRole.CREATOR;
+    if (dto.role) return dto.role;
+    throw new BadRequestException({
+      code: 'AUTH_ACCOUNT_KIND_REQUIRED',
+      message: 'account_kind is required',
+    });
+  }
+
+  /** Staff sign-up rules (SPEC §2): account kind, terms, no disposable email. */
+  private assertStaffSignup(dto: RegisterDto, email: string): void {
+    if (!dto.account_kind) {
+      throw new BadRequestException({
+        code: 'AUTH_ACCOUNT_KIND_REQUIRED',
+        message: 'account_kind is required',
+      });
+    }
+    if (dto.accept_terms !== true) {
+      throw new BadRequestException({
+        code: 'AUTH_TERMS_REQUIRED',
+        message: 'You must accept the terms and privacy policy',
+      });
+    }
+    if (dto.account_kind === 'supplier' && !dto.company_name?.trim()) {
+      throw new BadRequestException({
+        code: 'AUTH_COMPANY_NAME_REQUIRED',
+        message: 'company_name is required for a supplier account',
+      });
+    }
+    if (isDisposableEmail(email)) {
+      throw new BadRequestException({
+        code: 'AUTH_EMAIL_DISPOSABLE',
+        message: 'Disposable email addresses are not accepted',
+      });
+    }
+  }
+
+  private verificationUrl(raw: string): string {
+    return `${this.links.dashboardUrl()}/auth/verify#token=${encodeURIComponent(raw)}`;
+  }
+
+  /** Issues a 24 h single-use verification token and mails the link. */
+  private async sendVerificationEmail(
+    user: Pick<User, 'id' | 'email'>,
+    name: string,
+    locale?: string | null,
+  ): Promise<void> {
+    const raw = await this.magicLinks.issue(user.id, {
+      purpose: LoginTokenPurpose.EMAIL_VERIFY,
+    });
+    const url = this.verificationUrl(raw);
+    await this.mail.sendOnboarding(
+      'email_verification',
+      user.email,
+      { name, verify_url: url, expires_hours: String(EMAIL_VERIFY_TTL_HOURS) },
+      locale,
+      { sensitive: [raw] },
+    );
+  }
+
+  private async notifyAdminsNewSignup(
+    user: Pick<User, 'id' | 'email'>,
+    dto: RegisterDto,
+    firstName: string,
+    lastName: string,
+  ): Promise<void> {
+    const recipients = await this.mail.adminRecipients();
+    const vars = {
+      email: user.email,
+      name: [firstName, lastName].filter(Boolean).join(' '),
+      account_kind: dto.account_kind ?? '',
+      country: dto.country?.toUpperCase() ?? '',
+      disposable: isDisposableEmail(user.email) ? 'yes' : 'no',
+      admin_url: `${this.links.dashboardUrl()}/admin/users/${user.id}`,
+    };
+    for (const to of recipients) {
+      await this.mail.sendOnboarding('admin_new_signup', to, vars);
+    }
+  }
+
+  /**
+   * `POST /auth/verify-email`: consumes the token, marks the email verified,
+   * activates a PENDING account and returns a normal session so the link
+   * signs the user in. Unknown / used / expired → 401 EMAIL_VERIFY_INVALID.
+   */
+  async verifyEmail(token: string) {
+    const user = await this.magicLinks.consume(
+      token,
+      LoginTokenPurpose.EMAIL_VERIFY,
+    );
+    if (!user) {
+      throw new UnauthorizedException({
+        code: 'EMAIL_VERIFY_INVALID',
+        message: 'This verification link is invalid or has expired',
+      });
+    }
+    const updated = await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        email_verified_at: user.email_verified_at ?? new Date(),
+        ...(user.status === UserStatus.PENDING
+          ? { status: UserStatus.ACTIVE }
+          : {}),
+      },
+    });
+    // Every other outstanding verification link is dead now.
+    await this.prisma.loginToken.deleteMany({
+      where: { user_id: user.id, purpose: LoginTokenPurpose.EMAIL_VERIFY },
+    });
+    void this.sendPostVerificationWelcome(updated).catch(() => undefined);
+
+    // A mailed link proves the inbox, not the second factor.
+    if (await this.twoFactorEnabled(updated.id)) {
+      return this.twoFactor.issueChallenge(updated.id);
+    }
+    const tokens = await this.generateTokens(updated);
+    return {
+      user: {
+        id: updated.id,
+        email: updated.email,
+        role: updated.role,
+        status: updated.status,
+        store_id: updated.store_id,
+        email_verified_at: updated.email_verified_at,
+      },
+      ...tokens,
+    };
+  }
+
+  private async sendPostVerificationWelcome(user: User): Promise<void> {
+    const dashboard = this.links.dashboardUrl();
+    const cfg = await this.prisma.platformConfig.findFirst({
+      select: { support_email: true, default_locale: true },
+    });
+    const support = cfg?.support_email ?? '';
+    if (user.role === UserRole.CREATOR) {
+      const creator = await this.prisma.creator.findUnique({
+        where: { user_id: user.id },
+        select: { display_name: true },
+      });
+      await this.mail.sendOnboarding(
+        'welcome_owner',
+        user.email,
+        {
+          name: creator?.display_name ?? '',
+          dashboard_url: dashboard,
+          support_email: support,
+        },
+        cfg?.default_locale,
+      );
+    } else if (user.role === UserRole.PROVIDER) {
+      const provider = await this.prisma.provider.findUnique({
+        where: { user_id: user.id },
+        select: { company_name: true, contact_name: true },
+      });
+      await this.mail.sendOnboarding(
+        'welcome_supplier',
+        user.email,
+        {
+          name: provider?.contact_name ?? '',
+          company_name: provider?.company_name ?? '',
+          dashboard_url: dashboard,
+          support_email: support,
+        },
+        cfg?.default_locale,
+      );
+    }
+  }
+
+  /**
+   * `POST /auth/resend-verification` (JWT): a fresh link for a PENDING
+   * account, at most 3 per hour per user (429 AUTH_RESEND_RATE_LIMITED).
+   */
+  async resendVerification(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException();
+    if (user.email_verified_at || user.status !== UserStatus.PENDING) {
+      throw new BadRequestException({
+        code: 'AUTH_ALREADY_VERIFIED',
+        message: 'This email address is already verified',
+      });
+    }
+    const recent = await this.magicLinks.countRecent(
+      user.id,
+      LoginTokenPurpose.EMAIL_VERIFY,
+    );
+    if (recent >= 3) {
+      throw new HttpException(
+        {
+          code: 'AUTH_RESEND_RATE_LIMITED',
+          message: 'Too many verification emails. Try again in an hour.',
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    const name =
+      user.role === UserRole.CREATOR
+        ? (
+            await this.prisma.creator.findUnique({
+              where: { user_id: user.id },
+              select: { display_name: true },
+            })
+          )?.display_name
+        : (
+            await this.prisma.provider.findUnique({
+              where: { user_id: user.id },
+              select: { contact_name: true },
+            })
+          )?.contact_name;
+    await this.sendVerificationEmail(user, name ?? '');
+    return { message: 'Verification email sent' };
+  }
+
   private async sendRegisterWelcome(
     email: string,
     dto: RegisterDto,
     store: StoreLinkContext | null,
   ) {
     const locale = dto.locale ?? store?.primaryLocale ?? undefined;
-    // Staff sign in on the dashboard; customers on their store.
-    const loginUrl =
-      dto.role === UserRole.CUSTOMER
-        ? this.links.storefrontLink(
-            store?.base,
-            '/auth/login',
-            undefined,
-            locale,
-          )
-        : `${this.links.dashboardUrl()}/auth/login`;
+    // Customers sign in on their store (staff never reach this path).
+    const loginUrl = this.links.storefrontLink(
+      store?.base,
+      '/auth/login',
+      undefined,
+      locale,
+    );
     await this.mail.sendWelcome(
       email,
       { name: dto.first_name, loginUrl },
@@ -483,7 +785,8 @@ export class AuthService {
       throw new UnauthorizedException(INVALID_CREDENTIALS);
     }
 
-    if (user.status !== 'ACTIVE') {
+    // PENDING staff (email unverified) may sign in during the grace period.
+    if (!loginAllowed(user)) {
       throw new ForbiddenException({
         code: 'AUTH_ACCOUNT_NOT_ACTIVE',
         message: 'Account is not active',
@@ -536,7 +839,7 @@ export class AuthService {
         where: { id: payload.sub },
       });
 
-      if (!user || user.status !== 'ACTIVE') {
+      if (!user || !loginAllowed(user)) {
         throw new UnauthorizedException();
       }
       // Same rule as JwtStrategy: a customer token minted before accounts
@@ -740,6 +1043,7 @@ export class AuthService {
         creator: { omit: { kustom_shared_secret: true } },
         customer: true,
         totp_enabled_at: true,
+        email_verified_at: true,
       },
     });
 
@@ -748,7 +1052,15 @@ export class AuthService {
     }
 
     const { totp_enabled_at, ...profile } = user;
-    return { ...profile, two_factor_enabled: Boolean(totp_enabled_at) };
+    return {
+      ...profile,
+      two_factor_enabled: Boolean(totp_enabled_at),
+      // Grace period end while the email is unverified (SPEC §2).
+      verification_deadline:
+        user.status === UserStatus.PENDING && !user.email_verified_at
+          ? verificationDeadline(user.created_at)
+          : null,
+    };
   }
 
   private async twoFactorEnabled(userId: string): Promise<boolean> {
