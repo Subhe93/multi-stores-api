@@ -1,9 +1,7 @@
 import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
-import { AuthGuard } from '@nestjs/passport';
 import { StorefrontService } from './storefront.service';
 import { isPreview } from '../markets/preview-query';
-import { CurrentUser, type RequestUser } from '../../common/decorators';
 import {
   StorefrontViewerGuard,
   Viewer,
@@ -48,16 +46,16 @@ export class StorefrontController {
   }
 
   // Owner preview (SPEC §3): the full store payload regardless of status,
-  // for the store owner's JWT or an admin. Lets the web render a DRAFT
-  // store for its owner while the public sees "coming soon".
+  // for the store owner (session JWT or the dashboard's edit-hint token)
+  // or an admin. Lets the web render a DRAFT store for its owner while the
+  // public sees "coming soon". 401 anonymous, 403 anyone else.
   @Get(':slug/preview')
-  @UseGuards(AuthGuard('jwt'))
   preview(
-    @CurrentUser() user: RequestUser,
+    @Viewer() viewer: StorefrontViewer | null,
     @Param('slug') slug: string,
     @Query('market') market?: string,
   ) {
-    return this.storefrontService.ownerPreview(slug, user, market);
+    return this.storefrontService.ownerPreview(slug, viewer, market);
   }
 
   // Tiny endpoint the storefront reads to decide whether to cache this store.

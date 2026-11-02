@@ -4,6 +4,7 @@ import {
   Logger,
   NotFoundException,
   Optional,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { rewritePageMenuItems } from '../menus/page-menu-links';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -56,6 +57,7 @@ import { publicCheckoutSettings } from '../stores/checkout-settings';
 import { sanitizeAuthPagesConfig } from '../stores/theme-config';
 import {
   StorefrontGateService,
+  isEditHintViewer,
   type StorefrontViewer,
 } from './storefront-gate.service';
 import { compareManualOrder } from '../creator-categories/product-order';
@@ -759,20 +761,33 @@ export class StorefrontService {
    */
   async ownerPreview(
     slug: string,
-    viewer: { id: string; role: UserRole },
+    viewer: StorefrontViewer | null | undefined,
     marketKey?: string,
   ) {
-    if (viewer.role !== UserRole.ADMIN) {
+    if (!viewer) {
+      throw new UnauthorizedException({
+        code: 'STOREFRONT_PREVIEW_UNAUTHORIZED',
+        message: 'Sign in to preview this store',
+      });
+    }
+    const forbidden = () =>
+      new ForbiddenException({
+        code: 'STOREFRONT_PREVIEW_FORBIDDEN',
+        message: 'Only the store owner can preview this store',
+      });
+    if (isEditHintViewer(viewer)) {
+      // The token proves ownership of one store id; it must be this slug.
+      const own = await this.prisma.store.findFirst({
+        where: { slug, id: viewer.store_id },
+        select: { id: true },
+      });
+      if (!own) throw forbidden();
+    } else if (viewer.role !== UserRole.ADMIN) {
       const own = await this.prisma.store.findFirst({
         where: { slug, creator: { user_id: viewer.id } },
         select: { id: true },
       });
-      if (!own) {
-        throw new ForbiddenException({
-          code: 'STOREFRONT_PREVIEW_FORBIDDEN',
-          message: 'Only the store owner can preview this store',
-        });
-      }
+      if (!own) throw forbidden();
     }
     const full = await this.fullStore(slug, marketKey, true);
     return { ...full, preview: true };

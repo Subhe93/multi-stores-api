@@ -15,11 +15,35 @@ import {
   type AuthTokenPayload,
 } from '../auth/auth.service';
 import { loginAllowed } from '../auth/magic-link.service';
+import { EditHintTokenModule } from './edit-hint/edit-hint-token.module';
+import { EditHintTokenService } from './edit-hint/edit-hint-token.service';
 
-/** Who is reading a storefront: the account behind a valid bearer token. */
-export interface StorefrontViewer {
+/** The account behind a valid session JWT (dashboard / storefront login). */
+export interface SessionViewer {
   id: string;
   role: UserRole;
+  kind?: undefined;
+}
+
+/**
+ * The owner of ONE store, proven by the dashboard-issued edit-hint token
+ * (the storefront never holds the dashboard session JWT: other origin).
+ * Grants nothing beyond previewing that single store: no admin powers, no
+ * other store.
+ */
+export interface EditHintViewer {
+  kind: 'edit-hint';
+  store_id: string;
+  user_id: string;
+}
+
+/** Who is reading a storefront: the principal behind a valid bearer token. */
+export type StorefrontViewer = SessionViewer | EditHintViewer;
+
+export function isEditHintViewer(
+  viewer: StorefrontViewer | null | undefined,
+): viewer is EditHintViewer {
+  return viewer?.kind === 'edit-hint';
 }
 
 /** Statuses the owner may preview; SUSPENDED stays closed (admins only). */
@@ -39,6 +63,8 @@ interface ViewerRequest {
  * Public gate of the storefront read endpoints (SPEC §3, owner preview).
  * `viewerFromRequest` is an optional-auth resolver that never throws: a
  * missing, malformed, expired or revoked token simply means "anonymous".
+ * The bearer is a session JWT or, failing that, the edit-hint token the
+ * dashboard hands the storefront (owner of exactly one store).
  * `allows` decides whether a store may be served to that viewer: LIVE is
  * public; a non-LIVE store is served to its owner (DRAFT / PENDING_REVIEW /
  * CHANGES_REQUESTED / PAUSED) and to admins, closed to everyone else.
@@ -49,6 +75,7 @@ export class StorefrontGateService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly editHints: EditHintTokenService,
   ) {}
 
   async viewerFromRequest(
@@ -58,12 +85,19 @@ export class StorefrontGateService {
     const raw = Array.isArray(header) ? header[0] : header;
     const match = raw?.match(/^Bearer\s+(.+)$/i);
     if (!match) return null;
+    const session = await this.sessionViewer(match[1]);
+    if (session) return session;
+    return this.editHintViewer(match[1]);
+  }
+
+  /** The account of a valid session JWT, or null. Never throws. */
+  private async sessionViewer(token: string): Promise<SessionViewer | null> {
     try {
       const secret = this.config.get<string>('JWT_SECRET');
       if (!secret) return null;
       const payload = this.jwt.verify<
         Partial<AuthTokenPayload> & { type?: string; iat?: number }
-      >(match[1], { secret });
+      >(token, { secret });
       if (!payload.sub || payload.type !== undefined) return null;
       const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },
@@ -85,6 +119,35 @@ export class StorefrontGateService {
   }
 
   /**
+   * The owner behind a valid edit-hint token, or null. One query confirms
+   * the claimed user is still the owning creator of the claimed store and
+   * may still log in (ACTIVE, or PENDING for staff). The token carries no
+   * `iat` revocation semantics (own derived secret, own expiry), so no
+   * `tokens_valid_after` cutoff applies. Never throws.
+   */
+  private async editHintViewer(token: string): Promise<EditHintViewer | null> {
+    try {
+      const claims = this.editHints.verify(token);
+      if (!claims) return null;
+      const own = await this.prisma.store.findFirst({
+        where: { id: claims.store_id, creator: { user_id: claims.user_id } },
+        select: {
+          id: true,
+          creator: {
+            select: { user: { select: { role: true, status: true } } },
+          },
+        },
+      });
+      const user = own?.creator?.user;
+      if (!own || !user) return null;
+      if (user.role !== UserRole.CREATOR || !loginAllowed(user)) return null;
+      return { kind: 'edit-hint', store_id: own.id, user_id: claims.user_id };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Whether `store` may be served to `viewer`. `status` undefined is treated
    * as LIVE (rows always carry it; lean fixtures may not).
    */
@@ -96,6 +159,13 @@ export class StorefrontGateService {
       return true;
     }
     if (!viewer) return false;
+    if (isEditHintViewer(viewer)) {
+      // Ownership was proven when the viewer was resolved; the token is
+      // good for that one store only (never admin, never another store).
+      return (
+        OWNER_PREVIEW_STATUSES.has(store.status) && store.id === viewer.store_id
+      );
+    }
     if (viewer.role === UserRole.ADMIN) return true;
     if (!OWNER_PREVIEW_STATUSES.has(store.status)) return false;
     if (viewer.role !== UserRole.CREATOR) return false;
@@ -129,9 +199,10 @@ export const Viewer = createParamDecorator(
 );
 
 // Own JwtModule instance without a default secret: verification passes the
-// session secret explicitly. PrismaModule is global.
+// session secret explicitly. PrismaModule is global. EditHintTokenModule
+// (imports JwtModule only, no cycle) verifies the dashboard owner token.
 @Module({
-  imports: [JwtModule.register({})],
+  imports: [JwtModule.register({}), EditHintTokenModule],
   providers: [StorefrontGateService, StorefrontViewerGuard],
   exports: [StorefrontGateService, StorefrontViewerGuard],
 })

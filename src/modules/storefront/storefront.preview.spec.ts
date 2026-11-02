@@ -1,4 +1,8 @@
-import { NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { StoreStatus, StoreType, UserRole } from '@prisma/client';
 import type { ConfigService } from '@nestjs/config';
 import type { JwtService } from '@nestjs/jwt';
@@ -6,7 +10,9 @@ import { StorefrontService } from './storefront.service';
 import {
   StorefrontGateService,
   StorefrontViewerGuard,
+  type StorefrontViewer,
 } from './storefront-gate.service';
+import type { EditHintTokenService } from './edit-hint/edit-hint-token.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { StoreAppsService } from '../store-apps/store-apps.service';
 import type { MarketsContextService } from '../markets/markets-context.service';
@@ -16,14 +22,20 @@ import type { TaxService } from '../taxes/tax.service';
 // SPEC §3 owner preview, applied to every public storefront read: a
 // non-LIVE store is served in full to its owner / an admin (valid bearer
 // token) and closed to anonymous callers and other creators. LIVE stays
-// byte-identical (no gate query at all).
+// byte-identical (no gate query at all). The bearer may also be the
+// dashboard-issued edit-hint token: it previews exactly the store it names.
 
 const USERS: Record<string, { id: string; role: UserRole; status: string; store_id: null; tokens_valid_after: null }> = {
   owner: { id: 'owner', role: UserRole.CREATOR, status: 'ACTIVE', store_id: null, tokens_valid_after: null },
   other: { id: 'other', role: UserRole.CREATOR, status: 'PENDING', store_id: null, tokens_valid_after: null },
   admin: { id: 'admin', role: UserRole.ADMIN, status: 'ACTIVE', store_id: null, tokens_valid_after: null },
   banned: { id: 'banned', role: UserRole.CREATOR, status: 'BANNED', store_id: null, tokens_valid_after: null },
+  // A second (banned) owner of store 's1' for the edit-hint status check.
+  'banned-owner': { id: 'banned-owner', role: UserRole.CREATOR, status: 'BANNED', store_id: null, tokens_valid_after: null },
 };
+
+/** Store owners the fixture's `store.findFirst` recognises. */
+const OWNERS_OF_S1 = new Set(['owner', 'banned-owner']);
 
 function build(status: StoreStatus) {
   const store = {
@@ -61,8 +73,23 @@ function build(status: StoreStatus) {
       stripe_account_type: 'standard',
     },
   };
-  const ownerLookups = jest.fn(({ where }: { where: { id: string; creator: { user_id: string } } }) =>
-    Promise.resolve(where.creator.user_id === 'owner' ? { id: 's1' } : null),
+  // Serves the gate's owner lookups (`{ id, creator: { user_id } }`), the
+  // edit-hint ownership query (same `where`, nested creator.user) and the
+  // preview's `{ slug, id }` form; only store 's1' / slug 'namez' exists.
+  const ownerLookups = jest.fn(
+    ({ where }: { where: { id?: string; slug?: string; creator?: { user_id: string } } }) => {
+      const storeOk =
+        (where.id === undefined || where.id === 's1') &&
+        (where.slug === undefined || where.slug === 'namez');
+      const userId = where.creator?.user_id;
+      const ownerOk = userId === undefined || OWNERS_OF_S1.has(userId);
+      if (!storeOk || !ownerOk) return Promise.resolve(null);
+      const user = userId ? USERS[userId] : USERS.owner;
+      return Promise.resolve({
+        id: 's1',
+        creator: { user: { role: user.role, status: user.status } },
+      });
+    },
   );
   const prisma = {
     store: { findUnique: jest.fn(() => Promise.resolve(store)), findFirst: ownerLookups },
@@ -105,11 +132,20 @@ function build(status: StoreStatus) {
     menu: { findMany: jest.fn(() => Promise.resolve([{ id: 'm1', key: 'main', items: [] }])) },
     legalPage: { findMany: jest.fn(() => Promise.resolve([])) },
   };
-  // Tokens are "<userId>" verified by a stub JwtService; "bad" fails.
+  // Session tokens are "<userId>" verified by a stub JwtService; "bad" and
+  // every edit-hint token ("hint:...") fail its signature check.
   const jwt = {
     verify: jest.fn((token: string) => {
-      if (token === 'bad') throw new Error('invalid');
+      if (token === 'bad' || token.startsWith('hint:')) throw new Error('invalid');
       return { sub: token, role: USERS[token]?.role, store_id: null, iat: 1 };
+    }),
+  };
+  // Edit-hint tokens are "hint:<storeId>:<userId>"; anything else is
+  // forged / expired (verify → null, as the real service answers).
+  const editHints = {
+    verify: jest.fn((token: string) => {
+      const m = token.match(/^hint:([^:]+):([^:]+)$/);
+      return m ? { store_id: m[1], user_id: m[2] } : null;
     }),
   };
   const config = { get: (k: string) => (k === 'JWT_SECRET' ? 's' : undefined) };
@@ -117,6 +153,7 @@ function build(status: StoreStatus) {
     prisma as unknown as PrismaService,
     jwt as unknown as JwtService,
     config as unknown as ConfigService,
+    editHints as unknown as EditHintTokenService,
   );
   const service = new StorefrontService(
     prisma as unknown as PrismaService,
@@ -134,7 +171,13 @@ function build(status: StoreStatus) {
   return { service, gate, prisma, ownerLookups };
 }
 
-const viewer = (id: string) => ({ id, role: USERS[id].role });
+const viewer = (id: string): StorefrontViewer => ({ id, role: USERS[id].role });
+/** The viewer an edit-hint token for `storeId` resolves to (owner 'owner'). */
+const hint = (storeId: string): StorefrontViewer => ({
+  kind: 'edit-hint',
+  store_id: storeId,
+  user_id: 'owner',
+});
 
 describe('StorefrontGateService.viewerFromRequest (never throws)', () => {
   it('resolves a valid bearer token; anonymous / bad / revoked → null', async () => {
@@ -149,6 +192,28 @@ describe('StorefrontGateService.viewerFromRequest (never throws)', () => {
     // A PENDING (unverified) creator still counts as a viewer.
     expect(await gate.viewerFromRequest(req('Bearer other'))).toEqual({ id: 'other', role: 'CREATOR' });
     expect(await gate.viewerFromRequest(undefined)).toBeNull();
+  });
+
+  it('resolves the dashboard edit-hint token to the owner of that one store', async () => {
+    const { gate, ownerLookups, prisma } = build(StoreStatus.DRAFT);
+    const req = (token: string) => ({ headers: { authorization: `Bearer ${token}` } });
+    expect(await gate.viewerFromRequest(req('hint:s1:owner'))).toEqual({
+      kind: 'edit-hint',
+      store_id: 's1',
+      user_id: 'owner',
+    });
+    // One ownership query, no session user lookup.
+    expect(ownerLookups).toHaveBeenCalledTimes(1);
+    expect(ownerLookups).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 's1', creator: { user_id: 'owner' } } }),
+    );
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    // Claims naming a store the user does not own, an unknown store, a
+    // banned owner, or a forged / expired token → anonymous.
+    expect(await gate.viewerFromRequest(req('hint:s1:other'))).toBeNull();
+    expect(await gate.viewerFromRequest(req('hint:s2:owner'))).toBeNull();
+    expect(await gate.viewerFromRequest(req('hint:s1:banned-owner'))).toBeNull();
+    expect(await gate.viewerFromRequest(req('hint:forged'))).toBeNull();
   });
 
   it('the guard attaches the viewer and always lets the request through', async () => {
@@ -184,12 +249,24 @@ describe('StorefrontGateService.allows', () => {
     expect(await gate.allows({ id: 's1', status: StoreStatus.SUSPENDED }, viewer('owner'))).toBe(false);
     expect(await gate.allows({ id: 's1', status: StoreStatus.SUSPENDED }, viewer('admin'))).toBe(true);
   });
+
+  it('edit-hint viewer: exactly the store the token names, never another, never SUSPENDED', async () => {
+    const { gate, ownerLookups } = build(StoreStatus.DRAFT);
+    for (const status of [StoreStatus.DRAFT, StoreStatus.PENDING_REVIEW, StoreStatus.CHANGES_REQUESTED, StoreStatus.PAUSED]) {
+      expect(await gate.allows({ id: 's1', status }, hint('s1'))).toBe(true);
+      expect(await gate.allows({ id: 's2', status }, hint('s1'))).toBe(false);
+      expect(await gate.allows({ id: 's1', status }, hint('s2'))).toBe(false);
+    }
+    expect(await gate.allows({ id: 's1', status: StoreStatus.SUSPENDED }, hint('s1'))).toBe(false);
+    // Ownership was settled when the viewer was resolved: no lookup here.
+    expect(ownerLookups).not.toHaveBeenCalled();
+  });
 });
 
 describe('every public storefront read honours the owner preview', () => {
   type Case = {
     name: string;
-    call: (s: StorefrontService, v: ReturnType<typeof viewer> | null) => Promise<unknown>;
+    call: (s: StorefrontService, v: StorefrontViewer | null) => Promise<unknown>;
     closed: (res: unknown) => void;
     open: (res: unknown) => void;
   };
@@ -265,12 +342,14 @@ describe('every public storefront read honours the owner preview', () => {
   const fresh = (status: StoreStatus) => (lastBuild = build(status)).service;
 
   for (const c of cases) {
-    it(`${c.name}: anonymous and another creator → closed; owner and admin → full`, async () => {
+    it(`${c.name}: anonymous, another creator and another store's edit hint → closed; owner, admin and this store's edit hint → full`, async () => {
       for (const status of [StoreStatus.DRAFT, StoreStatus.PAUSED]) {
         c.closed(await c.call(fresh(status), null));
         c.closed(await c.call(fresh(status), viewer('other')));
+        c.closed(await c.call(fresh(status), hint('s2')));
         c.open(await c.call(fresh(status), viewer('owner')));
         c.open(await c.call(fresh(status), viewer('admin')));
+        c.open(await c.call(fresh(status), hint('s1')));
       }
     });
   }
@@ -290,11 +369,26 @@ describe('every public storefront read honours the owner preview', () => {
     expect(closed.prisma.product.findFirst).not.toHaveBeenCalled();
   });
 
-  it('LIVE: identical payloads for anonymous and owner, no owner lookup', async () => {
+  it('GET /storefront/:slug/preview: owner session, admin or this store\'s edit hint → full; else 401 / 403', async () => {
+    const { service } = build(StoreStatus.DRAFT);
+    await expect(service.ownerPreview('namez', hint('s1'))).resolves.toMatchObject({
+      preview: true,
+      status: 'DRAFT',
+      card_payments_enabled: expect.anything(),
+    });
+    await expect(service.ownerPreview('namez', viewer('owner'))).resolves.toMatchObject({ preview: true });
+    await expect(service.ownerPreview('namez', viewer('admin'))).resolves.toMatchObject({ preview: true });
+    await expect(service.ownerPreview('namez', hint('s2'))).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.ownerPreview('namez', viewer('other'))).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.ownerPreview('namez', null)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('LIVE: identical payloads for anonymous, owner and edit hint, no owner lookup', async () => {
     const { service, ownerLookups } = build(StoreStatus.LIVE);
     const anon = await service.getStore('namez', undefined, undefined, null);
     const own = await service.getStore('namez', undefined, undefined, viewer('owner'));
     expect(own).toEqual(anon);
+    expect(await service.getStore('namez', undefined, undefined, hint('s1'))).toEqual(anon);
     expect(anon).not.toHaveProperty('preview');
     expect(await service.getProducts('namez', {}, undefined, undefined, null)).toEqual(
       await service.getProducts('namez', {}, undefined, undefined, viewer('other')),
