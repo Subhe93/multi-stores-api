@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Delete,
+  ForbiddenException,
   Param,
   UseGuards,
   UseInterceptors,
@@ -9,45 +10,52 @@ import {
   Query,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { Throttle } from '@nestjs/throttler';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { UploadsService } from './uploads.service';
+import { CurrentUser, type RequestUser } from '../../common/decorators';
+import { sanitizeFolder } from '../storage/public-storage';
+import {
+  folderAllowedForRole,
+  UPLOAD_MAX_BYTES,
+  UploadsService,
+} from './uploads.service';
 
-const PUBLIC_UPLOAD_FOLDERS = ['custom-fields', 'customer-uploads'];
-
+/**
+ * Generic staff uploads (dashboard). The former unauthenticated
+ * `POST /uploads/public` is gone (no caller; raw customer files went to the
+ * public tree); storefront customer files use `POST /uploads/customer`.
+ */
 @Controller('uploads')
 export class UploadsController {
   constructor(private uploadsService: UploadsService) {}
 
   @Post()
   @UseGuards(AuthGuard('jwt'))
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: UPLOAD_MAX_BYTES, files: 1 },
+    }),
+  )
   upload(
     @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: RequestUser,
     @Query('folder') folder?: string,
   ) {
-    return this.uploadsService.uploadFile(file, folder || 'general');
-  }
-
-  // Unauthenticated uploads from the storefront (e.g. customer customization images).
-  // Folder is restricted to a whitelist so guests can't write to admin-only buckets.
-  // Throttled tightly — it is the only unauthenticated write on the API.
-  @Post('public')
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
-  @UseInterceptors(FileInterceptor('file'))
-  uploadPublic(
-    @UploadedFile() file: Express.Multer.File,
-    @Query('folder') folder?: string,
-  ) {
-    const safeFolder = PUBLIC_UPLOAD_FOLDERS.includes(folder ?? '')
-      ? folder!
-      : 'customer-uploads';
+    const safeFolder = sanitizeFolder(folder || 'general');
+    if (!folderAllowedForRole(user.role, safeFolder)) {
+      throw new ForbiddenException({
+        code: 'UPLOAD_FOLDER_FORBIDDEN',
+        message: `Uploads to "${safeFolder}" are not allowed for your account`,
+      });
+    }
     return this.uploadsService.uploadFile(file, safeFolder);
   }
 
   @Delete(':fileUrl')
   @UseGuards(AuthGuard('jwt'))
-  delete(@Param('fileUrl') fileUrl: string) {
-    return this.uploadsService.deleteFile(decodeURIComponent(fileUrl));
+  delete(@Param('fileUrl') fileUrl: string, @CurrentUser() user: RequestUser) {
+    return this.uploadsService.deleteOwnedFile(
+      decodeURIComponent(fileUrl),
+      user,
+    );
   }
 }

@@ -21,6 +21,8 @@ export const ONBOARDING_EVENTS = [
   'supplier_approved',
   'admin_new_signup',
   'admin_golive_request',
+  // Offsite backup watchdog (plans/s3-storage Phase 1): admins only.
+  'backup_offsite_missing',
 ] as const;
 export type OnboardingEvent = (typeof ONBOARDING_EVENTS)[number];
 
@@ -76,6 +78,15 @@ export const ONBOARDING_EVENT_VARIABLES: Record<OnboardingEvent, string[]> = {
     'checklist',
     'review_url',
   ],
+  backup_offsite_missing: [
+    'platform_name',
+    'bucket',
+    'last_success',
+    'hours_since',
+    'checked_at',
+    'reason',
+    'admin_url',
+  ],
 };
 
 /** Which variable the call-to-action button links to, per event. */
@@ -90,6 +101,7 @@ const BUTTON_URL_VAR: Partial<Record<OnboardingEvent, string>> = {
   supplier_approved: 'dashboard_url',
   admin_new_signup: 'admin_url',
   admin_golive_request: 'review_url',
+  backup_offsite_missing: 'admin_url',
 };
 
 interface Phrases {
@@ -811,6 +823,74 @@ export const ONBOARDING_TEXT: Record<OnboardingEvent, Locales> = {
       button: 'Mağazayı incele',
     },
   },
+  backup_offsite_missing: {
+    en: {
+      subject: '[{platform}] Offsite backup missing',
+      title: 'No offsite backup in the last 26 hours',
+      body: [
+        'The offsite backup watchdog found no success marker in {bucket} within the last 26 hours.',
+        'Last success: {last_success} ({hours_since} h ago). Checked at {checked_at}.',
+        'Reason: {reason}',
+        'Check the cron job (ms-backup-to-s3.sh) and the offsite log on the server, then run a manual backup from the admin panel. This alert is sent at most once a day.',
+      ],
+      button: 'Open backups',
+    },
+    sv: {
+      subject: '[{platform}] Extern säkerhetskopia saknas',
+      title: 'Ingen extern säkerhetskopia de senaste 26 timmarna',
+      body: [
+        'Vakthunden för externa säkerhetskopior hittade ingen lyckad markering i {bucket} under de senaste 26 timmarna.',
+        'Senast lyckad: {last_success} ({hours_since} h sedan). Kontrollerad {checked_at}.',
+        'Orsak: {reason}',
+        'Kontrollera cron-jobbet (ms-backup-to-s3.sh) och offsite-loggen på servern och kör sedan en manuell säkerhetskopia från adminpanelen. Den här varningen skickas högst en gång per dag.',
+      ],
+      button: 'Öppna säkerhetskopior',
+    },
+    ar: {
+      subject: '[{platform}] النسخة الاحتياطية الخارجية مفقودة',
+      title: 'لا توجد نسخة احتياطية خارجية خلال آخر 26 ساعة',
+      body: [
+        'لم يجد مراقب النسخ الاحتياطي الخارجي أي علامة نجاح في {bucket} خلال آخر 26 ساعة.',
+        'آخر نجاح: {last_success} (قبل {hours_since} ساعة). تم الفحص في {checked_at}.',
+        'السبب: {reason}',
+        'تحقّق من مهمة cron (ms-backup-to-s3.sh) وسجل offsite على الخادم، ثم شغّل نسخة احتياطية يدوية من لوحة الإدارة. يُرسل هذا التنبيه مرة واحدة في اليوم على الأكثر.',
+      ],
+      button: 'فتح النسخ الاحتياطية',
+    },
+    de: {
+      subject: '[{platform}] Externes Backup fehlt',
+      title: 'Kein externes Backup in den letzten 26 Stunden',
+      body: [
+        'Der Backup-Wächter hat in {bucket} innerhalb der letzten 26 Stunden keine Erfolgsmarkierung gefunden.',
+        'Letzter Erfolg: {last_success} (vor {hours_since} h). Geprüft um {checked_at}.',
+        'Grund: {reason}',
+        'Prüfen Sie den Cron-Job (ms-backup-to-s3.sh) und das Offsite-Log auf dem Server und starten Sie dann ein manuelles Backup im Adminbereich. Diese Warnung wird höchstens einmal pro Tag gesendet.',
+      ],
+      button: 'Backups öffnen',
+    },
+    fr: {
+      subject: '[{platform}] Sauvegarde externe manquante',
+      title: 'Aucune sauvegarde externe depuis 26 heures',
+      body: [
+        "Le chien de garde des sauvegardes externes n'a trouvé aucun marqueur de succès dans {bucket} au cours des 26 dernières heures.",
+        'Dernier succès : {last_success} (il y a {hours_since} h). Vérifié à {checked_at}.',
+        'Raison : {reason}',
+        "Vérifiez la tâche cron (ms-backup-to-s3.sh) et le journal offsite sur le serveur, puis lancez une sauvegarde manuelle depuis le panneau d'administration. Cette alerte est envoyée au plus une fois par jour.",
+      ],
+      button: 'Ouvrir les sauvegardes',
+    },
+    tr: {
+      subject: '[{platform}] Harici yedek eksik',
+      title: 'Son 26 saatte harici yedek yok',
+      body: [
+        'Harici yedek bekçisi son 26 saat içinde {bucket} içinde bir başarı işareti bulamadı.',
+        'Son başarı: {last_success} ({hours_since} saat önce). Kontrol zamanı: {checked_at}.',
+        'Neden: {reason}',
+        'Sunucudaki cron görevini (ms-backup-to-s3.sh) ve offsite günlüğünü kontrol edin, ardından yönetim panelinden manuel bir yedek çalıştırın. Bu uyarı günde en fazla bir kez gönderilir.',
+      ],
+      button: 'Yedekleri aç',
+    },
+  },
 };
 
 /** Split/join token fill, so `$` patterns in values stay literal. */
@@ -844,6 +924,10 @@ function tokensOf(vars: Record<string, string>): Record<string, string> {
     verify_url: vars.verify_url ?? '',
     admin_url: vars.admin_url ?? '',
     review_url: vars.review_url ?? '',
+    bucket: vars.bucket ?? '',
+    last_success: vars.last_success ?? '',
+    hours_since: vars.hours_since ?? '',
+    checked_at: vars.checked_at ?? '',
   };
 }
 

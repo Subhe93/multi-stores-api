@@ -1,4 +1,5 @@
 import { IsString, IsOptional, Length } from 'class-validator';
+import { UploadUrl } from '../../../common/uploads/upload-url.transform';
 
 export class CreateCreatorDto {
   @IsString()
@@ -30,5 +31,6 @@ export class UpdateCreatorDto {
 
   @IsOptional()
   @IsString()
+  @UploadUrl()
   avatar_url?: string;
 }

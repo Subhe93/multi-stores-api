@@ -12,6 +12,7 @@ import {
 } from 'class-validator';
 import { StoreStatus, StoreType } from '@prisma/client';
 import { SUPPORTED_CURRENCIES } from '../../../common/money/currency.util';
+import { UploadUrl } from '../../../common/uploads/upload-url.transform';
 
 const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const SLUG_MESSAGE =
@@ -187,10 +188,12 @@ export class UpdateStoreDto {
 
   @IsOptional()
   @IsString()
+  @UploadUrl()
   logo_url?: string;
 
   @IsOptional()
   @IsString()
+  @UploadUrl()
   favicon_url?: string;
 
   @IsOptional()

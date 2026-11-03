@@ -8,6 +8,7 @@ import { findKit, listKitSummaries } from './kits';
 import type { Kit, KitPage } from './kits/types';
 import { substituteAssets } from './kits/asset-substitution';
 import { materialiseKitAssets } from './kit-assets';
+import { PublicStorage } from '../storage/public-storage';
 
 const SINGLETON_TYPES: PageType[] = [
   PageType.HOME,
@@ -28,7 +29,10 @@ export interface ImportKitResult {
 
 @Injectable()
 export class TemplatesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly storage: PublicStorage,
+  ) {}
 
   // ── Catalog ─────────────────────────────────────────────
 
@@ -87,7 +91,7 @@ export class TemplatesService {
     // Copy the kit's bundled assets into the store's uploads (or generate
     // placeholders for any not yet shipped), producing the "@asset/<key>" → URL
     // map. Filesystem work — done before the DB transaction.
-    const assetMap = materialiseKitAssets(kit, storeId);
+    const assetMap = await materialiseKitAssets(kit, storeId, this.storage);
 
     const result: ImportKitResult = {
       kitId: kit.id,

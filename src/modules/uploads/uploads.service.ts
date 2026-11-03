@@ -1,8 +1,23 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
-import * as fs from 'fs';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  Optional,
+} from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import sharp from 'sharp';
+import { PrismaService } from '../../prisma/prisma.service';
+import type { RequestUser } from '../../common/decorators/current-user.decorator';
+import {
+  InvalidPublicUrlError,
+  PublicStorage,
+  publicMediaKeyFromUrl,
+  sanitizeFolder,
+} from '../storage/public-storage';
+import { sniffUploadType } from './upload-sniff';
 
 // Raster formats we re-encode to WebP. Vector/document types are stored as-is.
 const RASTER_EXTS = ['.png', '.jpg', '.jpeg', '.webp'];
@@ -12,19 +27,70 @@ const PASSTHROUGH_EXTS = ['.svg', '.pdf', '.ai'];
 // never need more, and next/image generates smaller responsive variants on top.
 const MAX_DIMENSION = 2000;
 const WEBP_QUALITY = 80;
+/** Generic upload route: multer and the service both enforce it. */
+export const UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Folders a role may write with `POST /uploads?folder=` (SPEC "Security
+ * fixes"). CUSTOMER accounts have no generic upload at all (the storefront
+ * uses `POST /uploads/customer`); ADMIN may use any folder.
+ */
+export const UPLOAD_FOLDERS_BY_ROLE: Readonly<
+  Record<UserRole, readonly string[]>
+> = {
+  [UserRole.ADMIN]: ['*'],
+  [UserRole.CREATOR]: [
+    'products',
+    'custom-products',
+    'avatars',
+    'logos',
+    'favicons',
+    'page-blocks',
+    'page-seo',
+    'store-hero',
+    'creator-categories',
+    'custom-fields',
+    'general',
+  ],
+  [UserRole.PROVIDER]: ['products', 'logos', 'avatars'],
+  [UserRole.CUSTOMER]: [],
+};
+
+/** True when `role` may upload into `folder` (already sanitized). */
+export function folderAllowedForRole(role: UserRole, folder: string): boolean {
+  const allowed = UPLOAD_FOLDERS_BY_ROLE[role] ?? [];
+  return allowed.includes('*') || allowed.includes(folder);
+}
+
+type OwnerUser = Pick<RequestUser, 'id' | 'role'>;
+
 @Injectable()
 export class UploadsService {
-  private readonly uploadDir = path.join(process.cwd(), 'uploads');
+  private readonly storage: PublicStorage;
 
-  constructor() {
-    // Ensure uploads directory exists
-    if (!fs.existsSync(this.uploadDir)) {
-      fs.mkdirSync(this.uploadDir, { recursive: true });
-    }
+  /**
+   * Both dependencies are optional so the service can be built bare in unit
+   * tests (`new UploadsService()` → local disk at `<cwd>/uploads`, no
+   * ownership lookups).
+   */
+  constructor(
+    @Optional() @Inject(PublicStorage) storage?: PublicStorage,
+    @Optional() private readonly prisma?: PrismaService,
+  ) {
+    this.storage = storage ?? PublicStorage.localDefault();
+  }
+
+  /** `local` or `s3`. */
+  get driver(): 'local' | 's3' {
+    return this.storage.driver;
+  }
+
+  /** Disk directory of a folder in local mode; null on S3 (no disk guard). */
+  localDir(folder: string): string | null {
+    return this.storage.localDir(folder);
   }
 
   async uploadFile(
@@ -44,11 +110,19 @@ export class UploadsService {
       throw new BadRequestException(`File type ${ext} not allowed`);
     }
 
-    const maxSize = 50 * 1024 * 1024; // 50MB
-    if (file.size > maxSize) {
+    if (file.size > UPLOAD_MAX_BYTES || file.buffer.length > UPLOAD_MAX_BYTES) {
       throw new BadRequestException({
         code: 'UPLOAD_FILE_TOO_LARGE',
         message: 'File too large (max 50MB)',
+      });
+    }
+
+    // The bytes must be what the extension claims (magic bytes); a renamed
+    // executable or an HTML file named .svg is refused before it is stored.
+    if (!sniffUploadType(file.buffer, ext)) {
+      throw new BadRequestException({
+        code: 'UPLOAD_TYPE_MISMATCH',
+        message: `File content does not match ${ext}`,
       });
     }
 
@@ -80,35 +154,23 @@ export class UploadsService {
       });
     }
 
-    const safeFolder = this.sanitizeFolder(folder);
-    const folderPath = path.join(this.uploadDir, safeFolder);
-    if (!fs.existsSync(folderPath)) {
-      fs.mkdirSync(folderPath, { recursive: true });
-    }
+    const safeFolder = sanitizeFolder(folder);
 
     // Raster images are resized + re-encoded to WebP to shrink payloads
     // (often 70–90% smaller). Other types are written through untouched.
     const isRaster = RASTER_EXTS.includes(inExt);
     const outExt = isRaster ? '.webp' : inExt;
     const filename = `${id}${outExt}`;
-    const filePath = path.join(folderPath, filename);
 
-    let bytesWritten = buffer.length;
-    if (isRaster) {
-      const out = await this.processImage(buffer, inExt, opts);
-      fs.writeFileSync(filePath, out);
-      bytesWritten = out.length;
-    } else {
-      fs.writeFileSync(filePath, buffer);
-    }
-
-    // In production, replace with S3/R2 URL
-    const url = `/uploads/${safeFolder}/${filename}`;
+    const out = isRaster
+      ? await this.processImage(buffer, inExt, opts)
+      : buffer;
+    const stored = await this.storage.put(safeFolder, filename, out);
 
     return {
-      url,
+      url: stored.url,
       file_type: outExt.replace('.', ''),
-      file_size: bytesWritten,
+      file_size: out.length,
     };
   }
 
@@ -146,33 +208,166 @@ export class UploadsService {
   }
 
   /**
-   * Reduce a caller-supplied folder to a single safe path segment. Without this
-   * a `folder` of `../../etc` wrote files outside the uploads tree entirely.
+   * Delete an uploaded file by its public URL (`/uploads/<folder>/<file>`,
+   * relative or absolute). The URL arrives from the client: anything outside
+   * the public key shape (`..`, other paths) is refused, so nothing outside
+   * the uploads tree can ever be unlinked. A missing file is not an error.
    */
-  private sanitizeFolder(folder: string): string {
-    const segment = (folder || '').trim().replace(/[^a-zA-Z0-9._-]/g, '');
-    // Reject empties and anything that is only dots (`.`, `..`).
-    if (!segment || /^\.+$/.test(segment)) return 'general';
-    return segment;
+  async deleteFile(fileUrl: string): Promise<void> {
+    try {
+      await this.storage.delete(fileUrl);
+    } catch (e) {
+      if (e instanceof InvalidPublicUrlError) {
+        throw new BadRequestException({
+          code: 'UPLOAD_INVALID_PATH',
+          message: 'Invalid file path',
+        });
+      }
+      throw e;
+    }
   }
 
   /**
-   * Delete an uploaded file. The url arrives from the client, so the resolved
-   * path is checked to still be inside the uploads directory — previously
-   * `../../` in the url escaped it and could unlink any file the process owns.
+   * `DELETE /uploads/:fileUrl` with ownership: an ADMIN may delete any public
+   * file; a CREATOR/PROVIDER only a file referenced by a record they own
+   * (store logo/favicon, legal-profile logo, avatar/cover, provider logo,
+   * product / custom-product / collection images, imported media, page
+   * builder JSON) or inside their store's `template-imports/<storeId>/`
+   * folder. Anything else → 403 UPLOAD_NOT_OWNED (the file is not revealed
+   * as existing or not).
    */
-  deleteFile(fileUrl: string): Promise<void> {
-    const filePath = path.resolve(process.cwd(), '.' + path.sep + fileUrl);
-    const root = path.resolve(this.uploadDir);
-    if (filePath !== root && !filePath.startsWith(root + path.sep)) {
+  async deleteOwnedFile(fileUrl: string, user: OwnerUser): Promise<void> {
+    const key = publicMediaKeyFromUrl(fileUrl);
+    if (!key) {
       throw new BadRequestException({
         code: 'UPLOAD_INVALID_PATH',
         message: 'Invalid file path',
       });
     }
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    if (user.role !== UserRole.ADMIN) {
+      const owned = await this.isOwnedBy(`/${key}`, user);
+      if (!owned) {
+        throw new ForbiddenException({
+          code: 'UPLOAD_NOT_OWNED',
+          message: 'You can only delete files you uploaded',
+        });
+      }
     }
-    return Promise.resolve();
+    await this.storage.delete(`/${key}`);
+  }
+
+  /**
+   * True when `rel` (`/uploads/<folder>/<file>`) is referenced by a record of
+   * the caller. Column values may be absolute (`https://host/uploads/...`),
+   * so every string column is matched with `endsWith`; JSON page-builder
+   * blobs are matched as text.
+   */
+  async isOwnedBy(rel: string, user: OwnerUser): Promise<boolean> {
+    const prisma = this.prisma;
+    if (!prisma) return false;
+    if (user.role === UserRole.CUSTOMER) return false;
+    const ends = { endsWith: rel };
+
+    const me = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { avatar_url: true },
+    });
+    if (me?.avatar_url?.endsWith(rel)) return true;
+
+    if (user.role === UserRole.PROVIDER) {
+      const provider = await prisma.provider.findUnique({
+        where: { user_id: user.id },
+        select: { id: true, logo_url: true },
+      });
+      if (!provider) return false;
+      if (provider.logo_url?.endsWith(rel)) return true;
+      const image = await prisma.productImage.findFirst({
+        where: { url: ends, product: { provider_id: provider.id } },
+        select: { id: true },
+      });
+      return image !== null;
+    }
+
+    if (user.role !== UserRole.CREATOR) return false;
+    const creator = await prisma.creator.findUnique({
+      where: { user_id: user.id },
+      select: {
+        id: true,
+        avatar_url: true,
+        cover_url: true,
+        store: { select: { id: true, logo_url: true, favicon_url: true } },
+      },
+    });
+    if (!creator) return false;
+    if (creator.avatar_url?.endsWith(rel) || creator.cover_url?.endsWith(rel)) {
+      return true;
+    }
+    const store = creator.store;
+    if (store) {
+      if (store.logo_url?.endsWith(rel) || store.favicon_url?.endsWith(rel)) {
+        return true;
+      }
+      // The kit assets of this store (`/uploads/template-imports/<storeId>/...`).
+      if (rel.startsWith(`/uploads/template-imports/${store.id}/`)) return true;
+    }
+
+    const checks: Array<() => Promise<boolean>> = [
+      async () =>
+        (await prisma.productImage.findFirst({
+          where: { url: ends, product: { creator_id: creator.id } },
+          select: { id: true },
+        })) !== null,
+      async () =>
+        (await prisma.customProductImage.findFirst({
+          where: { url: ends, custom_product: { creator_id: creator.id } },
+          select: { id: true },
+        })) !== null,
+      async () =>
+        (await prisma.creatorCategory.findFirst({
+          where: { thumbnail_url: ends, creator_id: creator.id },
+          select: { id: true },
+        })) !== null,
+    ];
+    if (store) {
+      checks.push(
+        async () =>
+          (await prisma.storeLegalProfile.findFirst({
+            where: { logo_url: ends, store_id: store.id },
+            select: { id: true },
+          })) !== null,
+        async () =>
+          (await prisma.importMedia.findFirst({
+            where: { public_url: ends, store_id: store.id },
+            select: { id: true },
+          })) !== null,
+        async () => this.referencedInPageJson(rel, store.id),
+      );
+    }
+    for (const check of checks) {
+      if (await check()) return true;
+    }
+    return false;
+  }
+
+  /** Page-builder JSON of the store (sections, blocks, translations, versions, SEO) mentioning `rel`. */
+  private async referencedInPageJson(
+    rel: string,
+    storeId: string,
+  ): Promise<boolean> {
+    const prisma = this.prisma;
+    if (!prisma) return false;
+    const needle = `%${rel.replace(/[%_\\]/g, (c) => `\\${c}`)}%`;
+    const rows = await prisma.$queryRaw<{ found: number }[]>`
+      SELECT 1 AS found FROM "Page" p
+      WHERE p."store_id" = ${storeId}
+        AND (
+          p."seo"::text LIKE ${needle}
+          OR EXISTS (SELECT 1 FROM "PageSection" s WHERE s."page_id" = p."id" AND s."settings"::text LIKE ${needle})
+          OR EXISTS (SELECT 1 FROM "PageSection" s JOIN "PageSectionTranslation" t ON t."section_id" = s."id"
+                     WHERE s."page_id" = p."id" AND t."content"::text LIKE ${needle})
+          OR EXISTS (SELECT 1 FROM "PageVersion" v WHERE v."page_id" = p."id" AND v."snapshot"::text LIKE ${needle})
+        )
+      LIMIT 1`;
+    return rows.length > 0;
   }
 }

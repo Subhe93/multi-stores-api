@@ -68,6 +68,7 @@ import { deriveNetTotals } from '../taxes/tax.service';
 import { SUPPORTED_LOCALES } from '../markets/market.types';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { loadPublicHost } from '../stores/storefront-hosts';
+import { PublicStorage } from '../storage/public-storage';
 import {
   onboardingEmail,
   ONBOARDING_EVENT_VARIABLES,
@@ -268,7 +269,14 @@ export class MailService {
     // Optional and last: resolves the store's public host for links (the
     // markets app is treated as off without it, e.g. in lean unit wiring).
     @Optional() private readonly storeApps?: StoreAppsService,
+    // Public media (email-safe PNG logos); local disk when not injected.
+    @Optional() private readonly publicStorage?: PublicStorage,
   ) {}
+
+  /** `<logo>.svg` → `<logo>.email.png` through the public storage. */
+  private emailLogo(logoUrl: string): Promise<string> {
+    return emailSafeLogoPath(logoUrl, this.publicStorage);
+  }
 
   /** Register an order-email extension (see OrderMailExtension). */
   registerOrderMailExtension(extension: OrderMailExtension): void {
@@ -1360,7 +1368,7 @@ export class MailService {
         const publicBase =
           this.config.get<string>('PUBLIC_API_URL') || 'http://localhost:3001';
         const logoUrl = store?.logo_url
-          ? absoluteUrl(await emailSafeLogoPath(store.logo_url), publicBase)
+          ? absoluteUrl(await this.emailLogo(store.logo_url), publicBase)
           : undefined;
         parts = accountCreatedEmail(
           {
@@ -1465,7 +1473,7 @@ export class MailService {
         const publicBase =
           this.config.get<string>('PUBLIC_API_URL') || 'http://localhost:3001';
         const logoUrl = store?.logo_url
-          ? absoluteUrl(await emailSafeLogoPath(store.logo_url), publicBase)
+          ? absoluteUrl(await this.emailLogo(store.logo_url), publicBase)
           : undefined;
         parts = customerLoginLinkEmail(
           {
@@ -1836,7 +1844,7 @@ export class MailService {
     // sender and template overrides, and brands the message itself.
     // SVG logos do not render in most mail clients; use a PNG rendition.
     const logoUrl = order.storeCtx?.logoUrl
-      ? absoluteUrl(await emailSafeLogoPath(order.storeCtx.logoUrl), publicBase)
+      ? absoluteUrl(await this.emailLogo(order.storeCtx.logoUrl), publicBase)
       : undefined;
 
     // b2b app: a company order prints the net-first layout; the net figures
@@ -2042,7 +2050,7 @@ export class MailService {
         store_name: store?.name ?? platformName,
         store_url: storeUrl,
         store_logo_url: store?.logo_url
-          ? absoluteUrl(await emailSafeLogoPath(store.logo_url), publicBase)
+          ? absoluteUrl(await this.emailLogo(store.logo_url), publicBase)
           : '',
         order_number: 'ORD-SAMPLE-0001',
         order_date: formatOrderDate(new Date(), locale),

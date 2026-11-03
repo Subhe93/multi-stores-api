@@ -11,6 +11,7 @@ import {
   PRESET_MODES,
   type PresetMode,
 } from '../personalization-presets.service';
+import { UploadUrlsInJson } from '../../../common/uploads/upload-url.transform';
 
 /** POST personalization/my/products/:productId/presets/:key */
 export class ApplyPresetDto {
@@ -36,6 +37,7 @@ export class CreateTemplateDto {
 
   @IsOptional()
   @IsObject()
+  @UploadUrlsInJson()
   definition?: Record<string, unknown>;
 }
 
@@ -49,5 +51,6 @@ export class UpdateTemplateDto {
 
   @IsOptional()
   @IsObject()
+  @UploadUrlsInJson()
   definition?: Record<string, unknown>;
 }

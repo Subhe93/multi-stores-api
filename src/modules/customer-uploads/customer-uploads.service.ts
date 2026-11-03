@@ -10,7 +10,6 @@ import {
 } from '@nestjs/common';
 import { OrderStatus, Prisma, UserRole } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
-import { promises as fs } from 'fs';
 import * as path from 'path';
 import { Readable } from 'stream';
 import sharp from 'sharp';
@@ -51,6 +50,7 @@ import {
   CustomerUploadByteBudget,
 } from './customer-upload-admission';
 import { PgUploadQuotaStore } from '../ops/upload-quota-store';
+import { isS3Driver } from '../storage/storage.config';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UUID_RE =
@@ -120,12 +120,6 @@ export class CustomerUploadsService implements OnModuleInit {
   readonly byteBudget: CustomerUploadByteBudget;
   private readonly storage: PrivateStorage;
   private uploadsService?: UploadsService;
-  /** Where the public previews live (same tree UploadsService writes to). */
-  private readonly previewDir = path.join(
-    process.cwd(),
-    'uploads',
-    CUSTOMER_PREVIEW_FOLDER,
-  );
 
   constructor(
     private readonly prisma: PrismaService,
@@ -160,6 +154,18 @@ export class CustomerUploadsService implements OnModuleInit {
     return this.uploadsService;
   }
 
+  /**
+   * Disks that receive the original and the preview (local driver only; on
+   * S3 there is no disk to fill and the free-space floor is skipped).
+   */
+  private diskDirs(): string[] {
+    if (isS3Driver()) return [];
+    const dirs = [this.storage.root];
+    const previews = this.uploads.localDir(CUSTOMER_PREVIEW_FOLDER);
+    if (previews) dirs.push(previews);
+    return dirs;
+  }
+
   // ── Upload ────────────────────────────────────────────────────────────────
 
   /**
@@ -174,7 +180,7 @@ export class CustomerUploadsService implements OnModuleInit {
    */
   async admit(client: CustomerUploadClient = {}): Promise<void> {
     await this.byteBudget.assertAllowed(client.ip);
-    await assertFreeDisk([this.storage.root, this.previewDir]);
+    await assertFreeDisk(this.diskDirs());
   }
 
   async upload(
@@ -192,7 +198,7 @@ export class CustomerUploadsService implements OnModuleInit {
       throw tooLarge();
     }
     await this.byteBudget.assertAllowed(client.ip, buffer.length);
-    await assertFreeDisk([this.storage.root, this.previewDir], buffer.length);
+    await assertFreeDisk(this.diskDirs(), buffer.length);
 
     const originalName = sanitizeFileName(file.originalname);
     const nameExt = path.extname(originalName).toLowerCase();
@@ -772,11 +778,9 @@ export class CustomerUploadsService implements OnModuleInit {
   /** Deletes `uploads/customer-previews/<id>.webp`; a missing file is fine. */
   private async deletePreview(id: string): Promise<void> {
     if (!UUID_RE.test(id)) return;
-    try {
-      await fs.unlink(path.join(this.previewDir, `${id}.webp`));
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-    }
+    await this.uploads.deleteFile(
+      `/uploads/${CUSTOMER_PREVIEW_FOLDER}/${id}.webp`,
+    );
   }
 }
 

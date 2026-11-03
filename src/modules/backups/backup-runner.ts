@@ -159,18 +159,49 @@ class StderrTail {
 // ── Tools ────────────────────────────────────────────────────────────────────
 
 /**
+ * Splits the password out of a libpq URL so it travels in `PGPASSWORD`
+ * (child env) instead of argv, where `ps`, crash reports and tool error
+ * messages would show it. A URL that cannot be parsed is passed unchanged.
+ */
+export function splitDatabasePassword(url: string): {
+  url: string;
+  env: NodeJS.ProcessEnv;
+} {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.password) return { url, env: {} };
+    const password = decodeURIComponent(parsed.password);
+    parsed.password = '';
+    return { url: parsed.toString(), env: { PGPASSWORD: password } };
+  } catch {
+    return { url, env: {} };
+  }
+}
+
+/** `options` plus the password env of `databaseUrl`; the URL loses it. */
+function withPasswordEnv(
+  databaseUrl: string,
+  options: RunOptions,
+): { url: string; options: RunOptions } {
+  const { url, env } = splitDatabasePassword(databaseUrl);
+  return { url, options: { ...options, env: { ...env, ...options.env } } };
+}
+
+/**
  * `pg_dump -Fc --no-owner --no-privileges -f <file> <url>` — custom-format
- * archive that `pg_restore` can replay selectively.
+ * archive that `pg_restore` can replay selectively. The password goes
+ * through `PGPASSWORD`, never argv.
  */
 export function pgDump(
   databaseUrl: string,
   file: string,
   options: RunOptions = {},
 ): Promise<ToolResult> {
+  const safe = withPasswordEnv(databaseUrl, options);
   return runTool(
     'pg_dump',
-    ['-Fc', '--no-owner', '--no-privileges', '-f', file, databaseUrl],
-    options,
+    ['-Fc', '--no-owner', '--no-privileges', '-f', file, safe.url],
+    safe.options,
   );
 }
 
@@ -183,6 +214,7 @@ export function pgRestore(
   file: string,
   options: RunOptions = {},
 ): Promise<ToolResult> {
+  const safe = withPasswordEnv(databaseUrl, options);
   return runTool(
     'pg_restore',
     [
@@ -191,10 +223,10 @@ export function pgRestore(
       '--no-owner',
       '--no-privileges',
       '-d',
-      databaseUrl,
+      safe.url,
       file,
     ],
-    options,
+    safe.options,
   );
 }
 

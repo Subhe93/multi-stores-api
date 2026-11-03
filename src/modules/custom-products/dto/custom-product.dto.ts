@@ -10,6 +10,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ProductStatus, ImportMode, PricingType } from '@prisma/client';
+import { UploadUrl } from '../../../common/uploads/upload-url.transform';
 
 // ── Sub-DTOs ──────────────────────────────────────────────
 
@@ -49,6 +50,7 @@ export class CustomProductFieldValueDto {
 
   @IsOptional()
   @IsString()
+  @UploadUrl()
   file_url?: string;
 }
 
@@ -91,6 +93,7 @@ export class CreateCustomProductDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @UploadUrl()
   mockup_image_urls?: string[];
 
   @IsArray()
@@ -154,6 +157,7 @@ export class UpdateCustomProductDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @UploadUrl()
   mockup_image_urls?: string[];
 
   @IsOptional()

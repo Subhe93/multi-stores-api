@@ -12,6 +12,7 @@ import { MagicLinkService } from '../auth/magic-link.service';
 import { AccountCredentialsService } from '../auth/account-credentials.service';
 import { AccountLinksService } from '../auth/account-links.service';
 import { normalizeEmail } from '../../common/email/email.util';
+import { normalizeApiUploadUrl } from '../../common/uploads/upload-url.transform';
 
 /** Store summary shown next to a customer account in the admin lists. */
 const STORE_SUMMARY = { select: { id: true, name: true, slug: true } } as const;
@@ -210,7 +211,7 @@ export class UsersService {
           password_hash,
           role: dto.role,
           status: dto.status ?? UserStatus.ACTIVE,
-          avatar_url: dto.avatar_url,
+          avatar_url: normalizeApiUploadUrl(dto.avatar_url),
           store_id: storeId,
         },
         select: {
@@ -321,7 +322,8 @@ export class UsersService {
         userUpdate.tokens_valid_after = new Date();
       }
     }
-    if (dto.avatar_url !== undefined) userUpdate.avatar_url = dto.avatar_url;
+    if (dto.avatar_url !== undefined)
+      userUpdate.avatar_url = normalizeApiUploadUrl(dto.avatar_url);
 
     if (Object.keys(userUpdate).length > 0) {
       try {
@@ -345,7 +347,8 @@ export class UsersService {
       if (dto.country !== undefined) providerUpdate.country = dto.country;
       if (dto.phone !== undefined) providerUpdate.phone = dto.phone;
       if (dto.verified !== undefined) providerUpdate.verified = dto.verified;
-      if (dto.logo_url !== undefined) providerUpdate.logo_url = dto.logo_url;
+      if (dto.logo_url !== undefined)
+        providerUpdate.logo_url = normalizeApiUploadUrl(dto.logo_url);
       if (Object.keys(providerUpdate).length > 0) {
         await this.prisma.provider.update({
           where: { id: user.provider.id },
@@ -360,8 +363,9 @@ export class UsersService {
       if (dto.phone !== undefined) creatorUpdate.phone = dto.phone;
       if (dto.verified !== undefined) creatorUpdate.verified = dto.verified;
       if (dto.avatar_url !== undefined)
-        creatorUpdate.avatar_url = dto.avatar_url;
-      if (dto.cover_url !== undefined) creatorUpdate.cover_url = dto.cover_url;
+        creatorUpdate.avatar_url = normalizeApiUploadUrl(dto.avatar_url);
+      if (dto.cover_url !== undefined)
+        creatorUpdate.cover_url = normalizeApiUploadUrl(dto.cover_url);
       if (Object.keys(creatorUpdate).length > 0) {
         await this.prisma.creator.update({
           where: { id: user.creator.id },

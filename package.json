@@ -30,6 +30,9 @@
     "seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-kms": "^3.1161.0",
+    "@aws-sdk/client-s3": "^3.1161.0",
+    "@aws-sdk/lib-storage": "^3.1161.0",
     "@fontsource/noto-sans": "^5.3.0",
     "@fontsource/noto-sans-arabic": "^5.3.0",
     "@multi-stores/core": "file:../multi-stores-shared/packages/core",
@@ -78,6 +81,7 @@
     "@types/qrcode": "^1.5.5",
     "@types/sanitize-html": "^2.16.2",
     "@types/supertest": "^7.0.0",
+    "aws-sdk-client-mock": "^4.1.0",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",

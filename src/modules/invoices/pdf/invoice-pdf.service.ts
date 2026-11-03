@@ -11,9 +11,8 @@
  * Throws PdfUnavailableError when the engine is off or cannot start; callers
  * map it to 503 INVOICE_PDF_UNAVAILABLE / "send the email without it".
  */
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { createHash } from 'crypto';
-import { promises as fs } from 'fs';
 import * as path from 'path';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { invoiceErrors } from '../invoice-errors';
@@ -30,6 +29,10 @@ import {
   type PdfRenderer,
 } from './pdf-renderer';
 import { toSnapshotForPdf, type SnapshotForPdf } from './snapshot-for-pdf';
+import {
+  PublicStorage,
+  publicMediaKeyFromUrl,
+} from '../../storage/public-storage';
 
 export { PdfUnavailableError } from './pdf-renderer';
 
@@ -70,46 +73,31 @@ export function invoicePdfFilename(
 }
 
 /**
- * Reads a public logo from `<cwd>/uploads` as a data URI. Accepts
- * "/uploads/..." paths and absolute URLs whose path is /uploads/... (the file
- * is read locally; nothing is fetched). Anything else → null.
+ * Reads a public logo through the public storage as a data URI. Accepts
+ * "/uploads/..." paths and absolute URLs whose path is /uploads/... (any
+ * host: the file is read from our own storage; nothing is fetched).
+ * Anything else, a traversal, a non-image or a file over 2 MB → null.
+ * `storage` may be a `PublicStorage` or a local uploads directory (tests);
+ * unset = the local `<cwd>/uploads` tree.
  */
 export async function loadLogoDataUri(
   logoUrl: string | null | undefined,
-  uploadsRoot = path.join(process.cwd(), 'uploads'),
+  storage: PublicStorage | string = PublicStorage.localDefault(),
 ): Promise<string | null> {
   if (!logoUrl) return null;
   const raw = logoUrl.trim();
   if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(raw)) {
     return raw.length <= LOGO_MAX_BYTES * 1.4 ? raw : null;
   }
-  let pathname = raw;
-  if (/^https?:\/\//i.test(raw)) {
-    try {
-      pathname = new URL(raw).pathname;
-    } catch {
-      return null;
-    }
-  }
-  if (!pathname.startsWith('/uploads/')) return null;
-  let rel: string;
-  try {
-    rel = decodeURIComponent(pathname.slice('/uploads/'.length));
-  } catch {
-    return null;
-  }
-  const root = path.resolve(uploadsRoot);
-  const file = path.resolve(root, rel);
-  const inside = path.relative(root, file);
-  if (!inside || inside.startsWith('..') || path.isAbsolute(inside)) {
-    return null;
-  }
-  const mime = LOGO_MIME[path.extname(file).toLowerCase()];
+  const key = publicMediaKeyFromUrl(raw);
+  if (!key) return null;
+  const mime = LOGO_MIME[path.extname(key).toLowerCase()];
   if (!mime) return null;
+  const store =
+    typeof storage === 'string' ? PublicStorage.local(storage) : storage;
   try {
-    const st = await fs.stat(file);
-    if (!st.isFile() || st.size > LOGO_MAX_BYTES) return null;
-    const data = await fs.readFile(file);
+    const data = await store.read(`/${key}`, LOGO_MAX_BYTES);
+    if (!data) return null;
     return `data:${mime};base64,${data.toString('base64')}`;
   } catch {
     return null;
@@ -125,6 +113,8 @@ export class InvoicePdfService {
     private readonly prisma: PrismaService,
     @Inject(PDF_RENDERER) private readonly renderer: PdfRenderer,
     @Inject(INVOICE_STORAGE) private readonly storage: InvoiceStorage,
+    // Public media (seller logo); local disk when not injected (unit tests).
+    @Optional() private readonly publicStorage?: PublicStorage,
   ) {}
 
   getPdf(invoiceId: string): Promise<InvoicePdf> {
@@ -142,7 +132,10 @@ export class InvoicePdfService {
     const snap = toSnapshotForPdf(stored);
     const phrases = getInvoicePhrases(snap.locale);
     const fontCss = getInvoiceFontCss();
-    const logoDataUri = await loadLogoDataUri(snap.seller.logo_url);
+    const logoDataUri = await loadLogoDataUri(
+      snap.seller.logo_url,
+      this.publicStorage,
+    );
     const html = renderInvoiceHtml(snap, phrases, { fontCss, logoDataUri });
     const footer = renderInvoiceFooterHtml(snap, phrases, { fontCss });
     return this.renderer.render(html, footer);

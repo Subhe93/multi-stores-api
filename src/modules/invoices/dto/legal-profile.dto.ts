@@ -10,6 +10,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { UploadUrl } from '../../../common/uploads/upload-url.transform';
 
 // PUT /invoices/my/legal-profile. Every field is optional so the form can be
 // saved progressively; null (or '') clears a field. Format checks that need
@@ -61,6 +62,7 @@ export class UpdateLegalProfileDto {
   @Matches(/^\/uploads\/[^\s]+$/, {
     message: 'logo_url must be an /uploads/ path',
   })
+  @UploadUrl()
   logo_url?: string | null;
 
   @IsOptional() @IsBoolean() f_tax_approved?: boolean;

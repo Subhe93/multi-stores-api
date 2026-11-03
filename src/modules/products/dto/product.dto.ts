@@ -21,6 +21,7 @@ import {
   ProductStatus,
   Prisma,
 } from '@prisma/client';
+import { UploadUrl } from '../../../common/uploads/upload-url.transform';
 
 /** Allowed `condition` values of a product (feeds app); null = new. */
 export const PRODUCT_CONDITIONS = ['new', 'refurbished', 'used'] as const;
@@ -100,11 +101,13 @@ export class ProductVariantSyncDto {
 
   @IsOptional()
   @IsString()
+  @UploadUrl()
   image_url?: string;
 }
 
 export class ProductImageSyncDto {
   @IsString()
+  @UploadUrl()
   url: string;
 
   @IsOptional()

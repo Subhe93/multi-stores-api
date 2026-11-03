@@ -1,7 +1,9 @@
 import { Prisma, PrismaClient } from '@prisma/client';
-import { promises as fs } from 'fs';
-import { join, normalize, sep } from 'path';
 import sharp from 'sharp';
+import {
+  PublicStorage,
+  publicMediaKeyFromUrl,
+} from '../storage/public-storage';
 import { currencyDecimals } from '../../common/money/currency.util';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
 import {
@@ -673,39 +675,66 @@ export function buildOrderUrl(
   return `${buildStoreUrl(storeSlug, storefrontBase, customDomain)}/account/orders/${orderId}`;
 }
 
+/** Rendered `.email.png` keys known to exist (per process; bounded). */
+const EMAIL_LOGO_CACHE = new Set<string>();
+const EMAIL_LOGO_CACHE_MAX = 2000;
+const EMAIL_LOGO_MAX_SVG_BYTES = 2 * 1024 * 1024;
+
 /**
  * Most mail clients (Gmail, Outlook) do not render SVG images, so a store
- * whose logo is an SVG would show no logo at all. Returns the path of a PNG
- * rendition stored next to the original (created on first use); any other
- * format, or any failure, returns the original path unchanged.
+ * whose logo is an SVG would show no logo at all. Returns the URL of a PNG
+ * rendition stored next to the original (`<logo>.email.png`, created on
+ * first use through `PublicStorage`, local disk or S3 by driver); any other
+ * format, an absolute URL, or any failure returns the original path
+ * unchanged. Without a storage the local `<cwd>/uploads` tree is used.
  */
-export async function emailSafeLogoPath(logoPath: string): Promise<string> {
+export async function emailSafeLogoPath(
+  logoPath: string,
+  storage: PublicStorage = PublicStorage.localDefault(),
+): Promise<string> {
   if (/^https?:\/\//i.test(logoPath) || !/\.svg$/i.test(logoPath)) {
     return logoPath;
   }
-  const relative = normalize(logoPath.replace(/^[\\/]+/, ''));
-  // Only ever touch files under uploads/.
-  if (!relative.startsWith(`uploads${sep}`) || relative.includes('..')) {
-    return logoPath;
-  }
-  const source = join(process.cwd(), relative);
-  const target = source.replace(/\.svg$/i, '.email.png');
-  const publicPath = logoPath.replace(/\.svg$/i, '.email.png');
+  // Only ever touch files under uploads/ (the public key shape).
+  const key = publicMediaKeyFromUrl(logoPath);
+  if (!key) return logoPath;
+  const targetKey = key.replace(/\.svg$/i, '.email.png');
+  const publicPath = `/${targetKey}`;
+  if (EMAIL_LOGO_CACHE.has(targetKey)) return publicPath;
   try {
-    await fs.access(target);
-    return publicPath;
+    if (await storage.exists(publicPath)) {
+      rememberEmailLogo(targetKey);
+      return publicPath;
+    }
   } catch {
-    // not rendered yet
+    // fall through to render
   }
   try {
-    await sharp(source, { density: 300 })
+    const svg = await storage.read(`/${key}`, EMAIL_LOGO_MAX_SVG_BYTES);
+    if (!svg) return logoPath;
+    const png = await sharp(svg, { density: 300 })
       .resize({ width: 480, withoutEnlargement: false })
       .png()
-      .toFile(target);
+      .toBuffer();
+    const slash = targetKey.lastIndexOf('/');
+    const folder = targetKey.slice('uploads/'.length, slash);
+    const file = targetKey.slice(slash + 1);
+    await storage.put(folder, file, png, { contentType: 'image/png' });
+    rememberEmailLogo(targetKey);
     return publicPath;
   } catch {
     return logoPath;
   }
+}
+
+function rememberEmailLogo(key: string): void {
+  if (EMAIL_LOGO_CACHE.size >= EMAIL_LOGO_CACHE_MAX) EMAIL_LOGO_CACHE.clear();
+  EMAIL_LOGO_CACHE.add(key);
+}
+
+/** Test hook: forgets the rendered-logo cache. */
+export function resetEmailLogoCache(): void {
+  EMAIL_LOGO_CACHE.clear();
 }
 
 const TOTALS_PHRASES: Record<

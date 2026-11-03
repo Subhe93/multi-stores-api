@@ -13,6 +13,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PageStatus, PageType, StaticPageType } from '@prisma/client';
+import { UploadUrlsInJson } from '../../../common/uploads/upload-url.transform';
 
 // Slugs follow WordPress sanitize_title (Unicode letters kept, up to 200
 // encoded bytes): the service sanitizes and dedupes whatever is sent and
@@ -88,6 +89,7 @@ export class UpdatePageDto {
 
   @IsOptional()
   @IsObject()
+  @UploadUrlsInJson()
   seo?: Record<string, unknown>;
 
   @IsOptional()
@@ -106,6 +108,7 @@ export class SectionTranslationDto {
   locale: string;
 
   @IsObject()
+  @UploadUrlsInJson()
   content: Record<string, unknown>;
 }
 
@@ -117,6 +120,7 @@ export class CreateSectionDto {
 
   @IsOptional()
   @IsObject()
+  @UploadUrlsInJson()
   settings?: Record<string, unknown>;
 
   @IsOptional()
@@ -135,6 +139,7 @@ export class CreateSectionDto {
 export class UpdateSectionDto {
   @IsOptional()
   @IsObject()
+  @UploadUrlsInJson()
   settings?: Record<string, unknown>;
 
   @IsOptional()

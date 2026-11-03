@@ -51,6 +51,8 @@ export const PLATFORM_ONLY_EVENTS: ReadonlySet<string> = new Set([
   'supplier_approved',
   'admin_new_signup',
   'admin_golive_request',
+  // Offsite backup watchdog alert (plans/s3-storage Phase 1): admins only.
+  'backup_offsite_missing',
 ]);
 
 /** The variables as the HTML body sees them (`html:` overrides applied). */

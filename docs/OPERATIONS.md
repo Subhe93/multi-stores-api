@@ -31,6 +31,17 @@ Every variable, grouped. Defaults in brackets; `(prod)` = required in production
 | `INVOICE_STORAGE_DIR` | `<cwd>/storage/invoices` | Rendered invoice PDFs. |
 | `<cwd>/uploads` | fixed | Public files (product media, customer previews). |
 | `BACKUP_DIR` | `<cwd>/backups` | pg_dump files and uploads tarballs. |
+| `S3_BACKUP_BUCKET` | – | Offsite copies of backups (section 5.1). When set (with `AWS_REGION`), every completed in-app backup is uploaded, even while `STORAGE_DRIVER=local`. |
+| `S3_KMS_KEY_ID` | – | SSE-KMS key for backup (and private) objects; SSE-S3 without it. |
+| `BACKUP_AWS_ACCESS_KEY_ID`, `BACKUP_AWS_SECRET_ACCESS_KEY`, `BACKUP_AWS_SESSION_TOKEN` | – | The `ms-backup-writer` key, used for the backup bucket only (the API key has no access to it, INFRA.md §5.2). Unset = SDK default chain. |
+| `BACKUP_OFFSITE_UPLOAD` | on | `off` keeps the sink configured (watchdog, restore from S3) but skips the in-app upload. |
+| `STORAGE_DRIVER` | `local` | `s3` moves public media, private files and invoice PDFs to the buckets below; the API streams `/uploads/*` from the media bucket with the same URLs and headers (plans/s3-storage/SPEC.md). |
+| `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | – | Region of the buckets and the `ms-api-storage` key (SDK default chain; an IAM role works too). Required with `STORAGE_DRIVER=s3` or `S3_BACKUP_BUCKET`. Never logged. |
+| `S3_MEDIA_BUCKET`, `S3_PRIVATE_BUCKET` | – | Required with `STORAGE_DRIVER=s3`. |
+| `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE` | – | Custom endpoint / path-style addressing (MinIO, tests). |
+| `MEDIA_LOCAL_FALLBACK` | `true` | s3 driver: a media miss on S3 falls back to the local `uploads/` file (reads only) during the migration window. |
+| `MEDIA_BASE_URL` | `PUBLIC_API_URL` | Absolute base for public media URLs in emails/feeds (future CDN origin). |
+| `STORAGE_STRICT_STARTUP` | `true` | s3 driver: refuse to start when the media or private `HeadBucket` fails. The backup bucket only warns. |
 | `IMPORTER_BUNDLE_DIR_ROOT` | – | Admin from-directory imports only. |
 
 ### Browser (invoice PDFs and designer renders)
@@ -130,6 +141,19 @@ Backups (admin panel or the scheduler) produce a `pg_dump -Fc` file and, with "i
 Restore order: stop the API, `pg_restore` the dump (admin panel "restore" does this with a pre-restore safety backup), untar the storage directories to the same paths, start the API. File keys in the DB are relative to the storage root, so the root may move as long as `PRIVATE_STORAGE_DIR` follows.
 
 Privacy note: backups contain customer photos, uploaded files and personal data. An erasure request (GDPR) is complete only after every backup holding the data has rotated out (14 days by default); document the retention window in the privacy policy and keep the backup directory with the same access controls as `storage/`. Customer IPs in `UploadQuotaWindow` are stored hashed and purged after two days.
+
+### 5.1 Offsite copies in S3 (plans/s3-storage Phase 1)
+
+Two independent paths put every backup into `S3_BACKUP_BUCKET` (region `AWS_REGION`, SSE-KMS with `S3_KMS_KEY_ID` or SSE-S3 without it). Both write with the `ms-backup-writer` key (INFRA.md §5.2: Put, tag, retention and List only, no Get): the cron sources it from `/etc/multi-stores/backup-aws.env`, the API reads it from `BACKUP_AWS_ACCESS_KEY_ID` / `BACKUP_AWS_SECRET_ACCESS_KEY` in `.env` (the `ms-api-storage` key has no access to the backup bucket). Every object is tagged `tier=daily|weekly|monthly` (Sunday = weekly, 1st of the month = monthly; manifests like their dump) and weekly/monthly objects get a per-object GOVERNANCE lock (56 d / 365 d) on top of the bucket default:
+
+1. **Cron script** `scripts/ops/ms-backup-to-s3.sh`, nightly 03:30 as `multistores` (cron line and the full procedure in [scripts/ops/README.md](../scripts/ops/README.md)). `pg_dump -Fc` with the password in a 0600 `PGPASSFILE` (never on argv), tar.gz of `PRIVATE_STORAGE_DIR` + `INVOICE_STORAGE_DIR` (+ `uploads/` while `STORAGE_DRIVER` is not `s3`), `aws s3api put-object --checksum-sha256` (S3 refuses a body that does not hash to it) with sha256 metadata, size verification through `list-objects-v2` on the key, success marker `manifests/<yyyy-mm-dd>.json`, local copies pruned to the last 2 under `BACKUP_DIR/offsite/`. Log: `BACKUP_DIR/offsite.log`.
+2. **In-app** (`src/modules/backups/offsite/`): after a manual or scheduled backup completes, the dump goes to `db/<yyyy-mm-dd>/<file>` and the archive to `files/<yyyy-mm-dd>/<file>`, verified the same way (`ChecksumSHA256` on the PutObject + `ListObjectsV2` size), plus a marker `manifests/<date>-app-<id>.json`. The row records `s3_key`, `s3_files_key`, `s3_etag`, `offsite_at` (or `offsite_error`; the local backup stays COMPLETED). The in-app archive now enters each configured directory with its own `-C`, so the private and invoice dirs are included wherever they live. A PRE_RESTORE backup is uploaded in the background so the restore does not wait. `pg_dump`/`pg_restore` get the password through `PGPASSWORD` in the child environment.
+
+Retention: the app's `backup_retention` and the admin "delete" remove **local files and rows only**; the S3 lifecycle (14 daily / 8 weekly / 12 monthly, Object Lock; INFRA.md) owns the objects. A restore or download of a backup whose local file was rotated out fetches the object back into `BACKUP_DIR` (sha256 checked) before `pg_restore` / streaming — that read needs `s3:GetObject`, i.e. the `ms-backup-restore` policy (temporarily put its key into `BACKUP_AWS_*`); with the write-only key the panel answers `BACKUP_OFFSITE_FETCH_FAILED` (`BACKUP_OFFSITE_READ_DENIED` in the log) and the restore is done with `scripts/ops/ms-backup-restore-from-s3.sh` instead.
+
+Watchdog: retention task `backups.offsite-watchdog` (hourly, `POST /admin/retention/run?task=backups.offsite-watchdog&dry_run=1` to probe) lists `manifests/` and, when the newest marker is older than 26 h or the bucket cannot be listed, mails the admin recipients (`PlatformConfig.support_email`, else ACTIVE admins) once per day with event `backup_offsite_missing` (template editable under notification templates). Without `S3_BACKUP_BUCKET` the task reports `disabled` and nothing is uploaded.
+
+Restore test: monthly, into a named scratch database with `scripts/ops/ms-backup-restore-from-s3.sh --date <yyyy-mm-dd> --target-db ms_restore_<date> --create-db` (refuses the live database unless `--allow-live`); record the printed smoke line (row counts, last order, migrations). Disaster restore: admin panel restore (fetches from S3 when needed) or the script with `--allow-live` while the API is stopped, then extract the files archive to the configured dirs.
 
 ## 6. Ops status endpoint
 

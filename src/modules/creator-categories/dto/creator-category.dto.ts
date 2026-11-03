@@ -17,6 +17,7 @@ import {
   CreatorCategoryMatchRule,
   CreatorCategoryVisibility,
 } from '@prisma/client';
+import { UploadUrl } from '../../../common/uploads/upload-url.transform';
 
 /** Token of one product in a manual collection order: `p:<id>` or `cp:<id>`. */
 export const PRODUCT_ORDER_TOKEN_RE = /^(p|cp):[0-9a-f-]{36}$/i;
@@ -63,6 +64,7 @@ export class CreateCreatorCategoryDto {
 
   @IsOptional()
   @IsString()
+  @UploadUrl()
   thumbnail_url?: string;
 
   @IsOptional()
@@ -143,6 +145,7 @@ export class UpdateCreatorCategoryDto {
 
   @IsOptional()
   @IsString()
+  @UploadUrl()
   thumbnail_url?: string | null;
 
   @IsOptional()

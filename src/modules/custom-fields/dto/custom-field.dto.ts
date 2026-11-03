@@ -16,6 +16,10 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CustomFieldType } from '@prisma/client';
+import {
+  UploadUrl,
+  UploadUrlsInJson,
+} from '../../../common/uploads/upload-url.transform';
 
 /** Bounds of `translations[].option_labels` (`{optionValue: label}`). */
 export const OPTION_LABELS_LIMITS = {
@@ -99,6 +103,7 @@ export class CustomFieldTranslationDto {
   @IsOptional()
   @IsString()
   @MaxLength(2000)
+  @UploadUrl()
   help_image_url?: string | null;
 
   @IsOptional()
@@ -169,6 +174,7 @@ export class CreateCustomFieldDto {
 
   @IsOptional()
   @IsObject()
+  @UploadUrlsInJson()
   ui?: Record<string, unknown> | null;
 
   // Audit keys written by presets / the importer; round-tripped by the editor.
@@ -240,6 +246,7 @@ export class UpdateCustomFieldDto {
 
   @IsOptional()
   @IsObject()
+  @UploadUrlsInJson()
   ui?: Record<string, unknown> | null;
 
   // Audit keys written by presets / the importer; round-tripped by the editor.

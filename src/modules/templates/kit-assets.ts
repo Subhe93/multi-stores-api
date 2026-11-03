@@ -2,10 +2,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import type { Kit } from './kits/types';
+import type { PublicStorage } from '../storage/public-storage';
 
-// Where bundled kit assets live (committed) and where the store's uploads are
-// served from. Both resolve against the API process cwd, matching UploadsService.
-const UPLOAD_ROOT = path.join(process.cwd(), 'uploads');
+// Where bundled kit assets live (committed app code, read from disk). The
+// copies are written through PublicStorage (local disk or S3 by driver).
 const ASSETS_ROOT = path.join(process.cwd(), 'assets', 'templates');
 
 const PLACEHOLDER_PALETTE: Array<[string, string]> = [
@@ -39,19 +39,19 @@ function placeholderSvg(key: string): string {
 }
 
 /**
- * Materialise a kit's assets into the store's uploads and return an
- * assetKey → "/uploads/..." URL map for substitution into section
- * settings/content. Bundled files (assets/templates/<kitId>/<file>) are copied
- * byte-for-byte; any missing file falls back to a generated gradient SVG so the
- * import never leaves broken images. Filesystem work — call before the DB
+ * Materialise a kit's assets into the store's uploads
+ * (`/uploads/template-imports/<storeId>/<uuid>.<ext>`) and return an
+ * assetKey → URL map for substitution into section settings/content. Bundled
+ * files (assets/templates/<kitId>/<file>) are copied byte-for-byte through
+ * `PublicStorage`; any missing file falls back to a generated gradient SVG so
+ * the import never leaves broken images. Storage work — call before the DB
  * transaction.
  */
-export function materialiseKitAssets(
+export async function materialiseKitAssets(
   kit: Kit,
   storeId: string,
-): Record<string, string> {
-  const destDir = path.join(UPLOAD_ROOT, 'template-imports', storeId);
-  fs.mkdirSync(destDir, { recursive: true });
+  storage: PublicStorage,
+): Promise<Record<string, string>> {
   const srcDir = path.join(ASSETS_ROOT, kit.id);
   const map: Record<string, string> = {};
 
@@ -67,14 +67,15 @@ export function materialiseKitAssets(
         ? path.extname(asset.file).toLowerCase() || '.svg'
         : '.svg';
       const filename = `${randomUUID()}${ext}`;
-      const destPath = path.join(destDir, filename);
-
-      if (useBundled) {
-        fs.copyFileSync(src, destPath);
-      } else {
-        fs.writeFileSync(destPath, placeholderSvg(key), 'utf8');
-      }
-      map[key] = `/uploads/template-imports/${storeId}/${filename}`;
+      const body = useBundled
+        ? await fs.promises.readFile(src)
+        : Buffer.from(placeholderSvg(key), 'utf8');
+      const stored = await storage.put(
+        `template-imports/${storeId}`,
+        filename,
+        body,
+      );
+      map[key] = stored.url;
     } catch {
       // Leave unmapped → substitution resolves to '' and sections show their
       // empty state rather than failing the whole import.

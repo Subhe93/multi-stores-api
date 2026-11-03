@@ -8,11 +8,12 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  Optional,
   StreamableFile,
 } from '@nestjs/common';
 import { Backup, BackupKind, BackupStatus, Prisma } from '@prisma/client';
 import { createReadStream, promises as fs } from 'fs';
-import { basename, isAbsolute, join, relative, resolve } from 'path';
+import { basename, dirname, join, resolve } from 'path';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   fileTimestamp,
@@ -36,6 +37,7 @@ import {
 } from './dto/backups.dto';
 import { computeNextRunAt, SlotConfig } from './backup-schedule';
 import { defaultPrivateStorageDir } from '../../common/storage/private-file-storage';
+import { BackupOffsiteService } from './offsite/backup-offsite.service';
 
 /** Name of the folder (relative to cwd) archived with a backup. */
 const UPLOADS_DIR = 'uploads';
@@ -126,7 +128,10 @@ export class BackupsService implements OnModuleInit {
   private restoring = false;
   private toolsCache: { at: number; tools: BackupTools } | null = null;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly offsite?: BackupOffsiteService,
+  ) {}
 
   /**
    * A row still PENDING/RUNNING at boot belongs to a process that died
@@ -325,27 +330,20 @@ export class BackupsService implements OnModuleInit {
 
       let uploadsSize: number | null = null;
       if (uploadsFile) {
-        // An empty uploads folder still yields a valid (tiny) archive.
-        await fs.mkdir(join(process.cwd(), UPLOADS_DIR), { recursive: true });
-        // Private files (customer upload originals, invoice PDFs, ...) travel
-        // in the same archive when they live under the working directory.
-        // Restore still extracts `uploads/` only.
-        const privateDirs = await privateArchiveDirs();
-        const dirs = [UPLOADS_DIR, ...privateDirs];
+        // Public uploads (while they are still on local disk), private files
+        // (customer upload originals, designer assets, importer bundles) and
+        // invoice PDFs travel in one archive, each directory entered with
+        // its own `-C` so the configured dirs may live outside the working
+        // directory. Restore still extracts `uploads/` only.
+        const members = await archiveMembers();
+        const privateDirs = members
+          .filter((m) => m.kind === 'private')
+          .map((m) => m.name);
+        // `--exclude`: in-flight atomic-write temp files of private storage.
+        const args = ['-czf', uploadsFile, '--exclude=.*.tmp'];
+        for (const m of members) args.push('-C', m.cwd, m.name);
         try {
-          await runTool(
-            'tar',
-            [
-              '-czf',
-              uploadsFile,
-              // In-flight atomic-write temp files of private storage.
-              '--exclude=.*.tmp',
-              '-C',
-              process.cwd(),
-              ...dirs,
-            ],
-            { timeoutMs: BACKUP_TIMEOUT_MS },
-          );
+          await runTool('tar', args, { timeoutMs: BACKUP_TIMEOUT_MS });
         } catch (err) {
           // Files purged or replaced in private storage during the run do
           // not invalidate the archive (see isTolerableTarWarning).
@@ -376,7 +374,7 @@ export class BackupsService implements OnModuleInit {
       this.logger.log(
         `Backup ${row.id} completed: db ${formatBytes(dbSize)}${uploadsSize === null ? '' : `, uploads ${formatBytes(uploadsSize)}`}`,
       );
-      return this.serialize(finished);
+      return this.serialize(await this.copyOffsite(finished));
     } catch (err) {
       const error = this.describeError(err);
       this.logger.error(`Backup ${row.id} failed: ${error}`);
@@ -396,6 +394,64 @@ export class BackupsService implements OnModuleInit {
     } finally {
       this.running = false;
     }
+  }
+
+  /**
+   * Offsite copy of a completed backup (never fails the backup). A
+   * PRE_RESTORE backup is copied in the background so the restore it
+   * protects does not wait for the upload.
+   */
+  private async copyOffsite(row: Backup): Promise<Backup> {
+    if (!this.offsite?.uploadEnabled) return row;
+    if (row.kind === BackupKind.PRE_RESTORE) {
+      this.offsite
+        .uploadAfterBackup(row)
+        .catch((err: unknown) =>
+          this.logger.error(
+            `Offsite copy of ${row.id} crashed: ${String(err)}`,
+          ),
+        );
+      return row;
+    }
+    return this.offsite.uploadAfterBackup(row);
+  }
+
+  /**
+   * Local path of a backup file, fetched back from the offsite copy when
+   * it was rotated off the disk; 404 BACKUP_FILE_MISSING when neither
+   * exists.
+   */
+  private async localFile(row: Backup, which: BackupFileKind): Promise<string> {
+    const current = which === 'db' ? row.db_file : row.uploads_file;
+    if (!current && !(which === 'db' ? row.s3_key : row.s3_files_key)) {
+      throw new NotFoundException({
+        code: 'BACKUP_FILE_MISSING',
+        message: `This backup has no ${which} file`,
+      });
+    }
+    let file: string | null = null;
+    try {
+      file = this.offsite
+        ? await this.offsite.ensureLocalFile(row, which, this.dir)
+        : current && (await fileExists(current))
+          ? current
+          : null;
+    } catch (err) {
+      this.logger.error(
+        `Backup ${row.id}: fetching the ${which} file offsite failed: ${String(err)}`,
+      );
+      throw new InternalServerErrorException({
+        code: 'BACKUP_OFFSITE_FETCH_FAILED',
+        message: `The ${which} file is not on disk and could not be fetched from the offsite copy`,
+      });
+    }
+    if (!file) {
+      throw new NotFoundException({
+        code: 'BACKUP_FILE_MISSING',
+        message: `The ${which} file is no longer on disk`,
+      });
+    }
+    return file;
   }
 
   /** Error text stored on a FAILED row: a code prefix + a bounded detail. */
@@ -462,13 +518,7 @@ export class BackupsService implements OnModuleInit {
 
   async download(id: string, which: BackupFileKind): Promise<StreamableFile> {
     const row = await this.findOrThrow(id);
-    const file = which === 'db' ? row.db_file : row.uploads_file;
-    if (!file) {
-      throw new NotFoundException({
-        code: 'BACKUP_FILE_MISSING',
-        message: `This backup has no ${which} file`,
-      });
-    }
+    const file = await this.localFile(row, which);
     let size: number;
     try {
       size = (await fs.stat(file)).size;
@@ -501,22 +551,24 @@ export class BackupsService implements OnModuleInit {
       });
     }
     const row = await this.findOrThrow(id);
-    if (row.status !== BackupStatus.COMPLETED || !row.db_file) {
+    if (row.status !== BackupStatus.COMPLETED || !(row.db_file || row.s3_key)) {
       throw new BadRequestException({
         code: 'BACKUP_NOT_RESTORABLE',
         message: 'Only a completed backup can be restored',
       });
     }
     const restoreUploads = dto.restore_uploads === true;
-    if (restoreUploads && !row.uploads_file) {
+    if (restoreUploads && !(row.uploads_file || row.s3_files_key)) {
       throw new BadRequestException({
         code: 'BACKUP_NO_UPLOADS',
         message: 'This backup does not include an uploads archive',
       });
     }
-    await this.assertFileExists(row.db_file, 'db');
-    if (restoreUploads)
-      await this.assertFileExists(row.uploads_file!, 'uploads');
+    // Local copies, fetched back from the offsite bucket when rotated out.
+    const dbFile = await this.localFile(row, 'db');
+    const uploadsFile = restoreUploads
+      ? await this.localFile(row, 'uploads')
+      : null;
 
     if (await this.isBusy()) {
       throw new ConflictException({
@@ -547,7 +599,7 @@ export class BackupsService implements OnModuleInit {
         BackupKind.PRE_RESTORE,
         {
           includeUploads: restoreUploads,
-          note: `Automatic backup before restoring ${basename(row.db_file)}`,
+          note: `Automatic backup before restoring ${basename(dbFile)}`,
           createdBy,
         },
         true,
@@ -565,11 +617,9 @@ export class BackupsService implements OnModuleInit {
 
       // 3. Replay the dump.
       const url = parseDatabaseUrl(process.env.DATABASE_URL ?? '');
-      this.logger.warn(
-        `RESTORE: pg_restore ${basename(row.db_file)} → database`,
-      );
+      this.logger.warn(`RESTORE: pg_restore ${basename(dbFile)} → database`);
       try {
-        await pgRestore(url, row.db_file, { timeoutMs: RESTORE_TIMEOUT_MS });
+        await pgRestore(url, dbFile, { timeoutMs: RESTORE_TIMEOUT_MS });
       } catch (err) {
         const detail = this.describeError(err);
         this.logger.error(`RESTORE FAILED for ${id}: ${detail}`);
@@ -593,12 +643,12 @@ export class BackupsService implements OnModuleInit {
       //    (list the folders first with `tar -tzf <file> | cut -d/ -f1 | sort -u`).
       //    Files purged by retention after the backup come back as files, but
       //    their CustomerUpload rows keep `purged_at`, so they stay unserved.
-      if (restoreUploads) {
+      if (restoreUploads && uploadsFile) {
         this.logger.warn(
-          `RESTORE: extracting ${basename(row.uploads_file!)} over ${UPLOADS_DIR}/`,
+          `RESTORE: extracting ${basename(uploadsFile)} over ${UPLOADS_DIR}/`,
         );
         try {
-          await tarExtract(row.uploads_file!, process.cwd(), UPLOADS_DIR, {
+          await tarExtract(uploadsFile, process.cwd(), UPLOADS_DIR, {
             timeoutMs: RESTORE_TIMEOUT_MS,
           });
         } catch (err) {
@@ -635,17 +685,6 @@ export class BackupsService implements OnModuleInit {
       this.logger.error(
         `Could not re-sync backup rows after restore: ${String(err)}`,
       );
-    }
-  }
-
-  private async assertFileExists(file: string, which: BackupFileKind) {
-    try {
-      await fs.access(file);
-    } catch {
-      throw new NotFoundException({
-        code: 'BACKUP_FILE_MISSING',
-        message: `The ${which} file is no longer on disk`,
-      });
     }
   }
 
@@ -785,32 +824,80 @@ function isNotFound(err: unknown): boolean {
   );
 }
 
+async function fileExists(file: string): Promise<boolean> {
+  try {
+    await fs.access(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** One `-C <cwd> <name>` pair of the files archive. */
+export interface ArchiveMember {
+  kind: 'uploads' | 'private';
+  /** Directory tar enters before adding `name`. */
+  cwd: string;
+  /** Entry name inside the archive (the directory's base name). */
+  name: string;
+  abs: string;
+}
+
 /**
- * Private storage roots to add to the uploads archive (M4.0 §8.6):
- * `PRIVATE_STORAGE_DIR` (default `<cwd>/storage`, which also holds the
- * default invoice storage) and `INVOICE_STORAGE_DIR`, each only when it
- * exists inside the working directory. Paths are relative to cwd, deduped,
- * and nested roots are covered by their parent.
+ * Directories of the files archive: the public `uploads/` folder while
+ * `STORAGE_DRIVER` is not `s3` (afterwards the media already lives in S3),
+ * then `PRIVATE_STORAGE_DIR` (default `<cwd>/storage`, which also holds the
+ * default invoice storage) and `INVOICE_STORAGE_DIR`, wherever they live.
+ * Each existing directory becomes `-C <parent> <basename>`; a root nested
+ * in another member is covered by it. Two roots with the same base name
+ * are both appended (tar merges them on extraction).
  */
-async function privateArchiveDirs(): Promise<string[]> {
+export async function archiveMembers(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ArchiveMember[]> {
   const cwd = process.cwd();
+  const members: ArchiveMember[] = [];
+  const addUploads = async () => {
+    // An empty uploads folder still yields a valid (tiny) archive.
+    const uploads = join(cwd, UPLOADS_DIR);
+    await fs.mkdir(uploads, { recursive: true });
+    members.push({ kind: 'uploads', cwd, name: UPLOADS_DIR, abs: uploads });
+  };
+  if ((env.STORAGE_DRIVER ?? 'local').trim().toLowerCase() !== 's3') {
+    await addUploads();
+  }
   const candidates = [defaultPrivateStorageDir()];
-  const invoiceDir = process.env.INVOICE_STORAGE_DIR?.trim();
+  const invoiceDir = env.INVOICE_STORAGE_DIR?.trim();
   if (invoiceDir) candidates.push(resolve(invoiceDir));
-  const rels: string[] = [];
+  const roots: string[] = [];
   for (const abs of candidates) {
-    const rel = relative(cwd, abs);
-    if (!rel || rel.startsWith('..') || isAbsolute(rel)) continue;
-    if (rel.split(/[\\/]/)[0] === UPLOADS_DIR) continue;
     try {
       if (!(await fs.stat(abs)).isDirectory()) continue;
     } catch {
       continue;
     }
-    rels.push(rel.split('\\').join('/'));
+    if (!roots.includes(abs)) roots.push(abs);
   }
-  rels.sort((a, b) => a.length - b.length);
-  return rels.filter(
-    (r, i) => !rels.slice(0, i).some((p) => r === p || r.startsWith(`${p}/`)),
-  );
+  roots.sort((a, b) => a.length - b.length);
+  for (const abs of roots) {
+    const covered = [...members.map((m) => m.abs), ...roots].some(
+      (p) => p !== abs && isInside(abs, p),
+    );
+    if (covered) continue;
+    members.push({
+      kind: 'private',
+      cwd: dirname(abs),
+      name: basename(abs),
+      abs,
+    });
+  }
+  // Nothing to archive (s3 driver, no private dirs yet): keep tar happy.
+  if (!members.length) await addUploads();
+  return members;
+}
+
+function isInside(child: string, parent: string): boolean {
+  const c = child.replace(/\\/g, '/').replace(/\/+$/, '');
+  const p = parent.replace(/\\/g, '/').replace(/\/+$/, '');
+  return c === p || c.startsWith(`${p}/`);
 }

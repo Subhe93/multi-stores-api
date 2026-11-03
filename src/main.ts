@@ -13,6 +13,9 @@ import {
   matchesAllowedOrigin,
   parseAllowedOrigins,
 } from './common/cors/cors-origin.matcher';
+import { PublicStorage } from './modules/storage/public-storage';
+import { storageDriver } from './modules/storage/storage.config';
+import { createUploadsServingHandler } from './modules/storage/uploads-serving';
 
 /** `TRUST_PROXY`: a hop count, or a name/list Express understands ("loopback"). */
 function parseTrustProxy(raw: string | undefined): number | string | undefined {
@@ -57,32 +60,40 @@ async function bootstrap() {
   app.getHttpAdapter().getInstance().disable('x-powered-by');
   app.use(securityHeadersMiddleware);
 
-  // Serve uploaded files as static. Filenames are UUIDs, so the content at any
-  // given URL never changes — mark them long-lived + immutable so browsers
-  // and the CDN can cache aggressively (Lighthouse flagged the previous 4h
-  // TTL as wasted bandwidth on repeat visits).
-  app.useStaticAssets(join(process.cwd(), 'uploads'), {
-    prefix: '/uploads/',
-    maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year in ms
-    immutable: true,
-    setHeaders: (res: Response, filePath: string) => {
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      // An SVG is a document: navigating straight to an uploaded one would run
-      // any script inside it on this origin. Forcing a download kills that path
-      // while `<img src="...svg">` still renders normally (embedded SVGs can't
-      // execute scripts).
-      if (filePath.toLowerCase().endsWith('.svg')) {
-        res.setHeader('Content-Disposition', 'attachment');
-      }
-      // Customer upload previews (M4.0) are purged by retention: a one-day
-      // cache (not immutable) lets a purge take effect, and they are never
-      // indexed. send() keeps a Cache-Control set here.
-      if (/[\\/]customer-previews[\\/]/.test(filePath)) {
-        res.setHeader('Cache-Control', 'public, max-age=86400');
-        res.setHeader('X-Robots-Tag', 'noindex');
-      }
-    },
-  });
+  // Serve uploaded files. Filenames are UUIDs, so the content at any given
+  // URL never changes — mark them long-lived + immutable so browsers and the
+  // CDN can cache aggressively (Lighthouse flagged the previous 4h TTL as
+  // wasted bandwidth on repeat visits).
+  //
+  // STORAGE_DRIVER=s3: the objects live in the media bucket and the API
+  // streams them (`/uploads/*` stays on this host, outside the /api prefix)
+  // with the same headers as the static handler below.
+  if (storageDriver() === 's3') {
+    app.use('/uploads', createUploadsServingHandler(app.get(PublicStorage)));
+  } else {
+    app.useStaticAssets(join(process.cwd(), 'uploads'), {
+      prefix: '/uploads/',
+      maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year in ms
+      immutable: true,
+      setHeaders: (res: Response, filePath: string) => {
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        // An SVG is a document: navigating straight to an uploaded one would
+        // run any script inside it on this origin. Forcing a download kills
+        // that path while `<img src="...svg">` still renders normally
+        // (embedded SVGs can't execute scripts).
+        if (filePath.toLowerCase().endsWith('.svg')) {
+          res.setHeader('Content-Disposition', 'attachment');
+        }
+        // Customer upload previews (M4.0) are purged by retention: a one-day
+        // cache (not immutable) lets a purge take effect, and they are never
+        // indexed. send() keeps a Cache-Control set here.
+        if (/[\\/]customer-previews[\\/]/.test(filePath)) {
+          res.setHeader('Cache-Control', 'public, max-age=86400');
+          res.setHeader('X-Robots-Tag', 'noindex');
+        }
+      },
+    });
+  }
 
   app.setGlobalPrefix('api');
 

@@ -51,6 +51,7 @@ import { LegalModule } from './modules/legal/legal.module';
 import { NotificationTemplatesModule } from './modules/notification-templates/notification-templates.module';
 import { BackupsModule } from './modules/backups/backups.module';
 import { PrivateStorageModule } from './common/storage/private-storage.module';
+import { StorageModule } from './modules/storage/storage.module';
 import { RetentionModule } from './modules/retention/retention.module';
 import { CustomerUploadsModule } from './modules/customer-uploads/customer-uploads.module';
 import { ProductionModule } from './modules/production/production.module';
@@ -71,6 +72,8 @@ import { HealthModule } from './modules/health/health.module';
     // in bursts from a single IP).
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 300 }]),
     PrismaModule,
+    // Object storage (local disk or S3 by STORAGE_DRIVER): media, private, backups.
+    StorageModule,
     CryptoModule,
     SecurityModule,
     RevalidationModule,

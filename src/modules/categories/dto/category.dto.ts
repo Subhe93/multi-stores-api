@@ -8,6 +8,7 @@ import {
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { UploadUrl } from '../../../common/uploads/upload-url.transform';
 
 export class CreateCategoryDto {
   @IsString()
@@ -19,6 +20,7 @@ export class CreateCategoryDto {
 
   @IsOptional()
   @IsString()
+  @UploadUrl()
   icon?: string;
 
   @IsOptional()
@@ -55,6 +57,7 @@ export class UpdateCategoryDto {
 
   @IsOptional()
   @IsString()
+  @UploadUrl()
   icon?: string;
 
   @IsOptional()

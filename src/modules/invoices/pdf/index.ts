@@ -8,6 +8,8 @@
  *   INVOICE_PDF_CHROMIUM_PATH     explicit browser executable
  *   INVOICE_PDF_BROWSER_CHANNEL   msedge | chrome | chromium ... (dev)
  *   INVOICE_STORAGE_DIR           default <cwd>/storage/invoices
+ *   STORAGE_DRIVER=s3             PDFs go to the private bucket under
+ *                                 `invoices/<key>` (S3InvoiceStorage)
  */
 import type { Provider } from '@nestjs/common';
 import {
@@ -15,6 +17,13 @@ import {
   LocalDiskInvoiceStorage,
 } from '../storage/invoice-storage';
 import { createPdfRenderer } from './chromium.renderer';
+import type { ObjectStorage } from '../../storage/object-storage';
+import { S3InvoiceStorage } from '../../storage/s3-invoice-storage';
+import type { StorageConfig } from '../../storage/storage.config';
+import {
+  PRIVATE_OBJECT_STORAGE,
+  STORAGE_CONFIG,
+} from '../../storage/storage.tokens';
 import { InvoicePdfService } from './invoice-pdf.service';
 import { PDF_RENDERER } from './pdf-renderer';
 
@@ -22,8 +31,11 @@ export const INVOICE_PDF_PROVIDERS: Provider[] = [
   { provide: PDF_RENDERER, useFactory: () => createPdfRenderer(process.env) },
   {
     provide: INVOICE_STORAGE,
-    useFactory: () =>
-      new LocalDiskInvoiceStorage(process.env.INVOICE_STORAGE_DIR),
+    inject: [STORAGE_CONFIG, PRIVATE_OBJECT_STORAGE],
+    useFactory: (cfg: StorageConfig, objects: ObjectStorage) =>
+      cfg.driver === 's3'
+        ? new S3InvoiceStorage(objects)
+        : new LocalDiskInvoiceStorage(process.env.INVOICE_STORAGE_DIR),
   },
   InvoicePdfService,
 ];

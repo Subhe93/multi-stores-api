@@ -1098,6 +1098,14 @@ model Backup {
   started_at         DateTime?
   finished_at        DateTime?
   created_at         DateTime     @default(now())
+  // Offsite copy (plans/s3-storage, Phase 1): object keys in S3_BACKUP_BUCKET
+  // (`db/<yyyy-mm-dd>/<file>`, `files/<yyyy-mm-dd>/<file>`), the ETag of the
+  // dump object, when the copy was verified, or why it failed.
+  s3_key             String?
+  s3_files_key       String?
+  s3_etag            String?
+  offsite_at         DateTime?
+  offsite_error      String?
 
   @@index([created_at])
 }

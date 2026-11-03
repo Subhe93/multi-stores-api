@@ -39,6 +39,30 @@ export function defaultInvoiceStorageDir(): string {
   return path.join(process.cwd(), 'storage', 'invoices');
 }
 
+/** True for `<store>/<yyyy>/<invoice>.pdf` (shared by the disk and S3 adapters). */
+export function isValidInvoiceStorageKey(key: unknown): key is string {
+  return typeof key === 'string' && KEY.test(key);
+}
+
+/** Builds `<store_id>/<yyyy>/<invoice_id>.pdf` (shared by the disk and S3 adapters). */
+export function invoiceKeyFor(
+  storeId: string,
+  issueDate: Date | string,
+  invoiceId: string,
+): string {
+  if (!SEGMENT.test(storeId) || !SEGMENT.test(invoiceId)) {
+    throw new InvalidInvoiceStorageKeyError(`${storeId}/${invoiceId}`);
+  }
+  const d = issueDate instanceof Date ? issueDate : new Date(String(issueDate));
+  const year = Number.isNaN(d.getTime())
+    ? String(issueDate).slice(0, 4)
+    : String(d.getUTCFullYear());
+  if (!/^\d{4}$/.test(year)) {
+    throw new InvalidInvoiceStorageKeyError(String(issueDate));
+  }
+  return `${storeId}/${year}/${invoiceId}.pdf`;
+}
+
 export class LocalDiskInvoiceStorage implements InvoiceStorage {
   readonly root: string;
 
@@ -49,23 +73,12 @@ export class LocalDiskInvoiceStorage implements InvoiceStorage {
   }
 
   keyFor(storeId: string, issueDate: Date | string, invoiceId: string): string {
-    if (!SEGMENT.test(storeId) || !SEGMENT.test(invoiceId)) {
-      throw new InvalidInvoiceStorageKeyError(`${storeId}/${invoiceId}`);
-    }
-    const d =
-      issueDate instanceof Date ? issueDate : new Date(String(issueDate));
-    const year = Number.isNaN(d.getTime())
-      ? String(issueDate).slice(0, 4)
-      : String(d.getUTCFullYear());
-    if (!/^\d{4}$/.test(year)) {
-      throw new InvalidInvoiceStorageKeyError(String(issueDate));
-    }
-    return `${storeId}/${year}/${invoiceId}.pdf`;
+    return invoiceKeyFor(storeId, issueDate, invoiceId);
   }
 
   /** Validates the key and resolves it to an absolute path inside root. */
   resolve(key: string): string {
-    if (typeof key !== 'string' || !KEY.test(key)) {
+    if (!isValidInvoiceStorageKey(key)) {
       throw new InvalidInvoiceStorageKeyError(key);
     }
     const full = path.resolve(this.root, ...key.split('/'));

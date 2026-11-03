@@ -1,4 +1,5 @@
 import { IsString, IsOptional, Length } from 'class-validator';
+import { UploadUrl } from '../../../common/uploads/upload-url.transform';
 
 export class CreateProviderDto {
   @IsString()
@@ -39,5 +40,6 @@ export class UpdateProviderDto {
 
   @IsOptional()
   @IsString()
+  @UploadUrl()
   logo_url?: string;
 }

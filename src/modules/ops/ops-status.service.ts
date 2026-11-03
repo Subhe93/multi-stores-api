@@ -1,13 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { promises as fs } from 'fs';
 import { hostname } from 'os';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import { PrismaService } from '../../prisma/prisma.service';
-import { defaultPrivateStorageDir } from '../../common/storage/private-file-storage';
 import { freeBytes } from '../customer-uploads/customer-upload-admission';
 import { instanceId } from '../../common/ops/job-log';
 import { workerFlags } from '../../common/ops/workers-env';
 import { computeNextRunAt } from '../backups/backup-schedule';
+import { parseStorageConfig } from '../storage/storage.config';
+import {
+  CryptoService,
+  CryptoStatus,
+} from '../../common/crypto/crypto.service';
 
 /**
  * `GET /admin/ops/status` (M5 W1-C, F13): one read-only snapshot of the
@@ -45,6 +49,8 @@ export interface OpsStatus {
   };
   workers: Record<string, boolean>;
   db: { ok: boolean; round_trip_ms: number | null; error?: string };
+  /** Data-key source and non-secret key id (KMS envelope, Phase 4). */
+  crypto: CryptoStatus | { error: string };
   disk: Record<string, DiskStatus>;
   retention: unknown;
   print_queue: unknown;
@@ -71,7 +77,10 @@ export class OpsStatusService {
   private build: { version: string | null; commit: string | null } | null =
     null;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly crypto: CryptoService,
+  ) {}
 
   async status(now: number = Date.now()): Promise<OpsStatus> {
     if (this.cache && now - this.cache.at < STATUS_CACHE_MS) {
@@ -114,12 +123,21 @@ export class OpsStatusService {
       workers: workerFlags(),
       db,
       disk,
+      crypto: this.cryptoStatus(),
       retention: retentionFromTicks(ticks),
       print_queue: withPaused(printQueue, ticks, now),
       importer: withImporterTicks(importer, ticks),
       backup,
       jobs: Array.isArray(jobs) ? ticks.map(tickView) : jobs,
     };
+  }
+
+  private cryptoStatus(): CryptoStatus | { error: string } {
+    try {
+      return this.crypto.describe();
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   /** Runs one section; its failure becomes `{ error }` instead of a 500. */
@@ -151,16 +169,18 @@ export class OpsStatusService {
   }
 
   private async disk(): Promise<Record<string, DiskStatus>> {
-    const dirs: Record<string, string> = {
-      private_storage: defaultPrivateStorageDir(),
-      invoices: process.env.INVOICE_STORAGE_DIR?.trim()
-        ? resolve(process.env.INVOICE_STORAGE_DIR.trim())
-        : join(process.cwd(), 'storage', 'invoices'),
-      uploads: join(process.cwd(), 'uploads'),
-      backups: process.env.BACKUP_DIR?.trim()
-        ? resolve(process.env.BACKUP_DIR.trim())
-        : join(process.cwd(), 'backups'),
-    };
+    // With STORAGE_DRIVER=s3 the media, private and invoice trees are not
+    // on this disk: only the backup directory is reported.
+    const storage = parseStorageConfig();
+    const dirs: Record<string, string> =
+      storage.driver === 's3'
+        ? { backups: storage.local.backupsDir }
+        : {
+            private_storage: storage.local.privateDir,
+            invoices: storage.local.invoicesDir,
+            uploads: storage.local.uploadsDir,
+            backups: storage.local.backupsDir,
+          };
     const out: Record<string, DiskStatus> = {};
     for (const [name, dir] of Object.entries(dirs)) {
       out[name] = { dir, free_bytes: await freeBytes(dir) };

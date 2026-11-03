@@ -21,6 +21,7 @@ import {
   type PrivateStorage,
 } from '../../common/storage/private-file-storage';
 import { freeBytes } from '../customer-uploads/customer-upload-admission';
+import { isS3Driver } from '../storage/storage.config';
 import type { RequestWithAppStore } from '../../common/guards/require-app.guard';
 import { UUID_RE } from './designs.util';
 
@@ -200,8 +201,9 @@ export class DesignerUploadAdmission {
     );
   }
 
-  /** Directory whose disk receives the photos. */
+  /** Directory whose disk receives the photos; undefined on S3 (no disk guard). */
   storageRoot(): string | undefined {
+    if (isS3Driver(this.env)) return undefined;
     return this.storage?.root;
   }
 
@@ -254,7 +256,7 @@ export class DesignerUploadAdmission {
         throw designerUploadQuota('design', { max_photos: maxPhotos });
     }
     const minMb = this.minFreeMb();
-    if (minMb && c.storageRoot) {
+    if (minMb && c.storageRoot && !isS3Driver(this.env)) {
       const free = await freeBytes(c.storageRoot);
       if (free !== null && free < minMb * 1024 * 1024 + bytes)
         throw designerStorageFull();
