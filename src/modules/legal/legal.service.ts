@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UpdateLegalPageDto } from './dto/legal.dto';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 
 type Localized = Record<string, string>;
 
@@ -12,7 +13,10 @@ type Localized = Record<string, string>;
  */
 @Injectable()
 export class LegalService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private revalidation: RevalidationService,
+  ) {}
 
   private pickLocale(json: unknown, locale?: string): string {
     const obj = (json || {}) as Localized;
@@ -72,9 +76,16 @@ export class LegalService {
       ? { ...(page.content as Localized), ...dto.content }
       : page.content;
 
-    return this.prisma.legalPage.update({
+    const updated = await this.prisma.legalPage.update({
       where: { slug },
       data: { title: mergedTitle as object, content: mergedContent as object },
     });
+    // The storefront caches legal pages for an hour; purge right away so an
+    // admin edit is visible immediately (best effort, never blocks the save).
+    void Promise.all([
+      this.revalidation.revalidateTag('legal'),
+      this.revalidation.revalidateTag(`legal:${slug}`),
+    ]).catch(() => undefined);
+    return updated;
   }
 }

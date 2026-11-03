@@ -37,6 +37,21 @@ export class RevalidationService {
 
   /** POST the store slug to the storefront's /api/revalidate endpoint. */
   async revalidateStoreBySlug(slug: string): Promise<void> {
+    await this.post({ slug }, `store "${slug}"`);
+  }
+
+  /**
+   * Purge a platform-wide storefront cache tag (e.g. `legal` after an admin
+   * edits a legal page). The storefront only accepts an allow-listed set.
+   */
+  async revalidateTag(tag: string): Promise<void> {
+    await this.post({ tag }, `tag "${tag}"`);
+  }
+
+  private async post(
+    body: Record<string, string>,
+    label: string,
+  ): Promise<void> {
     const baseUrl = process.env.STOREFRONT_URL;
     const secret = process.env.REVALIDATE_SECRET;
 
@@ -54,16 +69,16 @@ export class RevalidationService {
           'Content-Type': 'application/json',
           'x-revalidate-secret': secret,
         },
-        body: JSON.stringify({ slug }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         this.logger.warn(
-          `Revalidation for "${slug}" returned ${res.status} ${res.statusText}`,
+          `Revalidation for ${label} returned ${res.status} ${res.statusText}`,
         );
       }
     } catch (err) {
       this.logger.warn(
-        `Revalidation request for "${slug}" failed: ${(err as Error).message}`,
+        `Revalidation request for ${label} failed: ${(err as Error).message}`,
       );
     }
   }
