@@ -17,6 +17,11 @@ describe('storage config', () => {
     expect(cfg.strictStartup).toBe(true);
     expect(cfg.local.uploadsDir.endsWith('uploads')).toBe(true);
     expect(cfg.credentialsInEnv).toBe(false);
+    expect(cfg.mediaPrefix).toBe('media/');
+    expect(cfg.privatePrefix).toBe('private/');
+    expect(cfg.backupPrefix).toBe('backups/');
+    expect(cfg.deleteMode).toBe('try');
+    expect(cfg.backupObjectLock).toBe(false);
     expect(storageDriver({})).toBe('local');
     expect(isS3Driver({})).toBe(false);
   });
@@ -81,6 +86,92 @@ describe('storage config', () => {
     expect(described).not.toContain('key/x');
     expect(described).toContain('"kms":true');
     expect(described).toContain('"credentials_in_env":true');
+    expect(described).toContain('"delete_mode":"try"');
+    expect(described).toContain('"backup_object_lock":false');
+    expect(described).toContain('"media_prefix":"media/"');
+  });
+
+  it('single bucket for all roles: prefixes keep them apart, normalised to end with /', () => {
+    const cfg = parseStorageConfig(
+      {
+        STORAGE_DRIVER: 's3',
+        AWS_REGION: 'us-east-1',
+        S3_MEDIA_BUCKET: 'shopsdoor',
+        S3_PRIVATE_BUCKET: 'shopsdoor',
+        S3_BACKUP_BUCKET: 'shopsdoor',
+        S3_MEDIA_PREFIX: '/public',
+        S3_PRIVATE_PREFIX: 'priv//',
+        S3_BACKUP_PREFIX: ' archive/2026 ',
+        STORAGE_DELETE_MODE: 'skip',
+        S3_BACKUP_OBJECT_LOCK: 'true',
+      },
+      cwd,
+    );
+    expect(cfg).toMatchObject({
+      mediaPrefix: 'public/',
+      privatePrefix: 'priv/',
+      backupPrefix: 'archive/2026/',
+      deleteMode: 'skip',
+      backupObjectLock: true,
+      kmsKeyId: null,
+    });
+    // Set-but-empty = no prefix (allowed when the buckets differ).
+    expect(
+      parseStorageConfig(
+        {
+          STORAGE_DRIVER: 's3',
+          AWS_REGION: 'us-east-1',
+          S3_MEDIA_BUCKET: 'media',
+          S3_PRIVATE_BUCKET: 'private',
+          S3_MEDIA_PREFIX: '',
+          S3_PRIVATE_PREFIX: '',
+        },
+        cwd,
+      ),
+    ).toMatchObject({ mediaPrefix: '', privatePrefix: '' });
+  });
+
+  it('refuses two roles on the same bucket with the same prefix, and bad values', () => {
+    const base = {
+      STORAGE_DRIVER: 's3',
+      AWS_REGION: 'us-east-1',
+      S3_MEDIA_BUCKET: 'one',
+      S3_PRIVATE_BUCKET: 'one',
+    };
+    expect(() =>
+      parseStorageConfig({ ...base, S3_PRIVATE_PREFIX: 'media/' }, cwd),
+    ).toThrow(
+      /media and private share bucket "one" with the same key prefix "media\/"/,
+    );
+    expect(() =>
+      parseStorageConfig(
+        { ...base, S3_MEDIA_PREFIX: '', S3_PRIVATE_PREFIX: '' },
+        cwd,
+      ),
+    ).toThrow(/same key prefix ""/);
+    expect(() =>
+      parseStorageConfig(
+        { ...base, S3_BACKUP_BUCKET: 'one', S3_BACKUP_PREFIX: 'private' },
+        cwd,
+      ),
+    ).toThrow(/private and backup share bucket "one"/);
+    expect(() =>
+      parseStorageConfig({ ...base, S3_MEDIA_PREFIX: '../x' }, cwd),
+    ).toThrow(/S3_MEDIA_PREFIX is not a valid key prefix/);
+    expect(() =>
+      parseStorageConfig({ STORAGE_DELETE_MODE: 'maybe' }, cwd),
+    ).toThrow(/STORAGE_DELETE_MODE must be "try" or "skip"/);
+    expect(() =>
+      parseStorageConfig({ S3_BACKUP_OBJECT_LOCK: 'yes please' }, cwd),
+    ).toThrow(/S3_BACKUP_OBJECT_LOCK must be true or false/);
+  });
+
+  it('MEDIA_BASE_URL defaults to the API origin (PUBLIC_API_URL)', () => {
+    expect(
+      parseStorageConfig({ PUBLIC_API_URL: 'https://api.example.com/' }, cwd)
+        .mediaBaseUrl,
+    ).toBe('https://api.example.com');
+    expect(parseStorageConfig({}, cwd).mediaBaseUrl).toBeNull();
   });
 
   it('backups go offsite with the local driver when the backup bucket is set', () => {

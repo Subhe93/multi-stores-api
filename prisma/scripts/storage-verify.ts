@@ -14,7 +14,8 @@
  *   --seed 1234                          deterministic sample
  *   --concurrency 4
  *
- * Read-only on S3, on disk and on the API. No DB access.
+ * Read-only on S3 (GetObject under the role prefix, S3_MEDIA_PREFIX /
+ * S3_PRIVATE_PREFIX), on disk and on the API. No DB access.
  *
  * Run with:  npx ts-node prisma/scripts/storage-verify.ts --scope media --sample 100 --http https://ms-api.example.com
  */
@@ -32,7 +33,12 @@ import {
   keyFor,
   type Scope,
 } from './storage-migrate.planner';
-import { createS3, readS3Env, type S3Ops } from './storage-migrate.s3';
+import {
+  createS3,
+  readS3Env,
+  rolePrefixes,
+  type S3Ops,
+} from './storage-migrate.s3';
 
 interface Options {
   scopes: Scope[];
@@ -97,6 +103,8 @@ interface ScopeRoot {
   scope: Scope;
   root: string;
   bucket: string;
+  /** Key prefix of the role inside the bucket ('' or `<x>/`). */
+  prefix: string;
   exclude: string[];
 }
 
@@ -118,23 +126,27 @@ function resolveRoots(scopes: Scope[]): ScopeRoot[] {
     envTrim('INVOICE_STORAGE_DIR') ||
       path.join(process.cwd(), 'storage', 'invoices'),
   );
+  const prefixes = rolePrefixes();
   return scopes.map((scope) => {
+    const role = bucketRole(scope);
     const bucket =
-      bucketRole(scope) === 'media'
+      role === 'media'
         ? envTrim('S3_MEDIA_BUCKET')
         : envTrim('S3_PRIVATE_BUCKET');
+    const prefix = prefixes[role];
     if (!bucket)
       throw new Error(
-        `${bucketRole(scope) === 'media' ? 'S3_MEDIA_BUCKET' : 'S3_PRIVATE_BUCKET'} is not set`,
+        `${role === 'media' ? 'S3_MEDIA_BUCKET' : 'S3_PRIVATE_BUCKET'} is not set`,
       );
     if (scope === 'media')
-      return { scope, root: mediaRoot, bucket, exclude: [] };
+      return { scope, root: mediaRoot, bucket, prefix, exclude: [] };
     if (scope === 'invoices')
-      return { scope, root: invoiceRoot, bucket, exclude: [] };
+      return { scope, root: invoiceRoot, bucket, prefix, exclude: [] };
     return {
       scope,
       root: privateRoot,
       bucket,
+      prefix,
       exclude: isInside(invoiceRoot, privateRoot) ? [invoiceRoot] : [],
     };
   });
@@ -333,7 +345,7 @@ async function checkOne(
   const local = await sha256File(f.abs);
   let s3Problem: string | null = null;
   try {
-    const got = await s3.getDigest(sr.bucket, f.key);
+    const got = await s3.getDigest(sr.bucket, sr.prefix + f.key);
     if (!got) s3Problem = 'missing';
     else if (got.size !== f.size) s3Problem = `size ${got.size} != ${f.size}`;
     else if (got.sha256 !== local) s3Problem = 'sha256 differs';

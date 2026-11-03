@@ -13,6 +13,7 @@ import * as path from 'path';
 import type { Readable } from 'stream';
 import { contentTypeFor, LocalObjectStorage } from './local-object-storage';
 import type {
+  DeleteObjectResult,
   ObjectBody,
   ObjectHead,
   ObjectStorage,
@@ -168,8 +169,11 @@ export class PublicStorage {
     return { url: this.urlFor(key), key, size: out.size };
   }
 
-  /** Deletes the object behind a public URL; false when it did not exist. */
-  async delete(url: string): Promise<boolean> {
+  /**
+   * Deletes the object behind a public URL. `deleted: false` with a reason
+   * when it did not exist or S3 refused (`denied`: logged once, never thrown).
+   */
+  async delete(url: string): Promise<DeleteObjectResult> {
     const key = publicMediaKeyFromUrl(url);
     if (!key) throw new InvalidPublicUrlError(url);
     return this.store.delete(key);

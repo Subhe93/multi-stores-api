@@ -44,9 +44,12 @@ export interface BackupSinkPutOptions {
    */
   sha256?: string;
   metadata?: Record<string, string>;
-  /** Object tag `tier=<tier>` (lifecycle rules select on it). */
+  /**
+   * Object tag `tier=<tier>` (lifecycle rules select on it). Sent only when
+   * the sink runs with `S3_BACKUP_OBJECT_LOCK=true`; otherwise ignored.
+   */
   tier?: BackupTier;
-  /** Per-object Object Lock (GOVERNANCE) until this date. */
+  /** Per-object Object Lock (GOVERNANCE) until this date; same gate as `tier`. */
   retainUntil?: Date;
 }
 

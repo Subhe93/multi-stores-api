@@ -114,9 +114,10 @@ describe('createBackupObjectSink', () => {
     );
     expect(sink).toBeInstanceOf(S3BackupObjectSink);
     expect(sink.enabled).toBe(true);
-    expect(sink.target).toBe('s3://shopsdoor-prod-backups');
+    expect(sink.target).toBe('s3://shopsdoor-prod-backups/backups/');
     const line = String(logger.log.mock.calls[0][0]);
     expect(line).toContain('kms=true');
+    expect(line).toContain('object_lock=false');
     expect(line).toContain('backup_credentials=true');
     for (const secret of [
       'AKIASECRET',
@@ -140,12 +141,27 @@ describe('createBackupObjectSink', () => {
       }),
     ).toEqual({
       bucket: 'bkt',
+      keyPrefix: 'backups/',
       region: 'eu-north-1',
       kmsKeyId: undefined,
       endpoint: 'http://minio:9000',
       forcePathStyle: true,
+      objectLock: false,
       credentials: { accessKeyId: 'id', secretAccessKey: 'secret' },
     });
+    // Single bucket for every role: prefixes keep them apart; the API key
+    // (no BACKUP_AWS_*) is used.
+    expect(
+      s3BackupSinkConfigFromEnv({
+        STORAGE_DRIVER: 's3',
+        AWS_REGION: 'us-east-1',
+        S3_MEDIA_BUCKET: 'one',
+        S3_PRIVATE_BUCKET: 'one',
+        S3_BACKUP_BUCKET: 'one',
+        S3_BACKUP_PREFIX: 'archive',
+        S3_BACKUP_OBJECT_LOCK: 'true',
+      }),
+    ).toMatchObject({ bucket: 'one', keyPrefix: 'archive/', objectLock: true });
     expect(s3BackupSinkConfigFromEnv({ S3_BACKUP_BUCKET: '  ' })).toBeNull();
     // Same validation as the storage module: a bucket needs the region.
     expect(() =>
@@ -163,9 +179,15 @@ describe('S3BackupObjectSink (mocked client)', () => {
   beforeEach(() => stub.reset());
   afterAll(() => stub.restore());
 
-  it('puts with SSE-KMS, sha256 metadata + ChecksumSHA256, tier tag and Object Lock', async () => {
+  it('puts with SSE-KMS, sha256 metadata + ChecksumSHA256, and (opt-in) tier tag + Object Lock', async () => {
     const sink = new S3BackupObjectSink(
-      { bucket: 'b', region: 'eu-north-1', kmsKeyId: 'key-1' },
+      {
+        bucket: 'b',
+        keyPrefix: '',
+        region: 'eu-north-1',
+        kmsKeyId: 'key-1',
+        objectLock: true,
+      },
       client,
     );
     stub.on(PutObjectCommand).resolves({ ETag: '"abc"' });
@@ -195,26 +217,42 @@ describe('S3BackupObjectSink (mocked client)', () => {
     });
   });
 
-  it('daily objects carry the tag but no per-object lock; SSE-S3 without a KMS key', async () => {
+  it('default (no Object Lock, no KMS): plain PutObject under the prefix, no tag, no lock, no SSE header', async () => {
     const sink = new S3BackupObjectSink({ bucket: 'b' }, client);
+    expect(sink.keyPrefix).toBe('backups/');
+    expect(sink.target).toBe('s3://b/backups/');
     stub.on(PutObjectCommand).resolves({});
-    await sink.put('k', Buffer.from('xy'), { contentType: 't', tier: 'daily' });
-    const put = stub.commandCalls(PutObjectCommand)[0].args[0].input;
-    expect(put).toMatchObject({
-      ServerSideEncryption: 'AES256',
-      ContentLength: 2,
-      Tagging: 'tier=daily',
+    await sink.put('k', Buffer.from('xy'), {
+      contentType: 't',
+      tier: 'weekly',
+      retainUntil: new Date('2027-01-03T03:00:00Z'),
     });
+    const put = stub.commandCalls(PutObjectCommand)[0].args[0].input;
+    expect(put).toMatchObject({ Key: 'backups/k', ContentLength: 2 });
+    expect(put).not.toHaveProperty('ServerSideEncryption');
     expect(put).not.toHaveProperty('SSEKMSKeyId');
+    expect(put).not.toHaveProperty('Tagging');
     expect(put).not.toHaveProperty('ObjectLockMode');
     expect(put).not.toHaveProperty('ObjectLockRetainUntilDate');
+    // Object Lock on, daily: tag but no per-object lock.
+    const locking = new S3BackupObjectSink(
+      { bucket: 'b', keyPrefix: '', objectLock: true },
+      client,
+    );
+    await locking.put('k', Buffer.from('xy'), {
+      contentType: 't',
+      tier: 'daily',
+    });
+    const daily = stub.commandCalls(PutObjectCommand)[1].args[0].input;
+    expect(daily).toMatchObject({ Key: 'k', Tagging: 'tier=daily' });
+    expect(daily).not.toHaveProperty('ObjectLockMode');
     await expect(
       sink.put('k', Readable.from(['x']), { contentType: 't' }),
     ).rejects.toThrow(/contentLength/);
   });
 
   it('sizeOf verifies through ListObjectsV2 on the exact key (no HeadObject)', async () => {
-    const sink = new S3BackupObjectSink({ bucket: 'b' }, client);
+    const sink = new S3BackupObjectSink({ bucket: 'b', keyPrefix: '' }, client);
     stub
       .on(ListObjectsV2Command, { Prefix: 'db/2026-11-03/x.dump' })
       .resolvesOnce({
@@ -232,7 +270,7 @@ describe('S3BackupObjectSink (mocked client)', () => {
   });
 
   it('head/get answer null on 404, lower-case the metadata and explain a write-only key', async () => {
-    const sink = new S3BackupObjectSink({ bucket: 'b' }, client);
+    const sink = new S3BackupObjectSink({ bucket: 'b', keyPrefix: '' }, client);
     stub
       .on(HeadObjectCommand)
       .resolvesOnce({
@@ -262,7 +300,7 @@ describe('S3BackupObjectSink (mocked client)', () => {
   });
 
   it('list follows pagination', async () => {
-    const sink = new S3BackupObjectSink({ bucket: 'b' }, client);
+    const sink = new S3BackupObjectSink({ bucket: 'b', keyPrefix: '' }, client);
     stub
       .on(ListObjectsV2Command, { Prefix: 'manifests/' })
       .resolvesOnce({
@@ -291,6 +329,35 @@ describe('S3BackupObjectSink (mocked client)', () => {
     expect(second).toMatchObject({
       Prefix: 'manifests/',
       ContinuationToken: 't2',
+    });
+  });
+
+  it('prefixes sizeOf/list/get with the role prefix and answers role-relative keys', async () => {
+    const sink = new S3BackupObjectSink({ bucket: 'b' }, client);
+    stub
+      .on(ListObjectsV2Command, { Prefix: 'backups/db/2026-11-03/x.dump' })
+      .resolves({
+        Contents: [{ Key: 'backups/db/2026-11-03/x.dump', Size: 5 }],
+      });
+    expect(await sink.sizeOf('db/2026-11-03/x.dump')).toBe(5);
+    stub.on(ListObjectsV2Command, { Prefix: 'backups/manifests/' }).resolves({
+      Contents: [
+        { Key: 'backups/manifests/2026-11-01.json', Size: 1 },
+        { Key: 'backups/manifests/2026-11-02.json', Size: 2 },
+      ],
+    });
+    expect((await sink.list('manifests/')).map((o) => o.key)).toEqual([
+      'manifests/2026-11-01.json',
+      'manifests/2026-11-02.json',
+    ]);
+    stub.on(GetObjectCommand).resolves({
+      Body: Readable.from(['x']) as never,
+      ContentLength: 1,
+    });
+    await sink.get('db/2026-11-03/x.dump');
+    expect(stub.commandCalls(GetObjectCommand)[0].args[0].input).toMatchObject({
+      Bucket: 'b',
+      Key: 'backups/db/2026-11-03/x.dump',
     });
   });
 

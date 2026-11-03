@@ -1,9 +1,11 @@
 /**
  * Dual-read media storage for the migration window (`MEDIA_LOCAL_FALLBACK`):
  * reads (`get`/`head`/`exists`) try S3 first and fall back to the local tree
- * on a miss; writes go to S3 only; deletes go to both; `list` is S3 only.
+ * on a miss; writes go to S3 only; deletes go to both (the local file goes
+ * even when S3 refuses the delete); `list` is S3 only.
  */
 import type {
+  DeleteObjectResult,
   ListObjectsOptions,
   ListObjectsResult,
   ObjectBody,
@@ -42,12 +44,18 @@ export class DualReadObjectStorage implements ObjectStorage {
     return (await this.primary.head(key)) ?? this.fallback.head(key);
   }
 
-  async delete(key: string): Promise<boolean> {
+  /**
+   * Both sides are asked; the local delete happens even when S3 refuses
+   * (`denied`/`skipped`). Deleted when either side removed something; else
+   * the primary's reason wins over a plain `missing`.
+   */
+  async delete(key: string): Promise<DeleteObjectResult> {
     const [a, b] = await Promise.all([
       this.primary.delete(key),
       this.fallback.delete(key),
     ]);
-    return a || b;
+    if (a.deleted || b.deleted) return { deleted: true };
+    return a.reason && a.reason !== 'missing' ? a : b;
   }
 
   async exists(key: string): Promise<boolean> {

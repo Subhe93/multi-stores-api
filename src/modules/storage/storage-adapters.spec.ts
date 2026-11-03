@@ -7,6 +7,7 @@ import { StorageHealthService } from './storage-health.service';
 import { parseStorageConfig } from './storage.config';
 import { buildObjectStorages } from './storage.module';
 import { mockS3, type MockS3 } from './__fixtures__/s3-mock';
+import { ListObjectsV2Command } from '@aws-sdk/client-s3';
 
 describe('S3PrivateStorage', () => {
   let s3: MockS3;
@@ -35,6 +36,7 @@ describe('S3PrivateStorage', () => {
     expect(await storage.openRead(KEY)).toBeNull();
 
     await storage.write(KEY, Buffer.from('JPEGDATA'));
+    // No role prefix given: the key is the bucket key.
     expect(s3.objects.get(`private/${KEY}`)).toMatchObject({
       contentType: 'image/jpeg',
       sse: 'aws:kms',
@@ -124,8 +126,12 @@ describe('StorageHealthService', () => {
     S3_BACKUP_BUCKET: 'backup',
   };
 
-  function build(buckets: string[], extra: Record<string, string> = {}) {
-    const s3 = mockS3(buckets);
+  function build(
+    buckets: string[],
+    extra: Record<string, string> = {},
+    denied: string[] = [],
+  ) {
+    const s3 = mockS3(buckets, denied);
     const cfg = parseStorageConfig({ ...env, ...extra }, process.cwd());
     const s = buildObjectStorages(cfg, s3.client);
     const svc = new StorageHealthService(cfg, s.media, s.priv, s.backup);
@@ -141,6 +147,7 @@ describe('StorageHealthService', () => {
       media: 'ok',
       private: 'fail',
       backup: 'ok',
+      probe: { media: 'head', backup: 'head' },
     });
     const calls = s3.calls.filter((c) => c === 'HeadBucket').length;
     expect(calls).toBe(3);
@@ -152,10 +159,42 @@ describe('StorageHealthService', () => {
     s3.stub.restore();
   });
 
-  it('refuses to start on a failed HeadBucket unless strict startup is off', async () => {
+  it('falls back to a ListObjectsV2 probe when HeadBucket is refused (single-bucket key)', async () => {
+    const env1 = {
+      ...env,
+      S3_MEDIA_BUCKET: 'one',
+      S3_PRIVATE_BUCKET: 'one',
+      S3_BACKUP_BUCKET: 'one',
+    };
+    const { s3, svc } = build(['one'], env1, ['HeadBucket']);
+    await expect(svc.onModuleInit()).resolves.toBeUndefined();
+    expect(await svc.check()).toEqual({
+      driver: 's3',
+      media: 'ok',
+      private: 'ok',
+      backup: 'ok',
+      probe: { media: 'list', private: 'list', backup: 'list' },
+    });
+    expect(s3.calls).not.toContain('GetBucketLocation');
+    // One list per role under its own prefix.
+    const prefixes = s3.stub
+      .commandCalls(ListObjectsV2Command)
+      .map((c) => c.args[0].input.Prefix)
+      .sort();
+    expect(prefixes).toEqual(['backups/', 'media/', 'private/']);
+    s3.stub.restore();
+    // When the list is refused too, strict startup refuses to start.
+    const dead = build(['one'], env1, ['HeadBucket', 'ListObjectsV2']);
+    await expect(dead.svc.onModuleInit()).rejects.toThrow(
+      /bucket probe failed for media, private/,
+    );
+    dead.s3.stub.restore();
+  });
+
+  it('refuses to start on a failed probe unless strict startup is off', async () => {
     const strict = build(['media']);
     await expect(strict.svc.onModuleInit()).rejects.toThrow(
-      /HeadBucket failed for private/,
+      /bucket probe failed for private/,
     );
     strict.s3.stub.restore();
     // The backup bucket is best-effort (the API key may lack access to it).
@@ -180,6 +219,28 @@ describe('StorageHealthService', () => {
       driver: 'local',
       media: 'ok',
       private: 'ok',
+      probe: {},
     });
+  });
+});
+
+describe('S3PrivateStorage with a refused DeleteObject', () => {
+  it('answers false and keeps going (retention tasks count nothing, never fail)', async () => {
+    const s3 = mockS3(['one'], ['DeleteObject']);
+    const storage = new S3PrivateStorage(
+      new S3ObjectStorage({
+        client: s3.client,
+        bucket: 'one',
+        role: 'private',
+        keyPrefix: 'private/',
+      }),
+    );
+    const key =
+      'customer-uploads/2026/11/0f8fad5b-d9cb-469f-a165-70867728950e.jpg';
+    await storage.write(key, Buffer.from('JPEG'));
+    expect(s3.objects.has(`one/private/${key}`)).toBe(true);
+    await expect(storage.delete(key)).resolves.toBe(false);
+    expect(await storage.exists(key)).toBe(true);
+    s3.stub.restore();
   });
 });

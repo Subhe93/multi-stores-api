@@ -3,7 +3,10 @@
 # NAMED scratch database (plans/s3-storage Phase 1, "monthly restore test").
 #
 #   1. picks the dump: --date (reads manifests/<date>.json) or --key
+#      (keys are role-relative; S3_BACKUP_PREFIX, default `backups/`, is
+#      prepended like the backup script does)
 #   2. downloads it, compares size + sha256 with the object's metadata
+#      (HeadObject; when the key may not call it, the listed size only)
 #   3. pg_restore into --target-db (created with --create-db), never into
 #      the live database unless --allow-live is given explicitly
 #   4. prints row counts of a few tables so the result can be logged
@@ -40,7 +43,7 @@ Usage: $(basename "$0") --target-db NAME (--date YYYY-MM-DD | --key db/<date>/<f
 
   --target-db NAME  scratch database to restore into (required; refused when it is the live DB)
   --date DATE       use the dump listed in manifests/<DATE>.json
-  --key KEY         object key of the dump (overrides --date)
+  --key KEY         role-relative key of the dump, e.g. db/<date>/<file>.dump (overrides --date)
   --create-db       createdb NAME first (needs CREATEDB on the app role, or run as postgres)
   --files-dir DIR   also download the files archive of that day and extract it into DIR
   --keep            keep the downloaded files under BACKUP_DIR/offsite/restore-test/
@@ -77,6 +80,7 @@ DATABASE_URL="$(ms_env_get DATABASE_URL)"
 BACKUP_DIR="$(ms_env_get BACKUP_DIR)"
 BACKUP_DIR="${BACKUP_DIR:-$API_DIR/backups}"
 BUCKET="$(ms_env_get S3_BACKUP_BUCKET)"
+PREFIX="$(ms_s3_prefix S3_BACKUP_PREFIX backups/)"
 S3_ENDPOINT="$(ms_env_get S3_ENDPOINT)"
 [ -n "$DATABASE_URL" ] || ms_die 2 "DATABASE_URL missing in $ENV_FILE"
 [ -n "$BUCKET" ] || ms_die 2 "S3_BACKUP_BUCKET missing in $ENV_FILE"
@@ -94,6 +98,7 @@ ms_require_tool pg_restore psql sha256sum aws
 ENDPOINT_ARGS=()
 if [ -n "$S3_ENDPOINT" ]; then ENDPOINT_ARGS=(--endpoint-url "$S3_ENDPOINT"); fi
 s3() { aws ${ENDPOINT_ARGS[@]+"${ENDPOINT_ARGS[@]}"} "$@"; }
+s3key() { printf '%s%s' "$PREFIX" "$1"; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/ms-restore.XXXXXX")"
 KEEP_DIR="$BACKUP_DIR/offsite/restore-test"
@@ -108,7 +113,7 @@ trap cleanup EXIT
 ms_write_pgpass "$WORK"
 mapfile -t PG_ARGS < <(ms_pg_args)
 START=$(date +%s)
-ms_log "restore test start: target=$TARGET_DB bucket=s3://$BUCKET ${KEY:+key=$KEY}${DATE:+date=$DATE} live_db=$DB_NAME"
+ms_log "restore test start: target=$TARGET_DB bucket=s3://$BUCKET/$PREFIX ${KEY:+key=$KEY}${DATE:+date=$DATE} live_db=$DB_NAME"
 
 # ── 1. Which dump ─────────────────────────────────────────────────────────────
 json_field() {
@@ -119,7 +124,7 @@ FILES_KEY=""
 FILES_SHA=""
 if [ -z "$KEY" ]; then
   MANIFEST="$WORK/manifest.json"
-  if ! s3 s3 cp "s3://$BUCKET/manifests/$DATE.json" "$MANIFEST" --only-show-errors 2>"$WORK/aws.err"; then
+  if ! s3 s3 cp "s3://$BUCKET/$(s3key "manifests/$DATE.json")" "$MANIFEST" --only-show-errors 2>"$WORK/aws.err"; then
     ms_die 5 "no success marker for $DATE: $(tail -c 400 "$WORK/aws.err" | tr '\n' ' ')"
   fi
   KEY="$(json_field "$MANIFEST" db_key)"
@@ -132,13 +137,23 @@ fi
 
 # ── 2. Download + verify ──────────────────────────────────────────────────────
 fetch() {
-  # fetch <key> <local file>
-  local key="$1" file="$2" out size rsha lsize lsha
-  if ! out="$(s3 s3api head-object --bucket "$BUCKET" --key "$key" \
+  # fetch <role-relative key> <local file>
+  local rkey="$1" file="$2" key out size rsha lsize lsha
+  key="$(s3key "$rkey")"
+  if out="$(s3 s3api head-object --bucket "$BUCKET" --key "$key" \
     --query '[ContentLength, Metadata.sha256]' --output text 2>"$WORK/aws.err")"; then
-    ms_die 5 "head-object failed for $key: $(tail -c 400 "$WORK/aws.err" | tr '\n' ' ')"
+    read -r size rsha <<<"$out"
+  else
+    # HeadObject refused (key without that action): the listing gives the
+    # size; the sha256 metadata stays unknown (the manifest still has it).
+    ms_log "head-object refused for $key, using list-objects-v2 (size only)"
+    if ! size="$(s3 s3api list-objects-v2 --bucket "$BUCKET" --prefix "$key" \
+      --query "Contents[?Key=='$key'].Size | [0]" --output text 2>"$WORK/aws.err")"; then
+      ms_die 5 "list-objects-v2 failed for $key: $(tail -c 400 "$WORK/aws.err" | tr '\n' ' ')"
+    fi
+    [ "$size" != "None" ] || ms_die 5 "no such object: $key"
+    rsha="None"
   fi
-  read -r size rsha <<<"$out"
   if ! s3 s3 cp "s3://$BUCKET/$key" "$file" --only-show-errors 2>"$WORK/aws.err"; then
     ms_die 5 "download failed for $key: $(tail -c 400 "$WORK/aws.err" | tr '\n' ' ')"
   fi

@@ -5,13 +5,17 @@
 #   1. pg_dump -Fc of DATABASE_URL (password through a 0600 PGPASSFILE)
 #   2. tar.gz of PRIVATE_STORAGE_DIR + INVOICE_STORAGE_DIR
 #      (+ uploads/ while STORAGE_DRIVER is not s3)
-#   3. sha256 manifest, upload with SSE-KMS (S3_KMS_KEY_ID) or SSE-S3 via
-#      `aws s3api put-object --checksum-sha256` (S3 refuses a body that does
-#      not hash to it), tagged `tier=daily|weekly|monthly` (Sunday = weekly,
-#      1st of the month = monthly; INFRA.md §3.5) and, for weekly/monthly,
-#      locked per object (GOVERNANCE, 56 d / 365 d)
-#   4. size verification with `aws s3api list-objects-v2` on the key (the
-#      `ms-backup-writer` policy has no GetObject/HeadObject, INFRA.md §5.2)
+#   3. sha256 manifest, upload via `aws s3api put-object --checksum-sha256`
+#      (S3 refuses a body that does not hash to it); SSE-KMS only when
+#      S3_KMS_KEY_ID is set (no --sse flag otherwise: the bucket default
+#      applies); with S3_BACKUP_OBJECT_LOCK=true also tagged
+#      `tier=daily|weekly|monthly` (Sunday = weekly, 1st of the month =
+#      monthly; INFRA.md §3.5) and, for weekly/monthly, locked per object
+#      (GOVERNANCE, 56 d / 365 d) — off by default: the production key has
+#      ListBucket + GetObject + PutObject only, retention is then a bucket
+#      lifecycle configured by the AWS manager
+#   4. size verification with `aws s3api list-objects-v2` on the key (needs
+#      ListBucket only; no GetObject/HeadObject on the upload path)
 #   5. success marker manifests/<yyyy-mm-dd>.json (tagged like the dump)
 #   6. local cleanup: the last --keep dumps stay in BACKUP_DIR/offsite
 #
@@ -19,9 +23,12 @@
 # /etc/multi-stores/backup-aws.env), then BACKUP_AWS_* from the .env, then
 # the API's AWS_* (see ms_export_aws_env).
 #
-# Object keys:  db/<date>/db-<stamp>.dump
-#               files/<date>/files-<stamp>.tar.gz
-#               manifests/<date>.json
+# Object keys (under S3_BACKUP_PREFIX, default `backups/`, so one bucket may
+# hold media/, private/ and backups/; DB rows and manifests store the key
+# WITHOUT the prefix):
+#               <prefix>db/<date>/db-<stamp>.dump
+#               <prefix>files/<date>/files-<stamp>.tar.gz
+#               <prefix>manifests/<date>.json
 #
 # Exit codes: 0 ok · 1 failure · 2 usage/config · 3 lock held · 4 dump or
 # archive failed · 5 upload or verification failed. Logs to
@@ -71,7 +78,10 @@ DATABASE_URL="$(ms_env_get DATABASE_URL)"
 BACKUP_DIR="$(ms_env_get BACKUP_DIR)"
 BACKUP_DIR="${BACKUP_DIR:-$API_DIR/backups}"
 BUCKET="$(ms_env_get S3_BACKUP_BUCKET)"
+PREFIX="$(ms_s3_prefix S3_BACKUP_PREFIX backups/)"
 KMS_KEY_ID="$(ms_env_get S3_KMS_KEY_ID)"
+OBJECT_LOCK=0
+if ms_env_bool S3_BACKUP_OBJECT_LOCK false; then OBJECT_LOCK=1; fi
 S3_ENDPOINT="$(ms_env_get S3_ENDPOINT)"
 STORAGE_DRIVER="$(ms_env_get STORAGE_DRIVER)"
 STORAGE_DRIVER="${STORAGE_DRIVER:-local}"
@@ -105,11 +115,15 @@ STAMP="$(date -d "@$NOW_EPOCH" +%Y%m%d-%H%M%S)"
 DATE="$(date -u -d "@$NOW_EPOCH" +%F)"
 DUMP_NAME="db-$STAMP.dump"
 FILES_NAME="files-$STAMP.tar.gz"
+# Role-relative keys (what the manifest and the app store); the bucket key
+# is "$PREFIX$KEY" (see upload / s3key).
 DB_KEY="db/$DATE/$DUMP_NAME"
 FILES_KEY="files/$DATE/$FILES_NAME"
 MANIFEST_KEY="manifests/$DATE.json"
 TIER="$(ms_backup_tier "$NOW_EPOCH")"
-RETAIN_UNTIL="$(ms_retain_until "$TIER" "$NOW_EPOCH")"
+RETAIN_UNTIL=""
+if [ "$OBJECT_LOCK" -eq 1 ]; then RETAIN_UNTIL="$(ms_retain_until "$TIER" "$NOW_EPOCH")"; fi
+s3key() { printf '%s%s' "$PREFIX" "$1"; }
 
 ARCHIVE_DIRS=()
 add_dir() {
@@ -125,27 +139,39 @@ if [ "$DB_ONLY" -eq 0 ]; then
   esac
 fi
 
-# s3api put-object flags (the `s3 cp` spellings differ).
-SSE_ARGS=(--server-side-encryption AES256)
-SSE_LABEL="SSE-S3"
+# s3api put-object flags (the `s3 cp` spellings differ). Without a KMS key
+# no --sse* flag is sent at all: the bucket's default encryption applies.
+SSE_ARGS=()
+SSE_LABEL="bucket-default"
 if [ -n "$KMS_KEY_ID" ]; then
   SSE_ARGS=(--server-side-encryption aws:kms --ssekms-key-id "$KMS_KEY_ID")
   SSE_LABEL="SSE-KMS"
 fi
+# Tag + per-object lock only with S3_BACKUP_OBJECT_LOCK=true (needs
+# PutObjectTagging/PutObjectRetention on the key and Object Lock on the bucket).
+TAG_ARGS=()
 LOCK_ARGS=()
-if [ -n "$RETAIN_UNTIL" ]; then
-  LOCK_ARGS=(--object-lock-mode GOVERNANCE --object-lock-retain-until-date "$RETAIN_UNTIL")
+if [ "$OBJECT_LOCK" -eq 1 ]; then
+  TAG_ARGS=(--tagging "tier=$TIER")
+  if [ -n "$RETAIN_UNTIL" ]; then
+    LOCK_ARGS=(--object-lock-mode GOVERNANCE --object-lock-retain-until-date "$RETAIN_UNTIL")
+  fi
 fi
 ENDPOINT_ARGS=()
 if [ -n "$S3_ENDPOINT" ]; then ENDPOINT_ARGS=(--endpoint-url "$S3_ENDPOINT"); fi
 
-ms_log "offsite backup start: db=$DB_NAME@$DB_HOST:$DB_PORT bucket=s3://$BUCKET $SSE_LABEL tier=$TIER${RETAIN_UNTIL:+ lock_until=$RETAIN_UNTIL} driver=$STORAGE_DRIVER dirs=${#ARCHIVE_DIRS[@]} keep=$KEEP_LOCAL aws_key=$MS_AWS_KEY_SOURCE dry_run=$DRY_RUN"
+ms_log "offsite backup start: db=$DB_NAME@$DB_HOST:$DB_PORT bucket=s3://$BUCKET/$PREFIX $SSE_LABEL tier=$TIER object_lock=$OBJECT_LOCK${RETAIN_UNTIL:+ lock_until=$RETAIN_UNTIL} driver=$STORAGE_DRIVER dirs=${#ARCHIVE_DIRS[@]} keep=$KEEP_LOCAL aws_key=$MS_AWS_KEY_SOURCE dry_run=$DRY_RUN"
 if [ "$DRY_RUN" -eq 1 ]; then
-  ms_log "plan: pg_dump -Fc -> $LOCAL_DIR/$DUMP_NAME -> s3://$BUCKET/$DB_KEY"
+  ms_log "plan: pg_dump -Fc -> $LOCAL_DIR/$DUMP_NAME -> s3://$BUCKET/$(s3key "$DB_KEY")"
   if [ ${#ARCHIVE_DIRS[@]} -gt 0 ]; then
-    ms_log "plan: tar -czf $LOCAL_DIR/$FILES_NAME ${ARCHIVE_DIRS[*]} -> s3://$BUCKET/$FILES_KEY"
+    ms_log "plan: tar -czf $LOCAL_DIR/$FILES_NAME ${ARCHIVE_DIRS[*]} -> s3://$BUCKET/$(s3key "$FILES_KEY")"
   fi
-  ms_log "plan: marker s3://$BUCKET/$MANIFEST_KEY; tag tier=$TIER${RETAIN_UNTIL:+; Object Lock GOVERNANCE until $RETAIN_UNTIL}; aws identity: $(aws ${ENDPOINT_ARGS[@]+"${ENDPOINT_ARGS[@]}"} sts get-caller-identity --query Arn --output text 2>/dev/null || echo unavailable)"
+  if [ "$OBJECT_LOCK" -eq 1 ]; then
+    ms_log "plan: marker s3://$BUCKET/$(s3key "$MANIFEST_KEY"); tag tier=$TIER${RETAIN_UNTIL:+; Object Lock GOVERNANCE until $RETAIN_UNTIL}"
+  else
+    ms_log "plan: marker s3://$BUCKET/$(s3key "$MANIFEST_KEY"); no tag / Object Lock (S3_BACKUP_OBJECT_LOCK=false: bucket lifecycle owns retention)"
+  fi
+  ms_log "plan: aws identity: $(aws ${ENDPOINT_ARGS[@]+"${ENDPOINT_ARGS[@]}"} sts get-caller-identity --query Arn --output text 2>/dev/null || echo unavailable)"
   ms_log "dry run done"
   exit 0
 fi
@@ -197,42 +223,47 @@ fi
 
 # ── 3+4. Upload + verify ──────────────────────────────────────────────────────
 # One PutObject carries the checksum (S3 fails the request on a mismatch),
-# the sha256 metadata, the tier tag and the per-object lock. put-object is
-# limited to 5 GB; larger files go through `s3 cp` (multipart) and get tag +
-# retention with two follow-up calls. Verification lists the key (the writer
-# policy has no GetObject/HeadObject).
+# the sha256 metadata and, with S3_BACKUP_OBJECT_LOCK=true, the tier tag and
+# the per-object lock. put-object is limited to 5 GB; larger files go
+# through `s3 cp` (multipart) and get tag + retention with two follow-up
+# calls (only with Object Lock on). Verification lists the key (ListBucket
+# only; no GetObject/HeadObject on the upload path). <key> is role-relative;
+# the bucket key is "$PREFIX<key>".
 PUT_OBJECT_MAX=$((5 * 1024 * 1024 * 1024))
 upload() {
   # upload <local file> <key> <sha256> <content type>
-  local file="$1" key="$2" sha="$3" ctype="$4" expect size
+  local file="$1" rkey="$2" sha="$3" ctype="$4" key expect size
+  key="$(s3key "$rkey")"
   expect="$(ms_size "$file")"
   if [ "$expect" -le "$PUT_OBJECT_MAX" ]; then
     if ! aws ${ENDPOINT_ARGS[@]+"${ENDPOINT_ARGS[@]}"} s3api put-object \
       --bucket "$BUCKET" --key "$key" --body "$file" \
       --checksum-sha256 "$(ms_sha256_b64 "$file")" \
-      "${SSE_ARGS[@]}" --metadata "sha256=$sha" --content-type "$ctype" \
-      --tagging "tier=$TIER" ${LOCK_ARGS[@]+"${LOCK_ARGS[@]}"} \
+      ${SSE_ARGS[@]+"${SSE_ARGS[@]}"} --metadata "sha256=$sha" --content-type "$ctype" \
+      ${TAG_ARGS[@]+"${TAG_ARGS[@]}"} ${LOCK_ARGS[@]+"${LOCK_ARGS[@]}"} \
       --output text --query ETag >/dev/null 2>"$WORK/aws.err"; then
       ms_die 5 "upload failed for $key: $(tail -c 600 "$WORK/aws.err" | tr '\n' ' ')"
     fi
   else
-    local cp_sse=(--sse AES256)
+    local cp_sse=()
     [ -n "$KMS_KEY_ID" ] && cp_sse=(--sse aws:kms --sse-kms-key-id "$KMS_KEY_ID")
     if ! aws ${ENDPOINT_ARGS[@]+"${ENDPOINT_ARGS[@]}"} s3 cp "$file" "s3://$BUCKET/$key" \
-      "${cp_sse[@]}" --metadata "sha256=$sha" --content-type "$ctype" \
+      ${cp_sse[@]+"${cp_sse[@]}"} --metadata "sha256=$sha" --content-type "$ctype" \
       --only-show-errors 2>"$WORK/aws.err"; then
       ms_die 5 "upload failed for $key: $(tail -c 600 "$WORK/aws.err" | tr '\n' ' ')"
     fi
-    if ! aws ${ENDPOINT_ARGS[@]+"${ENDPOINT_ARGS[@]}"} s3api put-object-tagging \
-      --bucket "$BUCKET" --key "$key" \
-      --tagging "{\"TagSet\":[{\"Key\":\"tier\",\"Value\":\"$TIER\"}]}" 2>"$WORK/aws.err"; then
-      ms_die 5 "put-object-tagging failed for $key: $(tail -c 600 "$WORK/aws.err" | tr '\n' ' ')"
-    fi
-    if [ -n "$RETAIN_UNTIL" ]; then
-      if ! aws ${ENDPOINT_ARGS[@]+"${ENDPOINT_ARGS[@]}"} s3api put-object-retention \
+    if [ "$OBJECT_LOCK" -eq 1 ]; then
+      if ! aws ${ENDPOINT_ARGS[@]+"${ENDPOINT_ARGS[@]}"} s3api put-object-tagging \
         --bucket "$BUCKET" --key "$key" \
-        --retention "{\"Mode\":\"GOVERNANCE\",\"RetainUntilDate\":\"$RETAIN_UNTIL\"}" 2>"$WORK/aws.err"; then
-        ms_die 5 "put-object-retention failed for $key: $(tail -c 600 "$WORK/aws.err" | tr '\n' ' ')"
+        --tagging "{\"TagSet\":[{\"Key\":\"tier\",\"Value\":\"$TIER\"}]}" 2>"$WORK/aws.err"; then
+        ms_die 5 "put-object-tagging failed for $key: $(tail -c 600 "$WORK/aws.err" | tr '\n' ' ')"
+      fi
+      if [ -n "$RETAIN_UNTIL" ]; then
+        if ! aws ${ENDPOINT_ARGS[@]+"${ENDPOINT_ARGS[@]}"} s3api put-object-retention \
+          --bucket "$BUCKET" --key "$key" \
+          --retention "{\"Mode\":\"GOVERNANCE\",\"RetainUntilDate\":\"$RETAIN_UNTIL\"}" 2>"$WORK/aws.err"; then
+          ms_die 5 "put-object-retention failed for $key: $(tail -c 600 "$WORK/aws.err" | tr '\n' ' ')"
+        fi
       fi
     fi
   fi
@@ -259,6 +290,7 @@ MANIFEST="$WORK/manifest.json"
   printf '  "version": 1,\n  "source": "cron",\n  "host": "%s",\n' "$(hostname)"
   printf '  "date": "%s",\n  "created_at": "%s",\n' "$DATE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '  "database": "%s",\n  "storage_driver": "%s",\n  "encryption": "%s",\n  "tier": "%s",\n' "$DB_NAME" "$STORAGE_DRIVER" "$SSE_LABEL" "$TIER"
+  printf '  "key_prefix": "%s",\n  "object_lock": %s,\n' "$PREFIX" "$([ "$OBJECT_LOCK" -eq 1 ] && echo true || echo false)"
   printf '  "db_key": "%s",\n  "db_bytes": %s,\n  "db_sha256": "%s",\n' "$DB_KEY" "$DUMP_BYTES" "$DUMP_SHA"
   if [ -n "$FILES" ]; then
     printf '  "files_key": "%s",\n  "files_bytes": %s,\n  "files_sha256": "%s",\n' "$FILES_KEY" "$FILES_BYTES" "$FILES_SHA"
@@ -289,5 +321,5 @@ prune 'db-*.dump'
 prune 'files-*.tar.gz'
 prune 'manifest-*.json'
 
-ms_log "offsite backup done in $(($(date +%s) - START))s: $DB_KEY${FILES:+ + $FILES_KEY} (marker $MANIFEST_KEY)"
+ms_log "offsite backup done in $(($(date +%s) - START))s: $(s3key "$DB_KEY")${FILES:+ + $(s3key "$FILES_KEY")} (marker $(s3key "$MANIFEST_KEY"))"
 exit 0

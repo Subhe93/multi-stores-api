@@ -32,7 +32,7 @@ export function createBackupObjectSink(
     return new NoopBackupObjectSink();
   }
   logger.log(
-    `Offsite backups → s3://${config.bucket} (region=${config.region ?? 'default'}, kms=${!!config.kmsKeyId}, endpoint=${!!config.endpoint}, backup_credentials=${!!config.credentials})`,
+    `Offsite backups → s3://${config.bucket}/${config.keyPrefix ?? ''} (region=${config.region ?? 'default'}, kms=${!!config.kmsKeyId}, object_lock=${!!config.objectLock}, endpoint=${!!config.endpoint}, backup_credentials=${!!config.credentials})`,
   );
   return new S3BackupObjectSink(config);
 }

@@ -57,6 +57,45 @@ ms_env_get() {
   printf '%s' "$line"
 }
 
+# ms_env_has KEY [FILE]: true when a `KEY=` line exists (even with an empty
+# value), so "unset" and "set to empty" can be told apart.
+ms_env_has() {
+  local key="$1" file="${2:-$ENV_FILE}"
+  [ -r "$file" ] || return 1
+  grep -qE "^[[:space:]]*(export[[:space:]]+)?${key}=" "$file"
+}
+
+# ms_env_bool KEY DEFAULT: true/1/yes/on → 0 (true), false/0/no/off or
+# absent → DEFAULT (`true`|`false`).
+ms_env_bool() {
+  local key="$1" def="$2" v
+  v="$(ms_env_get "$key" | tr '[:upper:]' '[:lower:]')"
+  case "$v" in
+    1 | true | yes | on) return 0 ;;
+    0 | false | no | off) return 1 ;;
+    '') [ "$def" = "true" ] ;;
+    *) ms_die 2 "$key must be true or false (got '$v')" ;;
+  esac
+}
+
+# ms_s3_prefix KEY DEFAULT: the role's key prefix inside its bucket, read
+# like the API does (storage.config.ts `keyPrefixFor`): an absent KEY means
+# DEFAULT, an empty value means no prefix; the result has no leading `/`
+# and exactly one trailing `/` (or is empty). Refuses `..`, `\` and blanks.
+ms_s3_prefix() {
+  local key="$1" def="$2" v
+  if ms_env_has "$key"; then v="$(ms_env_get "$key")"; else v="$def"; fi
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  while [ "${v#/}" != "$v" ]; do v="${v#/}"; done
+  while [ "${v%/}" != "$v" ]; do v="${v%/}"; done
+  [ -z "$v" ] && return 0
+  case "$v" in
+    *..* | *\\* | *[[:space:]]* | *//*) ms_die 2 "$key is not a valid key prefix: '$v'" ;;
+  esac
+  printf '%s/' "$v"
+}
+
 # Exports the AWS settings for the aws CLI. Precedence (first wins):
 #   1. AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY already in the environment
 #      (the cron line sources /etc/multi-stores/backup-aws.env with the
@@ -64,7 +103,7 @@ ms_env_get() {
 #   2. BACKUP_AWS_ACCESS_KEY_ID / BACKUP_AWS_SECRET_ACCESS_KEY in the .env
 #      (the same writer key when the API also uploads in-app);
 #   3. AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in the .env (the API key;
-#      only works when that key may write the backup bucket).
+#      the normal case when one bucket holds every role under prefixes).
 # Values are never printed; the caller may log booleans only.
 ms_export_aws_env() {
   local v id secret token

@@ -14,6 +14,8 @@ export interface RemoteState {
   size: number;
   sha256: string | null;
   etag: string | null;
+  /** HeadObject was refused: only the listing (size, etag) is known. */
+  sizeOnly?: boolean;
 }
 
 export interface PlanEntry {
@@ -124,7 +126,10 @@ export function contentDispositionFor(
     : undefined;
 }
 
-/** SSE per scope: private/invoices with KMS when a key id is configured, media SSE-S3. */
+/**
+ * SSE per scope: private/invoices with KMS when a key id is configured;
+ * otherwise `s3`, which the uploader maps to "no header" (bucket default).
+ */
 export function sseFor(
   scope: Scope,
   kmsKeyId: string | undefined,
@@ -137,7 +142,9 @@ export function sseFor(
 /**
  * `copy` when the object is missing; `identical` when size and sha256
  * metadata match; otherwise `mismatch` (different bytes, or an object written
- * by something else without our sha256 metadata).
+ * by something else without our sha256 metadata). When the key may not call
+ * HeadObject (`remote.sizeOnly`, listing only) a matching size counts as
+ * identical: `storage-verify` (GetObject + sha256) is the real check then.
  */
 export function classify(
   local: { size: number; sha256: string | null },
@@ -145,6 +152,7 @@ export function classify(
 ): Action {
   if (!remote) return 'copy';
   if (remote.size !== local.size) return 'mismatch';
+  if (remote.sizeOnly) return 'identical';
   if (!remote.sha256) return 'mismatch';
   if (local.sha256 === null) return 'identical'; // --resume fast path (size matched, metadata present)
   return remote.sha256 === local.sha256 ? 'identical' : 'mismatch';
@@ -158,14 +166,15 @@ export function isActionable(e: PlanEntry, overwrite: boolean): boolean {
 /**
  * Post-upload check: size + sha256 metadata must match; for single-part
  * SSE-S3 objects the ETag is the MD5 and is checked too (SSE-KMS and
- * multipart ETags are not MD5s).
+ * multipart ETags are not MD5s). With a listing-only remote (`sizeOnly`)
+ * the sha256 metadata is unknown and only size (+ ETag) is compared.
  */
 export function verifyUploaded(
   local: { size: number; sha256: string; md5: string | null },
   remote: RemoteState & { sse: string | null },
 ): string | null {
   if (remote.size !== local.size) return `size ${remote.size} != ${local.size}`;
-  if (remote.sha256 !== local.sha256)
+  if (!remote.sizeOnly && remote.sha256 !== local.sha256)
     return `sha256 metadata ${remote.sha256 ?? 'missing'} != ${local.sha256}`;
   if (
     local.md5 &&

@@ -19,6 +19,7 @@ import {
   assertValidObjectKey,
   InvalidObjectKeyError,
   isValidObjectPrefix,
+  type DeleteObjectResult,
   type ListObjectsOptions,
   type ListObjectsResult,
   type ListedObject,
@@ -186,13 +187,15 @@ export class LocalObjectStorage implements ObjectStorage {
     return { ...head, stream: createReadStream(this.resolve(key)) };
   }
 
-  async delete(key: string): Promise<boolean> {
+  async delete(key: string): Promise<DeleteObjectResult> {
     const file = this.resolve(key);
     try {
       await fs.unlink(file);
-      return true;
+      return { deleted: true };
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { deleted: false, reason: 'missing' };
+      }
       throw e;
     }
   }

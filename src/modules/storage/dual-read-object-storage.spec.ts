@@ -71,10 +71,35 @@ describe('DualReadObjectStorage (MEDIA_LOCAL_FALLBACK)', () => {
     await remote.put('uploads/p/old.webp', Buffer.from('O'), {
       contentType: 'image/webp',
     });
-    expect(await dual.delete('uploads/p/old.webp')).toBe(true);
+    expect(await dual.delete('uploads/p/old.webp')).toEqual({ deleted: true });
     expect(await local.exists('uploads/p/old.webp')).toBe(false);
     expect(s3.objects.has('media/uploads/p/old.webp')).toBe(false);
-    expect(await dual.delete('uploads/p/old.webp')).toBe(false);
+    expect(await dual.delete('uploads/p/old.webp')).toEqual({
+      deleted: false,
+      reason: 'missing',
+    });
+  });
+
+  it('still deletes the local file when S3 refuses the delete', async () => {
+    s3.deny.add('DeleteObject');
+    await local.put('uploads/p/both.webp', Buffer.from('L'), {
+      contentType: 'image/webp',
+    });
+    await remote.put('uploads/p/both.webp', Buffer.from('S'), {
+      contentType: 'image/webp',
+    });
+    await remote.put('uploads/p/s3-only.webp', Buffer.from('S'), {
+      contentType: 'image/webp',
+    });
+    // Local copy gone → counts as deleted; the S3 object stays (lifecycle).
+    expect(await dual.delete('uploads/p/both.webp')).toEqual({ deleted: true });
+    expect(await local.exists('uploads/p/both.webp')).toBe(false);
+    expect(s3.objects.has('media/uploads/p/both.webp')).toBe(true);
+    // Nothing local: the S3 reason comes through, nothing throws.
+    expect(await dual.delete('uploads/p/s3-only.webp')).toEqual({
+      deleted: false,
+      reason: 'denied',
+    });
   });
 
   it('lists S3 only', async () => {

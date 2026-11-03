@@ -313,3 +313,51 @@ describe('parseArgs', () => {
     });
   });
 });
+
+describe('listing-only remote (HeadObject refused)', () => {
+  it('classify: a matching size is identical, a different one a mismatch', () => {
+    const local = { size: 10, sha256: 'a'.repeat(64) };
+    expect(
+      classify(local, { size: 10, sha256: null, etag: 'e', sizeOnly: true }),
+    ).toBe('identical');
+    expect(
+      classify(local, { size: 11, sha256: null, etag: 'e', sizeOnly: true }),
+    ).toBe('mismatch');
+    // Without the flag a missing sha256 metadata is still a mismatch.
+    expect(classify(local, { size: 10, sha256: null, etag: 'e' })).toBe(
+      'mismatch',
+    );
+  });
+
+  it('verifyUploaded: size (+ ETag) only', () => {
+    const md5 = 'b'.repeat(32);
+    const local = { size: 3, sha256: 'a'.repeat(64), md5 };
+    expect(
+      verifyUploaded(local, {
+        size: 3,
+        sha256: null,
+        etag: md5,
+        sse: null,
+        sizeOnly: true,
+      }),
+    ).toBeNull();
+    expect(
+      verifyUploaded(local, {
+        size: 3,
+        sha256: null,
+        etag: 'c'.repeat(32),
+        sse: null,
+        sizeOnly: true,
+      }),
+    ).toMatch(/etag/);
+    expect(
+      verifyUploaded(local, {
+        size: 4,
+        sha256: null,
+        etag: md5,
+        sse: null,
+        sizeOnly: true,
+      }),
+    ).toMatch(/size 4 != 3/);
+  });
+});

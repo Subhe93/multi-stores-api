@@ -4,9 +4,15 @@ import * as path from 'path';
 import { Readable } from 'stream';
 import { LocalObjectStorage } from './local-object-storage';
 import { InvalidObjectKeyError, type ObjectStorage } from './object-storage';
-import { S3ObjectStorage, S3_MULTIPART_THRESHOLD } from './s3-object-storage';
+import {
+  resetDeniedDeleteWarnings,
+  S3ObjectStorage,
+  S3_MULTIPART_THRESHOLD,
+} from './s3-object-storage';
+import { Logger } from '@nestjs/common';
 import { collect } from './s3-private-storage';
 import { mockS3, type MockS3 } from './__fixtures__/s3-mock';
+import { ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 
 /**
  * The same contract against both drivers: put/get/head/exists/delete/list,
@@ -53,14 +59,22 @@ function contract(
       expect(await storage.get('uploads/products/missing.webp')).toBeNull();
       expect(await storage.head('uploads/products/missing.webp')).toBeNull();
       expect(await storage.exists('uploads/products/missing.webp')).toBe(false);
-      expect(await storage.delete('uploads/products/missing.webp')).toBe(false);
+      expect(await storage.delete('uploads/products/missing.webp')).toEqual({
+        deleted: false,
+        reason: 'missing',
+      });
 
       await storage.put('uploads/products/b.webp', Buffer.from('x'), {
         contentType: 'image/webp',
       });
-      expect(await storage.delete('uploads/products/b.webp')).toBe(true);
+      expect(await storage.delete('uploads/products/b.webp')).toEqual({
+        deleted: true,
+      });
       expect(await storage.exists('uploads/products/b.webp')).toBe(false);
-      expect(await storage.delete('uploads/products/b.webp')).toBe(false);
+      expect(await storage.delete('uploads/products/b.webp')).toEqual({
+        deleted: false,
+        reason: 'missing',
+      });
     });
 
     it('accepts a stream body and reports the byte count', async () => {
@@ -261,8 +275,8 @@ describe('S3ObjectStorage specifics', () => {
       contentType: 'image/svg+xml',
       cacheControl: 'public, max-age=31536000, immutable',
       contentDisposition: 'attachment',
-      sse: 'AES256',
     });
+    expect(o.sse).toBeUndefined();
     expect(o.metadata.origin).toBe('test');
     expect(o.metadata.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect((await media.head('uploads/logos/l.svg'))!.metadata.sha256).toBe(
@@ -270,7 +284,7 @@ describe('S3ObjectStorage specifics', () => {
     );
   });
 
-  it('encrypts private/backup writes with SSE-KMS when the key is set, else AES256', async () => {
+  it('encrypts private/backup writes with SSE-KMS when the key is set, else sends no encryption header', async () => {
     const withKey = new S3ObjectStorage({
       client: s3.client,
       bucket: 'private',
@@ -295,11 +309,18 @@ describe('S3ObjectStorage specifics', () => {
     await noKey.put('db/2026-11-03/x.dump', Buffer.from('d'), {
       contentType: 'application/octet-stream',
     });
-    expect(s3.objects.get('backup/db/2026-11-03/x.dump')).toMatchObject({
-      sse: 'AES256',
-    });
+    // No key: the bucket default applies; not even AES256 is sent.
+    const stored = s3.objects.get('backup/db/2026-11-03/x.dump')!;
+    expect(stored.sse).toBeUndefined();
+    expect(stored.kmsKeyId).toBeUndefined();
+    const putInput = s3.stub
+      .commandCalls(PutObjectCommand)
+      .map((c) => c.args[0].input)
+      .find((i) => i.Key === 'db/2026-11-03/x.dump')!;
+    expect(putInput).not.toHaveProperty('ServerSideEncryption');
+    expect(putInput).not.toHaveProperty('SSEKMSKeyId');
 
-    // Media never asks for KMS even when a key exists (public, SSE-S3).
+    // Media never asks for KMS even when a key exists (public, bucket default).
     const media = new S3ObjectStorage({
       client: s3.client,
       bucket: 'media',
@@ -309,7 +330,7 @@ describe('S3ObjectStorage specifics', () => {
     await media.put('uploads/p/a.webp', Buffer.from('m'), {
       contentType: 'image/webp',
     });
-    expect(s3.objects.get('media/uploads/p/a.webp')!.sse).toBe('AES256');
+    expect(s3.objects.get('media/uploads/p/a.webp')!.sse).toBeUndefined();
     // An explicit `sse: 'kms'` on media uses the key when present.
     await media.put('uploads/p/b.webp', Buffer.from('m'), {
       contentType: 'image/webp',
@@ -334,6 +355,172 @@ describe('S3ObjectStorage specifics', () => {
     expect(stored.contentType).toBe('application/octet-stream');
     expect(stored.metadata.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(s3.calls).toContain('PutObject');
+  });
+
+  it('applies the role key prefix to every operation and answers role-relative keys', async () => {
+    const shared = mockS3(['one']);
+    const media = new S3ObjectStorage({
+      client: shared.client,
+      bucket: 'one',
+      role: 'media',
+      keyPrefix: 'media',
+    });
+    const priv = new S3ObjectStorage({
+      client: shared.client,
+      bucket: 'one',
+      role: 'private',
+      keyPrefix: '/private/',
+    });
+    expect(media.keyPrefix).toBe('media/');
+    expect(priv.keyPrefix).toBe('private/');
+    expect(media.location).toBe('one/media/');
+    await media.put('uploads/products/a.webp', Buffer.from('m'), {
+      contentType: 'image/webp',
+    });
+    await priv.put('customer-uploads/2026/11/x.jpg', Buffer.from('p'), {
+      contentType: 'image/jpeg',
+    });
+    expect([...shared.objects.keys()].sort()).toEqual([
+      'one/media/uploads/products/a.webp',
+      'one/private/customer-uploads/2026/11/x.jpg',
+    ]);
+    expect((await media.head('uploads/products/a.webp'))!.size).toBe(1);
+    expect(await media.exists('uploads/products/a.webp')).toBe(true);
+    expect(
+      (
+        await collect((await media.get('uploads/products/a.webp'))!.stream)
+      ).toString(),
+    ).toBe('m');
+    // A role never sees another role's objects, even inside one bucket.
+    expect(await priv.exists('uploads/products/a.webp')).toBe(false);
+    expect((await media.list('uploads/')).objects.map((o) => o.key)).toEqual([
+      'uploads/products/a.webp',
+    ]);
+    expect((await media.list('')).objects.map((o) => o.key)).toEqual([
+      'uploads/products/a.webp',
+    ]);
+    expect((await priv.list('')).objects.map((o) => o.key)).toEqual([
+      'customer-uploads/2026/11/x.jpg',
+    ]);
+    expect(await media.delete('uploads/products/a.webp')).toEqual({
+      deleted: true,
+    });
+    expect(
+      shared.objects.has('one/private/customer-uploads/2026/11/x.jpg'),
+    ).toBe(true);
+    expect(shared.calls).not.toContain('GetBucketLocation');
+    shared.stub.restore();
+  });
+
+  it('STORAGE_DELETE_MODE=try: a refused DeleteObject is `denied`, warned once per bucket/prefix, never thrown', async () => {
+    resetDeniedDeleteWarnings();
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    const denied = mockS3(['one'], ['DeleteObject']);
+    const media = new S3ObjectStorage({
+      client: denied.client,
+      bucket: 'one',
+      role: 'media',
+      keyPrefix: 'media/',
+      deleteMode: 'try',
+    });
+    const priv = new S3ObjectStorage({
+      client: denied.client,
+      bucket: 'one',
+      role: 'private',
+      keyPrefix: 'private/',
+    });
+    for (const k of ['uploads/p/a.webp', 'uploads/p/b.webp']) {
+      await media.put(k, Buffer.from('x'), { contentType: 'image/webp' });
+    }
+    await priv.put('designer/s/2026/proof/x.png', Buffer.from('x'), {
+      contentType: 'image/png',
+    });
+    expect(await media.delete('uploads/p/a.webp')).toEqual({
+      deleted: false,
+      reason: 'denied',
+    });
+    expect(await media.delete('uploads/p/b.webp')).toEqual({
+      deleted: false,
+      reason: 'denied',
+    });
+    expect(await priv.delete('designer/s/2026/proof/x.png')).toEqual({
+      deleted: false,
+      reason: 'denied',
+    });
+    // Objects stay; a missing key is still `missing` (no DeleteObject sent).
+    expect(denied.objects.size).toBe(3);
+    expect(await media.delete('uploads/p/none.webp')).toEqual({
+      deleted: false,
+      reason: 'missing',
+    });
+    expect(denied.calls.filter((c) => c === 'DeleteObject')).toHaveLength(3);
+    // One warning per bucket/prefix, not per file.
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(String(warn.mock.calls[0][0])).toContain('s3://one/media/');
+    expect(String(warn.mock.calls[1][0])).toContain('s3://one/private/');
+    warn.mockRestore();
+    denied.stub.restore();
+  });
+
+  it('STORAGE_DELETE_MODE=skip never calls DeleteObject', async () => {
+    const skip = new S3ObjectStorage({
+      client: s3.client,
+      bucket: 'media',
+      role: 'media',
+      deleteMode: 'skip',
+    });
+    await skip.put('uploads/p/a.webp', Buffer.from('x'), {
+      contentType: 'image/webp',
+    });
+    expect(await skip.delete('uploads/p/a.webp')).toEqual({
+      deleted: false,
+      reason: 'skipped',
+    });
+    expect(await skip.delete('uploads/p/none.webp')).toEqual({
+      deleted: false,
+      reason: 'skipped',
+    });
+    expect(s3.calls).not.toContain('DeleteObject');
+    expect(s3.objects.has('media/uploads/p/a.webp')).toBe(true);
+  });
+
+  it('probe: HeadBucket, else ListObjectsV2 on the role prefix when HeadBucket is refused; never GetBucketLocation', async () => {
+    const ok = new S3ObjectStorage({
+      client: s3.client,
+      bucket: 'media',
+      role: 'media',
+    });
+    expect(await ok.probe()).toBe('head');
+
+    const noHead = mockS3(['one'], ['HeadBucket']);
+    const listed = new S3ObjectStorage({
+      client: noHead.client,
+      bucket: 'one',
+      role: 'private',
+      keyPrefix: 'private/',
+    });
+    expect(await listed.probe()).toBe('list');
+    expect(noHead.calls).toEqual(['HeadBucket', 'ListObjectsV2']);
+    const list =
+      noHead.stub.commandCalls(ListObjectsV2Command)[0].args[0].input;
+    expect(list).toMatchObject({
+      Bucket: 'one',
+      Prefix: 'private/',
+      MaxKeys: 1,
+    });
+    // A missing bucket (404) and a refused list are failures.
+    const missing = new S3ObjectStorage({
+      client: noHead.client,
+      bucket: 'nope',
+      role: 'media',
+    });
+    await expect(missing.probe()).rejects.toThrow();
+    noHead.deny.add('ListObjectsV2');
+    await expect(listed.probe()).rejects.toThrow(/Access Denied/);
+    expect(noHead.calls).not.toContain('GetBucketLocation');
+    noHead.stub.restore();
   });
 
   it('headBucket reports a missing bucket', async () => {

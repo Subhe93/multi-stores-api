@@ -1,11 +1,14 @@
 /**
- * Bucket reachability (`HeadBucket` per role), cached 60 s, for
- * `GET /api/health` and the startup check. In local mode every role answers
- * `ok` without touching the disk. Logs carry booleans and bucket names only.
+ * Bucket reachability per role, cached 60 s, for `GET /api/health` and the
+ * startup check. The probe is `HeadBucket` first and, when the key may not
+ * call it (403), `ListObjectsV2 MaxKeys=1` on the role prefix; the answer
+ * records which one succeeded (`probe: 'head' | 'list'`). GetBucketLocation
+ * is never called. In local mode every role answers `ok` without touching
+ * the disk. Logs carry booleans, bucket names and prefixes only.
  */
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import type { ObjectStorage } from './object-storage';
-import { S3ObjectStorage } from './s3-object-storage';
+import { S3ObjectStorage, type BucketProbe } from './s3-object-storage';
 import { DualReadObjectStorage } from './dual-read-object-storage';
 import {
   BACKUP_OBJECT_STORAGE,
@@ -24,6 +27,12 @@ export interface StorageHealth {
   media: StorageRoleHealth;
   private: StorageRoleHealth;
   backup?: StorageRoleHealth;
+  /** Which probe answered per role (absent for a local role or a failure). */
+  probe: {
+    media?: BucketProbe;
+    private?: BucketProbe;
+    backup?: BucketProbe;
+  };
 }
 
 function s3Of(storage: ObjectStorage): S3ObjectStorage | null {
@@ -48,12 +57,13 @@ export class StorageHealthService implements OnModuleInit {
   ) {}
 
   /**
-   * Startup: in s3 mode (or with an S3 backup bucket) one HeadBucket per
-   * bucket; a media/private failure is logged and, with
-   * STORAGE_STRICT_STARTUP, refuses to start. The backup bucket is
+   * Startup: in s3 mode (or with an S3 backup bucket) one probe per role;
+   * a media/private failure (network, 404, a refused list) is logged and,
+   * with STORAGE_STRICT_STARTUP, refuses to start. A refused HeadBucket
+   * alone is not a failure: the list probe covers it. The backup bucket is
    * best-effort: its failure only warns (offsite copies record
    * `offsite_error`, the watchdog alerts), because the API key may lack
-   * access to it by design (INFRA.md §5.2) and serving must not depend on it.
+   * access to it by design and serving must not depend on it.
    */
   async onModuleInit(): Promise<void> {
     this.logger.log(
@@ -65,14 +75,19 @@ export class StorageHealthService implements OnModuleInit {
     const health = await this.check(true);
     if (health.backup === 'fail') {
       this.logger.warn(
-        'storage: HeadBucket failed for backup; offsite backups will record offsite_error until the bucket/credentials (BACKUP_AWS_*) are fixed',
+        'storage: bucket probe failed for backup; offsite backups will record offsite_error until the bucket/credentials (BACKUP_AWS_*) are fixed',
       );
     }
     const failed = (['media', 'private'] as const).filter(
       (r) => health[r] === 'fail',
     );
-    if (failed.length === 0) return;
-    const line = `storage: HeadBucket failed for ${failed.join(', ')} (driver=${this.config.driver})`;
+    if (failed.length === 0) {
+      this.logger.log(
+        `storage: buckets reachable (probe ${JSON.stringify(health.probe)})`,
+      );
+      return;
+    }
+    const line = `storage: bucket probe failed for ${failed.join(', ')} (driver=${this.config.driver})`;
     if (this.config.strictStartup) {
       this.logger.error(`${line}; refusing to start (STORAGE_STRICT_STARTUP)`);
       throw new Error(line);
@@ -113,29 +128,35 @@ export class StorageHealthService implements OnModuleInit {
     ]);
     const out: StorageHealth = {
       driver: this.config.driver,
-      media,
-      private: priv,
+      media: media.status,
+      private: priv.status,
+      probe: {},
     };
-    if (this.config.backupDriver === 's3') out.backup = backup;
+    if (media.probe) out.probe.media = media.probe;
+    if (priv.probe) out.probe.private = priv.probe;
+    if (this.config.backupDriver === 's3') {
+      out.backup = backup.status;
+      if (backup.probe) out.probe.backup = backup.probe;
+    }
     return out;
   }
 
   private async probeOne(
     storage: ObjectStorage,
     role: string,
-  ): Promise<StorageRoleHealth> {
+  ): Promise<{ status: StorageRoleHealth; probe?: BucketProbe }> {
     const s3 = s3Of(storage);
-    if (!s3) return 'ok';
+    if (!s3) return { status: 'ok' };
     try {
-      await s3.headBucket();
-      return 'ok';
+      const probe = await s3.probe();
+      return { status: 'ok', probe };
     } catch (err) {
       this.logger.warn(
-        `storage: HeadBucket ${role} (${s3.bucket}) failed: ${
+        `storage: probe of ${role} (${s3.location}) failed: ${
           err instanceof Error ? err.name : 'error'
         }`,
       );
-      return 'fail';
+      return { status: 'fail' };
     }
   }
 }

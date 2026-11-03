@@ -7,6 +7,7 @@ import {
   type S3Client,
 } from '@aws-sdk/client-s3';
 import type { Readable } from 'stream';
+import { normalizeKeyPrefix } from '../../storage/object-storage';
 import { createS3Client } from '../../storage/s3-object-storage';
 import {
   parseStorageConfig,
@@ -27,16 +28,26 @@ import {
 /**
  * Configuration of the S3 sink. It is derived from the storage core's
  * `parseStorageConfig` so the backups module reads `S3_BACKUP_BUCKET`,
- * `AWS_REGION`, `S3_KMS_KEY_ID`, `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE` and
- * the optional `BACKUP_AWS_*` writer credentials exactly like the storage
- * module (same validation, same defaults).
+ * `S3_BACKUP_PREFIX`, `S3_BACKUP_OBJECT_LOCK`, `AWS_REGION`,
+ * `S3_KMS_KEY_ID`, `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE` and the optional
+ * `BACKUP_AWS_*` writer credentials exactly like the storage module (same
+ * validation, same defaults).
  */
 export interface S3BackupSinkConfig {
   bucket: string;
+  /** Key prefix inside the bucket (undefined = `backups/`; '' = none). */
+  keyPrefix?: string;
   region?: string;
   kmsKeyId?: string;
   endpoint?: string;
   forcePathStyle?: boolean;
+  /**
+   * Send the `tier` tag and the per-object GOVERNANCE lock (needs
+   * PutObjectTagging / PutObjectRetention on the key and Object Lock on the
+   * bucket). Default false: plain PutObject; lifecycle/versioning/Object
+   * Lock are then bucket settings of the AWS manager (INFRA.md checklist).
+   */
+  objectLock?: boolean;
   /** `ms-backup-writer` key (INFRA.md §5.2); unset = SDK default chain. */
   credentials?: BackupCredentials;
 }
@@ -65,33 +76,40 @@ export function s3BackupSinkConfigFromEnv(
   if (!cfg.backupBucket) return null;
   return {
     bucket: cfg.backupBucket,
+    keyPrefix: cfg.backupPrefix,
     region: cfg.region ?? undefined,
     kmsKeyId: cfg.kmsKeyId ?? undefined,
     endpoint: cfg.endpoint ?? undefined,
     forcePathStyle: cfg.forcePathStyle ?? undefined,
+    objectLock: cfg.backupObjectLock,
     ...(cfg.backupCredentials ? { credentials: cfg.backupCredentials } : {}),
   };
 }
 
 /**
- * Backup sink on the backup bucket. Upload path (writer policy only):
- * `PutObject` with `ChecksumSHA256` (S3 rejects a body that does not hash
- * to it), `x-amz-meta-sha256`, `Tagging: tier=<tier>` and, for weekly /
- * monthly objects, a per-object GOVERNANCE lock; then one `ListObjectsV2`
- * on the exact key to confirm the stored size. `head`/`get` (restore and
- * download) need `s3:GetObject`, i.e. the restore policy or a writer key
- * extended with it; without it they fail with a clear error.
+ * Backup sink on the backup bucket (under `keyPrefix`). Upload path
+ * (ListBucket + PutObject are enough): `PutObject` with `ChecksumSHA256`
+ * (S3 rejects a body that does not hash to it) and `x-amz-meta-sha256`;
+ * SSE-KMS only when a key id is configured (else the bucket default, no
+ * header); `Tagging: tier=<tier>` and the per-object GOVERNANCE lock only
+ * with `objectLock` (off by default: the production key has no
+ * PutObjectTagging/PutObjectRetention); then one `ListObjectsV2` on the
+ * exact key to confirm the stored size. `head`/`get` (restore and download)
+ * need `s3:GetObject`; without it they fail with a clear error. Keys given
+ * to and returned by the sink are role-relative (`db/…`, `manifests/…`).
  */
 export class S3BackupObjectSink implements BackupObjectSink {
   readonly enabled = true;
   readonly target: string;
+  readonly keyPrefix: string;
   private client: S3Client | null;
 
   constructor(
     private readonly config: S3BackupSinkConfig,
     client?: S3Client,
   ) {
-    this.target = `s3://${config.bucket}`;
+    this.keyPrefix = normalizeKeyPrefix(config.keyPrefix ?? 'backups/');
+    this.target = `s3://${config.bucket}${this.keyPrefix ? `/${this.keyPrefix}` : ''}`;
     this.client = client ?? null;
   }
 
@@ -110,6 +128,15 @@ export class S3BackupObjectSink implements BackupObjectSink {
     return this.client;
   }
 
+  /** Bucket key of a role-relative key. */
+  private fullKey(key: string): string {
+    return `${this.keyPrefix}${key}`;
+  }
+
+  /**
+   * SSE-KMS with the configured key when asked (`kms`) or by default when a
+   * key exists; otherwise no header at all (bucket default encryption).
+   */
   private encryption(
     sse: BackupSinkPutOptions['sse'],
   ): Pick<PutObjectCommandInput, 'ServerSideEncryption' | 'SSEKMSKeyId'> {
@@ -121,7 +148,7 @@ export class S3BackupObjectSink implements BackupObjectSink {
         SSEKMSKeyId: this.config.kmsKeyId,
       };
     }
-    return { ServerSideEncryption: 'AES256' };
+    return {};
   }
 
   async put(
@@ -139,7 +166,7 @@ export class S3BackupObjectSink implements BackupObjectSink {
     if (options.sha256) metadata[SHA256_METADATA_KEY] = options.sha256;
     const input: PutObjectCommandInput = {
       Bucket: this.config.bucket,
-      Key: key,
+      Key: this.fullKey(key),
       Body: body,
       ContentLength: size,
       ContentType: options.contentType,
@@ -153,12 +180,14 @@ export class S3BackupObjectSink implements BackupObjectSink {
         'base64',
       );
     }
-    if (options.tier) {
-      input.Tagging = `${TIER_TAG_KEY}=${options.tier}`;
-    }
-    if (options.retainUntil) {
-      input.ObjectLockMode = 'GOVERNANCE';
-      input.ObjectLockRetainUntilDate = options.retainUntil;
+    if (this.config.objectLock) {
+      if (options.tier) {
+        input.Tagging = `${TIER_TAG_KEY}=${options.tier}`;
+      }
+      if (options.retainUntil) {
+        input.ObjectLockMode = 'GOVERNANCE';
+        input.ObjectLockRetainUntilDate = options.retainUntil;
+      }
     }
     const out = await this.s3().send(new PutObjectCommand(input));
     return { etag: stripQuotes(out.ETag), size };
@@ -166,16 +195,17 @@ export class S3BackupObjectSink implements BackupObjectSink {
 
   /** `ListObjectsV2` with the key as prefix (needs `s3:ListBucket` only). */
   async sizeOf(key: string): Promise<number | null> {
+    const full = this.fullKey(key);
     let token: string | undefined;
     do {
       const out = await this.s3().send(
         new ListObjectsV2Command({
           Bucket: this.config.bucket,
-          Prefix: key,
+          Prefix: full,
           ...(token ? { ContinuationToken: token } : {}),
         }),
       );
-      const hit = (out.Contents ?? []).find((o) => o.Key === key);
+      const hit = (out.Contents ?? []).find((o) => o.Key === full);
       if (hit) return Number(hit.Size ?? 0);
       token = out.IsTruncated ? out.NextContinuationToken : undefined;
     } while (token);
@@ -185,7 +215,10 @@ export class S3BackupObjectSink implements BackupObjectSink {
   async head(key: string): Promise<BackupSinkHead | null> {
     try {
       const out = await this.s3().send(
-        new HeadObjectCommand({ Bucket: this.config.bucket, Key: key }),
+        new HeadObjectCommand({
+          Bucket: this.config.bucket,
+          Key: this.fullKey(key),
+        }),
       );
       return {
         size: Number(out.ContentLength ?? 0),
@@ -200,21 +233,23 @@ export class S3BackupObjectSink implements BackupObjectSink {
     }
   }
 
+  /** Lists under the role prefix; keys come back role-relative. */
   async list(prefix: string): Promise<BackupSinkObject[]> {
     const items: BackupSinkObject[] = [];
+    const cut = this.keyPrefix.length;
     let token: string | undefined;
     do {
       const out = await this.s3().send(
         new ListObjectsV2Command({
           Bucket: this.config.bucket,
-          Prefix: prefix,
+          Prefix: this.fullKey(prefix),
           ...(token ? { ContinuationToken: token } : {}),
         }),
       );
       for (const o of out.Contents ?? []) {
-        if (!o.Key) continue;
+        if (!o.Key || !o.Key.startsWith(this.keyPrefix)) continue;
         items.push({
-          key: String(o.Key),
+          key: String(o.Key).slice(cut),
           size: Number(o.Size ?? 0),
           lastModified: o.LastModified instanceof Date ? o.LastModified : null,
         });
@@ -227,7 +262,10 @@ export class S3BackupObjectSink implements BackupObjectSink {
   async get(key: string): Promise<BackupSinkGet | null> {
     try {
       const out = await this.s3().send(
-        new GetObjectCommand({ Bucket: this.config.bucket, Key: key }),
+        new GetObjectCommand({
+          Bucket: this.config.bucket,
+          Key: this.fullKey(key),
+        }),
       );
       if (!out.Body) return null;
       return {

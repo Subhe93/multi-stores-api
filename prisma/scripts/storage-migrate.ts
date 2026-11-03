@@ -2,10 +2,12 @@
  * Local disk → S3 copy of every stored file (plans/s3-storage/SPEC.md
  * "Migration tooling"). Copies only; NEVER deletes or moves a local file.
  *
- * Scopes and keys (meaning never changes):
- *   media     <cwd>/uploads/<folder>/<file>   → S3_MEDIA_BUCKET    uploads/<folder>/<file>
- *   private   PRIVATE_STORAGE_DIR/<key>       → S3_PRIVATE_BUCKET  <key>
- *   invoices  INVOICE_STORAGE_DIR/<key>       → S3_PRIVATE_BUCKET  invoices/<key>
+ * Scopes and keys (meaning never changes; `<p>` = the role's key prefix,
+ * S3_MEDIA_PREFIX / S3_PRIVATE_PREFIX, default `media/` / `private/`, so the
+ * roles may share one bucket):
+ *   media     <cwd>/uploads/<folder>/<file>   → S3_MEDIA_BUCKET    <p>uploads/<folder>/<file>
+ *   private   PRIVATE_STORAGE_DIR/<key>       → S3_PRIVATE_BUCKET  <p><key>
+ *   invoices  INVOICE_STORAGE_DIR/<key>       → S3_PRIVATE_BUCKET  <p>invoices/<key>
  *
  * Plan: stream the directory walk (no file list in memory until classified,
  * never file contents), sha256 (+ md5) per file, HeadObject (size +
@@ -13,9 +15,11 @@
  * bytes per folder (never a customer file name) plus the DB orphan report.
  * --apply uploads `copy` (+ `mismatch` with --overwrite) through the SDK
  * (streamed; multipart >= 5 MB; SSE-KMS for private/invoices when
- * S3_KMS_KEY_ID is set, else SSE-S3; media SSE-S3; Content-Type,
- * Cache-Control and SVG Content-Disposition as the API serves them), then
- * verifies size + sha256 metadata (+ ETag = MD5 for single-part SSE-S3).
+ * S3_KMS_KEY_ID is set, else no encryption header = bucket default;
+ * Content-Type, Cache-Control and SVG Content-Disposition as the API serves
+ * them), then verifies size + sha256 metadata (+ ETag = MD5 for single-part
+ * SSE-S3). Needs ListBucket + GetObject + PutObject only: a refused
+ * HeadBucket/HeadObject falls back to listing (existence + size).
  *
  * Modes / flags:
  *   --scope media|private|invoices|all   (default all; comma list allowed)
@@ -74,6 +78,7 @@ import {
 import {
   createS3,
   readS3Env,
+  rolePrefixes,
   type S3Env,
   type S3Ops,
 } from './storage-migrate.s3';
@@ -91,6 +96,8 @@ interface ScopeRoot {
   scope: Scope;
   root: string;
   bucket: string;
+  /** Key prefix of the role inside the bucket ('' or `<x>/`). */
+  prefix: string;
   /** Subtrees under `root` that belong to another scope (invoices inside private). */
   exclude: string[];
 }
@@ -110,20 +117,27 @@ function resolveRoots(scopes: Scope[]): ScopeRoot[] {
   );
   const media = envTrim('S3_MEDIA_BUCKET');
   const priv = envTrim('S3_PRIVATE_BUCKET');
+  const prefixes = rolePrefixes();
+  if (media && media === priv && prefixes.media === prefixes.private)
+    throw new Error(
+      'S3_MEDIA_BUCKET and S3_PRIVATE_BUCKET are the same bucket with the same key prefix; set S3_MEDIA_PREFIX / S3_PRIVATE_PREFIX apart',
+    );
   const out: ScopeRoot[] = [];
   for (const scope of scopes) {
-    const bucket = bucketRole(scope) === 'media' ? media : priv;
+    const role = bucketRole(scope);
+    const bucket = role === 'media' ? media : priv;
+    const prefix = prefixes[role];
     if (!bucket)
       throw new Error(
-        `${bucketRole(scope) === 'media' ? 'S3_MEDIA_BUCKET' : 'S3_PRIVATE_BUCKET'} is not set`,
+        `${role === 'media' ? 'S3_MEDIA_BUCKET' : 'S3_PRIVATE_BUCKET'} is not set`,
       );
     if (scope === 'media')
-      out.push({ scope, root: mediaRoot, bucket, exclude: [] });
+      out.push({ scope, root: mediaRoot, bucket, prefix, exclude: [] });
     else if (scope === 'invoices')
-      out.push({ scope, root: invoiceRoot, bucket, exclude: [] });
+      out.push({ scope, root: invoiceRoot, bucket, prefix, exclude: [] });
     else {
       const exclude = isInside(invoiceRoot, privateRoot) ? [invoiceRoot] : [];
-      out.push({ scope, root: privateRoot, bucket, exclude });
+      out.push({ scope, root: privateRoot, bucket, prefix, exclude });
     }
   }
   return out;
@@ -261,7 +275,7 @@ async function planScope(
   await pool(take(walk(sr), opts.limit), opts.concurrency, async (f) => {
     bytes += f.size;
     tick();
-    const remote = s3 ? await s3.head(sr.bucket, f.key) : null;
+    const remote = s3 ? await s3.head(sr.bucket, sr.prefix + f.key) : null;
     let sha256: string | null = null;
     let md5: string | null = null;
     const fastPath =
@@ -285,7 +299,12 @@ async function planScope(
       md5,
       action,
       remote: remote
-        ? { size: remote.size, sha256: remote.sha256, etag: remote.etag }
+        ? {
+            size: remote.size,
+            sha256: remote.sha256,
+            etag: remote.etag,
+            ...(remote.sizeOnly ? { sizeOnly: true } : {}),
+          }
         : null,
       abs: f.abs,
     });
@@ -354,7 +373,7 @@ async function uploadEntries(
       }
       await s3.put({
         bucket: sr.bucket,
-        key: e.key,
+        key: sr.prefix + e.key,
         body: createReadStream(e.abs, { highWaterMark: 1024 * 1024 }),
         size: e.size,
         contentType: contentTypeFor(e.key),
@@ -373,7 +392,7 @@ async function uploadEntries(
       });
       return;
     }
-    const head = await s3.head(sr.bucket, e.key);
+    const head = await s3.head(sr.bucket, sr.prefix + e.key);
     const problem = head
       ? verifyUploaded({ size: e.size, sha256: e.sha256!, md5: e.md5 }, head)
       : 'object missing after upload';
@@ -420,7 +439,7 @@ async function main(): Promise<number> {
   );
   for (const r of roots)
     console.log(
-      `  ${r.scope.padEnd(8)} ${r.root}  ->  s3://${r.bucket}/${r.scope === 'media' ? 'uploads/' : r.scope === 'invoices' ? 'invoices/' : ''}`,
+      `  ${r.scope.padEnd(8)} ${r.root}  ->  s3://${r.bucket}/${r.prefix}${r.scope === 'media' ? 'uploads/' : r.scope === 'invoices' ? 'invoices/' : ''}`,
     );
 
   let s3: S3Ops | null = null;
@@ -431,12 +450,17 @@ async function main(): Promise<number> {
     console.log(
       `  region=${env.region} kms=${env.kmsKeyId ? 'yes' : 'no'}${env.endpoint ? ' endpoint=custom' : ''}`,
     );
-    for (const b of new Set(roots.map((r) => r.bucket))) {
+    const probed = new Set<string>();
+    for (const r of roots) {
+      const loc = `${r.bucket}/${r.prefix}`;
+      if (probed.has(loc)) continue;
+      probed.add(loc);
       try {
-        await s3.headBucket(b);
+        const how = await s3.probeBucket(r.bucket, r.prefix);
+        console.log(`  s3://${loc} reachable (${how})`);
       } catch (err) {
         console.error(
-          `HeadBucket ${b} failed: ${(err as Error).name ?? 'error'} (check bucket name, region and credentials)`,
+          `bucket probe s3://${loc} failed: ${(err as Error).name ?? 'error'} (check bucket name, region, credentials and ListBucket)`,
         );
         return 1;
       }
@@ -468,6 +492,7 @@ async function main(): Promise<number> {
       scope: r.scope,
       root: r.root,
       bucket: r.bucket,
+      prefix: r.prefix,
     })),
     summary: agg,
     actionable: { files: actionable.length, bytes: actionableBytes },

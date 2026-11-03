@@ -59,6 +59,18 @@ export interface ListObjectsResult {
   nextContinuationToken?: string;
 }
 
+/**
+ * Outcome of a delete. `deleted` is true when the object was removed;
+ * otherwise `reason` says why: `missing` (no such key), `denied` (the S3
+ * key has no DeleteObject permission; logged once per bucket/prefix) or
+ * `skipped` (`STORAGE_DELETE_MODE=skip`). Deletes never throw for a
+ * refused permission so callers can log and continue.
+ */
+export interface DeleteObjectResult {
+  deleted: boolean;
+  reason?: 'missing' | 'denied' | 'skipped';
+}
+
 export interface ObjectStorage {
   /** Where the objects live: `local` or `s3`. */
   readonly driver: 'local' | 's3';
@@ -72,8 +84,8 @@ export interface ObjectStorage {
   /** The object as a stream with its headers, or null when it does not exist. */
   get(key: string): Promise<ObjectBody | null>;
   head(key: string): Promise<ObjectHead | null>;
-  /** True when something was deleted; false when the key did not exist. */
-  delete(key: string): Promise<boolean>;
+  /** `{ deleted: true }`, or `{ deleted: false, reason }` (never throws for a refused permission). */
+  delete(key: string): Promise<DeleteObjectResult>;
   exists(key: string): Promise<boolean>;
   list(prefix: string, opts?: ListObjectsOptions): Promise<ListObjectsResult>;
 }
@@ -110,4 +122,16 @@ export function isValidObjectPrefix(prefix: unknown): prefix is string {
   if (prefix === '') return true;
   const trimmed = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
   return isValidObjectKey(trimmed);
+}
+
+/**
+ * Normalises a per-role key prefix (`S3_MEDIA_PREFIX` & co.): trimmed, no
+ * leading slash, exactly one trailing `/`; the empty string means "no
+ * prefix". Throws on an unsafe prefix (`..`, backslash, control characters).
+ */
+export function normalizeKeyPrefix(raw: string | null | undefined): string {
+  const trimmed = (raw ?? '').trim().replace(/^\/+/, '').replace(/\/+$/, '');
+  if (trimmed === '') return '';
+  if (!isValidObjectKey(trimmed)) throw new InvalidObjectKeyError(raw);
+  return `${trimmed}/`;
 }

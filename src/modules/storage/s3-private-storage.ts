@@ -50,8 +50,9 @@ export class S3PrivateStorage implements PrivateStorage {
     });
   }
 
-  delete(key: string): Promise<boolean> {
-    return this.objects.delete(this.key(key));
+  /** False when the key did not exist or S3 refused the delete (logged, not thrown). */
+  async delete(key: string): Promise<boolean> {
+    return (await this.objects.delete(this.key(key))).deleted;
   }
 
   async stat(key: string): Promise<PrivateFileStat | null> {

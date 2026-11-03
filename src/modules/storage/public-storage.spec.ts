@@ -114,8 +114,13 @@ describe('PublicStorage (local)', () => {
 
   it('delete accepts public URLs only', async () => {
     await storage.put('products', 'a.webp', Buffer.from('img'));
-    expect(await storage.delete('/uploads/products/a.webp')).toBe(true);
-    expect(await storage.delete('/uploads/products/a.webp')).toBe(false);
+    expect(await storage.delete('/uploads/products/a.webp')).toEqual({
+      deleted: true,
+    });
+    expect(await storage.delete('/uploads/products/a.webp')).toEqual({
+      deleted: false,
+      reason: 'missing',
+    });
     await expect(
       storage.delete('/uploads/../package.json'),
     ).rejects.toBeInstanceOf(InvalidPublicUrlError);

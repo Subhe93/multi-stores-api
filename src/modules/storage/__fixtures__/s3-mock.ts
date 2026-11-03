@@ -3,6 +3,12 @@
  * GetObject, DeleteObject, ListObjectsV2, HeadBucket and the multipart
  * commands lib-storage's `Upload` sends. Objects keep their headers so the
  * S3 driver can be checked against the same contract as the local one.
+ *
+ * `deny` holds command names the mocked IAM key may not call: they answer
+ * 403 AccessDenied (e.g. `DeleteObject`, `HeadBucket` for the production
+ * key that only has ListBucket + GetObject + PutObject). Every command
+ * without a handler (GetBucketLocation, PutObjectTagging, …) is recorded in
+ * `calls` and refused the same way, so a test can assert it was never sent.
  */
 import {
   CompleteMultipartUploadCommand,
@@ -30,6 +36,9 @@ export interface MockObject {
   metadata: Record<string, string>;
   sse?: string;
   kmsKeyId?: string;
+  tagging?: string;
+  objectLockMode?: string;
+  objectLockRetainUntilDate?: Date;
   etag: string;
   lastModified: Date;
 }
@@ -42,6 +51,8 @@ export interface MockS3 {
   buckets: Set<string>;
   /** Command names in the order they were sent. */
   calls: string[];
+  /** Command names the key may not call (403 AccessDenied). */
+  deny: Set<string>;
 }
 
 class NotFound extends Error {
@@ -49,6 +60,15 @@ class NotFound extends Error {
   constructor(name = 'NotFound') {
     super(name);
     this.name = name;
+  }
+}
+
+export class AccessDenied extends Error {
+  $metadata = { httpStatusCode: 403 };
+  Code = 'AccessDenied';
+  constructor(command: string) {
+    super(`Access Denied (${command})`);
+    this.name = 'AccessDenied';
   }
 }
 
@@ -65,11 +85,13 @@ async function toBuffer(body: unknown): Promise<Buffer> {
 
 export function mockS3(
   buckets: string[] = ['media', 'private', 'backup'],
+  denied: string[] = [],
 ): MockS3 {
   const objects = new Map<string, MockObject>();
   const parts = new Map<string, Map<number, Buffer>>();
   const uploads = new Map<string, PutObjectCommandInput>();
   const calls: string[] = [];
+  const deny = new Set(denied);
   const client = new S3Client({ region: 'eu-north-1' });
   const stub = mockClient(client) as unknown as AwsStub<
     ServiceInputTypes,
@@ -78,6 +100,10 @@ export function mockS3(
   >;
   const bucketSet = new Set(buckets);
   const k = (b?: string, key?: string) => `${b}/${key}`;
+  const guard = (name: string) => {
+    calls.push(name);
+    if (deny.has(name)) throw new AccessDenied(name);
+  };
 
   const store = async (input: PutObjectCommandInput, body: Buffer) => {
     const etag = `"${createHash('md5').update(body).digest('hex')}"`;
@@ -89,26 +115,36 @@ export function mockS3(
       metadata: { ...(input.Metadata ?? {}) },
       sse: input.ServerSideEncryption,
       kmsKeyId: input.SSEKMSKeyId,
+      tagging: input.Tagging,
+      objectLockMode: input.ObjectLockMode,
+      objectLockRetainUntilDate: input.ObjectLockRetainUntilDate,
       etag,
       lastModified: new Date('2026-11-03T10:00:00.000Z'),
     });
     return etag;
   };
 
+  // Anything without a handler below is a command the production key does
+  // not have (GetBucketLocation, PutObjectTagging, PutObjectRetention, …).
+  stub.onAnyCommand().callsFake((input: unknown, getClient: unknown) => {
+    void input;
+    void getClient;
+    throw new AccessDenied('unhandled');
+  });
   stub.on(HeadBucketCommand).callsFake((input: { Bucket: string }) => {
-    calls.push('HeadBucket');
+    guard('HeadBucket');
     if (!bucketSet.has(input.Bucket)) throw new NotFound();
     return {};
   });
   stub.on(PutObjectCommand).callsFake(async (input: PutObjectCommandInput) => {
-    calls.push('PutObject');
+    guard('PutObject');
     const body = await toBuffer(input.Body);
     return { ETag: await store(input, body) };
   });
   stub
     .on(CreateMultipartUploadCommand)
     .callsFake((input: PutObjectCommandInput) => {
-      calls.push('CreateMultipartUpload');
+      guard('CreateMultipartUpload');
       const id = `mpu-${uploads.size + 1}`;
       uploads.set(id, input);
       parts.set(id, new Map());
@@ -122,7 +158,7 @@ export function mockS3(
         PartNumber: number;
         Body: unknown;
       }) => {
-        calls.push('UploadPart');
+        guard('UploadPart');
         const body = await toBuffer(input.Body);
         parts.get(input.UploadId)!.set(input.PartNumber, body);
         return { ETag: `"part-${input.PartNumber}"` };
@@ -131,7 +167,7 @@ export function mockS3(
   stub
     .on(CompleteMultipartUploadCommand)
     .callsFake(async (input: { UploadId: string }) => {
-      calls.push('CompleteMultipartUpload');
+      guard('CompleteMultipartUpload');
       const init = uploads.get(input.UploadId)!;
       const ordered = [...parts.get(input.UploadId)!.entries()]
         .sort((a, b) => a[0] - b[0])
@@ -142,7 +178,7 @@ export function mockS3(
   stub
     .on(HeadObjectCommand)
     .callsFake((input: { Bucket: string; Key: string }) => {
-      calls.push('HeadObject');
+      guard('HeadObject');
       const o = objects.get(k(input.Bucket, input.Key));
       if (!o) throw new NotFound();
       return {
@@ -153,12 +189,13 @@ export function mockS3(
         Metadata: o.metadata,
         CacheControl: o.cacheControl,
         ContentDisposition: o.contentDisposition,
+        ServerSideEncryption: o.sse,
       };
     });
   stub
     .on(GetObjectCommand)
     .callsFake((input: { Bucket: string; Key: string }) => {
-      calls.push('GetObject');
+      guard('GetObject');
       const o = objects.get(k(input.Bucket, input.Key));
       if (!o) throw new NotFound('NoSuchKey');
       return {
@@ -168,12 +205,13 @@ export function mockS3(
         ETag: o.etag,
         LastModified: o.lastModified,
         Metadata: o.metadata,
+        ServerSideEncryption: o.sse,
       };
     });
   stub
     .on(DeleteObjectCommand)
     .callsFake((input: { Bucket: string; Key: string }) => {
-      calls.push('DeleteObject');
+      guard('DeleteObject');
       objects.delete(k(input.Bucket, input.Key));
       return {};
     });
@@ -186,7 +224,8 @@ export function mockS3(
         MaxKeys?: number;
         ContinuationToken?: string;
       }) => {
-        calls.push('ListObjectsV2');
+        guard('ListObjectsV2');
+        if (!bucketSet.has(input.Bucket)) throw new NotFound('NoSuchBucket');
         const prefix = `${input.Bucket}/${input.Prefix ?? ''}`;
         const all = [...objects.entries()]
           .filter(([key]) => key.startsWith(prefix))
@@ -211,5 +250,5 @@ export function mockS3(
       },
     );
 
-  return { client, stub, objects, buckets: bucketSet, calls };
+  return { client, stub, objects, buckets: bucketSet, calls, deny };
 }

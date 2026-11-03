@@ -10,25 +10,53 @@
  *   S3_PRIVATE_BUCKET              required with driver s3
  *   S3_BACKUP_BUCKET               optional; when set, backups go offsite
  *                                  even with driver local (Phase 1)
- *   S3_KMS_KEY_ID                  optional; SSE-KMS for private + backup
+ *   S3_MEDIA_PREFIX / S3_PRIVATE_PREFIX / S3_BACKUP_PREFIX
+ *                                  key prefix of each role inside its bucket
+ *                                  (defaults media/, private/, backups/;
+ *                                  normalised to end with `/`; empty = none).
+ *                                  The three roles may share ONE bucket as
+ *                                  long as their prefixes differ. DB values
+ *                                  stay role-relative, so moving a role to
+ *                                  its own bucket later is an env change.
+ *   S3_KMS_KEY_ID                  optional; SSE-KMS for private + backup;
+ *                                  unset = no SSE header (bucket default)
+ *   STORAGE_DELETE_MODE=try|skip   default try: DeleteObject, a refused
+ *                                  permission is logged once and swallowed;
+ *                                  skip: never call DeleteObject
+ *   S3_BACKUP_OBJECT_LOCK=true|false default false: send the tier tag and
+ *                                  the per-object GOVERNANCE lock on backup
+ *                                  uploads (needs PutObjectTagging /
+ *                                  PutObjectRetention on the key)
  *   S3_ENDPOINT / S3_FORCE_PATH_STYLE   optional (minio / tests)
  *   MEDIA_LOCAL_FALLBACK=true|false default true (dual-read in s3 mode)
  *   MEDIA_BASE_URL                 optional; default PUBLIC_API_URL
- *   STORAGE_STRICT_STARTUP=true|false default true (refuse to start when a
- *                                  media/private HeadBucket fails in s3 mode;
+ *   STORAGE_STRICT_STARTUP=true|false default true (refuse to start when the
+ *                                  media/private probe fails in s3 mode;
  *                                  the backup bucket only warns)
  *   BACKUP_AWS_ACCESS_KEY_ID / BACKUP_AWS_SECRET_ACCESS_KEY
  *                                  optional (+ BACKUP_AWS_SESSION_TOKEN): the
  *                                  `ms-backup-writer` key used for the backup
- *                                  bucket only (INFRA.md §5.2: the API key has
- *                                  no access to that bucket). Unset = the SDK
- *                                  default chain.
+ *                                  bucket only (INFRA.md §5.2). Unset = the
+ *                                  SDK default chain (the API key; fine when
+ *                                  one bucket holds every role).
  */
 import * as path from 'path';
 import { defaultPrivateStorageDir } from '../../common/storage/private-file-storage';
 import { defaultInvoiceStorageDir } from '../../modules/invoices/storage/invoice-storage';
+import {
+  InvalidObjectKeyError,
+  normalizeKeyPrefix,
+  type BucketRole,
+} from './object-storage';
 
 export type StorageDriver = 'local' | 's3';
+export type StorageDeleteMode = 'try' | 'skip';
+
+export const DEFAULT_KEY_PREFIXES: Readonly<Record<BucketRole, string>> = {
+  media: 'media/',
+  private: 'private/',
+  backup: 'backups/',
+};
 
 export interface StorageConfig {
   driver: StorageDriver;
@@ -39,6 +67,14 @@ export interface StorageConfig {
   mediaBucket: string | null;
   privateBucket: string | null;
   backupBucket: string | null;
+  /** Key prefix of each role inside its bucket ('' or `<x>/`). */
+  mediaPrefix: string;
+  privatePrefix: string;
+  backupPrefix: string;
+  /** `try` (default) or `skip` (never issue DeleteObject). */
+  deleteMode: StorageDeleteMode;
+  /** Send tier tags + per-object Object Lock on backup uploads (default false). */
+  backupObjectLock: boolean;
   /** Backups go to S3 whenever the bucket is set (independent of the driver). */
   backupDriver: StorageDriver;
   mediaLocalFallback: boolean;
@@ -110,6 +146,38 @@ export function isS3Driver(env: NodeJS.ProcessEnv = process.env): boolean {
   return storageDriver(env) === 's3';
 }
 
+/** `STORAGE_DELETE_MODE` (default `try`). */
+export function storageDeleteMode(
+  env: NodeJS.ProcessEnv = process.env,
+): StorageDeleteMode {
+  const raw = str(env, 'STORAGE_DELETE_MODE')?.toLowerCase() ?? 'try';
+  if (raw === 'try' || raw === 'skip') return raw;
+  throw new StorageConfigError(
+    `STORAGE_DELETE_MODE must be "try" or "skip" (got ${JSON.stringify(raw)})`,
+  );
+}
+
+/**
+ * Per-role key prefix from `S3_<ROLE>_PREFIX`: an unset variable means the
+ * default (`media/`, `private/`, `backups/`); a set-but-empty one means no
+ * prefix. Normalised to `<x>/`.
+ */
+export function keyPrefixFor(env: NodeJS.ProcessEnv, role: BucketRole): string {
+  const name = `S3_${role.toUpperCase()}_PREFIX`;
+  const raw = env[name];
+  if (raw === undefined) return DEFAULT_KEY_PREFIXES[role];
+  try {
+    return normalizeKeyPrefix(raw);
+  } catch (e) {
+    if (e instanceof InvalidObjectKeyError) {
+      throw new StorageConfigError(
+        `${name} is not a valid key prefix (got ${JSON.stringify(raw)})`,
+      );
+    }
+    throw e;
+  }
+}
+
 const BUCKET_RE = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
 
 function bucket(env: NodeJS.ProcessEnv, name: string): string | null {
@@ -118,6 +186,30 @@ function bucket(env: NodeJS.ProcessEnv, name: string): string | null {
     throw new StorageConfigError(`${name} is not a valid bucket name`);
   }
   return v;
+}
+
+/**
+ * Two roles may share a bucket only under different prefixes: with the
+ * same bucket AND the same prefix their keys would collide (`uploads/…`
+ * of media next to private namespaces, backups next to both).
+ */
+function assertDistinctLocations(
+  roles: { role: BucketRole; bucket: string | null; prefix: string }[],
+): void {
+  const seen = new Map<string, BucketRole>();
+  for (const r of roles) {
+    if (!r.bucket) continue;
+    const loc = `${r.bucket}/${r.prefix}`;
+    const other = seen.get(loc);
+    if (other) {
+      throw new StorageConfigError(
+        `${other} and ${r.role} share bucket "${r.bucket}" with the same key prefix ${JSON.stringify(
+          r.prefix,
+        )}; give each role its own prefix (S3_${other.toUpperCase()}_PREFIX / S3_${r.role.toUpperCase()}_PREFIX) or its own bucket`,
+      );
+    }
+    seen.set(loc, r.role);
+  }
 }
 
 export function parseStorageConfig(
@@ -129,6 +221,9 @@ export function parseStorageConfig(
   const mediaBucket = bucket(env, 'S3_MEDIA_BUCKET');
   const privateBucket = bucket(env, 'S3_PRIVATE_BUCKET');
   const backupBucket = bucket(env, 'S3_BACKUP_BUCKET');
+  const mediaPrefix = keyPrefixFor(env, 'media');
+  const privatePrefix = keyPrefixFor(env, 'private');
+  const backupPrefix = keyPrefixFor(env, 'backup');
   const endpoint = str(env, 'S3_ENDPOINT');
   if (endpoint && !/^https?:\/\//i.test(endpoint)) {
     throw new StorageConfigError('S3_ENDPOINT must be an http(s) URL');
@@ -157,6 +252,11 @@ export function parseStorageConfig(
   if (backupDriver === 's3' && !region) {
     throw new StorageConfigError('S3_BACKUP_BUCKET needs AWS_REGION');
   }
+  assertDistinctLocations([
+    { role: 'media', bucket: mediaBucket, prefix: mediaPrefix },
+    { role: 'private', bucket: privateBucket, prefix: privatePrefix },
+    { role: 'backup', bucket: backupBucket, prefix: backupPrefix },
+  ]);
 
   const mediaBase = str(env, 'MEDIA_BASE_URL') ?? str(env, 'PUBLIC_API_URL');
   const mediaBaseUrl = mediaBase ? mediaBase.replace(/\/+$/, '') : null;
@@ -190,6 +290,11 @@ export function parseStorageConfig(
     mediaBucket,
     privateBucket,
     backupBucket,
+    mediaPrefix,
+    privatePrefix,
+    backupPrefix,
+    deleteMode: storageDeleteMode(env),
+    backupObjectLock: envBool(env, 'S3_BACKUP_OBJECT_LOCK', false),
     backupDriver,
     mediaLocalFallback: envBool(env, 'MEDIA_LOCAL_FALLBACK', true),
     strictStartup: envBool(env, 'STORAGE_STRICT_STARTUP', true),
@@ -211,7 +316,7 @@ export function parseStorageConfig(
   };
 }
 
-/** Log-safe view: booleans and bucket names only. */
+/** Log-safe view: booleans, bucket names and prefixes only. */
 export function describeStorageConfig(
   cfg: StorageConfig,
 ): Record<string, unknown> {
@@ -221,8 +326,13 @@ export function describeStorageConfig(
     media_bucket: cfg.mediaBucket,
     private_bucket: cfg.privateBucket,
     backup_bucket: cfg.backupBucket,
+    media_prefix: cfg.mediaPrefix,
+    private_prefix: cfg.privatePrefix,
+    backup_prefix: cfg.backupPrefix,
     backup_driver: cfg.backupDriver,
     kms: !!cfg.kmsKeyId,
+    delete_mode: cfg.deleteMode,
+    backup_object_lock: cfg.backupObjectLock,
     endpoint: !!cfg.endpoint,
     media_local_fallback: cfg.mediaLocalFallback,
     strict_startup: cfg.strictStartup,

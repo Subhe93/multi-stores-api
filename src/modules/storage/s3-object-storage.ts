@@ -1,13 +1,25 @@
 /**
  * S3 `ObjectStorage` (AWS SDK v3). One instance per bucket role.
  *
+ * - keys: every operation prepends the role's `keyPrefix` (`media/`,
+ *   `private/`, `backups/` by default), so three roles can share one bucket
+ *   while the keys stored in the DB stay role-relative; `list` answers
+ *   role-relative keys (prefix stripped).
  * - put: buffers go through `PutObject` (ChecksumAlgorithm SHA256, user
  *   metadata `sha256`); streams and large bodies go through lib-storage's
  *   `Upload` (multipart, 8 MB parts). Content-Type, Cache-Control,
  *   Content-Disposition and the metadata are object headers, so a later CDN
  *   origin serves them without the API.
- * - encryption: private/backup roles use SSE-KMS with `S3_KMS_KEY_ID` when the
- *   key is set, else SSE-S3 (AES256); media uses SSE-S3.
+ * - encryption: with `S3_KMS_KEY_ID`, private/backup roles (or an explicit
+ *   `sse: 'kms'`) send SSE-KMS with that key; without it NO encryption
+ *   header is sent and the bucket default applies.
+ * - delete: `STORAGE_DELETE_MODE=try` issues DeleteObject and turns a
+ *   refused permission (403/AccessDenied) into `{ deleted: false, reason:
+ *   'denied' }` with one warning per process and bucket/prefix; `skip`
+ *   never calls DeleteObject.
+ * - probe: HeadBucket, and when that is refused (403) a `ListObjectsV2
+ *   MaxKeys=1` on the role prefix; never GetBucketLocation. The client is
+ *   built with the configured region only.
  * - get streams the body (never buffered); a missing key answers null.
  * - the client retries 3 times and times out a request after 30 s.
  */
@@ -21,16 +33,18 @@ import {
   S3Client,
   type PutObjectCommandInput,
   type S3ClientConfig,
-  type ServerSideEncryption,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
+import { Logger } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { PassThrough, Readable } from 'stream';
 import {
   assertValidObjectKey,
   InvalidObjectKeyError,
   isValidObjectPrefix,
+  normalizeKeyPrefix,
   type BucketRole,
+  type DeleteObjectResult,
   type ListObjectsOptions,
   type ListObjectsResult,
   type ObjectBody,
@@ -46,6 +60,10 @@ export const S3_MAX_ATTEMPTS = 3;
 /** Buffers at or above this size are uploaded multipart. */
 export const S3_MULTIPART_THRESHOLD = 5 * 1024 * 1024;
 const PART_SIZE = 8 * 1024 * 1024;
+
+export type StorageDeleteMode = 'try' | 'skip';
+/** Which reachability probe answered (health output). */
+export type BucketProbe = 'head' | 'list';
 
 export interface S3ClientOptions {
   region: string;
@@ -64,12 +82,14 @@ export interface S3ClientOptions {
 /**
  * One shared client per credential set (media + private share the API key;
  * the backup bucket may use its own). Credentials come from the SDK default
- * chain unless given explicitly; they are never logged.
+ * chain unless given explicitly; they are never logged. Only the configured
+ * region is used (no GetBucketLocation, no region redirects).
  */
 export function createS3Client(opts: S3ClientOptions): S3Client {
   const config: S3ClientConfig = {
     region: opts.region,
     maxAttempts: S3_MAX_ATTEMPTS,
+    followRegionRedirects: false,
     requestHandler: {
       requestTimeout: opts.requestTimeoutMs ?? S3_REQUEST_TIMEOUT_MS,
       connectionTimeout: S3_CONNECTION_TIMEOUT_MS,
@@ -87,11 +107,15 @@ export interface S3ObjectStorageOptions {
   client: S3Client;
   bucket: string;
   role: BucketRole;
-  /** KMS key for SSE-KMS on private/backup writes (unset = SSE-S3). */
+  /** Key prefix of the role inside the bucket (`media/`; '' = none). */
+  keyPrefix?: string;
+  /** KMS key for SSE-KMS on private/backup writes (unset = bucket default). */
   kmsKeyId?: string;
+  /** `try` (default) or `skip` (never call DeleteObject). */
+  deleteMode?: StorageDeleteMode;
 }
 
-function isNotFound(e: unknown): boolean {
+export function isNotFound(e: unknown): boolean {
   const err = e as {
     name?: string;
     $metadata?: { httpStatusCode?: number };
@@ -105,29 +129,68 @@ function isNotFound(e: unknown): boolean {
   );
 }
 
+/** 403 / AccessDenied (the IAM key lacks the action). */
+export function isAccessDenied(e: unknown): boolean {
+  const err = e as {
+    name?: string;
+    Code?: string;
+    $metadata?: { httpStatusCode?: number };
+  };
+  return (
+    err?.name === 'AccessDenied' ||
+    err?.Code === 'AccessDenied' ||
+    err?.name === 'Forbidden' ||
+    err?.$metadata?.httpStatusCode === 403
+  );
+}
+
+/** Bucket/prefix pairs whose refused delete was already logged (one line per process). */
+const deniedDeleteWarned = new Set<string>();
+
+/** Test hook: forget which bucket/prefix pairs were already warned about. */
+export function resetDeniedDeleteWarnings(): void {
+  deniedDeleteWarned.clear();
+}
+
 export class S3ObjectStorage implements ObjectStorage {
   readonly driver = 's3' as const;
   readonly bucket: string;
   readonly role: BucketRole;
+  readonly keyPrefix: string;
+  readonly deleteMode: StorageDeleteMode;
   private readonly client: S3Client;
   private readonly kmsKeyId?: string;
+  private readonly logger = new Logger(S3ObjectStorage.name);
 
   constructor(opts: S3ObjectStorageOptions) {
     this.client = opts.client;
     this.bucket = opts.bucket;
     this.role = opts.role;
+    this.keyPrefix = normalizeKeyPrefix(opts.keyPrefix);
     this.kmsKeyId = opts.kmsKeyId?.trim() || undefined;
+    this.deleteMode = opts.deleteMode ?? 'try';
   }
 
+  /** `<bucket>/<prefix>` (log lines, health). */
   get location(): string {
-    return this.bucket;
+    return this.keyPrefix ? `${this.bucket}/${this.keyPrefix}` : this.bucket;
   }
 
-  /** The encryption headers for a write (role + key decide, SPEC "SSE"). */
-  encryptionFor(sse?: 'kms' | 's3'): {
-    ServerSideEncryption: ServerSideEncryption;
-    SSEKMSKeyId?: string;
-  } {
+  /** The bucket key of a role-relative key (validated). */
+  objectKey(key: string): string {
+    assertValidObjectKey(key);
+    return `${this.keyPrefix}${key}`;
+  }
+
+  /**
+   * The encryption headers for a write: SSE-KMS when a key is configured
+   * and the role (private/backup) or the caller (`sse: 'kms'`) asks for it;
+   * otherwise nothing (the bucket's default encryption applies — AES256 is
+   * deliberately not sent, a bucket policy may require another algorithm).
+   */
+  encryptionFor(
+    sse?: 'kms' | 's3',
+  ): Pick<PutObjectCommandInput, 'ServerSideEncryption' | 'SSEKMSKeyId'> {
     const wantsKms =
       sse === 'kms' ||
       (sse === undefined &&
@@ -135,13 +198,36 @@ export class S3ObjectStorage implements ObjectStorage {
     if (wantsKms && this.kmsKeyId) {
       return { ServerSideEncryption: 'aws:kms', SSEKMSKeyId: this.kmsKeyId };
     }
-    return { ServerSideEncryption: 'AES256' };
+    return {};
   }
 
-  /** `HeadBucket`: true when the bucket answers (health + startup check). */
+  /** `HeadBucket`: true when the bucket answers. Throws on 403 too. */
   async headBucket(): Promise<boolean> {
     await this.client.send(new HeadBucketCommand({ Bucket: this.bucket }));
     return true;
+  }
+
+  /**
+   * Reachability probe (startup + health): HeadBucket first; when the key
+   * may not call it (403/AccessDenied) a `ListObjectsV2 MaxKeys=1` on the
+   * role prefix (ListBucket is the minimum the key has). Anything else
+   * (network, 404, a refused list) throws.
+   */
+  async probe(): Promise<BucketProbe> {
+    try {
+      await this.headBucket();
+      return 'head';
+    } catch (e) {
+      if (!isAccessDenied(e)) throw e;
+    }
+    await this.client.send(
+      new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: this.keyPrefix || undefined,
+        MaxKeys: 1,
+      }),
+    );
+    return 'list';
   }
 
   private baseInput(
@@ -150,7 +236,7 @@ export class S3ObjectStorage implements ObjectStorage {
   ): PutObjectCommandInput {
     const input: PutObjectCommandInput = {
       Bucket: this.bucket,
-      Key: key,
+      Key: this.objectKey(key),
       ContentType: opts.contentType,
       ...this.encryptionFor(opts.sse),
     };
@@ -169,7 +255,6 @@ export class S3ObjectStorage implements ObjectStorage {
     body: Buffer | Readable,
     opts: PutObjectOptions,
   ): Promise<PutObjectResult> {
-    assertValidObjectKey(key);
     const input = this.baseInput(key, opts);
 
     if (Buffer.isBuffer(body)) {
@@ -212,10 +297,10 @@ export class S3ObjectStorage implements ObjectStorage {
   }
 
   async head(key: string): Promise<ObjectHead | null> {
-    assertValidObjectKey(key);
+    const Key = this.objectKey(key);
     try {
       const out = await this.client.send(
-        new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+        new HeadObjectCommand({ Bucket: this.bucket, Key }),
       );
       return {
         size: out.ContentLength ?? 0,
@@ -231,10 +316,10 @@ export class S3ObjectStorage implements ObjectStorage {
   }
 
   async get(key: string): Promise<ObjectBody | null> {
-    assertValidObjectKey(key);
+    const Key = this.objectKey(key);
     try {
       const out = await this.client.send(
-        new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+        new GetObjectCommand({ Bucket: this.bucket, Key }),
       );
       const body = out.Body;
       if (!body) return null;
@@ -265,40 +350,72 @@ export class S3ObjectStorage implements ObjectStorage {
     }
   }
 
-  async delete(key: string): Promise<boolean> {
-    assertValidObjectKey(key);
-    // S3 deletes are idempotent (204 either way); a HeadObject first keeps
-    // the "false when it did not exist" contract of the local driver.
+  /**
+   * `skip` mode answers `skipped` without any request. `try` mode checks
+   * the object first (S3 deletes are idempotent; the "missing" answer
+   * keeps the local driver's contract), then issues DeleteObject; a
+   * refused permission is `denied`, warned once per bucket/prefix.
+   */
+  async delete(key: string): Promise<DeleteObjectResult> {
+    const Key = this.objectKey(key);
+    if (this.deleteMode === 'skip') {
+      return { deleted: false, reason: 'skipped' };
+    }
     const existed = (await this.head(key)) !== null;
-    if (!existed) return false;
-    await this.client.send(
-      new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
+    if (!existed) return { deleted: false, reason: 'missing' };
+    try {
+      await this.client.send(
+        new DeleteObjectCommand({ Bucket: this.bucket, Key }),
+      );
+      return { deleted: true };
+    } catch (e) {
+      if (!isAccessDenied(e)) throw e;
+      this.warnDeniedDelete(e);
+      return { deleted: false, reason: 'denied' };
+    }
+  }
+
+  private warnDeniedDelete(e: unknown): void {
+    const scope = `${this.bucket}/${this.keyPrefix}`;
+    if (deniedDeleteWarned.has(scope)) return;
+    deniedDeleteWarned.add(scope);
+    this.logger.warn(
+      `storage: DeleteObject refused on s3://${scope} (${
+        e instanceof Error ? e.name : 'AccessDenied'
+      }); the ${this.role} role keeps objects until the bucket lifecycle removes them (set STORAGE_DELETE_MODE=skip to stop trying). This is logged once.`,
     );
-    return true;
   }
 
   async exists(key: string): Promise<boolean> {
     return (await this.head(key)) !== null;
   }
 
+  /** Lists under the role prefix; keys come back role-relative. */
   async list(
     prefix: string,
     opts: ListObjectsOptions = {},
   ): Promise<ListObjectsResult> {
     if (!isValidObjectPrefix(prefix)) throw new InvalidObjectKeyError(prefix);
+    const full = `${this.keyPrefix}${prefix}`;
     const out = await this.client.send(
       new ListObjectsV2Command({
         Bucket: this.bucket,
-        Prefix: prefix || undefined,
+        Prefix: full || undefined,
         MaxKeys: opts.maxKeys && opts.maxKeys > 0 ? opts.maxKeys : undefined,
         ContinuationToken: opts.continuationToken,
       }),
     );
+    const cut = this.keyPrefix.length;
     return {
       objects: (out.Contents ?? [])
-        .filter((c) => typeof c.Key === 'string')
+        .filter(
+          (c) =>
+            typeof c.Key === 'string' &&
+            c.Key.startsWith(this.keyPrefix) &&
+            c.Key.length > cut,
+        )
         .map((c) => ({
-          key: c.Key!,
+          key: c.Key!.slice(cut),
           size: c.Size ?? 0,
           etag: c.ETag ?? null,
           lastModified: c.LastModified ?? null,

@@ -1,11 +1,12 @@
 /**
  * Global storage module: resolves the three bucket roles by `STORAGE_DRIVER`
  * (local → `LocalObjectStorage` rooted at `<cwd>/uploads`, `PRIVATE_STORAGE_DIR`
- * and `BACKUP_DIR`; s3 → `S3ObjectStorage` per bucket, media wrapped in
- * `DualReadObjectStorage` while `MEDIA_LOCAL_FALLBACK` is on) and exposes
- * `PublicStorage` + `StorageHealthService`. The `PrivateStorage` and
- * `InvoiceStorage` adapters are bound by their own modules over
- * `PRIVATE_OBJECT_STORAGE`.
+ * and `BACKUP_DIR`; s3 → `S3ObjectStorage` per role (bucket + key prefix:
+ * one bucket may hold all three roles under `media/`, `private/`,
+ * `backups/`), media wrapped in `DualReadObjectStorage` while
+ * `MEDIA_LOCAL_FALLBACK` is on) and exposes `PublicStorage` +
+ * `StorageHealthService`. The `PrivateStorage` and `InvoiceStorage` adapters
+ * are bound by their own modules over `PRIVATE_OBJECT_STORAGE`.
  */
 import { Global, Module, type Provider } from '@nestjs/common';
 import { DualReadObjectStorage } from './dual-read-object-storage';
@@ -48,9 +49,10 @@ export function buildObjectStorages(
           forcePathStyle: cfg.forcePathStyle ?? undefined,
         })
       : client;
-  // The backup bucket may be written with its own key (BACKUP_AWS_*): the
-  // API key has no access to that bucket (INFRA.md §5.2). A client passed in
-  // (tests, scripts) is used for every role.
+  // The backup bucket may be written with its own key (BACKUP_AWS_*) when
+  // the API key has no access to it (INFRA.md §5.2); with one shared bucket
+  // the API key is used. A client passed in (tests, scripts) serves every
+  // role.
   const backupClient =
     cfg.backupDriver === 's3' && !client && cfg.backupCredentials
       ? createS3Client({
@@ -68,6 +70,8 @@ export function buildObjectStorages(
       client: s3!,
       bucket: cfg.mediaBucket!,
       role: 'media',
+      keyPrefix: cfg.mediaPrefix,
+      deleteMode: cfg.deleteMode,
     });
     media = cfg.mediaLocalFallback
       ? new DualReadObjectStorage(s3Media, localMedia)
@@ -76,7 +80,9 @@ export function buildObjectStorages(
       client: s3!,
       bucket: cfg.privateBucket!,
       role: 'private',
+      keyPrefix: cfg.privatePrefix,
       kmsKeyId: cfg.kmsKeyId ?? undefined,
+      deleteMode: cfg.deleteMode,
     });
   }
   const backup: ObjectStorage =
@@ -85,7 +91,9 @@ export function buildObjectStorages(
           client: backupClient!,
           bucket: cfg.backupBucket!,
           role: 'backup',
+          keyPrefix: cfg.backupPrefix,
           kmsKeyId: cfg.kmsKeyId ?? undefined,
+          deleteMode: cfg.deleteMode,
         })
       : localBackup;
   return { media, priv, backup };
