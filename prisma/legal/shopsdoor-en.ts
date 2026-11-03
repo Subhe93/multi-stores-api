@@ -6,8 +6,8 @@
 const COMPANY = 'Namez AB';
 const BRAND = 'ShopsDoor';
 const EMAIL = 'hello@shopsdoor.com';
-const ORG = '[ORGANISATION NUMBER]';
-const ADDRESS = '[REGISTERED ADDRESS]';
+const ORG = '559295-1007';
+const ADDRESS = 'Hagavägen 36, 784 40 Borlänge, Sweden';
 const UPDATED = '2 November 2026';
 
 const mail = `<a href="mailto:${EMAIL}">${EMAIL}</a>`;
