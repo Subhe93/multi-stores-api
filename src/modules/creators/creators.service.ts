@@ -1,6 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { CreateCreatorDto, UpdateCreatorDto } from './dto/create-creator.dto';
+import { Prisma } from '@prisma/client';
+import {
+  CreateCreatorDto,
+  OnboardingProfileDto,
+  UpdateCreatorDto,
+} from './dto/create-creator.dto';
 
 @Injectable()
 export class CreatorsService {
@@ -59,6 +64,48 @@ export class CreatorsService {
         },
       });
     });
+  }
+
+  /**
+   * Merges the survey answers into `Creator.onboarding_profile` and stamps
+   * `completed_at`. Only the given keys change; `account_kind` (sign-up
+   * card) survives untouched. Returns the stored profile.
+   */
+  async updateOnboardingProfile(
+    userId: string,
+    dto: OnboardingProfileDto,
+    now = new Date(),
+  ) {
+    const creator = await this.prisma.creator.findUnique({
+      where: { user_id: userId },
+      select: { id: true, onboarding_profile: true },
+    });
+    if (!creator)
+      throw new NotFoundException({
+        code: 'CREATOR_PROFILE_NOT_FOUND',
+        message: 'Creator profile not found',
+      });
+    const current =
+      creator.onboarding_profile &&
+      typeof creator.onboarding_profile === 'object' &&
+      !Array.isArray(creator.onboarding_profile)
+        ? (creator.onboarding_profile as Record<string, unknown>)
+        : {};
+    const merged: Record<string, unknown> = {
+      ...current,
+      ...(dto.stage !== undefined ? { stage: dto.stage } : {}),
+      ...(dto.sells !== undefined ? { sells: dto.sells } : {}),
+      ...(dto.country !== undefined
+        ? { country: dto.country.toUpperCase() }
+        : {}),
+      completed_at: now.toISOString(),
+    };
+    const updated = await this.prisma.creator.update({
+      where: { id: creator.id },
+      data: { onboarding_profile: merged as Prisma.InputJsonObject },
+      select: { onboarding_profile: true },
+    });
+    return { onboarding_profile: updated.onboarding_profile };
   }
 
   async findAll(page = 1, limit = 20) {

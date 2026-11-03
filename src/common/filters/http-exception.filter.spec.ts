@@ -2,6 +2,7 @@ import {
   ArgumentsHost,
   BadRequestException,
   NotFoundException,
+  PayloadTooLargeException,
 } from '@nestjs/common';
 import { AllExceptionsFilter } from './http-exception.filter';
 
@@ -69,5 +70,28 @@ describe('AllExceptionsFilter', () => {
       message: 'Internal server error',
     });
     spy.mockRestore();
+  });
+});
+
+describe('AllExceptionsFilter multer limit fallback', () => {
+  it('gives a bare multer size error (no uploadLimit on the route) a code', () => {
+    const { status, body } = run(
+      new PayloadTooLargeException('File too large'),
+    );
+    expect(status).toHaveBeenCalledWith(413);
+    expect(body).toMatchObject({
+      success: false,
+      statusCode: 413,
+      code: 'UPLOAD_FILE_TOO_LARGE',
+      message: 'File too large',
+    });
+    expect(run(new BadRequestException('Too many files')).body.code).toBe(
+      'UPLOAD_TOO_MANY_FILES',
+    );
+    expect(
+      run(new BadRequestException('Unexpected field - photo')).body.code,
+    ).toBe('UPLOAD_UNEXPECTED_FIELD');
+    // Other bare messages keep no code.
+    expect(run(new BadRequestException('x')).body.code).toBeUndefined();
   });
 });

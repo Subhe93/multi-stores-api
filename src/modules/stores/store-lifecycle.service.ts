@@ -14,7 +14,12 @@ import { SecurityAuditService } from '../security/security-audit.service';
 import type { RequestMeta } from '../security/request-meta';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { loadPublicHost } from './storefront-hosts';
-import { traderDetailsComplete, validateTraderDetails } from './trader-details';
+import {
+  traderDetailsComplete,
+  traderVatBlocked,
+  validateTraderDetails,
+} from './trader-details';
+import { TraderVatCheckService } from './trader-vat-check';
 import { isDisposableEmail } from '../../common/email/disposable-domains';
 import { isKustomEnabledForStore, kustomCreatorSelect } from '../payments/kustom/kustom.eligibility';
 
@@ -87,6 +92,7 @@ export class StoreLifecycleService {
     private readonly revalidation: RevalidationService,
     private readonly storeApps: StoreAppsService,
     private readonly config: ConfigService,
+    private readonly vatCheck: TraderVatCheckService,
   ) {}
 
   private notFound(): NotFoundException {
@@ -217,10 +223,27 @@ export class StoreLifecycleService {
     return { ...items, ready: blocking.length === 0, blocking };
   }
 
-  /** PUT /stores/my/trader-details: validated as SPEC §1, stores completed_at. */
+  /**
+   * PUT /stores/my/trader-details: validated as SPEC §1, stores
+   * completed_at. A given VAT number is checked against VIES (wave 3):
+   * invalid → 400 TRADER_VAT_INVALID (blocking); unavailable → stored with
+   * `vat_check.valid = null` (accepted, hint in the dashboard).
+   */
   async updateTraderDetails(userId: string, body: Record<string, unknown>) {
     const store = await this.ownStore(userId);
     const details = validateTraderDetails(body);
+    if (details.vat_number) {
+      const vat_check = await this.vatCheck.check(details.vat_number);
+      if (vat_check.valid === false) {
+        throw new BadRequestException({
+          code: 'TRADER_VAT_INVALID',
+          message: 'The VAT number is not registered in VIES',
+          fields: ['vat_number'],
+          vat_check,
+        });
+      }
+      details.vat_check = vat_check;
+    }
     const updated = await this.prisma.store.update({
       where: { id: store.id },
       data: { trader_details: details as unknown as Prisma.InputJsonObject },
@@ -260,6 +283,8 @@ export class StoreLifecycleService {
       checklist.email_verified &&
       checklist.trader_details_complete &&
       checklist.has_published_product &&
+      // A VAT number VIES rejected never auto-approves (null = unchecked is fine).
+      !traderVatBlocked(store.trader_details) &&
       !isDisposableEmail(owner.email);
 
     const locale = store.language_config?.primary_locale ?? cfg?.default_locale;

@@ -8,6 +8,7 @@ import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { MagicLinkModule } from './magic-link.module';
 import { VerifyReminderService } from './verify-reminder.service';
+import { TurnstileService } from '../../common/security/turnstile.service';
 
 @Module({
   imports: [
@@ -26,7 +27,7 @@ import { VerifyReminderService } from './verify-reminder.service';
     }),
   ],
   controllers: [AuthController, TwoFactorController],
-  providers: [AuthService, JwtStrategy, VerifyReminderService],
+  providers: [AuthService, JwtStrategy, VerifyReminderService, TurnstileService],
   exports: [AuthService],
 })
 export class AuthModule {}

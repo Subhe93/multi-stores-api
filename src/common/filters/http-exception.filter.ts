@@ -6,6 +6,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { Response } from 'express';
+import { multerLimitCode } from './multer-limit-errors';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -31,11 +32,15 @@ export class AllExceptionsFilter implements ExceptionFilter {
       const res = exception.getResponse();
       if (typeof res === 'string') {
         message = res;
+        // A multer limit error Nest transformed into a bare exception (a
+        // route without `uploadLimit()`): still give it a stable code.
+        code = multerLimitCode(res);
       } else {
         const r = res as Record<string, unknown>;
         // `message` may be a string or an array (class-validator) — preserve it.
         if (r.message !== undefined) message = r.message;
         if (typeof r.code === 'string') code = r.code;
+        else code = multerLimitCode(r.message);
         const { message: _m, code: _c, statusCode: _s, error: _e, ...rest } = r;
         void _m;
         void _c;

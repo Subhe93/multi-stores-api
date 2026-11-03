@@ -6,6 +6,7 @@ import {
   ForbiddenException,
   HttpException,
   HttpStatus,
+  Optional,
 } from '@nestjs/common';
 import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -41,6 +42,7 @@ import {
 import { AccountCredentialsService } from './account-credentials.service';
 import { TwoFactorService } from '../security/two-factor.service';
 import type { RequestMeta } from '../security/request-meta';
+import { TurnstileService } from '../../common/security/turnstile.service';
 
 /** Bcrypt cost of every password hash written by the auth flows. */
 const PASSWORD_BCRYPT_COST = 12;
@@ -147,6 +149,8 @@ export class AuthService {
     private readonly links: AccountLinksService,
     private readonly credentials: AccountCredentialsService,
     private readonly twoFactor: TwoFactorService,
+    // Optional so lean unit wiring stays valid; AuthModule provides it.
+    @Optional() private readonly turnstile?: TurnstileService,
   ) {}
 
   private emailExists(): ConflictException {
@@ -273,6 +277,9 @@ export class AuthService {
         );
       }
       this.assertStaffSignup(dto, email);
+      // Captcha (when TURNSTILE_SECRET_KEY is set) before any lookup, so a
+      // bot without a token learns nothing about existing emails.
+      await this.turnstile?.verify(dto.turnstile_token, meta.ip);
     }
 
     const store = isCustomer

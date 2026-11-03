@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import type { TraderVatCheck } from './trader-vat-check';
 
 /**
  * Legal trader identity of a store (SPEC §1): what e-handelslagen 8 § and
@@ -19,6 +20,8 @@ export interface TraderDetails {
   phone: string;
   support_email: string;
   completed_at: string;
+  /** VIES answer for `vat_number` (wave 3); absent without a VAT number. */
+  vat_check?: TraderVatCheck;
 }
 
 export const VAT_NUMBER_PATTERN = /^[A-Z]{2}[A-Z0-9]{2,12}$/;
@@ -152,4 +155,19 @@ export function traderDetailsComplete(value: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * True when the stored VIES answer says the VAT number is invalid
+ * (`vat_check.valid === false`). Null (not checkable) and a missing check
+ * never block: only a hard "invalid" does (go-live auto-approval rule).
+ */
+export function traderVatBlocked(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const check = (value as { vat_check?: unknown }).vat_check;
+  return (
+    !!check &&
+    typeof check === 'object' &&
+    (check as { valid?: unknown }).valid === false
+  );
 }

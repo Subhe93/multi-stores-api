@@ -20,6 +20,11 @@ import type { StoreByDomainResponse } from '../markets/market.types';
 import { RedirectsService } from '../redirects/redirects.service';
 import { isReservedDomain } from '../../common/domains/reserved-hosts';
 import { isReservedStoreSlug } from '../../common/slug/reserved-store-slugs';
+import {
+  localSlugVerdict,
+  normalizeStoreSlug,
+  type SlugAvailability,
+} from './slug-availability';
 import { StoreLifecycleService } from './store-lifecycle.service';
 import { stripBrandFromThemeConfig } from './theme-config';
 import {
@@ -68,6 +73,25 @@ export class StoresService {
       throw new Error('StoreLifecycleService is not wired');
     }
     return this.lifecycle;
+  }
+
+  /**
+   * GET /stores/slug-available?slug= (creator): the same rules as `create`
+   * (WP normalisation, pattern, reserved list, existing store) without
+   * creating anything. Says only taken / reserved / invalid / free; nothing
+   * about whose store it is or its status.
+   */
+  async slugAvailability(raw: string): Promise<SlugAvailability> {
+    const slug = String(raw ?? '');
+    const normalized = normalizeStoreSlug(slug);
+    const local = localSlugVerdict(normalized);
+    if (local) return { slug, normalized, available: false, reason: local };
+    const existing = await this.prisma.store.findUnique({
+      where: { slug: normalized },
+      select: { id: true },
+    });
+    if (existing) return { slug, normalized, available: false, reason: 'taken' };
+    return { slug, normalized, available: true };
   }
 
   async create(userId: string, dto: CreateStoreDto) {

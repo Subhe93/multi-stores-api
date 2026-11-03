@@ -1,4 +1,8 @@
-import { ForbiddenException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  PayloadTooLargeException,
+} from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { promises as fs } from 'fs';
 import * as os from 'os';
@@ -6,7 +10,9 @@ import * as path from 'path';
 import sharp from 'sharp';
 import type { PrismaService } from '../../prisma/prisma.service';
 import { PublicStorage } from '../storage/public-storage';
+import { lastValueFrom, throwError } from 'rxjs';
 import { sniffUploadType } from './upload-sniff';
+import { uploadLimit } from './upload-limit.interceptor';
 import { UploadsController } from './uploads.controller';
 import { folderAllowedForRole, UploadsService } from './uploads.service';
 
@@ -420,5 +426,47 @@ describe('DELETE ownership', () => {
       response: { code: 'UPLOAD_INVALID_PATH' },
     });
     expect((prisma.creator.findUnique as jest.Mock).mock.calls).toHaveLength(0);
+  });
+});
+
+describe('uploadLimit interceptor', () => {
+  const run = (err: unknown) =>
+    lastValueFrom(
+      new (uploadLimit(50 * 1024 * 1024))().intercept({} as never, {
+        handle: () => throwError(() => err),
+      }),
+    );
+
+  it('maps multer LIMIT_FILE_SIZE to 413 UPLOAD_FILE_TOO_LARGE with the cap', async () => {
+    await expect(
+      run(new PayloadTooLargeException('File too large')),
+    ).rejects.toMatchObject({
+      status: 413,
+      response: {
+        code: 'UPLOAD_FILE_TOO_LARGE',
+        message: 'File too large (max 50 MB)',
+        max_bytes: 52428800,
+        params: { max_mb: 50 },
+      },
+    });
+  });
+
+  it('codes LIMIT_FILE_COUNT / LIMIT_UNEXPECTED_FILE and passes anything else through', async () => {
+    await expect(
+      run(new BadRequestException('Too many files')),
+    ).rejects.toMatchObject({
+      status: 400,
+      response: { code: 'UPLOAD_TOO_MANY_FILES' },
+    });
+    await expect(
+      run(new BadRequestException('Unexpected field - photo')),
+    ).rejects.toMatchObject({
+      status: 400,
+      response: { code: 'UPLOAD_UNEXPECTED_FIELD' },
+    });
+    const other = new BadRequestException({ code: 'X', message: 'x' });
+    await expect(run(other)).rejects.toBe(other);
+    const plain = new Error('boom');
+    await expect(run(plain)).rejects.toBe(plain);
   });
 });

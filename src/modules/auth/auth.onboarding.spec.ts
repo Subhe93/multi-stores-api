@@ -17,6 +17,7 @@ import type { PrismaService } from '../../prisma/prisma.service';
 import type { StoreAppsService } from '../store-apps/store-apps.service';
 import type { TwoFactorService } from '../security/two-factor.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import type { TurnstileService } from '../../common/security/turnstile.service';
 
 // Platform onboarding (SPEC §2): staff sign-up with account kinds, the
 // honeypot, terms and disposable-domain rules, PENDING accounts, email
@@ -33,6 +34,8 @@ function build(
     existing?: Record<string, unknown> | null;
     consumed?: Record<string, unknown> | null;
     recent?: number;
+    /** Turnstile stub (wave 3); omitted = no captcha wired. */
+    turnstile?: { enabled: boolean; verify: jest.Mock };
   } = {},
 ) {
   const created: Array<Record<string, unknown>> = [];
@@ -135,6 +138,7 @@ function build(
     links,
     credentials,
     twoFactor,
+    opts.turnstile as unknown as TurnstileService | undefined,
   );
   return { service, prisma, mail, magicLinks, created };
 }
@@ -160,6 +164,54 @@ async function code(p: Promise<unknown>): Promise<string | undefined> {
   return (err as { getResponse?: () => { code?: string } }).getResponse?.()
     ?.code;
 }
+
+describe('AuthService.register (Turnstile, wave 3)', () => {
+  it('staff sign-up verifies the token with the client IP before any lookup; a refusal creates nothing', async () => {
+    const verify = jest.fn(() =>
+      Promise.reject(
+        new BadRequestException({ code: 'AUTH_CAPTCHA_FAILED', message: 'x' }),
+      ),
+    );
+    const { service, prisma, created } = build({
+      turnstile: { enabled: true, verify },
+    });
+    expect(
+      await code(
+        service.register(
+          { ...base, account_kind: 'independent', turnstile_token: 'tok' },
+          { ip: '203.0.113.9' },
+        ),
+      ),
+    ).toBe('AUTH_CAPTCHA_FAILED');
+    expect(verify).toHaveBeenCalledWith('tok', '203.0.113.9');
+    expect(prisma.user.create).not.toHaveBeenCalled();
+    expect(created).toHaveLength(0);
+  });
+
+  it('an accepted token lets the sign-up through', async () => {
+    const verify = jest.fn(() => Promise.resolve());
+    const { service, created } = build({
+      turnstile: { enabled: true, verify },
+    });
+    await service.register(
+      { ...base, account_kind: 'independent', turnstile_token: 'tok' },
+      { ip: '203.0.113.9' },
+    );
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(created).toHaveLength(1);
+  });
+
+  it('storefront customers are never asked for a token', async () => {
+    const verify = jest.fn(() => Promise.resolve());
+    const { service } = build({ turnstile: { enabled: true, verify } });
+    // Customers need a store; the 400 STORE_REQUIRED comes after the staff
+    // branch, which is the only one that calls the verifier.
+    await service
+      .register({ ...base, role: UserRole.CUSTOMER })
+      .catch(() => undefined);
+    expect(verify).not.toHaveBeenCalled();
+  });
+});
 
 describe('AuthService.register (platform onboarding)', () => {
   it('independent → PENDING CREATOR with onboarding_profile, last name kept, verification email', async () => {

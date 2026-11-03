@@ -13,6 +13,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUser, type RequestUser } from '../../common/decorators';
 import { sanitizeFolder } from '../storage/public-storage';
+import { uploadLimit } from './upload-limit.interceptor';
 import {
   folderAllowedForRole,
   UPLOAD_MAX_BYTES,
@@ -31,6 +32,7 @@ export class UploadsController {
   @Post()
   @UseGuards(AuthGuard('jwt'))
   @UseInterceptors(
+    uploadLimit(UPLOAD_MAX_BYTES),
     FileInterceptor('file', {
       limits: { fileSize: UPLOAD_MAX_BYTES, files: 1 },
     }),

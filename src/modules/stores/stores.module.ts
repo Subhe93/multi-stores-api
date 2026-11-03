@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { StoresController, AdminStoresController } from './stores.controller';
 import { StoresService } from './stores.service';
 import { StoreLifecycleService } from './store-lifecycle.service';
+import { TraderVatCheckService } from './trader-vat-check';
 import { OrdersModule } from '../orders/orders.module';
 import { MarketsModule } from '../markets/markets.module';
 import { RedirectsModule } from '../redirects/redirects.module';
@@ -27,7 +28,7 @@ import { StorefrontGateModule } from '../storefront/storefront-gate.service';
     StorefrontGateModule,
   ],
   controllers: [StoresController, AdminStoresController],
-  providers: [StoresService, StoreLifecycleService],
+  providers: [StoresService, StoreLifecycleService, TraderVatCheckService],
   exports: [StoresService, StoreLifecycleService],
 })
 export class StoresModule {}

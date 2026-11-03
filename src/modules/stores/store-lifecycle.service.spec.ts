@@ -18,6 +18,7 @@ import type { OrdersService } from '../orders/orders.service';
 import type { MarketsService } from '../markets/markets.service';
 import type { MarketsContextService } from '../markets/markets-context.service';
 import type { RedirectsService } from '../redirects/redirects.service';
+import type { TraderVatCheckService } from './trader-vat-check';
 
 // SPEC §3: go-live checklist, the go-live request (auto-approval vs the
 // review queue), the LIVE↔PAUSED toggle, admin status changes with audit +
@@ -44,6 +45,8 @@ interface Fixture {
   requireApproval?: boolean;
   email?: string;
   wentLiveAt?: Date | null;
+  /** What the mocked VIES check answers (default: valid). */
+  vat?: { valid: boolean | null; name?: string; address?: string };
 }
 
 function build(f: Fixture = {}) {
@@ -122,6 +125,14 @@ function build(f: Fixture = {}) {
     get: (k: string) =>
       ({ DASHBOARD_URL: 'https://dash.x', STOREFRONT_URL: 'https://stores.x' })[k],
   };
+  const vatCheck = {
+    check: jest.fn(() =>
+      Promise.resolve({
+        checked_at: '2026-11-03T10:00:00.000Z',
+        ...(f.vat ?? { valid: true, name: 'Namez AB' }),
+      }),
+    ),
+  };
   const service = new StoreLifecycleService(
     prisma as unknown as PrismaService,
     mail as unknown as MailService,
@@ -129,8 +140,9 @@ function build(f: Fixture = {}) {
     revalidation as unknown as RevalidationService,
     storeApps as unknown as StoreAppsService,
     config as unknown as ConfigService,
+    vatCheck as unknown as TraderVatCheckService,
   );
-  return { service, prisma, mail, audit, store, updates };
+  return { service, prisma, mail, audit, store, updates, vatCheck };
 }
 
 async function waitFor(check: () => boolean) {
@@ -241,6 +253,22 @@ describe('StoreLifecycleService.requestGoLive', () => {
     expect(updates[0]).toMatchObject({ status: StoreStatus.PENDING_REVIEW });
   });
 
+  it('a VAT number VIES rejected never auto-approves; null (unchecked) is fine', async () => {
+    const rejected = build({
+      requireApproval: false,
+      trader: { ...VALID_TRADER, vat_number: 'SE556016068001', vat_check: { valid: false, checked_at: 'x' } },
+    });
+    await rejected.service.requestGoLive('u1');
+    expect(rejected.updates[0]).toMatchObject({ status: StoreStatus.PENDING_REVIEW });
+
+    const unchecked = build({
+      requireApproval: false,
+      trader: { ...VALID_TRADER, vat_number: 'SE556016068001', vat_check: { valid: null, checked_at: 'x' } },
+    });
+    await unchecked.service.requestGoLive('u1');
+    expect(unchecked.updates[0]).toMatchObject({ status: StoreStatus.LIVE });
+  });
+
   it('allowed from DRAFT and CHANGES_REQUESTED only (409 otherwise)', async () => {
     for (const status of [StoreStatus.LIVE, StoreStatus.PENDING_REVIEW, StoreStatus.PAUSED, StoreStatus.SUSPENDED]) {
       const { service } = build({ status });
@@ -252,6 +280,101 @@ describe('StoreLifecycleService.requestGoLive', () => {
     }
     const ok = build({ status: StoreStatus.CHANGES_REQUESTED });
     await expect(ok.service.requestGoLive('u1')).resolves.toBeDefined();
+  });
+});
+
+describe('StoreLifecycleService.updateTraderDetails (VIES, wave 3)', () => {
+  const body = { ...VALID_TRADER, vat_number: 'se 5560160680 01' };
+
+  it('without a VAT number: no VIES call, no vat_check stored', async () => {
+    const { service, updates, vatCheck } = build();
+    await service.updateTraderDetails('u1', VALID_TRADER);
+    expect(vatCheck.check).not.toHaveBeenCalled();
+    const stored = updates[0].trader_details as Record<string, unknown>;
+    expect(stored.vat_check).toBeUndefined();
+    expect(stored.completed_at).toEqual(expect.any(String));
+  });
+
+  it('valid: stores vat_check with VIES name/address', async () => {
+    const { service, updates, vatCheck } = build({
+      vat: { valid: true, name: 'Namez AB', address: 'Storgatan 1' },
+    });
+    await service.updateTraderDetails('u1', body);
+    expect(vatCheck.check).toHaveBeenCalledWith('SE556016068001');
+    expect(updates[0].trader_details).toMatchObject({
+      vat_number: 'SE556016068001',
+      vat_check: { valid: true, name: 'Namez AB', address: 'Storgatan 1' },
+    });
+  });
+
+  it('invalid: 400 TRADER_VAT_INVALID with fields, nothing stored', async () => {
+    const { service, updates } = build({ vat: { valid: false } });
+    const err = await service.updateTraderDetails('u1', body).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect((err as BadRequestException).getResponse()).toMatchObject({
+      code: 'TRADER_VAT_INVALID',
+      fields: ['vat_number'],
+    });
+    expect(updates).toHaveLength(0);
+  });
+
+  it('VIES unavailable: accepted with valid null (non-blocking)', async () => {
+    const { service, updates } = build({ vat: { valid: null } });
+    const res = await service.updateTraderDetails('u1', body);
+    expect(updates[0].trader_details).toMatchObject({ vat_check: { valid: null } });
+    expect(res.trader_details).toMatchObject({ vat_check: { valid: null } });
+  });
+});
+
+describe('StoresService.slugAvailability (wave 3)', () => {
+  function stores(existing: boolean) {
+    const prisma = {
+      store: { findUnique: jest.fn(() => Promise.resolve(existing ? { id: 's1' } : null)) },
+    };
+    const service = new StoresService(
+      prisma as unknown as PrismaService,
+      {} as RevalidationService,
+      {} as OrdersService,
+      {} as StoreAppsService,
+      {} as MarketsService,
+      {} as MarketsContextService,
+      {} as RedirectsService,
+    );
+    return { service, prisma };
+  }
+
+  it('normalises with the WP rule and reports free / taken', async () => {
+    const free = stores(false);
+    expect(await free.service.slugAvailability('My Störe')).toEqual({
+      slug: 'My Störe',
+      normalized: 'my-store',
+      available: true,
+    });
+    expect(free.prisma.store.findUnique).toHaveBeenCalledWith({
+      where: { slug: 'my-store' },
+      select: { id: true },
+    });
+    const taken = stores(true);
+    expect(await taken.service.slugAvailability('namez-se')).toMatchObject({
+      available: false,
+      reason: 'taken',
+    });
+  });
+
+  it('reserved and invalid never reach the database', async () => {
+    const { service, prisma } = stores(false);
+    expect(await service.slugAvailability('Admin')).toMatchObject({
+      normalized: 'admin',
+      available: false,
+      reason: 'reserved',
+    });
+    for (const raw of ['a', '', '-x-', 'متجر', 'x'.repeat(51)]) {
+      expect(await service.slugAvailability(raw)).toMatchObject({
+        available: false,
+        reason: 'invalid',
+      });
+    }
+    expect(prisma.store.findUnique).not.toHaveBeenCalled();
   });
 });
 

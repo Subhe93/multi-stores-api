@@ -78,6 +78,14 @@ export class RegisterDto {
   @MaxLength(500)
   website?: string;
 
+  // Cloudflare Turnstile token of the platform sign-up (wave 3). Required
+  // for staff kinds only while the API has TURNSTILE_SECRET_KEY set
+  // (400 AUTH_CAPTCHA_FAILED otherwise); ignored for storefront customers.
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  turnstile_token?: string;
+
   // Storefront context. Required for role CUSTOMER (the account belongs to
   // that store; 400 STORE_REQUIRED without it), ignored for CREATOR /
   // PROVIDER. Also brands and localizes the welcome email.

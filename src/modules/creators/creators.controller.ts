@@ -10,7 +10,11 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { CreatorsService } from './creators.service';
-import { CreateCreatorDto, UpdateCreatorDto } from './dto/create-creator.dto';
+import {
+  CreateCreatorDto,
+  OnboardingProfileDto,
+  UpdateCreatorDto,
+} from './dto/create-creator.dto';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '@prisma/client';
@@ -42,6 +46,18 @@ export class CreatorsController {
     @Body() dto: UpdateCreatorDto,
   ) {
     return this.creatorsService.update(userId, dto);
+  }
+
+  // Creator — Persist the first-run survey (onboarding wave 3). The
+  // dashboard keeps localStorage only as an offline fallback.
+  @Put('me/onboarding-profile')
+  @Roles(UserRole.CREATOR)
+  @UseGuards(RolesGuard)
+  updateOnboardingProfile(
+    @CurrentUser('id') userId: string,
+    @Body() dto: OnboardingProfileDto,
+  ) {
+    return this.creatorsService.updateOnboardingProfile(userId, dto);
   }
 
   @Get()

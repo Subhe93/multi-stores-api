@@ -93,6 +93,16 @@ export class StoresController {
 
   // Public — Get a store by its slug. A non-LIVE store is 404 unless the
   // bearer token is the owner's / an admin's (SPEC §3 owner preview).
+  // Creator — Live slug availability for the create-store form (wave 3).
+  // Declared before `:slug` so the literal path wins. Throttled: 20/min.
+  @Get('slug-available')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.CREATOR)
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  slugAvailable(@Query('slug') slug?: string) {
+    return this.storesService.slugAvailability(slug ?? '');
+  }
+
   @Get(':slug')
   @UseGuards(StorefrontViewerGuard)
   async findBySlug(
