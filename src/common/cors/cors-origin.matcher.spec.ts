@@ -84,6 +84,34 @@ describe('cors-origin.matcher', () => {
     ).toBe(false);
   });
 
+  it('domain move: one-level wildcards for the old and the new apex side by side', () => {
+    const both = parseAllowedOrigins(
+      'https://shopsdoor.com,https://www.shopsdoor.com,https://*.shopsdoor.com,https://app.shopsdoor.com,' +
+        'https://iwings-digital.com,https://*.iwings-digital.com,https://ms-dash.iwings-digital.com',
+    );
+    for (const origin of [
+      'https://shopsdoor.com',
+      'https://www.shopsdoor.com',
+      'https://muba.shopsdoor.com',
+      'https://muba--eu.shopsdoor.com',
+      'https://app.shopsdoor.com',
+      'https://iwings-digital.com',
+      'https://muba.iwings-digital.com',
+      'https://ms-dash.iwings-digital.com',
+    ]) {
+      expect(matchesAllowedOrigin(origin, both)).toBe(true);
+    }
+    for (const origin of [
+      'https://a.b.shopsdoor.com',
+      'https://notshopsdoor.com',
+      'https://shopsdoor.com.evil.io',
+      'http://muba.shopsdoor.com',
+      'https://namez.se',
+    ]) {
+      expect(matchesAllowedOrigin(origin, both)).toBe(false);
+    }
+  });
+
   it('ignores malformed entries and origins', () => {
     expect(matchesAllowedOrigin('https://x.com', ['garbage', ''])).toBe(false);
     expect(matchesAllowedOrigin('garbage', allowed)).toBe(false);

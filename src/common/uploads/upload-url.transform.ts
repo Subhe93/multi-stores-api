@@ -13,6 +13,12 @@
  * are returned unchanged, so nothing that is not an upload URL of ours is
  * ever touched.
  *
+ * Domain move: while the old API host still serves `/uploads/*`, list BOTH
+ * API origins in `API_PUBLIC_ORIGINS` (e.g. `https://api.shopsdoor.com,
+ * https://ms-api.iwings-digital.com`) so a dashboard built against either
+ * host, and the personalization file-URL check, keep normalising / accepting
+ * URLs of both. No code default carries a host name.
+ *
  * Deliberately NOT applied to customer personalization values
  * (`OrderCustomFieldValue`, `CartItem.custom_fields`): the personalization
  * core validates absolute customer-file URLs against the same origins and

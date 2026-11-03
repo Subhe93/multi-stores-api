@@ -1,19 +1,26 @@
 // Hosts a creator cannot claim as a store domain. Mirrors the storefront
-// proxy's PLATFORM_HOSTNAMES so an attacker can't register e.g.
-// "admin.iwings-digital.com" and intercept platform traffic. Both an exact
+// proxy's platform host list so an attacker can't register e.g.
+// "admin.<platform apex>" and intercept platform traffic. Both an exact
 // match and any subdomain (`.endsWith('.' + host)`) are blocked.
-const RESERVED_HOSTS = (
-  process.env.PLATFORM_HOSTS ||
-  process.env.NEXT_PUBLIC_PLATFORM_HOSTS ||
-  'localhost,iwings-digital.com,www.iwings-digital.com'
-)
-  .split(',')
-  .map((h) => h.trim().toLowerCase())
-  .filter(Boolean);
+//
+// The list comes from `platformHosts()`: the host of STOREFRONT_URL (bare +
+// www), every entry of PLATFORM_HOSTS (old + new apex during a domain move)
+// and localhost. No hardcoded apex.
+import { platformHosts } from './platform-hosts';
+
+const RESERVED_HOSTS = platformHosts();
+
+/** Pure form: is `domain` one of `hosts` or a subdomain of one? */
+export function isReservedDomainFor(
+  domain: string,
+  hosts: readonly string[],
+): boolean {
+  const d = domain.trim().toLowerCase();
+  return hosts.some((host) => d === host || d.endsWith('.' + host));
+}
 
 export function isReservedDomain(domain: string): boolean {
-  const d = domain.trim().toLowerCase();
-  return RESERVED_HOSTS.some((host) => d === host || d.endsWith('.' + host));
+  return isReservedDomainFor(domain, RESERVED_HOSTS);
 }
 
 /** Lower-case hostname without port, whitespace or trailing dot. */
