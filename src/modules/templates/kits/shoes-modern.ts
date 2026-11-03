@@ -84,7 +84,7 @@ export const shoesModernKit: Kit = {
           content: {
             en: {
               messages: [
-                { text: 'Free shipping on orders over $50' },
+                { text: 'New season collection is here' },
                 {
                   text: '30-day easy returns',
                   link_label: 'Learn more',
@@ -689,7 +689,6 @@ export const shoesModernKit: Kit = {
         {
           section_key: 'product-page',
           settings: {
-            show_trust_badges: true,
             show_shipping: true,
             show_tabs: true,
             button_style: 'solid',

@@ -606,7 +606,6 @@ export class PagesV2Service {
               section_key: 'product-page',
               sort_order: 0,
               settings: {
-                show_trust_badges: true,
                 show_shipping: true,
                 show_tabs: true,
                 button_style: 'solid',

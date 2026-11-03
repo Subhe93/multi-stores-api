@@ -907,7 +907,6 @@ export const v1ceNfcKit: Kit = {
         {
           section_key: 'product-page',
           settings: {
-            show_trust_badges: true,
             show_shipping: true,
             show_tabs: true,
             button_style: 'solid',
