@@ -43,6 +43,7 @@ import { AccountCredentialsService } from './account-credentials.service';
 import { TwoFactorService } from '../security/two-factor.service';
 import type { RequestMeta } from '../security/request-meta';
 import { TurnstileService } from '../../common/security/turnstile.service';
+import { platformHosts } from '../../common/domains/platform-hosts';
 
 /** Bcrypt cost of every password hash written by the auth flows. */
 const PASSWORD_BCRYPT_COST = 12;
@@ -140,6 +141,15 @@ export function issuedAtFor(
   return Math.max(now, Math.floor(cutoff.getTime() / 1000) + 1);
 }
 
+/**
+ * Hosts a staff sign-up captcha may be solved on: the platform hosts and
+ * their subdomains.
+ */
+function platformCaptchaHosts(): string[] {
+  const hosts = platformHosts();
+  return [...hosts, ...hosts.map((h) => `.${h}`)];
+}
+
 @Injectable()
 export class AuthService {
   /** Staff sign-ups per client IP (SPEC §2: 5 per hour), process-local. */
@@ -166,6 +176,30 @@ export class AuthService {
       code: 'AUTH_EMAIL_EXISTS',
       message: 'Email already registered',
     });
+  }
+
+  /**
+   * Hosts a storefront captcha may be solved on: the store's slug subdomain
+   * under any platform host, its ACTIVE market domains and its legacy custom
+   * domain. Only read when TURNSTILE_CUSTOMERS is on.
+   */
+  private async storeCaptchaHosts(storeId: string): Promise<string[]> {
+    if (!this.turnstile?.customersEnabled) return [];
+    const [domains, store] = await Promise.all([
+      this.prisma.storeDomain.findMany({
+        where: { store_id: storeId, status: 'ACTIVE' },
+        select: { hostname: true },
+      }),
+      this.prisma.store.findUnique({
+        where: { id: storeId },
+        select: { custom_domain: true },
+      }),
+    ]);
+    return [
+      ...platformHosts().map((h) => `.${h}`),
+      ...domains.map((d) => d.hostname),
+      ...(store?.custom_domain ? [store.custom_domain] : []),
+    ];
   }
 
   private storeRequired(): BadRequestException {
@@ -287,13 +321,24 @@ export class AuthService {
       this.assertStaffSignup(dto, email);
       // Captcha (when TURNSTILE_SECRET_KEY is set) before any lookup, so a
       // bot without a token learns nothing about existing emails.
-      await this.turnstile?.verify(dto.turnstile_token, meta.ip);
+      await this.turnstile?.verify(dto.turnstile_token, meta.ip, {
+        hostnames: platformCaptchaHosts(),
+      });
     }
 
     const store = isCustomer
       ? await this.links.resolveRequestStore(dto.store_slug, dto.hostname)
       : null;
     if (isCustomer && !store) throw this.storeRequired();
+    if (store) {
+      // Storefront captcha (only with TURNSTILE_CUSTOMERS=on), before any
+      // lookup of the email.
+      await this.turnstile?.verifyCustomer(
+        dto.turnstile_token,
+        meta.ip,
+        await this.storeCaptchaHosts(store.id),
+      );
+    }
 
     const taken = store
       ? (await this.findStoreCustomer(store.id, email)) !== null
@@ -657,12 +702,21 @@ export class AuthService {
    * The account belongs to the store of the request (400 STORE_REQUIRED
    * without one); the email only has to be free within that store.
    */
-  async guestRegister(dto: GuestRegisterDto) {
+  async guestRegister(
+    dto: GuestRegisterDto,
+    meta: { ip?: string | null } = {},
+  ) {
     const store = await this.links.resolveRequestStore(
       dto.store_slug,
       dto.hostname,
     );
     if (!store) throw this.storeRequired();
+    // Guest checkout mails a password: same captcha as storefront sign-up.
+    await this.turnstile?.verifyCustomer(
+      dto.turnstile_token,
+      meta.ip,
+      await this.storeCaptchaHosts(store.id),
+    );
     const email = normalizeEmail(dto.email);
     if (await this.findStoreCustomer(store.id, email)) throw this.emailExists();
 
@@ -949,12 +1003,15 @@ export class AuthService {
     // The link points back at the store's own domain (market host, custom
     // domain or {slug}.{platform-host}) so the customer stays in the same
     // storefront; otherwise at the platform storefront ([locale] tree).
-    const resetUrl = this.links.storefrontLink(
+    // The token rides in the fragment (never sent to a server, so it stays
+    // out of access logs and the store owner's analytics pixels, which
+    // record the full page URL). The page still accepts `?token=`.
+    const resetUrl = `${this.links.storefrontLink(
       store?.base,
       '/auth/reset-password',
-      `token=${encodeURIComponent(resetToken)}`,
+      undefined,
       'en',
-    );
+    )}#token=${encodeURIComponent(resetToken)}`;
     const mailLocale = store?.primaryLocale ?? undefined;
     // Off the response path: awaiting SMTP made a hit measurably slower than
     // a miss (timing-based account enumeration), and a mail failure surfaced
@@ -1133,12 +1190,17 @@ export class AuthService {
       iat: issuedAtFor(user),
     };
 
+    // Storefront customers may keep a longer access lifetime
+    // (JWT_CUSTOMER_EXPIRES_IN) than staff: the storefront refreshes only on
+    // load, while the dashboard refreshes through its cookie on any 401.
+    const accessTtl =
+      (user.role === UserRole.CUSTOMER
+        ? this.configService.get<string>('JWT_CUSTOMER_EXPIRES_IN')
+        : undefined) || this.configService.get<string>('JWT_EXPIRES_IN');
     const [access_token, refresh_token] = await Promise.all([
       this.jwtService.signAsync(payload, {
         secret: this.configService.get<string>('JWT_SECRET')!,
-        expiresIn: this.configService.get<string>(
-          'JWT_EXPIRES_IN',
-        ) as JwtSignOptions['expiresIn'],
+        expiresIn: accessTtl as JwtSignOptions['expiresIn'],
       }),
       this.jwtService.signAsync(payload, {
         secret: this.configService.get<string>('JWT_REFRESH_SECRET')!,

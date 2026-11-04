@@ -183,7 +183,9 @@ describe('AuthService.register (Turnstile, wave 3)', () => {
         ),
       ),
     ).toBe('AUTH_CAPTCHA_FAILED');
-    expect(verify).toHaveBeenCalledWith('tok', '203.0.113.9');
+    expect(verify).toHaveBeenCalledWith('tok', '203.0.113.9', {
+      hostnames: expect.arrayContaining(['localhost']) as unknown,
+    });
     expect(prisma.user.create).not.toHaveBeenCalled();
     expect(created).toHaveLength(0);
   });

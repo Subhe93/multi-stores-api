@@ -1054,7 +1054,12 @@ export class PaymentsService {
 
     const orderRow = await this.prisma.order.findUnique({
       where: { id: orderId },
-      select: { stripe_account_id: true, store_id: true },
+      select: {
+        stripe_account_id: true,
+        store_id: true,
+        total: true,
+        currency: true,
+      },
     });
     if (!orderRow) return;
 
@@ -1079,6 +1084,20 @@ export class PaymentsService {
     if (live.metadata?.order_id !== orderId) {
       this.logger.warn(
         `Ignoring payment_intent.succeeded for order ${orderId}: live intent belongs to a different order`,
+      );
+      return;
+    }
+    // The intent must have collected exactly the order total, in the order
+    // currency. An intent built elsewhere (an independent store's own Stripe
+    // account can create one with any amount and this order id in metadata)
+    // never marks the order paid.
+    const expected = toStripeAmount(Number(orderRow.total), orderRow.currency);
+    if (
+      live.amount_received !== expected ||
+      (live.currency ?? '').toLowerCase() !== orderRow.currency.toLowerCase()
+    ) {
+      this.logger.error(
+        `Refusing payment_intent.succeeded for order ${orderId}: received ${live.amount_received} ${live.currency}, expected ${expected} ${orderRow.currency.toLowerCase()}`,
       );
       return;
     }
@@ -1416,6 +1435,7 @@ export class PaymentsService {
         payment_status: true,
         store_id: true,
         stripe_account_id: true,
+        stripe_payment_id: true,
       },
     });
     if (!order && charge.metadata?.order_id) {
@@ -1427,6 +1447,7 @@ export class PaymentsService {
           payment_status: true,
           store_id: true,
           stripe_account_id: true,
+          stripe_payment_id: true,
         },
       });
     }
@@ -1439,6 +1460,7 @@ export class PaymentsService {
           payment_status: true,
           store_id: true,
           stripe_account_id: true,
+          stripe_payment_id: true,
         },
       });
     }
@@ -1457,6 +1479,20 @@ export class PaymentsService {
         ? { stripeAccount: order.stripe_account_id }
         : undefined,
     );
+
+    // The charge must belong to this order's payment: a charge found through
+    // its (copyable) metadata but made by another PaymentIntent never moves
+    // this order to refunded.
+    const livePi =
+      typeof live.payment_intent === 'string'
+        ? live.payment_intent
+        : live.payment_intent?.id;
+    if (order.stripe_payment_id && livePi !== order.stripe_payment_id) {
+      this.logger.warn(
+        `Ignoring charge.refunded for order ${order.id}: charge belongs to another payment`,
+      );
+      return;
+    }
 
     if (!live.refunded) {
       // Partial refund: the order stands, but the money movement is recorded

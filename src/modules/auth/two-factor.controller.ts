@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Post,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
@@ -19,9 +20,11 @@ import {
   TwoFactorSetupDto,
 } from '../security/dto/security.dto';
 import { ReqMeta, type RequestMeta } from '../security/request-meta';
+import { RefreshCookieInterceptor } from './refresh-cookie';
 
 // Contract: plans/security-hardening/API-CONTRACT.md
 @Controller('auth/2fa')
+@UseInterceptors(RefreshCookieInterceptor)
 @Throttle({ default: { limit: 10, ttl: 60000 } })
 export class TwoFactorController {
   constructor(

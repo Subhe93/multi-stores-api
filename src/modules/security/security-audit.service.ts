@@ -25,6 +25,11 @@ export const SECURITY_ACTIONS = [
   'user.deleted_by_admin',
   // Platform onboarding: admin changed a store's lifecycle status.
   'store.status_changed',
+  // Database backups (download / restore / delete need a re-auth grant).
+  'backup.created',
+  'backup.downloaded',
+  'backup.restored',
+  'backup.deleted',
 ] as const;
 export type SecurityAction = (typeof SECURITY_ACTIONS)[number];
 

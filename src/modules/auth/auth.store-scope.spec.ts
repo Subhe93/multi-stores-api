@@ -516,6 +516,13 @@ describe('forgot-password is store scoped', () => {
       generic,
     );
     expect(t.mail.sendPasswordReset).toHaveBeenCalledTimes(2);
+    // The reset token rides in the URL fragment, never in the query string.
+    for (const call of (t.mail.sendPasswordReset as jest.Mock).mock
+      .calls as unknown[][]) {
+      const url = call[1] as string;
+      expect(url).toMatch(/\/auth\/reset-password#token=[^&?]+$/);
+      expect(url).not.toContain('?token=');
+    }
     expect(t.signed.map((p) => (p as { sub: string }).sub)).toEqual([
       'ca',
       'cr',

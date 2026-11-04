@@ -68,4 +68,11 @@ export class GuestRegisterDto {
   @IsString()
   @Matches(/^[a-z]{2}(-[A-Za-z]{2})?$/)
   locale?: string;
+
+  // Cloudflare Turnstile token; required only while the API runs with
+  // TURNSTILE_CUSTOMERS=on (400 AUTH_CAPTCHA_FAILED otherwise).
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  turnstile_token?: string;
 }

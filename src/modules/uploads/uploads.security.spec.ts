@@ -117,12 +117,14 @@ describe('per-role folder allowlist', () => {
       controller.upload(file, user(UserRole.CREATOR), '../imports'),
     ).toThrow(ForbiddenException);
     expect(uploadFile).not.toHaveBeenCalled();
-    void controller.upload(file, user(UserRole.CREATOR), 'products');
-    expect(uploadFile).toHaveBeenLastCalledWith(file, 'products');
-    void controller.upload(file, user(UserRole.CREATOR), undefined);
-    expect(uploadFile).toHaveBeenLastCalledWith(file, 'general');
-    void controller.upload(file, user(UserRole.ADMIN), 'imports');
-    expect(uploadFile).toHaveBeenLastCalledWith(file, 'imports');
+    const creatorUser = user(UserRole.CREATOR);
+    void controller.upload(file, creatorUser, 'products');
+    expect(uploadFile).toHaveBeenLastCalledWith(file, 'products', creatorUser);
+    void controller.upload(file, creatorUser, undefined);
+    expect(uploadFile).toHaveBeenLastCalledWith(file, 'general', creatorUser);
+    const adminUser = user(UserRole.ADMIN);
+    void controller.upload(file, adminUser, 'imports');
+    expect(uploadFile).toHaveBeenLastCalledWith(file, 'imports', adminUser);
     expect(controller).not.toHaveProperty('uploadPublic');
   });
 });
@@ -198,7 +200,13 @@ describe('DELETE ownership', () => {
     legal?: Array<{ logo_url: string; store_id: string }>;
     importMedia?: Array<{ public_url: string; store_id: string }>;
     pageJson?: boolean;
+    uploaded?: Array<{
+      key: string;
+      user_id: string | null;
+      store_id: string | null;
+    }>;
   }) {
+    const uploaded = rows.uploaded ?? [];
     const ends = (v: string | null | undefined, w: { endsWith: string }) =>
       typeof v === 'string' && v.endsWith(w.endsWith);
     return {
@@ -281,11 +289,41 @@ describe('DELETE ownership', () => {
             ) ?? null,
         ),
       },
+      uploadedFile: {
+        findUnique: jest.fn((q: { where: { key: string } }) =>
+          Promise.resolve(uploaded.find((r) => r.key === q.where.key) ?? null),
+        ),
+        upsert: jest.fn(
+          (q: {
+            where: { key: string };
+            create: { key: string; user_id: string; store_id: string | null };
+          }) => {
+            const i = uploaded.findIndex((r) => r.key === q.where.key);
+            if (i >= 0) uploaded.splice(i, 1);
+            uploaded.push(q.create);
+            return Promise.resolve(q.create);
+          },
+        ),
+        deleteMany: jest.fn((q: { where: { key: string } }) => {
+          const before = uploaded.length;
+          for (let i = uploaded.length - 1; i >= 0; i--) {
+            if (uploaded[i].key === q.where.key) uploaded.splice(i, 1);
+          }
+          return Promise.resolve({ count: before - uploaded.length });
+        }),
+      },
       $queryRaw: jest
         .fn()
         .mockResolvedValue(rows.pageJson ? [{ found: 1 }] : []),
     } as unknown as PrismaService;
   }
+
+  type UploadedFileMock = Record<
+    'findUnique' | 'upsert' | 'deleteMany',
+    jest.Mock
+  >;
+  const uploadedOf = (prisma: PrismaService) =>
+    prisma.uploadedFile as unknown as UploadedFileMock;
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'upl-own-'));
@@ -441,6 +479,210 @@ describe('DELETE ownership', () => {
       prismaWith({ provider: { id: 'p1', logo_url: null } }),
     );
     expect(await nope.isOwnedBy(REL, user(UserRole.PROVIDER))).toBe(false);
+  });
+
+  describe('recorded uploader (UploadedFile)', () => {
+    const row = (user_id: string | null, store_id: string | null) => ({
+      key: REL,
+      user_id,
+      store_id,
+    });
+    const creatorIn = (storeId: string, id = 'c1') => ({
+      id,
+      avatar_url: null,
+      cover_url: null,
+      store: { id: storeId, logo_url: null, favicon_url: null },
+    });
+
+    it('records the uploader and a creator store on upload', async () => {
+      const prisma = prismaWith({ creator: creatorIn('s1') });
+      const svc = new UploadsService(storage, prisma);
+      const png = await sharp({
+        create: { width: 2, height: 2, channels: 3, background: '#000' },
+      })
+        .png()
+        .toBuffer();
+      const out = await svc.uploadFile(
+        {
+          originalname: 'a.png',
+          buffer: png,
+          size: png.length,
+        } as Express.Multer.File,
+        'products',
+        user(UserRole.CREATOR, 'u1'),
+      );
+      const upsert = uploadedOf(prisma).upsert;
+      expect(upsert).toHaveBeenCalledTimes(1);
+      const [arg] = upsert.mock.calls[0] as [
+        {
+          where: { key: string };
+          create: Record<string, unknown>;
+        },
+      ];
+      expect(out.url.endsWith(arg.where.key)).toBe(true);
+      expect(arg.where.key).toMatch(/^\/uploads\/products\/[0-9a-f-]+\.webp$/);
+      expect(arg.create).toMatchObject({
+        key: arg.where.key,
+        user_id: 'u1',
+        store_id: 's1',
+        folder: 'products',
+        content_type: 'image/webp',
+        size: out.file_size,
+      });
+
+      // Non-creators have no store; a buffer without an uploader is not recorded.
+      const provider = prismaWith({});
+      const psvc = new UploadsService(storage, provider);
+      await psvc.storeBuffer(Buffer.from('%PDF-1.7'), '.pdf', 'logos', {
+        uploader: user(UserRole.PROVIDER, 'p-user'),
+      });
+      const providerCall = uploadedOf(provider).upsert.mock.calls[0] as [
+        { create: Record<string, unknown> },
+      ];
+      expect(providerCall[0].create).toMatchObject({
+        user_id: 'p-user',
+        store_id: null,
+        content_type: 'application/pdf',
+      });
+      await psvc.storeBuffer(Buffer.from('%PDF-1.7'), '.pdf', 'general');
+      expect(uploadedOf(provider).upsert).toHaveBeenCalledTimes(1);
+    });
+
+    it('a recording failure does not fail the upload', async () => {
+      const prisma = prismaWith({});
+      uploadedOf(prisma).upsert.mockRejectedValue(new Error('db down'));
+      const svc = new UploadsService(storage, prisma);
+      const out = await svc.storeBuffer(
+        Buffer.from('%PDF-1.7'),
+        '.pdf',
+        'general',
+        {
+          uploader: user(UserRole.ADMIN),
+        },
+      );
+      expect(await storage.exists(out.url)).toBe(true);
+    });
+
+    it('the uploader deletes their own file, and the row is removed', async () => {
+      const prisma = prismaWith({
+        creator: creatorIn('s1'),
+        uploaded: [row('u1', 's1')],
+      });
+      const svc = new UploadsService(storage, prisma);
+      await svc.deleteOwnedFile(ABS, user(UserRole.CREATOR, 'u1'));
+      expect(await storage.exists(REL)).toBe(false);
+      expect(uploadedOf(prisma).deleteMany).toHaveBeenCalledWith({
+        where: { key: REL },
+      });
+      expect(
+        await uploadedOf(prisma).findUnique({ where: { key: REL } }),
+      ).toBeNull();
+    });
+
+    it('the uploader (no reference needed) is still refused while another account uses the file', async () => {
+      const prisma = prismaWith({
+        provider: { id: 'p1', logo_url: null },
+        uploaded: [row('u1', null)],
+      });
+      (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ found: 1 }]);
+      const svc = new UploadsService(storage, prisma);
+      await expect(
+        svc.deleteOwnedFile(REL, user(UserRole.PROVIDER, 'u1')),
+      ).rejects.toMatchObject({ response: { code: 'UPLOAD_NOT_OWNED' } });
+      expect(await storage.exists(REL)).toBe(true);
+      expect(uploadedOf(prisma).deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('another creator cannot delete it even when their own record references it', async () => {
+      const prisma = prismaWith({
+        creator: creatorIn('s2', 'c2'),
+        productImages: [{ url: REL, creator_id: 'c2' }],
+        uploaded: [row('u1', 's1')],
+      });
+      const svc = new UploadsService(storage, prisma);
+      await expect(
+        svc.deleteOwnedFile(REL, user(UserRole.CREATOR, 'u2')),
+      ).rejects.toMatchObject({ response: { code: 'UPLOAD_NOT_OWNED' } });
+      expect(await storage.exists(REL)).toBe(true);
+      expect(uploadedOf(prisma).deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('a CREATOR of the same store may delete it; a PROVIDER or CUSTOMER may not', async () => {
+      // Uploaded by another account (or the uploader was deleted) for store s1.
+      for (const uploader of ['someone-else', null]) {
+        await storage.put('products', path.basename(REL), Buffer.from('x'));
+        const prisma = prismaWith({
+          creator: creatorIn('s1'),
+          uploaded: [row(uploader, 's1')],
+        });
+        const svc = new UploadsService(storage, prisma);
+        await svc.deleteOwnedFile(REL, user(UserRole.CREATOR, 'u1'));
+        expect(await storage.exists(REL)).toBe(false);
+      }
+      await storage.put('products', path.basename(REL), Buffer.from('x'));
+      for (const role of [UserRole.PROVIDER, UserRole.CUSTOMER]) {
+        const prisma = prismaWith({
+          creator: creatorIn('s1'),
+          provider: { id: 'p1', logo_url: REL },
+          uploaded: [row('someone-else', 's1')],
+        });
+        const svc = new UploadsService(storage, prisma);
+        await expect(
+          svc.deleteOwnedFile(REL, user(role, 'u1')),
+        ).rejects.toMatchObject({ response: { code: 'UPLOAD_NOT_OWNED' } });
+      }
+      // A row without a store and without a matching user: nobody but admin.
+      const orphan = prismaWith({
+        creator: creatorIn('s1'),
+        productImages: [{ url: REL, creator_id: 'c1' }],
+        uploaded: [row(null, null)],
+      });
+      await expect(
+        new UploadsService(storage, orphan).deleteOwnedFile(
+          REL,
+          user(UserRole.CREATOR, 'u1'),
+        ),
+      ).rejects.toMatchObject({ response: { code: 'UPLOAD_NOT_OWNED' } });
+      expect(await storage.exists(REL)).toBe(true);
+    });
+
+    it('legacy files without a row keep the reference check', async () => {
+      const owned = prismaWith({
+        creator: creatorIn('s1'),
+        productImages: [{ url: REL, creator_id: 'c1' }],
+      });
+      await new UploadsService(storage, owned).deleteOwnedFile(
+        REL,
+        user(UserRole.CREATOR, 'u1'),
+      );
+      expect(await storage.exists(REL)).toBe(false);
+      expect(uploadedOf(owned).findUnique).toHaveBeenCalledWith({
+        where: { key: REL },
+        select: { user_id: true, store_id: true },
+      });
+
+      await storage.put('products', path.basename(REL), Buffer.from('x'));
+      const notOwned = prismaWith({ creator: creatorIn('s1') });
+      await expect(
+        new UploadsService(storage, notOwned).deleteOwnedFile(
+          REL,
+          user(UserRole.CREATOR, 'u1'),
+        ),
+      ).rejects.toMatchObject({ response: { code: 'UPLOAD_NOT_OWNED' } });
+      expect(await storage.exists(REL)).toBe(true);
+    });
+
+    it('ADMIN deletes a recorded file of anyone and the row goes too', async () => {
+      const prisma = prismaWith({ uploaded: [row('u1', 's1')] });
+      await new UploadsService(storage, prisma).deleteOwnedFile(
+        REL,
+        user(UserRole.ADMIN, 'admin'),
+      );
+      expect(await storage.exists(REL)).toBe(false);
+      expect(
+        await uploadedOf(prisma).findUnique({ where: { key: REL } }),
+      ).toBeNull();
+    });
   });
 
   it('refuses non-public paths before any lookup', async () => {

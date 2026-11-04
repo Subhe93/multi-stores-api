@@ -8,8 +8,15 @@ import {
   HttpCode,
   HttpStatus,
   Req,
+  Res,
+  UseInterceptors,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
+import {
+  clearRefreshCookie,
+  readRefreshCookie,
+  RefreshCookieInterceptor,
+} from './refresh-cookie';
 import { clientIp } from '../../common/security/signup-rate-limit';
 import { AuthGuard } from '@nestjs/passport';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
@@ -27,6 +34,7 @@ import {
 import { CurrentUser } from '../../common/decorators';
 
 @Controller('auth')
+@UseInterceptors(RefreshCookieInterceptor)
 export class AuthController {
   constructor(private authService: AuthService) {}
 
@@ -62,8 +70,8 @@ export class AuthController {
   // it with a magic login link. Same body as register.
   @Post('guest-register')
   @Throttle({ default: { limit: 10, ttl: 60000 } })
-  guestRegister(@Body() dto: GuestRegisterDto) {
-    return this.authService.guestRegister(dto);
+  guestRegister(@Body() dto: GuestRegisterDto, @Req() req: Request) {
+    return this.authService.guestRegister(dto, { ip: clientIp(req) });
   }
 
   // One-click login from an emailed link; same body as login.
@@ -86,8 +94,12 @@ export class AuthController {
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  refresh(@Body('refresh_token') refreshToken: string) {
-    return this.authService.refreshToken(refreshToken);
+  refresh(@Body('refresh_token') refreshToken: string, @Req() req: Request) {
+    // Body token (storefronts, old dashboard tabs) or the httpOnly cookie
+    // (dashboard, origin-checked in readRefreshCookie).
+    return this.authService.refreshToken(
+      refreshToken || readRefreshCookie(req) || '',
+    );
   }
 
   @Post('logout')
@@ -96,8 +108,15 @@ export class AuthController {
   logout(
     @CurrentUser('id') userId: string,
     @Body('refresh_token') refreshToken: string,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.authService.logout(userId, refreshToken);
+    const cookieToken = readRefreshCookie(req);
+    if (cookieToken) clearRefreshCookie(req, res);
+    return this.authService.logout(
+      userId,
+      refreshToken || cookieToken || undefined,
+    );
   }
 
   // Rate-limited to curb user-enumeration timing probes and email-bombing.

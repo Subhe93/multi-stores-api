@@ -49,7 +49,7 @@ export class UploadsController {
         message: `Uploads to "${safeFolder}" are not allowed for your account`,
       });
     }
-    return this.uploadsService.uploadFile(file, safeFolder);
+    return this.uploadsService.uploadFile(file, safeFolder, user);
   }
 
   @Delete(':fileUrl')

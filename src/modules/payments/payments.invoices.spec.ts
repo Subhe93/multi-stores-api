@@ -20,7 +20,12 @@ function build(opts: { changed: boolean; invoices?: boolean }) {
     order: {
       findUnique: jest.fn(
         (): Promise<unknown> =>
-          Promise.resolve({ stripe_account_id: null, store_id: 's1' }),
+          Promise.resolve({
+            stripe_account_id: null,
+            store_id: 's1',
+            total: 299,
+            currency: 'SEK',
+          }),
       ),
       findFirst: jest.fn((): Promise<unknown> => Promise.resolve(null)),
     },
@@ -47,6 +52,8 @@ function build(opts: { changed: boolean; invoices?: boolean }) {
           id: 'pi_1',
           status: 'succeeded',
           metadata: { order_id: 'o1' },
+          amount_received: 29900,
+          currency: 'sek',
           latest_charge: 'ch_1',
         }),
       ),
@@ -88,6 +95,7 @@ function build(opts: { changed: boolean; invoices?: boolean }) {
     invoices,
     capture,
     transfers,
+    stripe,
   };
 }
 
@@ -102,7 +110,12 @@ describe('PaymentsService invoices call sites (Stripe)', () => {
     await b.service.onPaymentSucceeded(pi);
     expect(b.prisma.order.findUnique).toHaveBeenCalledWith({
       where: { id: 'o1' },
-      select: { stripe_account_id: true, store_id: true },
+      select: {
+        stripe_account_id: true,
+        store_id: true,
+        total: true,
+        currency: true,
+      },
     });
     expect(b.invoices!.onOrderPaid).toHaveBeenCalledTimes(1);
     expect(b.invoices!.onOrderPaid).toHaveBeenCalledWith({
@@ -151,5 +164,60 @@ describe('PaymentsService invoices call sites (Stripe)', () => {
       'Stripe',
       { cumulativeRefunded: 50, storeId: 's1' },
     );
+  });
+});
+
+describe('PaymentsService Stripe amount and payment checks', () => {
+  const pi = { id: 'pi_1', metadata: { order_id: 'o1' } };
+
+  it('does not mark the order paid when the intent collected another amount', async () => {
+    const b = build({ changed: true });
+    (b.stripe.paymentIntents.retrieve as jest.Mock).mockResolvedValue({
+      id: 'pi_1',
+      status: 'succeeded',
+      metadata: { order_id: 'o1' },
+      amount_received: 100,
+      currency: 'sek',
+    });
+    await b.service.onPaymentSucceeded(pi);
+    expect(b.orders.markOrderPaid).not.toHaveBeenCalled();
+  });
+
+  it('does not mark the order paid when the currency differs', async () => {
+    const b = build({ changed: true });
+    (b.stripe.paymentIntents.retrieve as jest.Mock).mockResolvedValue({
+      id: 'pi_1',
+      status: 'succeeded',
+      metadata: { order_id: 'o1' },
+      amount_received: 29900,
+      currency: 'eur',
+    });
+    await b.service.onPaymentSucceeded(pi);
+    expect(b.orders.markOrderPaid).not.toHaveBeenCalled();
+  });
+
+  it('ignores a refunded charge of another payment intent', async () => {
+    const b = build({ changed: true });
+    b.prisma.order.findFirst.mockResolvedValue({
+      id: 'o1',
+      order_number: 'MS-1',
+      payment_status: 'paid',
+      store_id: 's1',
+      stripe_account_id: null,
+      stripe_payment_id: 'pi_real',
+    });
+    (b.stripe.charges.retrieve as jest.Mock).mockResolvedValue({
+      id: 'ch_1',
+      refunded: true,
+      amount_refunded: 29900,
+      currency: 'sek',
+      payment_intent: 'pi_other',
+    });
+    await b.service.onChargeRefunded({
+      id: 'ch_1',
+      payment_intent: 'pi_other',
+    });
+    expect(b.orders.recordPartialRefund).not.toHaveBeenCalled();
+    expect(b.orders.markOrderRefunded).not.toHaveBeenCalled();
   });
 });

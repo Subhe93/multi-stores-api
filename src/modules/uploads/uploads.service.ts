@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   Optional,
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
@@ -73,9 +74,33 @@ export function folderAllowedForRole(role: UserRole, folder: string): boolean {
 
 type OwnerUser = Pick<RequestUser, 'id' | 'role'>;
 
+/** Content type recorded for a stored extension (the output extension). */
+const CONTENT_TYPES: Readonly<Record<string, string>> = {
+  '.webp': 'image/webp',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.pdf': 'application/pdf',
+  '.ai': 'application/postscript',
+};
+
+export interface StoreBufferOptions {
+  id?: string;
+  animated?: boolean;
+  limitInputPixels?: number;
+  /**
+   * The account the file is stored for. When set, an `UploadedFile` row
+   * records the uploader (and a creator's store) so `DELETE /uploads/:url`
+   * can decide ownership by who uploaded the file (audit M1).
+   */
+  uploader?: OwnerUser;
+}
+
 @Injectable()
 export class UploadsService {
   private readonly storage: PublicStorage;
+  private readonly logger = new Logger(UploadsService.name);
 
   /**
    * Both dependencies are optional so the service can be built bare in unit
@@ -102,6 +127,7 @@ export class UploadsService {
   async uploadFile(
     file: Express.Multer.File,
     folder: string = 'general',
+    uploader?: OwnerUser,
   ): Promise<{ url: string; file_type: string; file_size: number }> {
     if (!file) {
       throw new BadRequestException({
@@ -132,7 +158,7 @@ export class UploadsService {
       });
     }
 
-    return this.storeBuffer(file.buffer, ext, folder);
+    return this.storeBuffer(file.buffer, ext, folder, { uploader });
   }
 
   /**
@@ -144,12 +170,13 @@ export class UploadsService {
    * `opts.animated` / `opts.limitInputPixels` override the decoder options of
    * the raster path (customer uploads: first frame only, explicit pixel cap);
    * without them the output is exactly what `uploadFile` always produced.
+   * `opts.uploader` records who stored the file (see `recordUpload`).
    */
   async storeBuffer(
     buffer: Buffer,
     ext: string,
     folder: string = 'general',
-    opts: { id?: string; animated?: boolean; limitInputPixels?: number } = {},
+    opts: StoreBufferOptions = {},
   ): Promise<{ url: string; file_type: string; file_size: number }> {
     const inExt = (ext.startsWith('.') ? ext : `.${ext}`).toLowerCase();
     const id = opts.id ?? randomUUID();
@@ -172,12 +199,64 @@ export class UploadsService {
       ? await this.processImage(buffer, inExt, opts)
       : buffer;
     const stored = await this.storage.put(safeFolder, filename, out);
+    if (opts.uploader) {
+      await this.recordUpload(
+        `/${stored.key}`,
+        safeFolder,
+        out.length,
+        outExt,
+        opts.uploader,
+      );
+    }
 
     return {
       url: stored.url,
       file_type: outExt.replace('.', ''),
       file_size: out.length,
     };
+  }
+
+  /**
+   * Upserts the `UploadedFile` row of a freshly stored key. A failure is
+   * logged and swallowed: the file is already stored, and a key without a row
+   * falls back to the reference-based delete check (never more permissive
+   * than before this table existed).
+   */
+  private async recordUpload(
+    key: string,
+    folder: string,
+    size: number,
+    ext: string,
+    uploader: OwnerUser,
+  ): Promise<void> {
+    const prisma = this.prisma;
+    if (!prisma) return;
+    try {
+      let storeId: string | null = null;
+      if (uploader.role === UserRole.CREATOR) {
+        const creator = await prisma.creator.findUnique({
+          where: { user_id: uploader.id },
+          select: { store: { select: { id: true } } },
+        });
+        storeId = creator?.store?.id ?? null;
+      }
+      const data = {
+        user_id: uploader.id,
+        store_id: storeId,
+        folder,
+        size,
+        content_type: CONTENT_TYPES[ext] ?? 'application/octet-stream',
+      };
+      await prisma.uploadedFile.upsert({
+        where: { key },
+        create: { key, ...data },
+        update: data,
+      });
+    } catch (e) {
+      this.logger.warn(
+        `Could not record uploader of ${key}: ${(e as Error).message}`,
+      );
+    }
   }
 
   /**
@@ -234,12 +313,17 @@ export class UploadsService {
 
   /**
    * `DELETE /uploads/:fileUrl` with ownership: an ADMIN may delete any public
-   * file; a CREATOR/PROVIDER only a file referenced by a record they own
-   * (store logo/favicon, legal-profile logo, avatar/cover, provider logo,
-   * product / custom-product / collection images, imported media, page
-   * builder JSON) or inside their store's `template-imports/<storeId>/`
-   * folder. Anything else → 403 UPLOAD_NOT_OWNED (the file is not revealed
-   * as existing or not).
+   * file. For anyone else:
+   * - a file with an `UploadedFile` row may be deleted only by its uploader,
+   *   or by a CREATOR of the store it was uploaded for;
+   * - a file without a row (stored before uploads were recorded) may be
+   *   deleted when a record the caller owns references it (store
+   *   logo/favicon, legal-profile logo, avatar/cover, provider logo, product /
+   *   custom-product / collection images, imported media, page builder JSON)
+   *   or it lies in their store's `template-imports/<storeId>/` folder;
+   * - in both cases a file another account still references is refused.
+   * Anything else → 403 UPLOAD_NOT_OWNED (the file is not revealed as
+   * existing or not). The row is removed after the storage delete.
    */
   async deleteOwnedFile(fileUrl: string, user: OwnerUser): Promise<void> {
     const key = publicMediaKeyFromUrl(fileUrl);
@@ -253,8 +337,11 @@ export class UploadsService {
       // Owning a reference is not enough: anyone can paste another store's
       // URL into their own record. A file another account still uses is
       // never deleted by a non-admin.
+      const record = await this.findUploadRecord(`/${key}`);
       const owned =
-        (await this.isOwnedBy(`/${key}`, user)) &&
+        (record
+          ? await this.isUploader(record, user)
+          : await this.isOwnedBy(`/${key}`, user)) &&
         !(await this.isReferencedByOthers(`/${key}`, user));
       if (!owned) {
         throw new ForbiddenException({
@@ -264,6 +351,38 @@ export class UploadsService {
       }
     }
     await this.storage.delete(`/${key}`);
+    await this.prisma?.uploadedFile.deleteMany({ where: { key: `/${key}` } });
+  }
+
+  /** The `UploadedFile` row of `rel`, or null (legacy file / no database). */
+  private async findUploadRecord(
+    rel: string,
+  ): Promise<{ user_id: string | null; store_id: string | null } | null> {
+    if (!this.prisma) return null;
+    return this.prisma.uploadedFile.findUnique({
+      where: { key: rel },
+      select: { user_id: true, store_id: true },
+    });
+  }
+
+  /**
+   * True when the caller uploaded the recorded file, or is a CREATOR whose
+   * store the file was uploaded for. CUSTOMER accounts never qualify.
+   */
+  private async isUploader(
+    record: { user_id: string | null; store_id: string | null },
+    user: OwnerUser,
+  ): Promise<boolean> {
+    if (user.role === UserRole.CUSTOMER) return false;
+    if (record.user_id !== null && record.user_id === user.id) return true;
+    if (user.role !== UserRole.CREATOR || record.store_id === null) {
+      return false;
+    }
+    const creator = await this.prisma?.creator.findUnique({
+      where: { user_id: user.id },
+      select: { store: { select: { id: true } } },
+    });
+    return creator?.store?.id === record.store_id;
   }
 
   /**

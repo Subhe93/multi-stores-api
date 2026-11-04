@@ -2117,7 +2117,7 @@ export class MailService {
       password: 'Kx7mP2qRw9Tn4bVz',
       magic_url: `${dashboardBase.replace(/\/$/, '')}/auth/magic#token=sample-token`,
       expires_hours: '72',
-      reset_url: `${storefrontBase.replace(/\/$/, '')}/reset-password?token=sample`,
+      reset_url: `${storefrontBase.replace(/\/$/, '')}/reset-password#token=sample`,
     };
   }
 

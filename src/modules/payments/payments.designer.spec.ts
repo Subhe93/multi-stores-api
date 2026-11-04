@@ -28,7 +28,12 @@ function stripe(opts: { changed: boolean; designer?: boolean }) {
   const prisma = {
     order: {
       findUnique: jest.fn(() =>
-        Promise.resolve({ stripe_account_id: null, store_id: 's1' }),
+        Promise.resolve({
+          stripe_account_id: null,
+          store_id: 's1',
+          total: 299,
+          currency: 'SEK',
+        }),
       ),
     },
   };
@@ -67,6 +72,8 @@ function stripe(opts: { changed: boolean; designer?: boolean }) {
           id: 'pi_1',
           status: 'succeeded',
           metadata: { order_id: 'o1' },
+          amount_received: 29900,
+          currency: 'sek',
           latest_charge: 'ch_1',
         }),
       ),

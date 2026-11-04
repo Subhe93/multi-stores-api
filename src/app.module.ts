@@ -62,6 +62,7 @@ import { ZohoMailModule } from './modules/zoho-mail/zoho-mail.module';
 import { OverviewModule } from './modules/overview/overview.module';
 import { StoreCustomersModule } from './modules/store-customers/store-customers.module';
 import { HealthModule } from './modules/health/health.module';
+import { CspReportModule } from './modules/csp-report/csp-report.module';
 
 @Module({
   imports: [
@@ -140,6 +141,8 @@ import { HealthModule } from './modules/health/health.module';
     OverviewModule,
     StoreCustomersModule,
     HealthModule,
+    // Security audit M6: CSP violation reports (POST /api/csp-report).
+    CspReportModule,
   ],
   providers: [
     // ThrottlerModule alone throttles nothing — only routes that explicitly

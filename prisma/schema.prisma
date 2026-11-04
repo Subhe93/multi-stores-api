@@ -58,6 +58,7 @@ model User {
   sessions     Session[]
   login_tokens LoginToken[]
   security_events SecurityEvent[]
+  uploaded_files  UploadedFile[]
 
   @@unique([store_id, email])
   @@index([email])
@@ -90,6 +91,29 @@ model SecurityEvent {
   @@index([created_at])
   @@index([user_id, created_at])
   @@index([action, created_at])
+}
+
+// Who uploaded each public file (security audit M1). `DELETE /uploads/:url`
+// lets a non-admin delete a file only when they (or, for a creator, their
+// store) uploaded it. Files stored before this table existed have no row and
+// fall back to the reference-based check.
+model UploadedFile {
+  id           String   @id @default(uuid())
+  // Public key of the file, e.g. `/uploads/products/<uuid>.webp`.
+  key          String   @unique
+  user_id      String?
+  // The uploader's store (creators only).
+  store_id     String?
+  folder       String
+  size         Int
+  content_type String
+  created_at   DateTime @default(now())
+
+  user  User?  @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  store Store? @relation(fields: [store_id], references: [id], onDelete: SetNull)
+
+  @@index([user_id])
+  @@index([store_id])
 }
 
 model Session {
@@ -1254,6 +1278,7 @@ model Store {
   product_designers         ProductDesigner[]
   login_tokens              LoginToken[]
   customers                 User[]         @relation("StoreCustomers")
+  uploaded_files            UploadedFile[]
 
   @@index([slug])
   @@index([status])
