@@ -18,12 +18,28 @@ export class LegalService {
     private revalidation: RevalidationService,
   ) {}
 
-  private pickLocale(json: unknown, locale?: string): string {
+  /**
+   * The key a localized value is read from: the requested locale (matched
+   * case-insensitively), else `en`, else the first key; null when empty.
+   */
+  private localeKey(json: unknown, locale?: string): string | null {
     const obj = (json || {}) as Localized;
-    if (locale && obj[locale]) return obj[locale];
-    if (obj.en) return obj.en;
-    const first = Object.values(obj)[0];
-    return typeof first === 'string' ? first : '';
+    if (locale) {
+      if (obj[locale]) return locale;
+      const lower = locale.toLowerCase();
+      const ci = Object.keys(obj).find(
+        (k) => k.toLowerCase() === lower && obj[k],
+      );
+      if (ci) return ci;
+    }
+    if (obj.en) return 'en';
+    return Object.keys(obj)[0] ?? null;
+  }
+
+  private pickLocale(json: unknown, locale?: string): string {
+    const key = this.localeKey(json, locale);
+    const value = key ? (json as Localized)[key] : undefined;
+    return typeof value === 'string' ? value : '';
   }
 
   /** Public: list all legal pages with the requested locale's title. */
@@ -46,6 +62,8 @@ export class LegalService {
       slug: page.slug,
       title: this.pickLocale(page.title, locale),
       content: this.pickLocale(page.content, locale),
+      // The locale the content is written in (after fallback).
+      locale: this.localeKey(page.content, locale) ?? 'en',
       updated_at: page.updated_at,
     };
   }

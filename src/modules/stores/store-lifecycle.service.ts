@@ -20,6 +20,10 @@ import {
   validateTraderDetails,
 } from './trader-details';
 import { TraderVatCheckService } from './trader-vat-check';
+import {
+  loadStoreLegalRows,
+  resolveLegalPage,
+} from '../legal/store-templates/store-legal-resolver';
 import { isDisposableEmail } from '../../common/email/disposable-domains';
 import { isKustomEnabledForStore, kustomCreatorSelect } from '../payments/kustom/kustom.eligibility';
 
@@ -53,6 +57,16 @@ const BLOCKING_ITEMS: ReadonlyArray<keyof GoLiveChecklist> = [
   'email_verified',
   'trader_details_complete',
   'has_published_product',
+];
+
+/**
+ * INDEPENDENT stores also need their own Privacy + Terms pages published
+ * before going live (plans/store-legal-pages/SPEC.md, condition 5); for
+ * MARKETPLACE stores the platform texts apply and the item stays advisory.
+ */
+const INDEPENDENT_BLOCKING_ITEMS: ReadonlyArray<keyof GoLiveChecklist> = [
+  ...BLOCKING_ITEMS,
+  'legal_pages_published',
 ];
 
 /**
@@ -165,32 +179,45 @@ export class StoreLifecycleService {
     });
     if (!store) throw this.notFound();
 
-    const [ownPublished, customPublished, homePublished, legalPages, legalStatic] =
-      await Promise.all([
-        this.prisma.product.count({
-          where: { creator_id: store.creator.id, status: 'PUBLISHED' },
-        }),
-        store.store_type === StoreType.INDEPENDENT
-          ? Promise.resolve(0)
-          : this.prisma.customProduct.count({
-              where: { creator_id: store.creator.id, status: 'PUBLISHED' },
-            }),
-        this.prisma.page.count({
-          where: {
-            store_id: store.id,
-            type: 'HOME',
-            published_version_id: { not: null },
-          },
-        }),
-        this.prisma.legalPage.count(),
-        this.prisma.staticPage.count({
-          where: {
-            store_id: store.id,
-            status: 'PUBLISHED',
-            type: { in: ['PRIVACY_POLICY', 'TERMS', 'RETURN_POLICY'] },
-          },
-        }),
-      ]);
+    const independent = store.store_type === StoreType.INDEPENDENT;
+    const [
+      ownPublished,
+      customPublished,
+      homePublished,
+      legalPages,
+      legalStatic,
+      storeLegalRows,
+    ] = await Promise.all([
+      this.prisma.product.count({
+        where: { creator_id: store.creator.id, status: 'PUBLISHED' },
+      }),
+      store.store_type === StoreType.INDEPENDENT
+        ? Promise.resolve(0)
+        : this.prisma.customProduct.count({
+            where: { creator_id: store.creator.id, status: 'PUBLISHED' },
+          }),
+      this.prisma.page.count({
+        where: {
+          store_id: store.id,
+          type: 'HOME',
+          published_version_id: { not: null },
+        },
+      }),
+      independent ? Promise.resolve(0) : this.prisma.legalPage.count(),
+      independent
+        ? Promise.resolve(0)
+        : this.prisma.staticPage.count({
+            where: {
+              store_id: store.id,
+              status: 'PUBLISHED',
+              type: { in: ['PRIVACY_POLICY', 'TERMS', 'RETURN_POLICY'] },
+            },
+          }),
+      // INDEPENDENT: the store's own legal pages (v2 wins over legacy).
+      independent
+        ? loadStoreLegalRows(this.prisma, store.id)
+        : Promise.resolve(null),
+    ]);
 
     const creator = store.creator;
     const cardReady =
@@ -217,9 +244,16 @@ export class StoreLifecycleService {
       has_published_product: ownPublished + customPublished > 0,
       has_published_theme: themeChosen,
       payments_ready: cardReady || kustomReady || store.cod_enabled,
-      legal_pages_published: legalPages > 0 || legalStatic >= 3,
+      legal_pages_published: storeLegalRows
+        ? (['privacy', 'terms'] as const).every(
+            (slug) =>
+              resolveLegalPage(slug, storeLegalRows).state === 'published',
+          )
+        : legalPages > 0 || legalStatic >= 3,
     };
-    const blocking = BLOCKING_ITEMS.filter((k) => !items[k]);
+    const blocking = (
+      independent ? INDEPENDENT_BLOCKING_ITEMS : BLOCKING_ITEMS
+    ).filter((k) => !items[k]);
     return { ...items, ready: blocking.length === 0, blocking };
   }
 

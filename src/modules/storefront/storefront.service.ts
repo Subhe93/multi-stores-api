@@ -61,6 +61,14 @@ import {
   type StorefrontViewer,
 } from './storefront-gate.service';
 import { compareManualOrder } from '../creator-categories/product-order';
+import {
+  STORE_LEGAL_KIND,
+  STORE_LEGAL_SLUGS,
+} from '../legal/store-templates/store-templates';
+import {
+  loadStoreLegalRows,
+  resolveLegalPage,
+} from '../legal/store-templates/store-legal-resolver';
 
 /** The legacy freeform Store.theme_config JSON as getStore() reads it. */
 interface LegacyThemeConfig {
@@ -2185,6 +2193,7 @@ export class StorefrontService {
       where: { store_id: store.id, published_version_id: { not: null } },
       select: {
         type: true,
+        static_kind: true,
         slug: true,
         updated_at: true,
       },
@@ -2194,8 +2203,22 @@ export class StorefrontService {
     // Kept so sitemap doesn't drop pages during the migration window.
     const legacyPages = await this.prisma.staticPage.findMany({
       where: { store_id: store.id, status: 'PUBLISHED' },
-      select: { slug: true, updated_at: true },
+      select: { slug: true, type: true, updated_at: true },
     });
+
+    // Store legal pages (plans/store-legal-pages/SPEC.md): an INDEPENDENT
+    // store serves all four /legal/{slug} URLs (own page, else the default
+    // template), so its legal-kind pages are listed there and not again
+    // under their own /{slug}. MARKETPLACE stores keep the platform texts.
+    const independent = store.store_type === StoreType.INDEPENDENT;
+    const legalKinds = new Set<string>(
+      STORE_LEGAL_SLUGS.map((s) => STORE_LEGAL_KIND[s]),
+    );
+    const isLegalKind = (kind: string | null | undefined) =>
+      independent && !!kind && legalKinds.has(kind);
+    const storeLegalRows = independent
+      ? await loadStoreLegalRows(this.prisma, store.id)
+      : null;
 
     // Published own products + custom products. For sitemap we only need slug
     // + lastmod, so we project a thin shape. Independent stores never expose
@@ -2275,9 +2298,13 @@ export class StorefrontService {
         : null,
       static_pages: [
         ...v2Pages
-          .filter((p) => p.type === 'STATIC' && p.slug)
+          .filter(
+            (p) => p.type === 'STATIC' && p.slug && !isLegalKind(p.static_kind),
+          )
           .map((p) => ({ slug: p.slug!, lastmod: p.updated_at })),
-        ...legacyPages.map((p) => ({ slug: p.slug, lastmod: p.updated_at })),
+        ...legacyPages
+          .filter((p) => !isLegalKind(p.type))
+          .map((p) => ({ slug: p.slug, lastmod: p.updated_at })),
       ],
       landing_pages: v2Pages
         .filter((p) => p.type === 'LANDING' && p.slug)
@@ -2315,10 +2342,24 @@ export class StorefrontService {
             ? [{ slug: c.slug, path: info.path, lastmod: c.updated_at }]
             : [];
         }),
-      legal_pages: legalPages.map((p) => ({
-        slug: p.slug,
-        lastmod: p.updated_at,
-      })),
+      legal_pages: storeLegalRows
+        ? STORE_LEGAL_SLUGS.map((slug) => {
+            const own = resolveLegalPage(slug, storeLegalRows);
+            // Never null (the web sitemap needs a date): a template-backed
+            // slug changes with the store's trader details, so it uses
+            // the store's own updated_at.
+            return {
+              slug,
+              lastmod:
+                own.state === 'published' && own.page
+                  ? own.page.updated_at
+                  : store.updated_at,
+            };
+          })
+        : legalPages.map((p) => ({
+            slug: p.slug,
+            lastmod: p.updated_at,
+          })),
       ...(market
         ? {
             market: toMarketRoute(market),

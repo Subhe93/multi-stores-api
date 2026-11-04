@@ -1,7 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { StoreStatus, StoreType, UserRole } from '@prisma/client';
 import type { ConfigService } from '@nestjs/config';
 import {
@@ -47,6 +44,25 @@ interface Fixture {
   wentLiveAt?: Date | null;
   /** What the mocked VIES check answers (default: valid). */
   vat?: { valid: boolean | null; name?: string; address?: string };
+  storeType?: StoreType;
+  /** v2 legal-kind pages of the store (default: published Privacy + Terms). */
+  v2Legal?: Array<Record<string, unknown>>;
+  /** Legacy legal-kind StaticPages of the store (default: none). */
+  legacyLegal?: Array<Record<string, unknown>>;
+}
+
+function v2Legal(kind: string, published = true) {
+  return {
+    id: `p-${kind}`,
+    slug: kind.toLowerCase(),
+    static_kind: kind,
+    published_version_id: published ? `v-${kind}` : null,
+    updated_at: new Date('2026-11-01T00:00:00Z'),
+    translations: [{ locale: 'sv', title: kind }],
+    published_version: published
+      ? { published_at: new Date('2026-11-01T00:00:00Z') }
+      : null,
+  };
 }
 
 function build(f: Fixture = {}) {
@@ -55,7 +71,7 @@ function build(f: Fixture = {}) {
     slug: 'namez',
     name: 'Namez',
     status: f.status ?? StoreStatus.DRAFT,
-    store_type: StoreType.INDEPENDENT,
+    store_type: f.storeType ?? StoreType.INDEPENDENT,
     trader_details: f.trader === undefined ? VALID_TRADER : f.trader,
     cod_enabled: false,
     currency: 'SEK',
@@ -97,9 +113,34 @@ function build(f: Fixture = {}) {
     },
     product: { count: jest.fn(() => Promise.resolve(f.products ?? 1)) },
     customProduct: { count: jest.fn(() => Promise.resolve(0)) },
-    page: { count: jest.fn(() => Promise.resolve(1)) },
+    page: {
+      count: jest.fn(() => Promise.resolve(1)),
+      findMany: jest.fn(() =>
+        Promise.resolve(
+          f.v2Legal ?? [v2Legal('PRIVACY_POLICY'), v2Legal('TERMS')],
+        ),
+      ),
+    },
     legalPage: { count: jest.fn(() => Promise.resolve(3)) },
-    staticPage: { count: jest.fn(() => Promise.resolve(0)) },
+    // Snapshot meta (section count + titles) of the published legal pages.
+    $queryRaw: jest.fn(() =>
+      Promise.resolve(
+        (
+          (f.v2Legal ?? [
+            v2Legal('PRIVACY_POLICY'),
+            v2Legal('TERMS'),
+          ]) as Array<{ published_version_id?: unknown }>
+        ).flatMap((p) =>
+          typeof p.published_version_id === 'string'
+            ? [{ id: p.published_version_id, section_count: 1, titles: [] }]
+            : [],
+        ),
+      ),
+    ),
+    staticPage: {
+      count: jest.fn(() => Promise.resolve(0)),
+      findMany: jest.fn(() => Promise.resolve(f.legacyLegal ?? [])),
+    },
     platformConfig: {
       findFirst: jest.fn(() =>
         Promise.resolve({
@@ -123,7 +164,9 @@ function build(f: Fixture = {}) {
   const storeApps = { isEnabled: jest.fn(() => Promise.resolve(false)) };
   const config = {
     get: (k: string) =>
-      ({ DASHBOARD_URL: 'https://dash.x', STOREFRONT_URL: 'https://stores.x' })[k],
+      ({ DASHBOARD_URL: 'https://dash.x', STOREFRONT_URL: 'https://stores.x' })[
+        k
+      ],
   };
   const vatCheck = {
     check: jest.fn(() =>
@@ -158,7 +201,13 @@ describe('storeStatusData (derived is_active)', () => {
       status: 'LIVE',
       is_active: true,
     });
-    for (const s of ['DRAFT', 'PENDING_REVIEW', 'CHANGES_REQUESTED', 'PAUSED', 'SUSPENDED'] as StoreStatus[]) {
+    for (const s of [
+      'DRAFT',
+      'PENDING_REVIEW',
+      'CHANGES_REQUESTED',
+      'PAUSED',
+      'SUSPENDED',
+    ] as StoreStatus[]) {
       expect(storeStatusData(s).is_active).toBe(false);
     }
   });
@@ -192,6 +241,68 @@ describe('StoreLifecycleService.checklist', () => {
   });
 });
 
+describe('StoreLifecycleService.checklist legal pages (store-legal-pages SPEC)', () => {
+  it('INDEPENDENT: own Privacy AND Terms published → legal_pages_published', async () => {
+    const { service, prisma } = build();
+    const c = await service.checklist('s1');
+    expect(c.legal_pages_published).toBe(true);
+    expect(c.blocking).toEqual([]);
+    // The platform LegalPage rows do not count for an independent store.
+    expect(prisma.legalPage.count).not.toHaveBeenCalled();
+  });
+
+  it('INDEPENDENT: a missing Terms page (template only) blocks go-live', async () => {
+    const { service } = build({ v2Legal: [v2Legal('PRIVACY_POLICY')] });
+    const c = await service.checklist('s1');
+    expect(c.legal_pages_published).toBe(false);
+    expect(c.ready).toBe(false);
+    expect(c.blocking).toEqual(['legal_pages_published']);
+  });
+
+  it('INDEPENDENT: a draft v2 page does not count; a published legacy page with content does', async () => {
+    const draft = build({
+      v2Legal: [v2Legal('PRIVACY_POLICY'), v2Legal('TERMS', false)],
+    });
+    expect((await draft.service.checklist('s1')).legal_pages_published).toBe(
+      false,
+    );
+
+    const legacy = build({
+      v2Legal: [v2Legal('PRIVACY_POLICY')],
+      legacyLegal: [
+        {
+          id: 'l1',
+          slug: 'terms',
+          type: 'TERMS',
+          status: 'PUBLISHED',
+          updated_at: new Date(),
+          translations: [
+            { locale: 'sv', title: 'Villkor', content: '<p>Text</p>' },
+          ],
+        },
+      ],
+    });
+    expect((await legacy.service.checklist('s1')).legal_pages_published).toBe(
+      true,
+    );
+  });
+
+  it('MARKETPLACE: unchanged (platform legal pages count, advisory only)', async () => {
+    const { service, prisma } = build({
+      storeType: StoreType.MARKETPLACE,
+      v2Legal: [],
+    });
+    const c = await service.checklist('s1');
+    expect(c.legal_pages_published).toBe(true);
+    expect(prisma.page.findMany).not.toHaveBeenCalled();
+
+    prisma.legalPage.count.mockResolvedValue(0);
+    const none = await service.checklist('s1');
+    expect(none.legal_pages_published).toBe(false);
+    expect(none.blocking).not.toContain('legal_pages_published');
+  });
+});
+
 describe('StoreLifecycleService.requestGoLive', () => {
   it('not ready → 400 STORE_GOLIVE_NOT_READY with blocking', async () => {
     const { service, prisma } = build({ products: 0 });
@@ -214,7 +325,9 @@ describe('StoreLifecycleService.requestGoLive', () => {
     });
     expect(res.auto_approved).toBe(false);
     await waitFor(() => mail.sendOnboarding.mock.calls.length === 2);
-    const events = mail.sendOnboarding.mock.calls.map((c) => (c as unknown as [string, string])[0]);
+    const events = mail.sendOnboarding.mock.calls.map(
+      (c) => (c as unknown as [string, string])[0],
+    );
     expect(events.sort()).toEqual(['admin_golive_request', 'golive_requested']);
     const admin = mail.sendOnboarding.mock.calls.find(
       (c) => (c as unknown as [string])[0] === 'admin_golive_request',
@@ -256,21 +369,36 @@ describe('StoreLifecycleService.requestGoLive', () => {
   it('a VAT number VIES rejected never auto-approves; null (unchecked) is fine', async () => {
     const rejected = build({
       requireApproval: false,
-      trader: { ...VALID_TRADER, vat_number: 'SE556016068001', vat_check: { valid: false, checked_at: 'x' } },
+      trader: {
+        ...VALID_TRADER,
+        vat_number: 'SE556016068001',
+        vat_check: { valid: false, checked_at: 'x' },
+      },
     });
     await rejected.service.requestGoLive('u1');
-    expect(rejected.updates[0]).toMatchObject({ status: StoreStatus.PENDING_REVIEW });
+    expect(rejected.updates[0]).toMatchObject({
+      status: StoreStatus.PENDING_REVIEW,
+    });
 
     const unchecked = build({
       requireApproval: false,
-      trader: { ...VALID_TRADER, vat_number: 'SE556016068001', vat_check: { valid: null, checked_at: 'x' } },
+      trader: {
+        ...VALID_TRADER,
+        vat_number: 'SE556016068001',
+        vat_check: { valid: null, checked_at: 'x' },
+      },
     });
     await unchecked.service.requestGoLive('u1');
     expect(unchecked.updates[0]).toMatchObject({ status: StoreStatus.LIVE });
   });
 
   it('allowed from DRAFT and CHANGES_REQUESTED only (409 otherwise)', async () => {
-    for (const status of [StoreStatus.LIVE, StoreStatus.PENDING_REVIEW, StoreStatus.PAUSED, StoreStatus.SUSPENDED]) {
+    for (const status of [
+      StoreStatus.LIVE,
+      StoreStatus.PENDING_REVIEW,
+      StoreStatus.PAUSED,
+      StoreStatus.SUSPENDED,
+    ]) {
       const { service } = build({ status });
       const err = await service.requestGoLive('u1').catch((e: unknown) => e);
       expect(err).toBeInstanceOf(ConflictException);
@@ -309,7 +437,9 @@ describe('StoreLifecycleService.updateTraderDetails (VIES, wave 3)', () => {
 
   it('invalid: 400 TRADER_VAT_INVALID with fields, nothing stored', async () => {
     const { service, updates } = build({ vat: { valid: false } });
-    const err = await service.updateTraderDetails('u1', body).catch((e: unknown) => e);
+    const err = await service
+      .updateTraderDetails('u1', body)
+      .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(BadRequestException);
     expect((err as BadRequestException).getResponse()).toMatchObject({
       code: 'TRADER_VAT_INVALID',
@@ -321,7 +451,9 @@ describe('StoreLifecycleService.updateTraderDetails (VIES, wave 3)', () => {
   it('VIES unavailable: accepted with valid null (non-blocking)', async () => {
     const { service, updates } = build({ vat: { valid: null } });
     const res = await service.updateTraderDetails('u1', body);
-    expect(updates[0].trader_details).toMatchObject({ vat_check: { valid: null } });
+    expect(updates[0].trader_details).toMatchObject({
+      vat_check: { valid: null },
+    });
     expect(res.trader_details).toMatchObject({ vat_check: { valid: null } });
   });
 });
@@ -329,7 +461,11 @@ describe('StoreLifecycleService.updateTraderDetails (VIES, wave 3)', () => {
 describe('StoresService.slugAvailability (wave 3)', () => {
   function stores(existing: boolean) {
     const prisma = {
-      store: { findUnique: jest.fn(() => Promise.resolve(existing ? { id: 's1' } : null)) },
+      store: {
+        findUnique: jest.fn(() =>
+          Promise.resolve(existing ? { id: 's1' } : null),
+        ),
+      },
     };
     const service = new StoresService(
       prisma as unknown as PrismaService,
@@ -382,11 +518,20 @@ describe('StoreLifecycleService.toggleActive (creator "Store active")', () => {
   it('LIVE→PAUSED and PAUSED→LIVE, nothing else', async () => {
     const live = build({ status: StoreStatus.LIVE, wentLiveAt: new Date() });
     await live.service.toggleActive('s1', false);
-    expect(live.updates[0]).toMatchObject({ status: 'PAUSED', is_active: false });
+    expect(live.updates[0]).toMatchObject({
+      status: 'PAUSED',
+      is_active: false,
+    });
 
-    const paused = build({ status: StoreStatus.PAUSED, wentLiveAt: new Date() });
+    const paused = build({
+      status: StoreStatus.PAUSED,
+      wentLiveAt: new Date(),
+    });
     await paused.service.toggleActive('s1', true);
-    expect(paused.updates[0]).toMatchObject({ status: 'LIVE', is_active: true });
+    expect(paused.updates[0]).toMatchObject({
+      status: 'LIVE',
+      is_active: true,
+    });
     expect(paused.updates[0]).not.toHaveProperty('went_live_at');
 
     const draft = build({ status: StoreStatus.DRAFT });
@@ -406,9 +551,16 @@ describe('StoreLifecycleService.adminSetStatus', () => {
     });
     await expect(
       service.adminSetStatus('s1', StoreStatus.CHANGES_REQUESTED, '', admin),
-    ).rejects.toMatchObject({ response: { code: 'STORE_STATUS_REASON_REQUIRED' } });
+    ).rejects.toMatchObject({
+      response: { code: 'STORE_STATUS_REASON_REQUIRED' },
+    });
 
-    await service.adminSetStatus('s1', StoreStatus.CHANGES_REQUESTED, 'Add a logo', admin);
+    await service.adminSetStatus(
+      's1',
+      StoreStatus.CHANGES_REQUESTED,
+      'Add a logo',
+      admin,
+    );
     expect(updates[0]).toMatchObject({
       status: 'CHANGES_REQUESTED',
       status_reason: 'Add a logo',
@@ -432,7 +584,9 @@ describe('StoreLifecycleService.adminSetStatus', () => {
   });
 
   it('LIVE clears the reason, sets went_live_at once and emails store_live', async () => {
-    const { service, updates, mail } = build({ status: StoreStatus.PENDING_REVIEW });
+    const { service, updates, mail } = build({
+      status: StoreStatus.PENDING_REVIEW,
+    });
     await service.adminSetStatus('s1', StoreStatus.LIVE, undefined, admin);
     expect(updates[0]).toMatchObject({
       status: 'LIVE',
@@ -441,7 +595,9 @@ describe('StoreLifecycleService.adminSetStatus', () => {
       went_live_at: expect.any(Date),
     });
     await waitFor(() => mail.sendOnboarding.mock.calls.length === 1);
-    expect((mail.sendOnboarding.mock.calls[0] as unknown as [string])[0]).toBe('store_live');
+    expect((mail.sendOnboarding.mock.calls[0] as unknown as [string])[0]).toBe(
+      'store_live',
+    );
   });
 
   it('SUSPENDED emails store_suspended with the reason and support address', async () => {
@@ -524,6 +680,8 @@ describe('StoresService.create (SPEC §3)', () => {
       name: 'X',
       store_type: StoreType.MARKETPLACE,
     });
-    expect(explicit.created[0]).toMatchObject({ store_type: StoreType.MARKETPLACE });
+    expect(explicit.created[0]).toMatchObject({
+      store_type: StoreType.MARKETPLACE,
+    });
   });
 });
