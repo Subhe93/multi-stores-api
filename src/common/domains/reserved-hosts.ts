@@ -8,8 +8,6 @@
 // and localhost. No hardcoded apex.
 import { platformHosts } from './platform-hosts';
 
-const RESERVED_HOSTS = platformHosts();
-
 /** Pure form: is `domain` one of `hosts` or a subdomain of one? */
 export function isReservedDomainFor(
   domain: string,
@@ -19,8 +17,10 @@ export function isReservedDomainFor(
   return hosts.some((host) => d === host || d.endsWith('.' + host));
 }
 
+// Read at call time (cheap) so the list follows the current environment,
+// including tests that set STOREFRONT_URL / PLATFORM_HOSTS after import.
 export function isReservedDomain(domain: string): boolean {
-  return isReservedDomainFor(domain, RESERVED_HOSTS);
+  return isReservedDomainFor(domain, platformHosts());
 }
 
 /** Lower-case hostname without port, whitespace or trailing dot. */

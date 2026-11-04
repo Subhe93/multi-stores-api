@@ -165,6 +165,16 @@ function build(
 }
 
 describe('DomainsService.add', () => {
+  // The reserved-host list follows the process env (platformHosts()).
+  const prevStorefront = process.env.STOREFRONT_URL;
+  beforeAll(() => {
+    process.env.STOREFRONT_URL = 'https://iwings-digital.com';
+  });
+  afterAll(() => {
+    if (prevStorefront === undefined) delete process.env.STOREFRONT_URL;
+    else process.env.STOREFRONT_URL = prevStorefront;
+  });
+
   it('refuses a platform (reserved) host and its subdomains', async () => {
     const { service } = build([]);
     await expect(
