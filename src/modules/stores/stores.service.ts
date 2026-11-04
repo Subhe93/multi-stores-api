@@ -49,6 +49,20 @@ const STORE_CUSTOM_DOMAIN_MANAGED_BY_MARKETS = {
   message: 'Domains are managed in Markets while the markets app is enabled.',
 };
 
+/**
+ * A rename may not move a store onto a platform-reserved address (admin,
+ * api, login, ...), the same rule as create. A store that already has such a
+ * slug (created before the list existed) keeps it.
+ */
+function assertSlugNotReserved(slug: string, currentSlug?: string | null) {
+  if (slug === currentSlug) return;
+  if (isReservedStoreSlug(slug))
+    throw new BadRequestException({
+      code: 'STORE_SLUG_RESERVED',
+      message: 'This store address is reserved by the platform',
+    });
+}
+
 @Injectable()
 export class StoresService {
   private readonly logger = new Logger(StoresService.name);
@@ -381,6 +395,13 @@ export class StoresService {
       });
 
     if (dto.slug) {
+      if (isReservedStoreSlug(dto.slug)) {
+        const current = await this.prisma.store.findUnique({
+          where: { creator_id: creator.id },
+          select: { slug: true },
+        });
+        assertSlugNotReserved(dto.slug, current?.slug);
+      }
       const conflict = await this.prisma.store.findFirst({
         where: { slug: dto.slug, creator_id: { not: creator.id } },
         select: { id: true },
@@ -682,7 +703,7 @@ export class StoresService {
   async adminUpdateByCreatorId(creatorId: string, dto: AdminUpdateStoreDto) {
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creatorId },
-      select: { id: true, store_type: true, custom_domain: true },
+      select: { id: true, slug: true, store_type: true, custom_domain: true },
     });
     if (!store)
       throw new NotFoundException({
@@ -699,6 +720,7 @@ export class StoresService {
     if (typeChanged) (dto as UpdateStoreDto).currency = '';
 
     if (dto.slug) {
+      assertSlugNotReserved(dto.slug, store.slug);
       const conflict = await this.prisma.store.findFirst({
         where: { slug: dto.slug, id: { not: store.id } },
         select: { id: true },

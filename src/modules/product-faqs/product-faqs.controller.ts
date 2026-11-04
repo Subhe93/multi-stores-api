@@ -14,7 +14,8 @@ import {
   CreateProductFaqDto,
   UpdateProductFaqDto,
 } from './dto/product-faq.dto';
-import { Roles } from '../../common/decorators';
+import { CurrentUser, Roles } from '../../common/decorators';
+import type { RequestUser } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '@prisma/client';
 
@@ -28,8 +29,9 @@ export class ProductFaqsController {
   create(
     @Param('productId') productId: string,
     @Body() dto: CreateProductFaqDto,
+    @CurrentUser() user: RequestUser,
   ) {
-    return this.faqsService.create(productId, dto);
+    return this.faqsService.create(productId, dto, user);
   }
 
   @Get('products/:productId/faqs')
@@ -40,15 +42,19 @@ export class ProductFaqsController {
   @Put('faqs/:id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
-  update(@Param('id') id: string, @Body() dto: UpdateProductFaqDto) {
-    return this.faqsService.update(id, dto);
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateProductFaqDto,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.faqsService.update(id, dto, user);
   }
 
   @Delete('faqs/:id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
-  delete(@Param('id') id: string) {
-    return this.faqsService.delete(id);
+  delete(@Param('id') id: string, @CurrentUser() user: RequestUser) {
+    return this.faqsService.delete(id, user);
   }
 
   @Put('products/:productId/faqs/sort')
@@ -57,7 +63,8 @@ export class ProductFaqsController {
   reorder(
     @Param('productId') productId: string,
     @Body('faq_ids') faqIds: string[],
+    @CurrentUser() user: RequestUser,
   ) {
-    return this.faqsService.reorder(productId, faqIds);
+    return this.faqsService.reorder(productId, faqIds, user);
   }
 }

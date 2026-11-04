@@ -27,6 +27,12 @@ const PASSTHROUGH_EXTS = ['.svg', '.pdf', '.ai'];
 // never need more, and next/image generates smaller responsive variants on top.
 const MAX_DIMENSION = 2000;
 const WEBP_QUALITY = 80;
+/**
+ * Decode cap for the generic upload route (about 4 bytes of RAM per pixel
+ * while resizing). 60 MP covers any camera photo; larger inputs are refused
+ * instead of letting a few parallel uploads exhaust memory.
+ */
+export const GENERIC_UPLOAD_MAX_PIXELS = 60_000_000;
 /** Generic upload route: multer and the service both enforce it. */
 export const UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
 
@@ -187,9 +193,8 @@ export class UploadsService {
     const input: sharp.SharpOptions = {
       animated: decode.animated ?? ext === '.webp',
     };
-    if (decode.limitInputPixels !== undefined) {
-      input.limitInputPixels = decode.limitInputPixels;
-    }
+    input.limitInputPixels =
+      decode.limitInputPixels ?? GENERIC_UPLOAD_MAX_PIXELS;
     try {
       return await sharp(buffer, input)
         .rotate() // honour EXIF orientation before stripping metadata
@@ -245,7 +250,12 @@ export class UploadsService {
       });
     }
     if (user.role !== UserRole.ADMIN) {
-      const owned = await this.isOwnedBy(`/${key}`, user);
+      // Owning a reference is not enough: anyone can paste another store's
+      // URL into their own record. A file another account still uses is
+      // never deleted by a non-admin.
+      const owned =
+        (await this.isOwnedBy(`/${key}`, user)) &&
+        !(await this.isReferencedByOthers(`/${key}`, user));
       if (!owned) {
         throw new ForbiddenException({
           code: 'UPLOAD_NOT_OWNED',
@@ -347,6 +357,68 @@ export class UploadsService {
       if (await check()) return true;
     }
     return false;
+  }
+
+  /**
+   * True when `rel` is referenced by a record that does NOT belong to the
+   * caller: another user's avatar, another provider/creator profile, another
+   * store's logo / description / legal logo / imports / pages, or a product,
+   * custom product or collection of someone else (images and description
+   * HTML). Absolute URLs match by suffix, HTML and JSON by substring.
+   */
+  async isReferencedByOthers(rel: string, user: OwnerUser): Promise<boolean> {
+    const prisma = this.prisma;
+    if (!prisma) return true;
+    const [creator, provider] = await Promise.all([
+      prisma.creator.findUnique({
+        where: { user_id: user.id },
+        select: { id: true, store: { select: { id: true } } },
+      }),
+      prisma.provider.findUnique({
+        where: { user_id: user.id },
+        select: { id: true },
+      }),
+    ]);
+    const creatorId = creator?.id ?? null;
+    const storeId = creator?.store?.id ?? null;
+    const providerId = provider?.id ?? null;
+    const esc = rel.replace(/[%_\\]/g, (c) => `\\${c}`);
+    const suffix = `%${esc}`;
+    const inside = `%${esc}%`;
+    const rows = await prisma.$queryRaw<{ found: number }[]>`
+      SELECT 1 AS found WHERE
+        EXISTS (SELECT 1 FROM "User" u WHERE u."id" <> ${user.id} AND u."avatar_url" LIKE ${suffix})
+        OR EXISTS (SELECT 1 FROM "Creator" c WHERE c."user_id" <> ${user.id}
+                   AND (c."avatar_url" LIKE ${suffix} OR c."cover_url" LIKE ${suffix}))
+        OR EXISTS (SELECT 1 FROM "Provider" p WHERE p."user_id" <> ${user.id}
+                   AND (p."logo_url" LIKE ${suffix} OR p."description" LIKE ${inside}))
+        OR EXISTS (SELECT 1 FROM "Store" s WHERE s."creator_id" IS DISTINCT FROM ${creatorId}
+                   AND (s."logo_url" LIKE ${suffix} OR s."favicon_url" LIKE ${suffix} OR s."description" LIKE ${inside}))
+        OR EXISTS (SELECT 1 FROM "ProductImage" i JOIN "Product" pr ON pr."id" = i."product_id"
+                   WHERE i."url" LIKE ${suffix}
+                     AND pr."creator_id" IS DISTINCT FROM ${creatorId}
+                     AND pr."provider_id" IS DISTINCT FROM ${providerId})
+        OR EXISTS (SELECT 1 FROM "ProductTranslation" t JOIN "Product" pr ON pr."id" = t."product_id"
+                   WHERE (t."description" LIKE ${inside} OR t."short_description" LIKE ${inside})
+                     AND pr."creator_id" IS DISTINCT FROM ${creatorId}
+                     AND pr."provider_id" IS DISTINCT FROM ${providerId})
+        OR EXISTS (SELECT 1 FROM "CustomProductImage" i JOIN "CustomProduct" cp ON cp."id" = i."custom_product_id"
+                   WHERE i."url" LIKE ${suffix} AND cp."creator_id" IS DISTINCT FROM ${creatorId})
+        OR EXISTS (SELECT 1 FROM "CustomProductTranslation" t JOIN "CustomProduct" cp ON cp."id" = t."custom_product_id"
+                   WHERE t."description" LIKE ${inside} AND cp."creator_id" IS DISTINCT FROM ${creatorId})
+        OR EXISTS (SELECT 1 FROM "CreatorCategory" cc WHERE cc."creator_id" IS DISTINCT FROM ${creatorId}
+                   AND cc."thumbnail_url" LIKE ${suffix})
+        OR EXISTS (SELECT 1 FROM "StoreLegalProfile" l WHERE l."store_id" IS DISTINCT FROM ${storeId}
+                   AND l."logo_url" LIKE ${suffix})
+        OR EXISTS (SELECT 1 FROM "ImportMedia" m WHERE m."store_id" IS DISTINCT FROM ${storeId}
+                   AND m."public_url" LIKE ${suffix})
+        OR EXISTS (SELECT 1 FROM "Page" pg WHERE pg."store_id" IS DISTINCT FROM ${storeId}
+                   AND (pg."seo"::text LIKE ${inside}
+                     OR EXISTS (SELECT 1 FROM "PageSection" ps WHERE ps."page_id" = pg."id" AND ps."settings"::text LIKE ${inside})
+                     OR EXISTS (SELECT 1 FROM "PageSection" ps JOIN "PageSectionTranslation" pt ON pt."section_id" = ps."id"
+                                WHERE ps."page_id" = pg."id" AND pt."content"::text LIKE ${inside})))
+      LIMIT 1`;
+    return rows.length > 0;
   }
 
   /** Page-builder JSON of the store (sections, blocks, translations, versions, SEO) mentioning `rel`. */

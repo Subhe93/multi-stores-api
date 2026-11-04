@@ -47,6 +47,14 @@ import { TurnstileService } from '../../common/security/turnstile.service';
 /** Bcrypt cost of every password hash written by the auth flows. */
 const PASSWORD_BCRYPT_COST = 12;
 
+/** expires_at of a Session row that marks a surrendered refresh token. */
+const REVOKED_MARKER = new Date(0);
+/**
+ * How long a revocation marker is kept: longer than any refresh token lives
+ * (JWT_REFRESH_EXPIRES_IN, 7 days by default), so pruning never revives one.
+ */
+const MARKER_RETENTION_MS = 60 * 24 * 60 * 60 * 1000;
+
 // Lifetime of the single-use link that signs a freshly registered staff
 // account in on the dashboard (the browser follows it right away).
 const REGISTER_HANDOFF_TTL_HOURS = 0.25;
@@ -870,22 +878,34 @@ export class AuthService {
 
   async logout(userId: string, refreshToken?: string) {
     // Drop the user's session rows (this also invalidates any outstanding
-    // password-reset links, which share this table).
+    // password-reset links, which share this table). Revocation markers
+    // (expires_at = epoch) of earlier logouts stay: deleting them would make
+    // a refresh token revoked on another device usable again.
     await this.prisma.session.deleteMany({
-      where: { user_id: userId },
+      where: { user_id: userId, expires_at: { gt: REVOKED_MARKER } },
     });
 
     // Record the surrendered refresh token as revoked. An already-expired
-    // expires_at is the marker refreshToken() checks for.
+    // expires_at is the marker refreshToken() checks for. Markers older than
+    // the longest refresh lifetime can never match a live token: pruned.
     if (refreshToken) {
-      await this.prisma.session.create({
-        data: {
+      await this.prisma.session.upsert({
+        where: { token: refreshToken },
+        update: { expires_at: REVOKED_MARKER },
+        create: {
           user_id: userId,
           token: refreshToken,
-          expires_at: new Date(0),
+          expires_at: REVOKED_MARKER,
         },
       });
     }
+    await this.prisma.session.deleteMany({
+      where: {
+        user_id: userId,
+        expires_at: REVOKED_MARKER,
+        created_at: { lt: new Date(Date.now() - MARKER_RETENTION_MS) },
+      },
+    });
 
     return { message: 'Logged out successfully' };
   }

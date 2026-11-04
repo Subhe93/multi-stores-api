@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { sanitizeCreatorHtml } from '../../common/html/creator-html';
 import {
   productSlugContext,
   resolveProductTranslationSlugs,
@@ -256,7 +257,9 @@ export class TranslationsService {
             product_id: product.id,
             locale: targetLocale,
             title: result.title || source.title,
-            description: result.description || source.description,
+            description:
+              sanitizeCreatorHtml(result.description || source.description) ??
+              '',
             slug: await this.translatedSlug(
               { productId: product.id },
               product,
@@ -307,7 +310,9 @@ export class TranslationsService {
             custom_product_id: item.id,
             locale: targetLocale,
             title: result.title || source.title,
-            description: result.description || source.description,
+            description: sanitizeCreatorHtml(
+              result.description || source.description,
+            ),
             slug: await this.translatedSlug(
               { customProductId: item.id },
               item,
@@ -500,8 +505,16 @@ export class TranslationsService {
     entityType: TranslatableEntity,
     entityId: string,
     locale: string,
-    translated: Record<string, string>,
+    translatedRaw: Record<string, string>,
   ) {
+    // Third-party machine output lands in columns rendered as HTML, so it
+    // gets the same sanitizer as a creator's own edit.
+    const translated: Record<string, string> = { ...translatedRaw };
+    for (const key of ['description', 'content'] as const) {
+      if (typeof translated[key] === 'string') {
+        translated[key] = sanitizeCreatorHtml(translated[key]) ?? '';
+      }
+    }
     switch (entityType) {
       case TranslatableEntity.PRODUCT: {
         const owner = await this.prisma.product.findUnique({

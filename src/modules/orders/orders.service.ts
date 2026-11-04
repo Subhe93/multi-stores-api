@@ -1597,6 +1597,10 @@ export class OrdersService {
         subtotal: toBase(subtotal),
         item_count: totalItemCount,
         product_ids: productIds,
+        line_totals: lines.map((item, i) => ({
+          product_id: (item.product_id || item.custom_product_id) ?? '',
+          amount: toBase(input.taxLines[i]?.amount ?? 0),
+        })),
       });
 
       discountAmount = roundMoney(convert(couponValidation.discount_amount));

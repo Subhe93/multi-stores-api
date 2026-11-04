@@ -343,6 +343,37 @@ describe('DELETE ownership', () => {
     expect(await storage.exists(REL)).toBe(true);
   });
 
+  it('CREATOR: an owned reference does not allow deleting a file another account still uses', async () => {
+    // Store B pasted store A's image URL into its own product: B "owns" a
+    // reference, but A's record still points at the file.
+    const prisma = prismaWith({
+      creator: creator(),
+      productImages: [{ url: REL, creator_id: 'c1' }],
+    });
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ found: 1 }]);
+    const svc = new UploadsService(storage, prisma);
+    await expect(
+      svc.deleteOwnedFile(REL, user(UserRole.CREATOR)),
+    ).rejects.toMatchObject({ response: { code: 'UPLOAD_NOT_OWNED' } });
+    expect(await storage.exists(REL)).toBe(true);
+  });
+
+  it('isReferencedByOthers escapes LIKE wildcards and excludes the caller', async () => {
+    const prisma = prismaWith({ creator: creator() });
+    const raw = (prisma as unknown as { $queryRaw: jest.Mock<unknown[]> })
+      .$queryRaw;
+    const svc = new UploadsService(storage, prisma);
+    expect(
+      await svc.isReferencedByOthers(
+        '/uploads/products/a_b%.webp',
+        user(UserRole.CREATOR),
+      ),
+    ).toBe(false);
+    const values = (raw.mock.calls[0] as unknown[]).slice(1);
+    expect(values).toContain(String.raw`%/uploads/products/a\_b\%.webp`);
+    expect(values).toContain(String.raw`%/uploads/products/a\_b\%.webp%`);
+  });
+
   it('CREATOR: store logo, legal logo, categories, custom products, imports, page JSON, kit folder', async () => {
     const cases = [
       {

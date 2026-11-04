@@ -3,8 +3,9 @@
  * (`src/common/html/creator-html.ts`) over HTML that was stored before the
  * write-time sanitizing existed — product translations (description,
  * short_description), product FAQ answers, category and creator-collection
- * descriptions (short + M6.2 long_description), store descriptions and
- * legacy static page content.
+ * descriptions (short + M6.2 long_description), store descriptions,
+ * legacy static page content, and custom-product descriptions and FAQ
+ * answers (sanitized on write since 2026-11-04).
  *
  * Dry-run by default: prints, per table, how many rows would change and
  * writes nothing. `--apply` writes the sanitized values. `--slug <store>`
@@ -116,6 +117,41 @@ async function main(): Promise<void> {
   });
   await run('ProductFaqTranslation.answer', faqRows, ['answer'], false, (c) =>
     prisma.productFaqTranslation.update({ where: { id: c.id }, data: c.data }),
+  );
+
+  // Custom products (creator imports of provider products).
+  const customRows = await prisma.customProductTranslation.findMany({
+    where: creatorId ? { custom_product: { creator_id: creatorId } } : {},
+    select: { id: true, description: true },
+  });
+  await run(
+    'CustomProductTranslation.description',
+    customRows,
+    ['description'],
+    true,
+    (c) =>
+      prisma.customProductTranslation.update({
+        where: { id: c.id },
+        data: c.data,
+      }),
+  );
+
+  const customFaqRows = await prisma.customProductFaqTranslation.findMany({
+    where: creatorId
+      ? { faq: { custom_product: { creator_id: creatorId } } }
+      : {},
+    select: { id: true, answer: true },
+  });
+  await run(
+    'CustomProductFaqTranslation.answer',
+    customFaqRows,
+    ['answer'],
+    false,
+    (c) =>
+      prisma.customProductFaqTranslation.update({
+        where: { id: c.id },
+        data: c.data,
+      }),
   );
 
   if (!SLUG) {

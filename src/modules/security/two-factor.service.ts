@@ -23,6 +23,7 @@ import {
   verifyTotp,
 } from '../../common/security/totp';
 import { SecurityAuditService } from './security-audit.service';
+import { loginAllowed } from '../auth/magic-link.service';
 import type { RequestMeta } from './request-meta';
 
 /** Consecutive failures (wrong 2FA code or re-auth password) before a lock. */
@@ -462,8 +463,8 @@ export class TwoFactorService {
       where: { id: payload.sub },
       select: SECURITY_USER_SELECT,
     });
-    if (!user || user.status !== 'ACTIVE' || !this.isEnabled(user))
-      throw invalid();
+    // Same rule as the password step: staff may sign in while PENDING.
+    if (!user || !loginAllowed(user) || !this.isEnabled(user)) throw invalid();
     // A password change / block after the challenge was issued kills it.
     const cutoff = user.tokens_valid_after;
     if (cutoff && (payload.iat ?? 0) <= Math.floor(cutoff.getTime() / 1000)) {

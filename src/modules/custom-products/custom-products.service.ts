@@ -16,6 +16,7 @@ import {
   resolveProductTranslationSlugs,
 } from '../../common/slug/product-slugs';
 import type { LocaleSlug } from '../../common/slug/slug-moves';
+import { sanitizeCreatorHtml } from '../../common/html/creator-html';
 import {
   CreatorCategoryLinks,
   resolvePrimaryCreatorCategory,
@@ -41,6 +42,23 @@ import {
   type ProductForBundleCheck,
 } from '../bundles/bundle-economics.util';
 import { BundleOfferLike } from '../bundles/bundle-pricing.util';
+
+/**
+ * The description and FAQ answers are rendered as HTML (storefront product
+ * page, provider review page), so they go through the creator sanitizer on
+ * every write, like regular products.
+ */
+function sanitizeDescription<T extends { description?: string | null }>(
+  t: T,
+): T {
+  return t.description == null
+    ? t
+    : { ...t, description: sanitizeCreatorHtml(t.description) };
+}
+
+function sanitizeAnswer<T extends { answer: string }>(t: T): T {
+  return { ...t, answer: sanitizeCreatorHtml(t.answer) ?? '' };
+}
 
 @Injectable()
 export class CustomProductsService {
@@ -602,7 +620,7 @@ export class CustomProductsService {
         pricing_type: data.pricing_type,
         final_price: data.final_price ?? 0,
         margin_amount: data.margin_amount,
-        translations: { create: translations },
+        translations: { create: translations.map(sanitizeDescription) },
         selected_variants: {
           create: variantRows,
         },
@@ -981,7 +999,7 @@ export class CustomProductsService {
         ...data,
         ...(translations &&
           translations.length > 0 && {
-            translations: { create: translations },
+            translations: { create: translations.map(sanitizeDescription) },
           }),
         ...(selected_variants && {
           selected_variants: {
@@ -1149,7 +1167,7 @@ export class CustomProductsService {
             custom_product_id: newCp.id,
             locale: t.locale,
             title: `${t.title} (Copy)`,
-            description: t.description,
+            description: sanitizeCreatorHtml(t.description),
             slug: slugged[i].slug,
           })),
         });
@@ -1199,7 +1217,7 @@ export class CustomProductsService {
               create: f.translations.map((t) => ({
                 locale: t.locale,
                 question: t.question,
-                answer: t.answer,
+                answer: sanitizeCreatorHtml(t.answer) ?? '',
               })),
             },
           },
@@ -1426,7 +1444,7 @@ export class CustomProductsService {
       data: {
         custom_product_id: customProductId,
         sort_order: dto.sort_order ?? 0,
-        translations: { create: dto.translations },
+        translations: { create: dto.translations.map(sanitizeAnswer) },
       },
       include: { translations: true },
     });
@@ -1470,7 +1488,7 @@ export class CustomProductsService {
         ...(dto.sort_order !== undefined && { sort_order: dto.sort_order }),
         ...(dto.translations &&
           dto.translations.length > 0 && {
-            translations: { create: dto.translations },
+            translations: { create: dto.translations.map(sanitizeAnswer) },
           }),
       },
       include: { translations: true },

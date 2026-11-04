@@ -94,6 +94,16 @@ export class UpdatePromotionDto {
   translations?: PromotionTranslationDto[];
 }
 
+export class CouponLineTotalDto {
+  @IsString()
+  product_id: string;
+
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  amount: number;
+}
+
 export class ValidateCouponDto {
   @IsString()
   coupon_code: string;
@@ -116,4 +126,11 @@ export class ValidateCouponDto {
   @IsArray()
   @IsString({ each: true })
   product_ids?: string[];
+
+  /** Per-line totals (product or custom product id), for targeted coupons. */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CouponLineTotalDto)
+  line_totals?: CouponLineTotalDto[];
 }

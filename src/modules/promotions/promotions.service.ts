@@ -18,6 +18,24 @@ interface PromotionConditions {
   product_ids?: string[];
 }
 
+/**
+ * The amount a coupon applies to: the whole subtotal, or for a coupon that
+ * targets products, only the cart lines of those products (when the caller
+ * sends per-line totals; checkout always does). null = unknown (a preview
+ * call without a subtotal).
+ */
+export function discountBase(
+  dto: Pick<ValidateCouponDto, 'subtotal' | 'line_totals'>,
+  targetIds: readonly string[] | undefined,
+): number | null {
+  if (targetIds?.length && dto.line_totals?.length) {
+    return dto.line_totals
+      .filter((l) => targetIds.includes(l.product_id))
+      .reduce((sum, l) => sum + l.amount, 0);
+  }
+  return dto.subtotal ?? null;
+}
+
 @Injectable()
 export class PromotionsService {
   constructor(private prisma: PrismaService) {}
@@ -323,12 +341,15 @@ export class PromotionsService {
       }
     }
 
-    // Calculate discount
+    // Calculate discount. A product-targeted coupon discounts only the
+    // targeted lines, never the rest of the cart.
+    const base = discountBase(dto, conditions?.product_ids);
     let discount = 0;
     if (promo.type === 'PERCENTAGE' || promo.type === 'COUPON') {
-      discount = (dto.subtotal || 0) * (Number(promo.value) / 100);
+      discount = (base ?? 0) * (Number(promo.value) / 100);
     } else if (promo.type === 'FIXED_AMOUNT') {
-      discount = Number(promo.value);
+      const value = Number(promo.value);
+      discount = base == null ? value : Math.min(value, base);
     } else if (promo.type === 'FREE_SHIPPING') {
       discount = 0; // Handled separately in shipping calculation
     }
