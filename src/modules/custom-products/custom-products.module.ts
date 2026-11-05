@@ -4,9 +4,10 @@ import { CustomProductsController } from './custom-products.controller';
 import { CustomProductsService } from './custom-products.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { BundlesModule } from '../bundles/bundles.module';
+import { TaxesModule } from '../taxes/taxes.module';
 
 @Module({
-  imports: [RedirectsModule, NotificationsModule, BundlesModule],
+  imports: [RedirectsModule, NotificationsModule, BundlesModule, TaxesModule],
   controllers: [CustomProductsController],
   providers: [CustomProductsService],
   exports: [CustomProductsService],

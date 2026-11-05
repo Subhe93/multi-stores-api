@@ -1005,6 +1005,11 @@ model OrderCommission {
   provider_amount Decimal          @default(0) @db.Decimal(10, 2)
   platform_amount Decimal          @db.Decimal(10, 2)
   creator_amount  Decimal          @default(0) @db.Decimal(10, 2)
+  // Marketplace orders: the order's VAT (lines + shipping) reserved for the
+  // platform as seller of record, outside the provider/creator shares.
+  // Null on independent-store orders and on rows written before 2026-11-16
+  // (their split was computed on the gross amount and is left as settled).
+  vat_amount      Decimal?         @db.Decimal(10, 2)
   currency        String           @default("EUR") @db.VarChar(3)
   status          CommissionStatus @default(PENDING)
   created_at      DateTime         @default(now())

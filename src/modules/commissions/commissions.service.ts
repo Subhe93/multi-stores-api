@@ -373,6 +373,8 @@ export class CommissionsService {
         platform_amount: Number(r.platform_amount),
         provider_amount: Number(r.provider_amount),
         creator_amount: Number(r.creator_amount),
+        // Marketplace VAT kept by the platform as seller (null = legacy row).
+        vat_amount: r.vat_amount == null ? null : Number(r.vat_amount),
         currency: r.currency,
         status: r.status,
         created_at: r.created_at,

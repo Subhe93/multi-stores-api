@@ -42,6 +42,47 @@ import {
   type ProductForBundleCheck,
 } from '../bundles/bundle-economics.util';
 import { BundleOfferLike } from '../bundles/bundle-pricing.util';
+import { TaxService } from '../taxes/tax.service';
+import {
+  findPriceFloorViolation,
+  loadPriceFloorSetup,
+  minimumCustomerPrice,
+  priceFloorInfo,
+  type PriceFloorSetup,
+  type PriceFloorVariant,
+} from './price-floor';
+
+type Money = Prisma.Decimal | number;
+
+/** Base product fields the minimum price check reads. */
+interface FloorProduct {
+  base_price: Money;
+  provider_id: string | null;
+  tax_class_id: string | null;
+  tax_exempt: boolean;
+  variants: { id: string; price_adjustment: Money }[];
+}
+
+/** Custom product fields the below-minimum flag reads. */
+interface FloorCustomProduct {
+  pricing_type: PricingType;
+  final_price: Money;
+  margin_amount: Money | null;
+  selected_variants?: { variant_id: string; custom_price: Money | null }[];
+  product: FloorProduct;
+}
+
+/** Base product select of the minimum price check. */
+const floorProductSelect = {
+  base_price: true,
+  provider_id: true,
+  tax_class_id: true,
+  tax_exempt: true,
+  variants: {
+    where: { is_active: true },
+    select: { id: true, price_adjustment: true },
+  },
+} as const;
 
 /**
  * The description and FAQ answers are rendered as HTML (storefront product
@@ -67,7 +108,182 @@ export class CustomProductsService {
     private notificationsService: NotificationsService,
     // Old-slug 301s (WP `_wp_old_slug`); optional for positional tests.
     @Optional() private readonly redirects?: RedirectsService,
+    // Minimum price check (checkout tax engine); optional for positional
+    // tests, which then skip the check.
+    @Optional() private readonly taxService?: TaxService,
   ) {}
+
+  private loadFloorSetup(creatorId: string): Promise<PriceFloorSetup> | null {
+    return this.taxService
+      ? loadPriceFloorSetup(this.prisma, this.taxService, creatorId)
+      : null;
+  }
+
+  /**
+   * The variants a custom product sells, as the floor check sees them: the
+   * selected rows still active on the base product, else every active
+   * variant (AS_IS rows mirror them), else none.
+   */
+  private floorVariants(
+    product: FloorProduct,
+    selected: { variant_id: string; custom_price?: Money | null }[] | undefined,
+  ): PriceFloorVariant[] {
+    const active = new Map(
+      product.variants.map((v) => [v.id, Number(v.price_adjustment) || 0]),
+    );
+    const rows = (selected ?? []).filter((sv) => active.has(sv.variant_id));
+    if (rows.length > 0) {
+      return rows.map((sv) => ({
+        variant_id: sv.variant_id,
+        price_adjustment: active.get(sv.variant_id) ?? 0,
+        custom_price: sv.custom_price == null ? null : Number(sv.custom_price),
+      }));
+    }
+    return product.variants.map((v) => ({
+      variant_id: v.id,
+      price_adjustment: Number(v.price_adjustment) || 0,
+    }));
+  }
+
+  /**
+   * Marketplace: the customer price must cover the provider base + VAT (the
+   * split runs on net revenue and provider bases are net). 400
+   * CUSTOM_PRODUCT_PRICE_BELOW_MINIMUM with { minimum, currency, variant_id? }
+   * (plus minimum_margin for MARGIN pricing).
+   */
+  private async assertPriceFloor(
+    creatorId: string,
+    product: FloorProduct,
+    pricing: {
+      pricing_type: PricingType;
+      final_price?: Money | null;
+      margin_amount?: Money | null;
+      selected_variants?: { variant_id: string; custom_price?: Money | null }[];
+    },
+  ) {
+    if (!product.provider_id) return;
+    const setupPromise = this.loadFloorSetup(creatorId);
+    if (!setupPromise) return;
+    const setup = await setupPromise;
+    const violation = findPriceFloorViolation(
+      {
+        pricingType: pricing.pricing_type,
+        finalPrice: Number(pricing.final_price) || 0,
+        marginAmount: Number(pricing.margin_amount) || 0,
+        basePrice: Number(product.base_price),
+        variants: this.floorVariants(product, pricing.selected_variants),
+      },
+      setup.rateBpFor(product),
+      setup.pricesIncludeVat,
+    );
+    if (!violation) return;
+    throw new BadRequestException({
+      code: 'CUSTOM_PRODUCT_PRICE_BELOW_MINIMUM',
+      message: `The price must be at least ${violation.minimum.toFixed(2)} ${setup.currency} (the provider's base price plus VAT).`,
+      minimum: violation.minimum,
+      currency: setup.currency,
+      ...(violation.variant_id ? { variant_id: violation.variant_id } : {}),
+      ...(violation.minimum_margin !== undefined
+        ? { minimum_margin: violation.minimum_margin }
+        : {}),
+    });
+  }
+
+  /**
+   * Floor a bundle's effective unit price must keep for a SINGLE-priced
+   * custom product: the highest variant minimum (base + VAT). Without the
+   * tax engine (positional tests) it is the net base, as before.
+   */
+  private async bundleFloorFor(
+    creatorId: string,
+    product: FloorProduct,
+    selected?: { variant_id: string }[],
+  ): Promise<number> {
+    if (!product.provider_id) return 0;
+    const base = Number(product.base_price);
+    const setupPromise = this.loadFloorSetup(creatorId);
+    if (!setupPromise) return base;
+    const setup = await setupPromise;
+    const rate = setup.rateBpFor(product);
+    const variants = this.floorVariants(product, selected);
+    const costs = variants.length
+      ? variants.map((v) => base + v.price_adjustment)
+      : [base];
+    return Math.max(
+      ...costs.map((c) =>
+        minimumCustomerPrice(c, rate, setup.pricesIncludeVat),
+      ),
+    );
+  }
+
+  /** Adds the creator-facing minimum price fields to custom product payloads. */
+  private withPriceFloor<T extends FloorCustomProduct>(
+    cp: T,
+    setup: PriceFloorSetup | null,
+  ): T & {
+    price_floor: ReturnType<typeof priceFloorInfo> | null;
+    below_minimum: boolean;
+  } {
+    if (!setup || !cp.product?.provider_id) {
+      return { ...cp, price_floor: null, below_minimum: false };
+    }
+    const info = priceFloorInfo(setup, cp.product);
+    const violation = findPriceFloorViolation(
+      {
+        pricingType: cp.pricing_type,
+        finalPrice: Number(cp.final_price) || 0,
+        marginAmount: Number(cp.margin_amount) || 0,
+        basePrice: Number(cp.product.base_price),
+        variants: this.floorVariants(cp.product, cp.selected_variants),
+      },
+      info.vat_rate_bp,
+      info.prices_include_vat,
+    );
+    return { ...cp, price_floor: info, below_minimum: !!violation };
+  }
+
+  /**
+   * GET /custom-products/price-floor?product_id=: what the creator's pricing
+   * step needs to show and check the minimum before the product exists.
+   * Null when the minimum is not enforced (no tax engine).
+   */
+  async getPriceFloor(userId: string, productId: string) {
+    if (!productId || typeof productId !== 'string')
+      throw new BadRequestException({
+        code: 'CUSTOM_PRODUCT_BASE_PRODUCT_NOT_FOUND',
+        message: 'product_id is required',
+      });
+    const creator = await this.prisma.creator.findUnique({
+      where: { user_id: userId },
+      select: { id: true },
+    });
+    if (!creator)
+      throw new NotFoundException({
+        code: 'CUSTOM_PRODUCT_CREATOR_NOT_FOUND',
+        message: 'Creator not found',
+      });
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+      select: {
+        provider_id: true,
+        tax_class_id: true,
+        tax_exempt: true,
+        status: true,
+      },
+    });
+    if (
+      !product ||
+      !product.provider_id ||
+      product.status !== ProductStatus.PUBLISHED
+    )
+      throw new NotFoundException({
+        code: 'CUSTOM_PRODUCT_BASE_PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
+    const setupPromise = this.loadFloorSetup(creator.id);
+    if (!setupPromise) return null;
+    return priceFloorInfo(await setupPromise, product);
+  }
 
   /**
    * Same protection as ProductsService: refuse to attach a bundle whose
@@ -530,14 +746,17 @@ export class CustomProductsService {
       if (data.pricing_type === PricingType.SINGLE) {
         const baseProduct = await this.prisma.product.findUnique({
           where: { id: data.product_id },
-          select: { base_price: true, provider_id: true },
+          select: floorProductSelect,
         });
         if (baseProduct) {
           const unitPrice =
             Number(data.final_price) || Number(baseProduct.base_price);
-          const providerBase = baseProduct.provider_id
-            ? Number(baseProduct.base_price)
-            : 0;
+          // Marketplace: the floor is the provider base plus VAT.
+          const providerBase = await this.bundleFloorFor(
+            creator.id,
+            baseProduct,
+            selected_variants,
+          );
           await this.assertCustomProductCompatibleWithBundles(
             {
               id: 'pending',
@@ -610,6 +829,20 @@ export class CustomProductsService {
         }));
       }
       // Product has no variants — variantRows stays empty, which is valid
+    }
+
+    // Minimum price: provider base + VAT for every variant sold.
+    const floorProduct = await this.prisma.product.findUnique({
+      where: { id: dto.product_id },
+      select: floorProductSelect,
+    });
+    if (floorProduct) {
+      await this.assertPriceFloor(creator.id, floorProduct, {
+        pricing_type: dto.pricing_type,
+        final_price: data.final_price,
+        margin_amount: data.margin_amount,
+        selected_variants: variantRows,
+      });
     }
 
     const created = await this.prisma.customProduct.create({
@@ -701,7 +934,7 @@ export class CustomProductsService {
     }
 
     const skip = (page - 1) * limit;
-    const [data, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       this.prisma.customProduct.findMany({
         where,
         skip,
@@ -711,6 +944,9 @@ export class CustomProductsService {
       }),
       this.prisma.customProduct.count({ where }),
     ]);
+    // below_minimum flags existing products priced under base + VAT.
+    const setup = rows.length ? await this.loadFloorSetup(creator.id) : null;
+    const data = rows.map((cp) => this.withPriceFloor(cp, setup));
 
     return {
       data,
@@ -754,8 +990,9 @@ export class CustomProductsService {
       where: { store: { creator_id: cp.creator_id } },
       select: { primary_locale: true, secondary_locales: true },
     });
+    const setup = await this.loadFloorSetup(cp.creator_id);
     return {
-      ...cp,
+      ...this.withPriceFloor(cp, setup),
       store_language: {
         primary_locale: languageConfig?.primary_locale ?? 'en',
         secondary_locales: languageConfig?.secondary_locales ?? [],
@@ -785,7 +1022,10 @@ export class CustomProductsService {
       where: { id },
       include: {
         creator: { select: { user_id: true } },
-        product: { select: { provider_id: true, base_price: true } },
+        product: { select: floorProductSelect },
+        selected_variants: {
+          select: { variant_id: true, custom_price: true },
+        },
       },
     });
     if (!existing)
@@ -875,6 +1115,64 @@ export class CustomProductsService {
       });
     }
 
+    // Minimum price (provider base + VAT), checked only when the pricing
+    // actually changes: an existing product below the minimum can still have
+    // its texts or images edited (the list flags it as below_minimum).
+    type PricingState = {
+      pricing_type: PricingType;
+      final_price: number;
+      margin_amount: number | null;
+      selected_variants: { variant_id: string; custom_price?: Money | null }[];
+    };
+    const nextPricing: PricingState = {
+      pricing_type: pricingType,
+      final_price:
+        dto.final_price !== undefined
+          ? dto.final_price
+          : Number(existing.final_price),
+      margin_amount:
+        dto.margin_amount !== undefined
+          ? dto.margin_amount
+          : existing.margin_amount == null
+            ? null
+            : Number(existing.margin_amount),
+      selected_variants: dto.selected_variants ?? existing.selected_variants,
+    };
+    const pricingSignature = (p: PricingState) =>
+      JSON.stringify([
+        p.pricing_type,
+        p.pricing_type === PricingType.SINGLE
+          ? Number(p.final_price) || 0
+          : null,
+        p.pricing_type === PricingType.MARGIN
+          ? Number(p.margin_amount) || 0
+          : null,
+        (p.selected_variants ?? [])
+          .map((sv) => [
+            sv.variant_id,
+            p.pricing_type === PricingType.PER_VARIANT
+              ? Number(sv.custom_price) || 0
+              : null,
+          ])
+          .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+      ]);
+    const storedPricing: PricingState = {
+      pricing_type: existing.pricing_type,
+      final_price: Number(existing.final_price),
+      margin_amount:
+        existing.margin_amount == null ? null : Number(existing.margin_amount),
+      selected_variants: existing.selected_variants,
+    };
+    const pricingChanged =
+      pricingSignature(nextPricing) !== pricingSignature(storedPricing);
+    if (pricingChanged) {
+      await this.assertPriceFloor(
+        existing.creator_id,
+        existing.product,
+        nextPricing,
+      );
+    }
+
     // WP slugs (excluding this custom product): unchanged slugs kept,
     // others sanitized and suffixed when taken.
     let storedSlugs: LocaleSlug[] = [];
@@ -915,7 +1213,8 @@ export class CustomProductsService {
     if (
       pricingType === PricingType.SINGLE &&
       data.final_price !== undefined &&
-      bundle_ids === undefined
+      bundle_ids === undefined &&
+      pricingChanged
     ) {
       const currentAttachments = await this.prisma.bundleCustomProduct.findMany(
         {
@@ -927,9 +1226,11 @@ export class CustomProductsService {
       if (currentBundleIds.length > 0) {
         const nextFinal = Number(data.final_price);
         const unitPrice = nextFinal || Number(existing.product.base_price);
-        const providerBase = existing.product.provider_id
-          ? Number(existing.product.base_price)
-          : 0;
+        const providerBase = await this.bundleFloorFor(
+          existing.creator_id,
+          existing.product,
+          nextPricing.selected_variants,
+        );
         const titleRow = await this.prisma.customProductTranslation.findFirst({
           where: { custom_product_id: id },
           select: { title: true },
@@ -952,12 +1253,27 @@ export class CustomProductsService {
       // PER_VARIANT/MARGIN the price depends on the chosen variant, so we
       // accept the attachment and let runtime order validation handle each
       // line individually.
-      if (bundle_ids.length > 0 && pricingType === PricingType.SINGLE) {
+      // The edit page always resends bundle_ids + final_price, so the
+      // (gross) floor runs only on a real change: every bundle when the
+      // pricing changed, else just the newly attached ones. Unchanged
+      // attachments of an unchanged price stay saveable (text edits).
+      let bundlesToCheck = bundle_ids;
+      if (!pricingChanged && bundle_ids.length > 0) {
+        const stored = await this.prisma.bundleCustomProduct.findMany({
+          where: { custom_product_id: id },
+          select: { bundle_id: true },
+        });
+        const storedIds = new Set(stored.map((a) => a.bundle_id));
+        bundlesToCheck = bundle_ids.filter((b) => !storedIds.has(b));
+      }
+      if (bundlesToCheck.length > 0 && pricingType === PricingType.SINGLE) {
         const nextFinal = Number(data.final_price ?? existing.final_price);
         const unitPrice = nextFinal || Number(existing.product.base_price);
-        const providerBase = existing.product.provider_id
-          ? Number(existing.product.base_price)
-          : 0;
+        const providerBase = await this.bundleFloorFor(
+          existing.creator_id,
+          existing.product,
+          nextPricing.selected_variants,
+        );
         const titleRow = await this.prisma.customProductTranslation.findFirst({
           where: { custom_product_id: id },
           select: { title: true },
@@ -969,7 +1285,7 @@ export class CustomProductsService {
             providerBasePrice: providerBase,
             title: titleRow?.title,
           },
-          bundle_ids,
+          bundlesToCheck,
         );
       }
       await this.prisma.bundleCustomProduct.deleteMany({

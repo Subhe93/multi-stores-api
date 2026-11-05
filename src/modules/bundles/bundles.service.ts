@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateBundleDto, UpdateBundleDto } from './dto/bundle.dto';
@@ -13,6 +14,12 @@ import {
   type ProductForBundleCheck,
 } from './bundle-economics.util';
 import { BundleOfferLike } from './bundle-pricing.util';
+import { TaxService } from '../taxes/tax.service';
+import {
+  loadPriceFloorSetup,
+  minimumCustomerPrice,
+  type PriceFloorSetup,
+} from '../custom-products/price-floor';
 
 interface OfferLike {
   quantity: number;
@@ -44,7 +51,12 @@ const bundleInclude = {
 
 @Injectable()
 export class BundlesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    // Marketplace minimum price (base + VAT) of SINGLE-priced custom
+    // products; optional for positional tests (net base floor then).
+    @Optional() private readonly taxService?: TaxService,
+  ) {}
 
   private async resolveCreatorId(userId: string): Promise<string> {
     const creator = await this.prisma.creator.findUnique({
@@ -103,21 +115,73 @@ export class BundlesService {
           final_price: true,
           pricing_type: true,
           translations: { take: 1, select: { title: true } },
-          product: { select: { base_price: true, provider_id: true } },
+          creator_id: true,
+          selected_variants: { select: { variant_id: true } },
+          product: {
+            select: {
+              base_price: true,
+              provider_id: true,
+              tax_class_id: true,
+              tax_exempt: true,
+              variants: {
+                where: { is_active: true },
+                select: { id: true, price_adjustment: true },
+              },
+            },
+          },
         },
       });
+      // One price floor setup per creator (the store's tax context).
+      const setups = new Map<string, Promise<PriceFloorSetup>>();
+      const setupFor = (creatorId: string) => {
+        if (!this.taxService) return null;
+        let p = setups.get(creatorId);
+        if (!p) {
+          p = loadPriceFloorSetup(this.prisma, this.taxService, creatorId);
+          setups.set(creatorId, p);
+        }
+        return p;
+      };
       for (const cp of customs) {
         // Only SINGLE pricing has a well-defined unit price for this static
         // check. PER_VARIANT/MARGIN are skipped — their pricing depends on
         // the variant chosen at checkout.
         if (cp.pricing_type !== 'SINGLE') continue;
         const unit = Number(cp.final_price) || Number(cp.product.base_price);
+        const base = Number(cp.product.base_price);
+        let floor = cp.product.provider_id ? base : 0;
+        const setupPromise = cp.product.provider_id
+          ? setupFor(cp.creator_id)
+          : null;
+        if (setupPromise) {
+          // Marketplace: the bundle price must still cover base + VAT of the
+          // most expensive variant sold (the split runs on net revenue).
+          const setup = await setupPromise;
+          const rate = setup.rateBpFor(cp.product);
+          const active = new Map(
+            cp.product.variants.map((v) => [
+              v.id,
+              Number(v.price_adjustment) || 0,
+            ]),
+          );
+          const selected = cp.selected_variants
+            .map((sv) => active.get(sv.variant_id))
+            .filter((a): a is number => a !== undefined);
+          const adjustments = selected.length
+            ? selected
+            : active.size
+              ? [...active.values()]
+              : [0];
+          floor = Math.max(
+            ...adjustments.map((a) =>
+              minimumCustomerPrice(base + a, rate, setup.pricesIncludeVat),
+            ),
+          );
+        }
         result.push({
           id: cp.id,
           unitPrice: unit,
-          providerBasePrice: cp.product.provider_id
-            ? Number(cp.product.base_price)
-            : 0,
+          providerBasePrice: floor,
           title: cp.translations[0]?.title,
         });
       }
@@ -291,10 +355,43 @@ export class BundlesService {
       dto.custom_product_ids ??
       existing.custom_products.map((cp) => cp.custom_product_id);
 
+    // The (gross) floor runs only on a real change, so a bundle whose
+    // members predate the floor stays editable (texts, status): every member
+    // when the discount changed, else just the newly attached members.
+    const offersSignature = (offers: BundleOfferLike[]) =>
+      JSON.stringify(
+        offers
+          .map((o) => [
+            Number(o.quantity),
+            String(o.discount_type),
+            Number(o.discount_value),
+          ])
+          .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+      );
+    const offersChanged =
+      !!dto.offers &&
+      offersSignature(effectiveOffers) !==
+        offersSignature(
+          existing.offers.map((o) => ({
+            quantity: o.quantity,
+            discount_type: o.discount_type,
+            discount_value: o.discount_value as unknown as number,
+          })),
+        );
+    const storedProductIds = new Set(
+      existing.products.map((p) => p.product_id),
+    );
+    const storedCustomIds = new Set(
+      existing.custom_products.map((cp) => cp.custom_product_id),
+    );
     await this.assertBundleEconomicallyValid(
       effectiveOffers,
-      effectiveProductIds,
-      effectiveCustomIds,
+      offersChanged
+        ? effectiveProductIds
+        : effectiveProductIds.filter((pid) => !storedProductIds.has(pid)),
+      offersChanged
+        ? effectiveCustomIds
+        : effectiveCustomIds.filter((cid) => !storedCustomIds.has(cid)),
     );
 
     const ops: Prisma.PrismaPromise<unknown>[] = [];

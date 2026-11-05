@@ -16,6 +16,7 @@ import {
   fromStripeAmount,
   resolveOrderCurrency,
 } from '../../common/money/currency.util';
+import { splitProviderShares } from '../../common/money/provider-share.util';
 import { MarketsContextService } from '../markets/markets-context.service';
 import { OrdersService } from '../orders/orders.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -1284,9 +1285,11 @@ export class PaymentsService {
           },
           // Key includes the transfer currency so a prior attempt that ran with
           // a different settlement currency (e.g. before balance_transaction was
-          // ready) can't poison this retry.
+          // ready) can't poison this retry. v5: the largest-remainder
+          // provider split can move a share by a cent, so a v4 key must not
+          // replay a transfer with a different amount.
           {
-            idempotencyKey: `transfer_${orderId}_${destination}_${transferCurrency}_v4`,
+            idempotencyKey: `transfer_${orderId}_${destination}_${transferCurrency}_v5`,
           },
         );
         await this.prisma.orderPayout.upsert({
@@ -1333,7 +1336,8 @@ export class PaymentsService {
       }
     };
 
-    // ── Providers: split the aggregate provider_amount by each provider's base.
+    // ── Providers: split the aggregate provider_amount by each provider's base
+    // (largest remainder, so the transfers add up to provider_amount exactly).
     const providerItems = order.items.filter(
       (i) => i.fulfiller_type === FulfillerType.PROVIDER,
     );
@@ -1343,26 +1347,19 @@ export class PaymentsService {
     );
     const providerAmountCents = toCents(order.commission.provider_amount);
     if (providerBaseTotal > 0 && providerAmountCents > 0) {
-      const baseByProvider = new Map<string, number>();
-      for (const i of providerItems) {
-        baseByProvider.set(
-          i.fulfiller_id,
-          (baseByProvider.get(i.fulfiller_id) || 0) +
-            Number(i.provider_base_amount),
-        );
-      }
+      const shareByProvider = splitProviderShares(
+        providerAmountCents,
+        providerItems,
+      );
       const providers = await this.prisma.provider.findMany({
-        where: { id: { in: [...baseByProvider.keys()] } },
+        where: { id: { in: [...shareByProvider.keys()] } },
         select: { id: true, stripe_account_id: true },
       });
-      for (const [providerId, base] of baseByProvider) {
+      for (const [providerId, share] of shareByProvider) {
         const acct = providers.find(
           (p) => p.id === providerId,
         )?.stripe_account_id;
         if (!acct) continue;
-        const share = Math.round(
-          providerAmountCents * (base / providerBaseTotal),
-        );
         await payout(FulfillerType.PROVIDER, providerId, acct, share);
       }
     }

@@ -5,6 +5,7 @@ import {
   fromStripeAmount,
   toStripeAmount,
 } from '../../common/money/currency.util';
+import { splitProviderShares } from '../../common/money/provider-share.util';
 import { csvAmount, csvText } from '../invoices/invoices-csv';
 import type {
   ProviderEarningsLinesQueryDto,
@@ -102,7 +103,7 @@ export function computeProviderLine(
     : 0;
   let amountMinor =
     allBase > 0 && poolMinor > 0
-      ? Math.round(poolMinor * (myBase / allBase))
+      ? (splitProviderShares(poolMinor, row.items).get(providerId) ?? 0)
       : 0;
 
   const payout = row.payouts[0];

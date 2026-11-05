@@ -501,36 +501,12 @@ export class UsersService {
     };
   }
 
-  async getPlatformConfig() {
+  async getPlatformConfig(role?: UserRole) {
     let config = await this.prisma.platformConfig.findFirst();
     if (!config) {
       config = await this.prisma.platformConfig.create({ data: {} });
     }
-    // This endpoint is readable by providers/creators, so never expose the
-    // platform Stripe/SMTP credentials here. They are managed via the admin-only
-    // payments / mail settings APIs instead.
-    const {
-      stripe_secret_key: _s,
-      stripe_publishable_key: _p,
-      stripe_webhook_secret: _w,
-      smtp_host: _sh,
-      smtp_port: _sp,
-      smtp_secure: _ss,
-      smtp_user: _su,
-      smtp_pass: _spw,
-      mail_from: _mf,
-      ...safe
-    } = config;
-    void _s;
-    void _p;
-    void _w;
-    void _sh;
-    void _sp;
-    void _ss;
-    void _su;
-    void _spw;
-    void _mf;
-    return safe;
+    return publicPlatformConfig(config, role);
   }
 
   async updatePlatformConfig(data: {
@@ -607,4 +583,31 @@ function isUniqueViolation(err: unknown): boolean {
   return (
     err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'
   );
+}
+
+/**
+ * GET /admin/platform-config is readable by providers and creators, so it
+ * never returns credentials (or their ciphertexts): any *_secret / *_key /
+ * *_token / *_pass field and the SMTP / sender settings are dropped for every
+ * role (they are managed via the admin-only payments / mail APIs). Non-admins
+ * additionally never see operational settings that are none of their
+ * business: the Kustom partner id, the backup schedule and any storage /
+ * KMS (s3_*, kms_*) settings.
+ */
+const SECRET_FIELD = /(_secret|_key|_token|_pass|_password)$/i;
+const SECRET_PREFIX = /^(smtp_|mail_from)/i;
+const ADMIN_ONLY_FIELD = /^(kustom_partner_id$|backup_|s3_|kms_|storage_)/i;
+
+export function publicPlatformConfig<T extends object>(
+  config: T,
+  role?: UserRole,
+): Partial<T> {
+  const isAdmin = role === UserRole.ADMIN;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (SECRET_FIELD.test(key) || SECRET_PREFIX.test(key)) continue;
+    if (!isAdmin && ADMIN_ONLY_FIELD.test(key)) continue;
+    out[key] = value;
+  }
+  return out as Partial<T>;
 }

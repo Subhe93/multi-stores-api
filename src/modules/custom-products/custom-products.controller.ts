@@ -98,6 +98,17 @@ export class CustomProductsController {
     return this.customProductsService.checkSlug(userId, slug, excludeId);
   }
 
+  // Minimum price inputs (VAT rate, incl./excl. VAT, currency) for a base
+  // product, so the pricing step can show the minimum before saving.
+  // Must come before @Get(':id') so the static path matches first.
+  @Get('price-floor')
+  priceFloor(
+    @CurrentUser('id') userId: string,
+    @Query('product_id') productId: string,
+  ) {
+    return this.customProductsService.getPriceFloor(userId, productId);
+  }
+
   // ── Provider review endpoints (PROVIDER role) ─────────────
   // NOTE: This must come BEFORE @Get(':id') so the static path matches first.
   @Get('pending-reviews')

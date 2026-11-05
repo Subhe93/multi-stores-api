@@ -272,8 +272,9 @@ export class UsersController {
 
   @Get('platform-config')
   @Roles(UserRole.ADMIN, UserRole.PROVIDER, UserRole.CREATOR)
-  getPlatformConfig() {
-    return this.usersService.getPlatformConfig();
+  getPlatformConfig(@CurrentUser() user: RequestUser) {
+    // Non-admins get the public subset only (no credentials / admin settings).
+    return this.usersService.getPlatformConfig(user?.role);
   }
 
   @Put('platform-config')

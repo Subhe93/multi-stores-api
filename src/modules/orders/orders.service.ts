@@ -42,9 +42,12 @@ import { InvoiceTriggersService } from '../invoices/invoice-triggers.service';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import {
   currencyDecimals,
+  fromStripeAmount,
   resolveOrderCurrency,
   roundMoney,
+  toStripeAmount,
 } from '../../common/money/currency.util';
+import { splitProviderShares } from '../../common/money/provider-share.util';
 import { allocateLargestRemainder } from '../../common/money/tax.util';
 import { MarketsContextService } from '../markets/markets-context.service';
 import {
@@ -65,7 +68,16 @@ import {
   type TaxLine,
   type TaxLineInput,
   type TaxStoreFields,
+  deriveNetTotals,
 } from '../taxes/tax.service';
+import {
+  bundleUnitBelowFloor,
+  loadPriceFloorSetup,
+} from '../custom-products/price-floor';
+import {
+  computeMarketplaceCommission,
+  couponBreaksProviderFloor,
+} from './marketplace-commission';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
 import {
   isKustomEnabledForStore,
@@ -1303,7 +1315,40 @@ export class OrdersService {
       // the provider's payout — that was unfair to providers. With the
       // economic guard at attach/cart time this case should only trigger
       // when provider pricing changed after the line entered the cart.
-      if (providerBasePrice > 0 && unitPrice < providerBasePrice) {
+      //
+      // Same floor as attach time (CustomProductsService / BundlesService):
+      // the gross customer price is compared to the gross floor. For a
+      // marketplace custom product that is the provider base (net) plus VAT
+      // at the highest rate the store sells at (loadPriceFloorSetup, rounded
+      // up like minimumPriceMinor), so whatever the attach-time check let
+      // through also passes here. Provider products sold as-is keep their
+      // net base floor, exactly like their attach-time check.
+      let floorRateBp = 0;
+      let floorInclVat = false;
+      if (
+        providerBasePrice > 0 &&
+        item.custom_product_id &&
+        !isIndependentStore
+      ) {
+        const setup = await loadPriceFloorSetup(
+          this.prisma,
+          this.taxService,
+          orderStore.creator_id,
+        );
+        floorRateBp = setup.rateBpFor({
+          tax_class_id: taxClassId,
+          tax_exempt: taxExempt,
+        });
+        floorInclVat = setup.pricesIncludeVat;
+      }
+      if (
+        bundleUnitBelowFloor(
+          unitPrice,
+          providerBasePrice,
+          floorRateBp,
+          floorInclVat,
+        )
+      ) {
         throw new BadRequestException({
           code: 'ORDER_BUNDLE_BELOW_PROVIDER_COST',
           message:
@@ -1624,20 +1669,6 @@ export class OrdersService {
       if (discountAmount > subtotal) {
         discountAmount = subtotal;
       }
-
-      // Reject rather than sell below provider cost — the same economic guard
-      // the bundle path applies. Without it a percentage coupon silently
-      // scales the provider's payout below the base price they are owed.
-      if (
-        !isIndependentStore &&
-        subtotal - discountAmount < providerBaseTotal
-      ) {
-        throw new BadRequestException({
-          code: 'ORDER_DISCOUNT_BELOW_PROVIDER_COST',
-          message:
-            'This coupon cannot be applied to the items in your cart. Please remove it and try again.',
-        });
-      }
     }
 
     // b2b app M2.5 (D5): the coupon was evaluated on the gross subtotal (the
@@ -1670,6 +1701,33 @@ export class OrdersService {
     // exactly subtotal + shipping - discount, in EXCLUSIVE mode the tax is
     // added on top (what Stripe / COD / Kustom charge).
     const tax = await taxFor(shippingCost, discountAmount);
+
+    // Reject rather than sell below provider cost — the same economic guard
+    // the bundle path applies. Without it a percentage coupon silently
+    // scales the provider's payout below the base price they are owed.
+    // Marketplace VAT is the platform's (the seller's), so the discounted
+    // revenue is compared net of VAT (net_items), like the split itself.
+    // Only a coupon that actually lowers the revenue is judged (free
+    // shipping / zero amount pass), against min(base, net without coupon).
+    if (
+      couponValidation &&
+      !isIndependentStore &&
+      discountAmount > 0 &&
+      Math.round(tax.net_items * 100) < Math.round(providerBaseTotal * 100) &&
+      couponBreaksProviderFloor({
+        discountAmount,
+        netItemsAfter: tax.net_items,
+        netItemsBefore: (await taxFor(shippingCost, 0)).net_items,
+        providerBaseTotal,
+      })
+    ) {
+      throw new BadRequestException({
+        code: 'ORDER_DISCOUNT_BELOW_PROVIDER_COST',
+        message:
+          'This coupon cannot be applied to the items in your cart. Please remove it and try again.',
+      });
+    }
+
     const total = roundMoney(tax.total);
     return {
       shipping,
@@ -2129,7 +2187,6 @@ export class OrdersService {
     // Calculate prices
     let subtotal = 0;
     let providerBaseTotal = 0; // what providers are owed (their base prices)
-    let creatorMarginTotal = 0; // what creators are owed (their markup or creator-only revenue)
     const orderItems: PendingOrderItem[] = [];
 
     // Collected during the loop and decremented atomically before order.create.
@@ -2283,7 +2340,6 @@ export class OrdersService {
         item.quantity,
       );
       providerBaseTotal += providerBaseForItem;
-      creatorMarginTotal += totalPrice - providerBaseForItem;
       subtotal += totalPrice;
       taxLines.push({
         amount: totalPrice,
@@ -2432,7 +2488,6 @@ export class OrdersService {
 
     subtotal = roundMoney(subtotal);
     providerBaseTotal = roundMoney(providerBaseTotal);
-    creatorMarginTotal = roundMoney(creatorMarginTotal);
 
     // Calculate shipping cost based on product profiles and destination
     const shippingAddress = await this.prisma.address.findUnique({
@@ -2826,28 +2881,32 @@ export class OrdersService {
     }
 
     // Commission split. Independent stores take no platform commission and
-    // have no provider share — the creator keeps the full order total
-    // (subtotal - discount + shipping). Marketplace stores: platform takes %,
-    // rest split between provider (base) and creator (margin).
+    // have no provider share — the creator is the seller and keeps the full
+    // order total (subtotal - discount + shipping). Marketplace stores: the
+    // platform is the seller, so the order's VAT (lines + shipping) is
+    // reserved for it first (vat_amount); the platform % and the provider /
+    // creator split then run on the net merchandise revenue.
     let platformAmount = 0;
     let providerAmount = 0;
     let creatorAmount = 0;
+    let vatAmount: number | null = null;
     if (isIndependentStore) {
       creatorAmount = total;
     } else {
       const commissionPercent = platformConfig
         ? Number(platformConfig.commission_value)
         : 15;
-      const split = this.computeMarketplaceCommission({
+      const split = computeMarketplaceCommission({
         subtotal,
         discountAmount,
+        netItems: tax.net_items,
         providerBaseTotal,
-        creatorMarginTotal,
         commissionPercent,
       });
       platformAmount = split.platformAmount;
       providerAmount = split.providerAmount;
       creatorAmount = split.creatorAmount;
+      vatAmount = roundMoney(tax.tax_total);
     }
 
     try {
@@ -2857,6 +2916,7 @@ export class OrdersService {
           platform_amount: platformAmount,
           provider_amount: providerAmount,
           creator_amount: creatorAmount,
+          vat_amount: vatAmount,
           currency,
         },
       });
@@ -2912,79 +2972,6 @@ export class OrdersService {
   }
 
   /**
-   * Marketplace commission split: the platform takes a percentage of
-   * (subtotal - discount); the remaining payout pool is distributed pro-rata
-   * between the aggregate provider base and the creator margin, both scaled by
-   * the discount factor. Shared by create() and recomputeCommissionForOrder()
-   * so the two can never drift apart.
-   */
-  private computeMarketplaceCommission(input: {
-    subtotal: number;
-    discountAmount: number;
-    providerBaseTotal: number;
-    creatorMarginTotal: number;
-    commissionPercent: number;
-  }): {
-    platformAmount: number;
-    providerAmount: number;
-    creatorAmount: number;
-  } {
-    const {
-      subtotal,
-      discountAmount,
-      providerBaseTotal,
-      creatorMarginTotal,
-      commissionPercent,
-    } = input;
-
-    const commissionBase = subtotal - discountAmount;
-    let platformAmount =
-      Math.round(commissionBase * (commissionPercent / 100) * 100) / 100;
-
-    // A coupon is offered by the creator (or the platform) — the provider never
-    // agreed to it, so it must not come out of their share. The floor is what
-    // the provider would have received on an undiscounted order, which is their
-    // base minus the platform's percentage: with no discount it equals the
-    // pro-rata result exactly, so the split below is unchanged for those orders.
-    // Anything the discount takes is absorbed by the creator's margin first,
-    // then by the platform's commission.
-    const providerFloor =
-      Math.round(providerBaseTotal * (1 - commissionPercent / 100) * 100) / 100;
-    if (platformAmount > commissionBase - providerFloor) {
-      platformAmount = Math.max(
-        0,
-        Math.round((commissionBase - providerFloor) * 100) / 100,
-      );
-    }
-
-    // Scale provider/creator by discount factor to reflect discounted revenue
-    const discountFactor = subtotal > 0 ? commissionBase / subtotal : 1;
-    const payoutPool = commissionBase - platformAmount;
-
-    // Distribute payoutPool proportionally between provider base and creator margin
-    const scaledProviderBase = providerBaseTotal * discountFactor;
-    const scaledCreatorMargin = creatorMarginTotal * discountFactor;
-    const totalScaled = scaledProviderBase + scaledCreatorMargin;
-
-    let providerAmount = 0;
-    let creatorAmount = 0;
-    if (totalScaled > 0 && payoutPool > 0) {
-      providerAmount =
-        Math.round(((payoutPool * scaledProviderBase) / totalScaled) * 100) /
-        100;
-      // Never below the provider's base cost, never above what was collected.
-      if (providerAmount < providerFloor) providerAmount = providerFloor;
-      if (providerAmount > payoutPool) providerAmount = payoutPool;
-      creatorAmount = Math.max(
-        0,
-        Math.round((payoutPool - providerAmount) * 100) / 100,
-      );
-    }
-
-    return { platformAmount, providerAmount, creatorAmount };
-  }
-
-  /**
    * Re-derive an unpaid order's commission split from the store's CURRENT
    * store_type. An admin can flip a store between MARKETPLACE and INDEPENDENT
    * while unpaid orders exist; without this, the commission row created at
@@ -3002,7 +2989,21 @@ export class OrdersService {
       },
     });
     if (!order) return;
-    if (order.payment_status === 'paid') return;
+    // Settled history is never re-derived: a paid or refunded order, a COD
+    // order whose cash was collected on delivery, or any order that already
+    // has payout ledger rows keeps the split it was settled with.
+    if (
+      order.payment_status === 'paid' ||
+      order.payment_status === 'refunded' ||
+      order.status === OrderStatus.DELIVERED ||
+      order.status === OrderStatus.REFUNDED ||
+      order.status === OrderStatus.RETURNED
+    )
+      return;
+    const payoutCount = await this.prisma.orderPayout.count({
+      where: { order_id: order.id },
+    });
+    if (payoutCount > 0) return;
 
     const store = order.store_id
       ? await this.prisma.store.findUnique({
@@ -3015,6 +3016,7 @@ export class OrdersService {
     let platformAmount = 0;
     let providerAmount = 0;
     let creatorAmount = 0;
+    let vatAmount: number | null = null;
     if (isIndependentStore) {
       // Independent stores: no platform cut, no provider share — the creator
       // keeps the full order total (charged directly on their own account).
@@ -3029,16 +3031,19 @@ export class OrdersService {
         (sum, i) => sum + Number(i.provider_base_amount),
         0,
       );
-      const split = this.computeMarketplaceCommission({
+      // Same inputs as create(): the net merchandise revenue comes from the
+      // order's own tax snapshot (total - VAT - net shipping).
+      const split = computeMarketplaceCommission({
         subtotal,
         discountAmount: Number(order.discount_amount),
+        netItems: deriveNetTotals(order).net_items,
         providerBaseTotal,
-        creatorMarginTotal: subtotal - providerBaseTotal,
         commissionPercent,
       });
       platformAmount = split.platformAmount;
       providerAmount = split.providerAmount;
       creatorAmount = split.creatorAmount;
+      vatAmount = roundMoney(Number(order.tax_amount));
     }
 
     // Upsert: the row can legitimately be missing because commission creation
@@ -3050,12 +3055,14 @@ export class OrdersService {
         platform_amount: platformAmount,
         provider_amount: providerAmount,
         creator_amount: creatorAmount,
+        vat_amount: vatAmount,
         currency: order.currency,
       },
       update: {
         platform_amount: platformAmount,
         provider_amount: providerAmount,
         creator_amount: creatorAmount,
+        vat_amount: vatAmount,
       },
     });
   }
@@ -3358,8 +3365,9 @@ export class OrdersService {
     void _r;
 
     let scopedPayouts: typeof payouts = [];
+    let fulfillerId: string | null = null;
     if ((role === UserRole.PROVIDER || role === UserRole.CREATOR) && userId) {
-      const fulfillerId = await this.resolveFulfillerId(userId, role);
+      fulfillerId = await this.resolveFulfillerId(userId, role);
       scopedPayouts = payouts.filter((p) => p.recipient_id === fulfillerId);
     }
 
@@ -3383,12 +3391,20 @@ export class OrdersService {
         role === UserRole.PROVIDER && customerSafe.customer
           ? { ...customerSafe.customer, user: undefined }
           : customerSafe.customer;
+      // Providers: their OWN share of the aggregate provider_amount (the
+      // very split the transfers use) and the net shipping, so the earnings
+      // breakdown adds up on multi-provider orders.
+      const providerShare =
+        role === UserRole.PROVIDER && fulfillerId
+          ? providerOrderShare(order, fulfillerId)
+          : {};
       // Customers / providers: reverse-charge evidence without internals.
       return this.forCustomer(
         this.withItemImages({
           ...customerSafe,
           customer,
           payouts: scopedPayouts,
+          ...providerShare,
         }),
       );
     }
@@ -4330,4 +4346,42 @@ export class OrdersService {
       }
     }
   }
+}
+
+/**
+ * A provider's view of an order's money: `my_share` is this provider's part
+ * of the aggregate provider_amount, split exactly like the Stripe transfers
+ * (PaymentsService.issueOrderTransfers, splitProviderShares); `net_shipping`
+ * is the shipping excl. VAT (kept by the platform, not part of any share).
+ * Null my_share when the order has no commission row yet.
+ */
+export function providerOrderShare(
+  order: {
+    currency: string | null;
+    total: unknown;
+    tax_amount?: unknown;
+    shipping_cost?: unknown;
+    shipping_tax_amount?: unknown;
+    tax_pricing_mode?: TaxPricingMode | null;
+    commission?: { provider_amount: unknown } | null;
+    items: {
+      fulfiller_type: FulfillerType | string;
+      fulfiller_id: string;
+      provider_base_amount: unknown;
+    }[];
+  },
+  providerId: string,
+): { my_share: number | null; net_shipping: number } {
+  const currency = order.currency || 'EUR';
+  const net_shipping = deriveNetTotals(order, currency).net_shipping;
+  if (!order.commission) return { my_share: null, net_shipping };
+  const pool = toStripeAmount(
+    Number(order.commission.provider_amount),
+    currency,
+  );
+  const providerItems = order.items.filter(
+    (i) => i.fulfiller_type === FulfillerType.PROVIDER,
+  );
+  const minor = splitProviderShares(pool, providerItems).get(providerId) ?? 0;
+  return { my_share: fromStripeAmount(minor, currency), net_shipping };
 }
