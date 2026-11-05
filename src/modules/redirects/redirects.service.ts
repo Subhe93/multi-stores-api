@@ -6,7 +6,13 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { Prisma, RedirectSource, StoreRedirect } from '@prisma/client';
+import {
+  PageType,
+  Prisma,
+  RedirectSource,
+  StoreRedirect,
+  StoreType,
+} from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   REDIRECT_MAP_MAX_ENTRIES,
@@ -33,7 +39,18 @@ import {
   type SlugMove,
   type SlugRedirectPlan,
 } from './slug-redirects';
-import { withLocalePrefixes } from '../../common/slug/slug-moves';
+import {
+  collectionChainIsLive,
+  livePathCandidate,
+  slugForms,
+  slugKey,
+  type LiveContentKind,
+} from './redirect-live-content';
+import {
+  productPath,
+  withLocalePrefixes,
+  type LocaleSlug,
+} from '../../common/slug/slug-moves';
 import { SUPPORTED_LOCALES } from '../markets/market.types';
 import type {
   CreateRedirectDto,
@@ -117,6 +134,7 @@ export type BulkCreateConflictCode =
   | 'REDIRECT_INVALID_PATH'
   | 'REDIRECT_DUPLICATE'
   | 'REDIRECT_LIMIT'
+  | 'REDIRECT_SHADOWS_LIVE'
   | ChainFailureCode;
 
 export interface BulkCreateResult {
@@ -174,6 +192,52 @@ export type RedirectMapResponse =
 export interface RedirectResolveResponse {
   to: string;
   status: number;
+}
+
+/** `GET redirects/my/locale-prefixes`. */
+export interface StoreLocales {
+  primary_locale: string;
+  prefixes: string[];
+}
+
+export type ProductPathKind = 'product' | 'custom-product';
+
+export interface ProductPathRef {
+  kind: ProductPathKind;
+  id: string;
+}
+
+export function productPathKey(kind: ProductPathKind, id: string): string {
+  return `${kind}:${id}`;
+}
+
+/**
+ * Public paths of one product (pure): `/products/<slug>` per translation
+ * slug, then `/<prefix>/products/<slug of that locale>` per served prefix,
+ * falling back to the primary-locale slug (else the first slug) like
+ * productSlugMoves. Locales compare case-insensitively. Deduplicated.
+ */
+export function productPublicPaths(
+  translations: readonly LocaleSlug[],
+  primaryLocale: string,
+  prefixes: readonly string[],
+): string[] {
+  const withSlug = translations.filter((t) => !!t.slug);
+  if (!withSlug.length) return [];
+  const byLocale = new Map<string, string>();
+  for (const t of withSlug) {
+    const k = t.locale.toLowerCase();
+    if (!byLocale.has(k)) byLocale.set(k, t.slug);
+  }
+  const primarySlug =
+    byLocale.get(primaryLocale.toLowerCase()) ?? withSlug[0].slug;
+  const out = new Set<string>();
+  for (const t of withSlug) out.add(productPath(t.slug));
+  for (const l of prefixes) {
+    const k = l.toLowerCase();
+    out.add(productPath(byLocale.get(k) ?? primarySlug, k));
+  }
+  return [...out];
 }
 
 export interface RedirectView {
@@ -418,6 +482,7 @@ export class RedirectsService {
     const from = requirePath(dto.from_path);
     const to = requireTarget(dto.to_path);
     const isActive = dto.is_active ?? true;
+    if (isActive) await this.assertNotLive(storeId, from);
     const row = await this.prisma.$transaction(async (tx) => {
       const taken = await tx.storeRedirect.findUnique({
         where: { store_id_from_path: { store_id: storeId, from_path: from } },
@@ -470,6 +535,11 @@ export class RedirectsService {
           ? requireTarget(dto.to_path)
           : current.to_path;
       const isActive = dto.is_active ?? current.is_active;
+      // Only a new source or a switch-on is checked: a row that already
+      // shadows a page (an older MANUAL row) can still get a new target.
+      if (isActive && (from !== current.from_path || !current.is_active)) {
+        await this.assertNotLive(storeId, from, tx);
+      }
       if (from !== current.from_path) {
         const taken = await tx.storeRedirect.findUnique({
           where: { store_id_from_path: { store_id: storeId, from_path: from } },
@@ -508,9 +578,15 @@ export class RedirectsService {
   async test(storeId: string, path: string) {
     const normalized = normalizeRedirectPath(path);
     if (normalized === null) throw invalidPath();
-    const row = await this.findMatch(storeId, path);
+    const [row, live] = await Promise.all([
+      this.findMatch(storeId, path),
+      this.liveContentAt(storeId, [normalized]),
+    ]);
     return {
       path: normalized,
+      // Published content served at this path (a redirect from it is refused
+      // with REDIRECT_SHADOWS_LIVE until it is deleted or unpublished).
+      live: live.get(normalized) ?? null,
       match: row
         ? {
             id: row.id,
@@ -521,6 +597,164 @@ export class RedirectsService {
           }
         : null,
     };
+  }
+
+  /** 409 REDIRECT_SHADOWS_LIVE when `from` serves published content. */
+  private async assertNotLive(
+    storeId: string,
+    from: string,
+    db: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<void> {
+    const kind = (await this.liveContentAt(storeId, [from], db)).get(from);
+    if (kind) throw shadowsLive(kind);
+  }
+
+  /**
+   * Normalised paths among `paths` that serve published content of the store
+   * right now, with its kind (redirect-live-content.ts): a published own
+   * product (or custom product on a non-INDEPENDENT store) with that
+   * translation slug, a reachable collection chain, a published legacy page
+   * or a published builder STATIC/LANDING page. Deleted, draft or archived
+   * content is not live, so a redirect from its old URL is accepted. Same
+   * rules for MARKETPLACE and INDEPENDENT stores. Slugs match like the
+   * storefront's tolerant lookup: exact first, then case-insensitively for
+   * the misses (legacy capitalised slugs). Reads through `db` when given
+   * (the caller's transaction).
+   */
+  async liveContentAt(
+    storeId: string,
+    paths: readonly string[],
+    db: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<Map<string, LiveContentKind>> {
+    const out = new Map<string, LiveContentKind>();
+    const products = new Map<string, string[]>();
+    const pages = new Map<string, string[]>();
+    const collections: { path: string; segments: string[] }[] = [];
+    const add = (m: Map<string, string[]>, k: string, p: string) =>
+      m.set(k, [...(m.get(k) ?? []), p]);
+    for (const p of new Set(paths)) {
+      const c = livePathCandidate(p);
+      if (!c) continue;
+      if (c.kind === 'product') add(products, c.slug, p);
+      else if (c.kind === 'page') add(pages, c.slug, p);
+      else collections.push({ path: p, segments: c.segments });
+    }
+    if (!products.size && !pages.size && !collections.length) return out;
+    const store = await db.store.findUnique({
+      where: { id: storeId },
+      select: { creator_id: true, store_type: true },
+    });
+    if (!store) return out;
+    type SlugRow = { slug: string | null };
+    type SlugWhere =
+      | { slug: { in: string[] } }
+      | { OR: { slug: { equals: string; mode: 'insensitive' } }[] };
+    // Exact `in` lookup, then a case-insensitive pass for the slugs still
+    // missing. Matches are compared again in memory (slugKey), so only an
+    // exact lower-case NFC match marks a path. Lists are chunked under the
+    // Postgres bind-parameter limit.
+    const findLive = async (
+      by: Map<string, string[]>,
+      kind: LiveContentKind,
+      queries: ((where: SlugWhere) => Promise<SlugRow[]>)[],
+    ) => {
+      const mark = (found: readonly SlugRow[]) => {
+        const hit = new Set(
+          found.flatMap((f) => (f.slug ? [slugKey(f.slug)] : [])),
+        );
+        for (const [slug, ps] of by)
+          if (hit.has(slug)) for (const p of ps) out.set(p, kind);
+      };
+      const run = async (
+        keys: string[],
+        size: number,
+        where: (part: string[]) => SlugWhere,
+      ) => {
+        const all: SlugRow[] = [];
+        for (const q of queries)
+          for (let i = 0; i < keys.length; i += size)
+            all.push(...(await q(where(keys.slice(i, i + size)))));
+        return all;
+      };
+      mark(
+        await run(slugForms(by.keys()), 5000, (part) => ({
+          slug: { in: part },
+        })),
+      );
+      const misses = [...by.entries()]
+        .filter(([, ps]) => !out.has(ps[0]))
+        .map(([slug]) => slug);
+      if (!misses.length) return;
+      mark(
+        await run(slugForms(misses), 500, (part) => ({
+          OR: part.map((s) => ({
+            slug: { equals: s, mode: 'insensitive' as const },
+          })),
+        })),
+      );
+    };
+    if (products.size) {
+      await findLive(products, 'product', [
+        (where) =>
+          db.productTranslation.findMany({
+            where: {
+              ...where,
+              product: { creator_id: store.creator_id, status: 'PUBLISHED' },
+            },
+            select: { slug: true },
+          }),
+        ...(store.store_type === StoreType.INDEPENDENT
+          ? []
+          : [
+              (where: SlugWhere) =>
+                db.customProductTranslation.findMany({
+                  where: {
+                    ...where,
+                    custom_product: {
+                      creator_id: store.creator_id,
+                      status: 'PUBLISHED',
+                    },
+                  },
+                  select: { slug: true },
+                }),
+            ]),
+      ]);
+    }
+    if (pages.size) {
+      await findLive(pages, 'page', [
+        (where) =>
+          db.staticPage.findMany({
+            where: { ...where, store_id: storeId, status: 'PUBLISHED' },
+            select: { slug: true },
+          }),
+        (where) =>
+          db.page.findMany({
+            where: {
+              ...where,
+              store_id: storeId,
+              type: { in: [PageType.STATIC, PageType.LANDING] },
+              published_version_id: { not: null },
+            },
+            select: { slug: true },
+          }),
+      ]);
+    }
+    if (collections.length) {
+      const rows = await db.creatorCategory.findMany({
+        where: { creator_id: store.creator_id },
+        select: {
+          id: true,
+          slug: true,
+          parent_id: true,
+          is_active: true,
+          visibility: true,
+        },
+      });
+      for (const c of collections)
+        if (collectionChainIsLive(rows, c.segments))
+          out.set(c.path, 'collection');
+    }
+    return out;
   }
 
   /**
@@ -576,6 +810,14 @@ export class RedirectsService {
         limit: BULK_REDIRECT_MAX_ROWS,
       });
     }
+    // An empty upload (or a probe) writes nothing: no transaction, no scan.
+    if (!rows.length) return { created: [], conflicts: [] };
+    const candidates: string[] = [];
+    for (const row of rows) {
+      const from = normalizeRedirectPath(row.from_path);
+      if (from !== null) candidates.push(from);
+    }
+    const live = await this.liveContentAt(storeId, candidates);
     const result = await this.prisma.$transaction(
       async (tx) => {
         const existing = await tx.storeRedirect.findMany({
@@ -618,6 +860,10 @@ export class RedirectsService {
           }
           if (taken.has(from)) {
             reject(row, 'REDIRECT_DUPLICATE');
+            continue;
+          }
+          if (live.has(from)) {
+            reject(row, 'REDIRECT_SHADOWS_LIVE');
             continue;
           }
           if (room <= 0) {
@@ -763,6 +1009,17 @@ export class RedirectsService {
     storeId: string,
     db: Prisma.TransactionClient | PrismaService = this.prisma,
   ): Promise<string[]> {
+    return (await this.storeLocales(storeId, db)).prefixes;
+  }
+
+  /**
+   * The store's primary content locale (lower case, 'en' when unset) and the
+   * prefixes of storeLocalePrefixes. `GET redirects/my/locale-prefixes`.
+   */
+  async storeLocales(
+    storeId: string,
+    db: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<StoreLocales> {
     const [cfg, markets] = await Promise.all([
       db.storeLanguageConfig.findUnique({
         where: { store_id: storeId },
@@ -783,7 +1040,73 @@ export class RedirectsService {
       const k = String(l).toLowerCase();
       if (known.has(k) && k !== primary) out.add(k);
     }
-    return [...out];
+    return { primary_locale: primary, prefixes: [...out] };
+  }
+
+  /**
+   * Every public path of the store's own products / custom products (the
+   * dashboard collects them BEFORE a delete, as redirect sources):
+   * `/products/<slug>` for each translation slug, plus
+   * `/<locale>/products/<slug>` for each served locale prefix with that
+   * locale's slug (the primary-locale slug when it has none), as
+   * productSlugMoves builds them. Deduplicated, percent-encoded like the
+   * slug moves. An item of another store (or unknown) gets no entry; a
+   * custom product of an INDEPENDENT store gets an empty list (not served). Status is not
+   * checked: an archived item's old URLs may still be indexed.
+   */
+  async productPaths(
+    storeId: string,
+    items: readonly ProductPathRef[],
+  ): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    if (!items.length) return out;
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { creator_id: true, store_type: true },
+    });
+    if (!store) return out;
+    const ids = (kind: ProductPathKind) => [
+      ...new Set(items.filter((i) => i.kind === kind).map((i) => i.id)),
+    ];
+    const productIds = ids('product');
+    const customIds = ids('custom-product');
+    const [own, custom, locales] = await Promise.all([
+      productIds.length
+        ? this.prisma.product.findMany({
+            where: { id: { in: productIds }, creator_id: store.creator_id },
+            select: {
+              id: true,
+              translations: { select: { locale: true, slug: true } },
+            },
+          })
+        : [],
+      customIds.length
+        ? this.prisma.customProduct.findMany({
+            where: { id: { in: customIds }, creator_id: store.creator_id },
+            select: {
+              id: true,
+              translations: { select: { locale: true, slug: true } },
+            },
+          })
+        : [],
+      this.storeLocales(storeId),
+    ]);
+    const build = (translations: readonly LocaleSlug[]) =>
+      productPublicPaths(
+        translations,
+        locales.primary_locale,
+        locales.prefixes,
+      );
+    for (const p of own)
+      out.set(productPathKey('product', p.id), build(p.translations));
+    // INDEPENDENT stores do not serve custom products: owned, no paths.
+    const servesCustom = store.store_type !== StoreType.INDEPENDENT;
+    for (const p of custom)
+      out.set(
+        productPathKey('custom-product', p.id),
+        servesCustom ? build(p.translations) : [],
+      );
+    return out;
   }
 
   /**
@@ -992,6 +1315,17 @@ function chainError(code: ChainFailureCode) {
       code === 'REDIRECT_LOOP'
         ? 'This redirect would create a loop.'
         : 'This redirect would chain through too many other redirects.',
+  });
+}
+
+function shadowsLive(kind: LiveContentKind) {
+  return new ConflictException({
+    code: 'REDIRECT_SHADOWS_LIVE',
+    message:
+      'This address still shows a published ' +
+      kind +
+      '. Delete, unpublish or rename it first, then add the redirect.',
+    kind,
   });
 }
 

@@ -1,8 +1,10 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
   Get,
+  NotFoundException,
   Param,
   ParseUUIDPipe,
   Post,
@@ -12,26 +14,35 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { UserRole } from '@prisma/client';
-import { CurrentUser, RequireApp, Roles } from '../../common/decorators';
+import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
-import { RequireAppGuard } from '../../common/guards/require-app.guard';
-import { parseBulkRedirectCsv, RedirectsService } from './redirects.service';
+import {
+  parseBulkRedirectCsv,
+  productPathKey,
+  RedirectsService,
+  type ProductPathKind,
+} from './redirects.service';
 import {
   BulkRedirectDto,
   CreateRedirectDto,
+  PRODUCT_PATH_KINDS,
+  ProductPathsBatchDto,
   RedirectListQueryDto,
   TestRedirectDto,
   UpdateRedirectDto,
 } from './dto/redirect.dto';
 
 /**
- * Creator management of the store's redirects (M4.4 §6.3). Listing and
- * deleting stay open when the importer app is off, so a merchant can clean
- * up; creating, editing and testing require the app. Static routes are
- * declared before ':id'.
+ * Creator management of the store's redirects (M4.4 §6.3). A core online
+ * store feature: every store type (MARKETPLACE and INDEPENDENT) manages its
+ * redirects, with or without the importer app. Every call is scoped to the
+ * caller's own store (storeIdForCreator). Rows the importer wrote (IMPORT)
+ * are listed, edited and deleted like the merchant's own; an edit turns a
+ * row MANUAL so a later import run never overwrites it and a run rollback
+ * skips it. Static routes are declared before ':id'.
  */
 @Controller('redirects/my')
-@UseGuards(AuthGuard('jwt'), RolesGuard, RequireAppGuard)
+@UseGuards(AuthGuard('jwt'), RolesGuard)
 @Roles(UserRole.CREATOR)
 export class RedirectsCreatorController {
   constructor(private readonly redirects: RedirectsService) {}
@@ -45,15 +56,75 @@ export class RedirectsCreatorController {
     return this.redirects.list(storeId, query);
   }
 
+  /**
+   * `{ primary_locale, prefixes }`: the `/<locale>/…` prefixes the storefront
+   * serves for the store (storeLocalePrefixes), so the dashboard builds the
+   * same locale forms as the API's own slug redirects.
+   */
+  @Get('locale-prefixes')
+  async localePrefixes(@CurrentUser('id') userId: string) {
+    const storeId = await this.redirects.storeIdForCreator(userId);
+    return this.redirects.storeLocales(storeId);
+  }
+
+  /**
+   * `{ paths }`: every public path of one own product / custom product,
+   * read before it is deleted (redirect sources). 404 when the item is not
+   * the caller's.
+   */
+  @Get('product-paths/:kind/:id')
+  async productPaths(
+    @CurrentUser('id') userId: string,
+    @Param('kind') kind: string,
+    @Param('id') id: string,
+  ) {
+    if (!(PRODUCT_PATH_KINDS as readonly string[]).includes(kind)) {
+      throw new BadRequestException({
+        code: 'REDIRECT_INVALID_KIND',
+        message: 'kind must be product or custom-product.',
+      });
+    }
+    const storeId = await this.redirects.storeIdForCreator(userId);
+    const k = kind as ProductPathKind;
+    const paths = (
+      await this.redirects.productPaths(storeId, [{ kind: k, id }])
+    ).get(productPathKey(k, id));
+    if (!paths) {
+      throw new NotFoundException({
+        code: 'REDIRECT_ITEM_NOT_FOUND',
+        message: 'Product not found',
+      });
+    }
+    return { paths };
+  }
+
+  /**
+   * Batch form for bulk deletes: `{ items: [{ kind, id, paths }] }` in the
+   * request order; an item that is not the caller's gets `paths: []`.
+   */
+  @Post('product-paths')
+  async productPathsBatch(
+    @CurrentUser('id') userId: string,
+    @Body() dto: ProductPathsBatchDto,
+  ) {
+    const storeId = await this.redirects.storeIdForCreator(userId);
+    const found = await this.redirects.productPaths(storeId, dto.items);
+    return {
+      items: dto.items.map((i) => ({
+        kind: i.kind,
+        id: i.id,
+        paths: found.get(productPathKey(i.kind, i.id)) ?? [],
+      })),
+    };
+  }
+
   @Post('test')
-  @RequireApp('importer')
   async test(@CurrentUser('id') userId: string, @Body() dto: TestRedirectDto) {
     const storeId = await this.redirects.storeIdForCreator(userId);
     return this.redirects.test(storeId, dto.path);
   }
 
   @Post()
-  @RequireApp('importer')
   async create(
     @CurrentUser('id') userId: string,
     @Body() dto: CreateRedirectDto,
@@ -69,14 +140,12 @@ export class RedirectsCreatorController {
    * fail are reported, the rest are written (MANUAL).
    */
   @Post('bulk')
-  @RequireApp('importer')
   async bulk(@CurrentUser('id') userId: string, @Body() dto: BulkRedirectDto) {
     const storeId = await this.redirects.storeIdForCreator(userId);
     return this.redirects.bulkCreate(storeId, parseBulkRedirectCsv(dto.csv));
   }
 
   @Put(':id')
-  @RequireApp('importer')
   async update(
     @CurrentUser('id') userId: string,
     @Param('id', ParseUUIDPipe) id: string,

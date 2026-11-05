@@ -61,6 +61,7 @@ import {
   type StorefrontViewer,
 } from './storefront-gate.service';
 import { compareManualOrder } from '../creator-categories/product-order';
+import { storeSellerDetails } from '../legal/platform-seller';
 import {
   STORE_LEGAL_KIND,
   STORE_LEGAL_SLUGS,
@@ -917,6 +918,10 @@ export class StorefrontService {
       },
       // Store type drives the storefront's product mix and checkout flow.
       store_type: store.store_type,
+      // Seller of record the storefront shows (footer company details,
+      // structured data): the platform operator for MARKETPLACE stores,
+      // the store's own trader details for INDEPENDENT ones.
+      seller_details: storeSellerDetails(store, platformConfig?.support_email),
       // Card checkout availability. Marketplace stores need the creator able
       // to receive payout transfers (Express onboarding complete); independent
       // stores charge directly, so they need a Standard account that can take

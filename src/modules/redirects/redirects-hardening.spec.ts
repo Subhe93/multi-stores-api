@@ -129,6 +129,8 @@ function svcWith(rows: { from_path: string; to_path: string }[]) {
   };
   const prisma = {
     storeRedirect,
+    // No store row: the live-content check has nothing to compare against.
+    store: { findUnique: jest.fn(() => Promise.resolve(null)) },
     $transaction: jest.fn((fn: (tx: unknown) => Promise<unknown>) =>
       fn({ storeRedirect }),
     ),

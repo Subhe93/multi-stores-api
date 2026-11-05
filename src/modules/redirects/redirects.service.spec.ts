@@ -1,5 +1,7 @@
 import { GUARDS_METADATA } from '@nestjs/common/constants';
-import { REQUIRE_APP_KEY } from '../../common/decorators';
+import { UserRole } from '@prisma/client';
+import { REQUIRE_APP_KEY, ROLES_KEY } from '../../common/decorators';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import {
   BULK_REDIRECT_MAX_ROWS,
   parseBulkRedirectCsv,
@@ -125,8 +127,10 @@ function setup(initial: Row[] = []) {
         ),
       ),
     },
-    $transaction: jest.fn((fn: (tx: unknown) => Promise<unknown>) =>
-      fn({ storeRedirect }),
+    // The interactive transaction client is the same fake (update reads
+    // live content through it).
+    $transaction: jest.fn(
+      (fn: (tx: unknown) => Promise<unknown>): Promise<unknown> => fn(prisma),
     ),
   };
   const svc = new RedirectsService(prisma as unknown as PrismaService);
@@ -352,6 +356,7 @@ describe('RedirectsService creator CRUD', () => {
     ]);
     expect(await svc.test('s1', '/Feed-Me/feed')).toEqual({
       path: '/feed-me/feed',
+      live: null,
       match: {
         id: 'r1',
         from_path: '/feed-me',
@@ -420,16 +425,22 @@ describe('redirect controllers: guards and app gating', () => {
       (proto as Record<string, object>)[method],
     ) as string | undefined;
 
-  it('creator writes require the importer app; list and delete stay open', () => {
+  it('creator routes need no store app (core feature for every store type): JWT + creator role only', () => {
     const p = RedirectsCreatorController.prototype;
-    expect(appKey(p, 'create')).toBe('importer');
-    expect(appKey(p, 'update')).toBe('importer');
-    expect(appKey(p, 'test')).toBe('importer');
-    expect(appKey(p, 'list')).toBeUndefined();
-    expect(appKey(p, 'remove')).toBeUndefined();
+    for (const m of ['list', 'test', 'create', 'bulk', 'update', 'remove'])
+      expect(appKey(p, m)).toBeUndefined();
     expect(
-      Reflect.getMetadata(GUARDS_METADATA, RedirectsCreatorController),
-    ).toHaveLength(3);
+      Reflect.getMetadata(REQUIRE_APP_KEY, RedirectsCreatorController),
+    ).toBeUndefined();
+    const guards = Reflect.getMetadata(
+      GUARDS_METADATA,
+      RedirectsCreatorController,
+    ) as unknown[];
+    expect(guards).toHaveLength(2);
+    expect(guards).toContain(RolesGuard);
+    expect(Reflect.getMetadata(ROLES_KEY, RedirectsCreatorController)).toEqual([
+      UserRole.CREATOR,
+    ]);
   });
 
   it('public routes have no route guards and their own throttle limits', () => {
@@ -550,12 +561,12 @@ describe('RedirectsService.bulkCreate', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('the bulk route requires the importer app', () => {
+  it('the bulk route needs no store app', () => {
     const p = RedirectsCreatorController.prototype as unknown as Record<
       string,
       object
     >;
-    expect(Reflect.getMetadata(REQUIRE_APP_KEY, p.bulk)).toBe('importer');
+    expect(Reflect.getMetadata(REQUIRE_APP_KEY, p.bulk)).toBeUndefined();
   });
 });
 

@@ -23,10 +23,8 @@ import {
 } from '../storefront/storefront-gate.service';
 import { loadPublicHost } from '../stores/storefront-hosts';
 import {
-  PLATFORM_ADDRESS,
-  PLATFORM_COMPANY,
   PLATFORM_CONTACT_EMAIL,
-  PLATFORM_ORG_NUMBER,
+  platformSellerDetails,
 } from './platform-seller';
 import {
   STORE_LEGAL_KIND,
@@ -560,13 +558,14 @@ export function platformSellerContext(
   email: string,
   locale: string,
 ): StoreTemplateContext {
+  const seller = platformSellerDetails(email);
   return {
-    'trader.legal_name': PLATFORM_COMPANY,
-    'trader.org_number': PLATFORM_ORG_NUMBER,
-    'trader.vat_number': '',
-    'trader.address': formatTraderAddress({ ...PLATFORM_ADDRESS }, locale),
-    'trader.email': email,
-    'trader.phone': '',
+    'trader.legal_name': seller.legal_name,
+    'trader.org_number': seller.org_number,
+    'trader.vat_number': seller.vat_number,
+    'trader.address': formatTraderAddress(seller, locale),
+    'trader.email': seller.support_email,
+    'trader.phone': seller.phone,
     'store.name': store.name,
     'store.url': store.url,
     'seller.is_independent': '',

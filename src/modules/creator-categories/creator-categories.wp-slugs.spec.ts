@@ -47,6 +47,13 @@ function setup(cats: Cat[], locale = 'sv') {
       ),
       create,
       update,
+      // FK `onDelete: SetNull`: the children of a deleted row become roots.
+      delete: jest.fn(({ where }: { where: { id: string } }) => {
+        const i = rows.findIndex((r) => r.id === where.id);
+        const [gone] = rows.splice(i, 1);
+        for (const r of rows) if (r.parent_id === gone.id) r.parent_id = null;
+        return Promise.resolve(gone);
+      }),
       count: jest.fn(() => Promise.resolve(0)),
     },
     creatorCategoryTranslation: {
@@ -167,6 +174,56 @@ describe('CreatorCategoriesService WP slugs', () => {
       undefined,
       { localePrefixes: true },
     );
+  });
+
+  it('delete: re-rooted descendants get old-path 301s (locale forms) and moved_children', async () => {
+    const { svc, rows, redirects } = setup([
+      cat('a', 'klader'),
+      cat('b', 'troja', 'a'),
+      cat('c', 'straße', 'b'),
+      cat('d', 'byxor', 'a'),
+      cat('e', 'rea'),
+    ]);
+    const res = await svc.delete('a', 'u');
+    expect(res).toMatchObject({ id: 'a', moved_children: 3 });
+    expect(rows.find((r) => r.id === 'b')!.parent_id).toBeNull();
+    expect(redirects.applySlugChangeRedirects).toHaveBeenCalledWith(
+      's1',
+      [
+        { from: '/collections/klader/troja', to: '/collections/troja' },
+        {
+          from: '/collections/klader/troja/stra%c3%9fe',
+          to: '/collections/troja/stra%c3%9fe',
+        },
+        { from: '/collections/klader/byxor', to: '/collections/byxor' },
+      ],
+      undefined,
+      { localePrefixes: true },
+    );
+    // Old redirects sitting on the new root paths are switched off.
+    expect(redirects.releaseLivePaths).toHaveBeenCalledWith(
+      's1',
+      expect.arrayContaining(['/collections/troja', '/collections/byxor']),
+      { localePrefixes: true },
+    );
+  });
+
+  it('delete: a leaf moves nothing and writes no redirects', async () => {
+    const { svc, redirects } = setup([cat('a', 'klader'), cat('b', 'x', 'a')]);
+    await expect(svc.delete('b', 'u')).resolves.toMatchObject({
+      id: 'b',
+      moved_children: 0,
+    });
+    expect(redirects.applySlugChangeRedirects).not.toHaveBeenCalled();
+  });
+
+  it('delete: a hidden (inactive) child still counts as moved but gets no 301', async () => {
+    const hidden = { ...cat('b', 'x', 'a'), is_active: false };
+    const { svc, redirects } = setup([cat('a', 'klader'), hidden]);
+    await expect(svc.delete('a', 'u')).resolves.toMatchObject({
+      moved_children: 1,
+    });
+    expect(redirects.applySlugChangeRedirects).not.toHaveBeenCalled();
   });
 
   it('update: a rename to a taken slug is suffixed (this row excluded)', async () => {

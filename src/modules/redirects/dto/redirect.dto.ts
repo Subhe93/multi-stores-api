@@ -1,4 +1,6 @@
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsEnum,
   IsIn,
@@ -8,6 +10,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { RedirectSource } from '@prisma/client';
@@ -92,4 +95,26 @@ export class TestRedirectDto {
   @IsString()
   @MaxLength(RAW_PATH_MAX)
   path: string;
+}
+
+export const PRODUCT_PATH_KINDS = ['product', 'custom-product'] as const;
+/** Items per `POST redirects/my/product-paths` (a bulk delete page). */
+export const PRODUCT_PATHS_MAX_ITEMS = 200;
+
+export class ProductPathItemDto {
+  @IsIn([...PRODUCT_PATH_KINDS])
+  kind: (typeof PRODUCT_PATH_KINDS)[number];
+
+  @IsString()
+  @MaxLength(64)
+  id: string;
+}
+
+/** `POST redirects/my/product-paths`: public paths of several items. */
+export class ProductPathsBatchDto {
+  @IsArray()
+  @ArrayMaxSize(PRODUCT_PATHS_MAX_ITEMS)
+  @ValidateNested({ each: true })
+  @Type(() => ProductPathItemDto)
+  items: ProductPathItemDto[];
 }

@@ -718,13 +718,46 @@ export class CreatorCategoriesService {
     });
   }
 
+  /**
+   * Deletes a collection. Its children's parent_id is SET NULL via FK, so the
+   * whole subtree moves up (`/collections/parent/child/x` becomes
+   * `/collections/child/x`): old-path 301s are written for every served
+   * descendant, locale forms included (same flow as a slug edit), and old
+   * redirects now shadowing a re-rooted path are released. The deleted
+   * collection's own URL is left to the caller (it has no new address).
+   * `moved_children` = descendants whose public path changed.
+   */
   async delete(id: string, userId: string) {
     const creatorId = await this.getCreatorIdOrThrow(userId);
     await this.assertOwnership(id, creatorId);
-    // children's parent_id is SET NULL via FK
+    const pathsBefore = await this.collectionPaths(creatorId);
     const deleted = await this.prisma.creatorCategory.delete({ where: { id } });
+    const pathsAfter = await this.collectionPaths(creatorId);
+    let movedChildren = 0;
+    for (const [cid, after] of pathsAfter) {
+      const before = pathsBefore.get(cid);
+      if (before && before.path.join('/') !== after.path.join('/'))
+        movedChildren++;
+    }
+    if (movedChildren && this.redirects) {
+      const moves = collectionPathMoves(pathsBefore, pathsAfter);
+      if (moves.length) {
+        const store = await this.prisma.store.findUnique({
+          where: { creator_id: creatorId },
+          select: { id: true },
+        });
+        if (store)
+          await this.redirects.applySlugChangeRedirects(
+            store.id,
+            moves,
+            undefined,
+            { localePrefixes: true },
+          );
+      }
+      await this.releaseLiveCollectionPaths(creatorId);
+    }
     await this.refreshStorefront(creatorId);
-    return deleted;
+    return { ...deleted, moved_children: movedChildren };
   }
 
   async reorder(userId: string, dto: ReorderCreatorCategoriesDto) {
