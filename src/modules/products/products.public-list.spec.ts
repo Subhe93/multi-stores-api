@@ -257,6 +257,25 @@ describe('DTO limits', () => {
     expect(await validate(nulled)).toHaveLength(0);
   });
 
+  it('meta_title is capped at 255 and meta_desc at 1000 characters', async () => {
+    const base = { locale: 'en', title: 't', description: 'd', slug: 's' };
+    const ok = plainToInstance(ProductTranslationDto, {
+      ...base,
+      meta_title: 'x'.repeat(255),
+      meta_desc: 'x'.repeat(1000),
+    });
+    expect(await validate(ok)).toHaveLength(0);
+    const tooLong = plainToInstance(ProductTranslationDto, {
+      ...base,
+      meta_title: 'x'.repeat(256),
+      meta_desc: 'x'.repeat(1001),
+    });
+    expect((await validate(tooLong)).map((e) => e.property)).toEqual([
+      'meta_title',
+      'meta_desc',
+    ]);
+  });
+
   it('the admin directory run takes a relative name only', async () => {
     const id = '7c1f3a2e-1d2b-4c3d-8e4f-5a6b7c8d9e0f';
     const ok = plainToInstance(DirectoryRunDto, {

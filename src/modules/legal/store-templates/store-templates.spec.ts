@@ -7,6 +7,7 @@ import {
 } from './store-templates';
 import { STORE_LEGAL_TEMPLATES } from './templates.data';
 import { sanitizeCreatorHtml } from '../../../common/html/creator-html';
+import { platformSellerContext } from '../store-legal.service';
 import {
   hasVisibleText,
   pickPageTitle,
@@ -271,6 +272,8 @@ describe('every shipped template fills and sanitizes cleanly', () => {
     'trader.phone': '+46701234567',
     'store.name': 'Anna',
     'store.url': 'https://anna.se',
+    'seller.is_independent': '1',
+    'seller.is_platform': '',
   };
   const minimal = { ...full, 'trader.vat_number': '', 'trader.phone': '' };
   const cases = STORE_LEGAL_SLUGS.flatMap((slug) =>
@@ -370,6 +373,8 @@ describe('templates with empty required trader fields (older stores)', () => {
     'trader.phone': '',
     'store.name': 'Anna',
     'store.url': 'https://anna.se',
+    'seller.is_independent': '1',
+    'seller.is_platform': '',
   };
   const cases = STORE_LEGAL_SLUGS.flatMap((slug) =>
     Object.keys(STORE_LEGAL_TEMPLATES[slug]).map(
@@ -387,5 +392,80 @@ describe('templates with empty required trader fields (older stores)', () => {
       /(org\.nr|reg\. no\.|Org\.-Nr\.|immatriculation|sicil no\.|رقم التسجيل)\s*[,.;،]/,
     );
     expect(text).not.toMatch(/(Adress|Address|Adresse|Adres|العنوان)\s*:\s*$/m);
+  });
+});
+
+/**
+ * Wording that is only valid when the seller is not Namez AB: the platform
+ * provider (processor) bullet and the sub-processor label, per locale.
+ */
+const INDEPENDENT_ONLY: Record<string, string[]> = {
+  sv: ['Plattformsleverantör', 'personuppgiftsbiträdesavtal', 'Underbiträden'],
+  en: ['Platform provider', 'on our behalf as our processor', 'Sub-processors'],
+  de: ['Plattformanbieter', 'in unserem Auftrag', 'Unterauftragsverarbeiter'],
+  fr: [
+    'Fournisseur de la plateforme',
+    'pour notre compte',
+    'Sous-traitants ultérieurs',
+  ],
+  ar: ['مزوّد المنصة', 'المعالجون الفرعيون'],
+  tr: ['Platform sağlayıcısı', 'bizim adımıza', 'Alt işleyenler'],
+};
+
+describe('seller conditionals', () => {
+  const cases = STORE_LEGAL_SLUGS.flatMap((slug) =>
+    Object.keys(STORE_LEGAL_TEMPLATES[slug]).map(
+      (locale) => [slug, locale] as const,
+    ),
+  );
+
+  it.each(cases)(
+    '%s / %s: marketplace (Namez AB as seller)',
+    (slug, locale) => {
+      const tpl = STORE_LEGAL_TEMPLATES[slug][locale as 'en']!;
+      const ctx = platformSellerContext(
+        { name: 'Influencer Store', url: 'https://influencer.shopsdoor.com' },
+        'hello@shopsdoor.com',
+        locale,
+      );
+      const filled = fillStoreTemplate(tpl.html, ctx);
+      const out = sanitizeCreatorHtml(filled) ?? '';
+      const text = out.replace(/<[^>]*>/g, ' ');
+      expect(out).not.toContain('{{');
+      expect(filled).not.toContain('data-if');
+      expect(out).not.toMatch(/<(p|li)>\s*<\/\1>/);
+      expect(text).not.toMatch(/[,،]\s*[,.،]/);
+      for (const phrase of INDEPENDENT_ONLY[locale] ?? []) {
+        expect(text).not.toContain(phrase);
+      }
+      // No Borlänge office as fallback return address.
+      if (slug === 'refund') {
+        expect(text.split('Hagavägen').length - 1).toBeLessThanOrEqual(1);
+      }
+      // The shipping policy names no seller.
+      if (slug !== 'shipping') expect(text).toContain('Namez AB');
+    },
+  );
+
+  it('privacy names Namez AB as the controller for marketplace stores', () => {
+    const ctx = platformSellerContext(
+      { name: 'Influencer Store', url: 'https://influencer.shopsdoor.com' },
+      'hello@shopsdoor.com',
+      'sv',
+    );
+    const out = fillStoreTemplate(STORE_LEGAL_TEMPLATES.privacy.sv!.html, ctx);
+    expect(out).toContain(
+      'Namez AB, org.nr 559295-1007, Hagavägen 36, 784 40 Borlänge, Sverige, är personuppgiftsansvarig',
+    );
+    expect(out).toContain('som är säljare och personuppgiftsansvarig');
+  });
+
+  it('independent stores keep the processor bullet', () => {
+    const out = fillStoreTemplate(STORE_LEGAL_TEMPLATES.privacy.en!.html, {
+      'trader.legal_name': 'Anna AB',
+      'seller.is_independent': '1',
+    });
+    expect(out).toContain('Platform provider (processor)');
+    expect(out).not.toContain('which is the seller and the controller');
   });
 });

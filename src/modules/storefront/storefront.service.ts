@@ -2209,7 +2209,8 @@ export class StorefrontService {
     // Store legal pages (plans/store-legal-pages/SPEC.md): an INDEPENDENT
     // store serves all four /legal/{slug} URLs (own page, else the default
     // template), so its legal-kind pages are listed there and not again
-    // under their own /{slug}. MARKETPLACE stores keep the platform texts.
+    // under their own /{slug}. MARKETPLACE stores serve the same four URLs
+    // with the platform-seller template (never an own page).
     const independent = store.store_type === StoreType.INDEPENDENT;
     const legalKinds = new Set<string>(
       STORE_LEGAL_SLUGS.map((s) => STORE_LEGAL_KIND[s]),
@@ -2224,52 +2225,46 @@ export class StorefrontService {
     // + lastmod, so we project a thin shape. Independent stores never expose
     // custom products, so their sitemap lists own products only (mirrors
     // getProducts).
-    const [ownProducts, customProducts, collections, legalPages] =
-      await Promise.all([
-        this.prisma.product.findMany({
-          where: { creator_id: store.creator.id, status: 'PUBLISHED' },
-          select: {
-            id: true,
-            updated_at: true,
-            translations: { select: { locale: true, slug: true } },
-          },
-        }),
-        store.store_type === StoreType.INDEPENDENT
-          ? []
-          : this.prisma.customProduct.findMany({
-              where: { creator_id: store.creator.id, status: 'PUBLISHED' },
-              select: {
-                id: true,
-                updated_at: true,
-                translations: { select: { locale: true, slug: true } },
-              },
-            }),
-        // Collections are linkable, indexable storefront pages but were missing
-        // from the sitemap entirely. INTERNAL labels have no page (M6.3).
-        this.prisma.creatorCategory.findMany({
-          where: {
-            creator_id: store.creator.id,
-            is_active: true,
-            visibility: 'PUBLIC',
-          },
-          select: {
-            id: true,
-            slug: true,
-            parent_id: true,
-            is_active: true,
-            visibility: true,
-            updated_at: true,
-            noindex_when_empty: true,
-            match_rule: true,
-            match_tags: true,
-          },
-        }),
-        // Legal pages are platform content rendered under each store's own
-        // /legal/{slug}, so they belong in the store's sitemap too.
-        this.prisma.legalPage.findMany({
-          select: { slug: true, updated_at: true },
-        }),
-      ]);
+    const [ownProducts, customProducts, collections] = await Promise.all([
+      this.prisma.product.findMany({
+        where: { creator_id: store.creator.id, status: 'PUBLISHED' },
+        select: {
+          id: true,
+          updated_at: true,
+          translations: { select: { locale: true, slug: true } },
+        },
+      }),
+      store.store_type === StoreType.INDEPENDENT
+        ? []
+        : this.prisma.customProduct.findMany({
+            where: { creator_id: store.creator.id, status: 'PUBLISHED' },
+            select: {
+              id: true,
+              updated_at: true,
+              translations: { select: { locale: true, slug: true } },
+            },
+          }),
+      // Collections are linkable, indexable storefront pages but were missing
+      // from the sitemap entirely. INTERNAL labels have no page (M6.3).
+      this.prisma.creatorCategory.findMany({
+        where: {
+          creator_id: store.creator.id,
+          is_active: true,
+          visibility: 'PUBLIC',
+        },
+        select: {
+          id: true,
+          slug: true,
+          parent_id: true,
+          is_active: true,
+          visibility: true,
+          updated_at: true,
+          noindex_when_empty: true,
+          match_rule: true,
+          match_tags: true,
+        },
+      }),
+    ]);
 
     // M4.4: collections flagged `noindex_when_empty` are left out while they
     // list no published product (queries only when a flag is set).
@@ -2356,9 +2351,11 @@ export class StorefrontService {
                   : store.updated_at,
             };
           })
-        : legalPages.map((p) => ({
-            slug: p.slug,
-            lastmod: p.updated_at,
+        : // MARKETPLACE: the template filled with the platform seller; it
+          // only changes with the store (name / URL) or a release.
+          STORE_LEGAL_SLUGS.map((slug) => ({
+            slug,
+            lastmod: store.updated_at,
           })),
       ...(market
         ? {

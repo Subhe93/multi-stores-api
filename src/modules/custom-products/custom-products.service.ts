@@ -748,7 +748,19 @@ export class CustomProductsService {
         });
       }
     }
-    return cp;
+    // The selling store's content languages, so a reviewing provider (who
+    // cannot read the creator's store) shows its texts in the right locale.
+    const languageConfig = await this.prisma.storeLanguageConfig.findFirst({
+      where: { store: { creator_id: cp.creator_id } },
+      select: { primary_locale: true, secondary_locales: true },
+    });
+    return {
+      ...cp,
+      store_language: {
+        primary_locale: languageConfig?.primary_locale ?? 'en',
+        secondary_locales: languageConfig?.secondary_locales ?? [],
+      },
+    };
   }
 
   /**

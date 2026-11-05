@@ -1,9 +1,12 @@
 /**
- * Default legal texts for INDEPENDENT stores (plans/store-legal-pages/SPEC.md).
+ * Default legal texts of store storefronts (plans/store-legal-pages/SPEC.md).
  *
- * The seller (the store owner) is the trader in every text; ShopsDoor / Namez AB only appears
- * as the platform provider acting as GDPR processor. Swedish and English are authoritative;
- * de/fr/ar/tr are faithful translations with the same structure.
+ * The seller is the trader in every text. INDEPENDENT stores: the store owner, with ShopsDoor /
+ * Namez AB only as the platform provider acting as GDPR processor. MARKETPLACE stores: the trader
+ * IS Namez AB (seller of record and controller). `seller.is_independent` / `seller.is_platform`
+ * (exactly one is set) select the sentences that differ between the two.
+ * Swedish and English are authoritative; de/fr/ar/tr are faithful translations with the same
+ * structure.
  *
  * Placeholders are filled by fillStoreTemplate(); optional values (org_number, address, vat_number,
  * phone) are only used inside <span data-if="..."> so the sentence still reads fine when the value
@@ -59,8 +62,8 @@ const PRIVACY: LocalizedTemplates = {
 <h2>5. Vilka vi delar uppgifter med</h2>
 <p>Vi säljer aldrig dina personuppgifter. Vi delar dem endast när det behövs:</p>
 <ul>
-<li><strong>Plattformsleverantör (personuppgiftsbiträde)</strong> – butiken drivs på e-handelsplattformen ShopsDoor, som tillhandahålls av Namez AB, org.nr 559295-1007, Hagavägen 36, 784 40 Borlänge. Namez AB driver den tekniska plattformen för butiken och behandlar personuppgifter för vår räkning som vårt personuppgiftsbiträde enligt ett personuppgiftsbiträdesavtal och får inte använda uppgifterna för egna ändamål.</li>
-<li><strong>Underbiträden</strong> – Namez AB anlitar underleverantörer för drift och lagring på servrar inom EU/EES, e-postutskick och liknande tekniska tjänster.</li>
+<li><span data-if="seller.is_independent"><strong>Plattformsleverantör (personuppgiftsbiträde)</strong> – butiken drivs på e-handelsplattformen ShopsDoor, som tillhandahålls av Namez AB, org.nr 559295-1007, Hagavägen 36, 784 40 Borlänge. Namez AB driver den tekniska plattformen för butiken och behandlar personuppgifter för vår räkning som vårt personuppgiftsbiträde enligt ett personuppgiftsbiträdesavtal och får inte använda uppgifterna för egna ändamål.</span><span data-if="seller.is_platform"><strong>Plattformen</strong> – butiken drivs på e-handelsplattformen ShopsDoor av Namez AB, som är säljare och personuppgiftsansvarig. Butikens skapare presenterar produkterna. De uppgifter som behövs för leveransen delas med den leverantör som skickar din beställning.</span></li>
+<li><span data-if="seller.is_independent"><strong>Underbiträden</strong></span><span data-if="seller.is_platform"><strong>Personuppgiftsbiträden</strong></span> – Namez AB anlitar underleverantörer för drift och lagring på servrar inom EU/EES, e-postutskick och liknande tekniska tjänster.</li>
 <li><strong>Betaltjänstleverantörer</strong> – beroende på vilket betalsätt du väljer: Stripe, Kustom (kassan) och Klarna (faktura och delbetalning). De behandlar uppgifter för att genomföra betalningen. Kustom och Klarna är självständigt personuppgiftsansvariga för de uppgifter de samlar in i kassan och vid kreditprövning, enligt sina egna integritetspolicyer; Stripe även för bedrägeriförebyggande och regelefterlevnad.</li>
 <li><strong>Transportföretag</strong> – namn, adress och kontaktuppgifter för att leverera ditt paket och skicka leveransaviseringar.</li>
 <li><strong>Myndigheter och rådgivare</strong> – när lagen kräver det (till exempel Skatteverket), för att tillvarata våra rättsliga anspråk, samt till vår redovisningskonsult eller revisor.</li>
@@ -121,8 +124,8 @@ const PRIVACY: LocalizedTemplates = {
 <h2>5. Who we share data with</h2>
 <p>We never sell your personal data. We only share it where necessary:</p>
 <ul>
-<li><strong>Platform provider (processor)</strong> – the store runs on the e-commerce platform ShopsDoor, provided by Namez AB, company reg. no. 559295-1007, Hagavägen 36, 784 40 Borlänge, Sweden. Namez AB operates the technical platform for the store and processes personal data on our behalf as our processor (personuppgiftsbiträde) under a data processing agreement, and may not use the data for its own purposes.</li>
-<li><strong>Sub-processors</strong> – Namez AB uses subcontractors for hosting and storage on servers in the EU/EEA, email delivery and similar technical services.</li>
+<li><span data-if="seller.is_independent"><strong>Platform provider (processor)</strong> – the store runs on the e-commerce platform ShopsDoor, provided by Namez AB, company reg. no. 559295-1007, Hagavägen 36, 784 40 Borlänge, Sweden. Namez AB operates the technical platform for the store and processes personal data on our behalf as our processor (personuppgiftsbiträde) under a data processing agreement, and may not use the data for its own purposes.</span><span data-if="seller.is_platform"><strong>Platform</strong> – the store is operated on the e-commerce platform ShopsDoor by Namez AB, which is the seller and the controller. The store’s creator presents the products. The details needed for delivery are shared with the supplier that ships your order.</span></li>
+<li><span data-if="seller.is_independent"><strong>Sub-processors</strong></span><span data-if="seller.is_platform"><strong>Processors</strong></span> – Namez AB uses subcontractors for hosting and storage on servers in the EU/EEA, email delivery and similar technical services.</li>
 <li><strong>Payment providers</strong> – depending on the payment method you choose: Stripe, Kustom (checkout) and Klarna (invoice and instalments). They process data to carry out the payment. Kustom and Klarna are independent controllers for the data they collect in the checkout and for credit checks, under their own privacy policies; Stripe also for fraud prevention and regulatory compliance.</li>
 <li><strong>Carriers</strong> – name, address and contact details to deliver your parcel and send delivery notifications.</li>
 <li><strong>Authorities and advisers</strong> – where required by law (for example the Swedish Tax Agency), to protect our legal claims, and to our accountant or auditor.</li>
@@ -183,8 +186,8 @@ const PRIVACY: LocalizedTemplates = {
 <h2>5. Empfänger der Daten</h2>
 <p>Wir verkaufen Ihre personenbezogenen Daten niemals. Wir geben sie nur weiter, soweit dies erforderlich ist:</p>
 <ul>
-<li><strong>Plattformanbieter (Auftragsverarbeiter)</strong> – der Shop läuft auf der E-Commerce-Plattform ShopsDoor, bereitgestellt von Namez AB, Org.-Nr. 559295-1007, Hagavägen 36, 784 40 Borlänge, Schweden. Namez AB betreibt die technische Plattform des Shops und verarbeitet personenbezogene Daten in unserem Auftrag als unser Auftragsverarbeiter (personuppgiftsbiträde) auf Grundlage eines Auftragsverarbeitungsvertrags und darf die Daten nicht für eigene Zwecke nutzen.</li>
-<li><strong>Unterauftragsverarbeiter</strong> – Namez AB setzt Subunternehmer für Hosting und Speicherung auf Servern in der EU/im EWR, den E-Mail-Versand und ähnliche technische Dienste ein.</li>
+<li><span data-if="seller.is_independent"><strong>Plattformanbieter (Auftragsverarbeiter)</strong> – der Shop läuft auf der E-Commerce-Plattform ShopsDoor, bereitgestellt von Namez AB, Org.-Nr. 559295-1007, Hagavägen 36, 784 40 Borlänge, Schweden. Namez AB betreibt die technische Plattform des Shops und verarbeitet personenbezogene Daten in unserem Auftrag als unser Auftragsverarbeiter (personuppgiftsbiträde) auf Grundlage eines Auftragsverarbeitungsvertrags und darf die Daten nicht für eigene Zwecke nutzen.</span><span data-if="seller.is_platform"><strong>Plattform</strong> – der Shop wird auf der E-Commerce-Plattform ShopsDoor von Namez AB betrieben, die Verkäufer und Verantwortlicher ist. Die Produkte werden von der Person präsentiert, die den Shop erstellt hat. Die für die Lieferung erforderlichen Angaben werden an den Lieferanten weitergegeben, der Ihre Bestellung versendet.</span></li>
+<li><span data-if="seller.is_independent"><strong>Unterauftragsverarbeiter</strong></span><span data-if="seller.is_platform"><strong>Auftragsverarbeiter</strong></span> – Namez AB setzt Subunternehmer für Hosting und Speicherung auf Servern in der EU/im EWR, den E-Mail-Versand und ähnliche technische Dienste ein.</li>
 <li><strong>Zahlungsdienstleister</strong> – je nach gewählter Zahlungsart: Stripe, Kustom (Checkout) und Klarna (Rechnungs- und Ratenkauf). Sie verarbeiten Daten zur Durchführung der Zahlung. Kustom und Klarna sind für die Daten, die sie im Checkout und bei Bonitätsprüfungen erheben, eigenständige Verantwortliche nach ihren eigenen Datenschutzerklärungen; Stripe auch für Betrugsprävention und die Einhaltung regulatorischer Pflichten.</li>
 <li><strong>Versanddienstleister</strong> – Name, Adresse und Kontaktdaten, um Ihr Paket zuzustellen und Versandbenachrichtigungen zu senden.</li>
 <li><strong>Behörden und Berater</strong> – soweit gesetzlich vorgeschrieben (z. B. die schwedische Steuerbehörde), zur Wahrung unserer Rechtsansprüche sowie an unseren Steuerberater oder Wirtschaftsprüfer.</li>
@@ -245,8 +248,8 @@ const PRIVACY: LocalizedTemplates = {
 <h2>5. Destinataires des données</h2>
 <p>Nous ne vendons jamais vos données personnelles. Nous ne les partageons que lorsque cela est nécessaire :</p>
 <ul>
-<li><strong>Fournisseur de la plateforme (sous-traitant)</strong> – la boutique fonctionne sur la plateforme de commerce en ligne ShopsDoor, fournie par Namez AB, numéro d’immatriculation 559295-1007, Hagavägen 36, 784 40 Borlänge, Suède. Namez AB exploite la plateforme technique de la boutique et traite les données personnelles pour notre compte en tant que sous-traitant (personuppgiftsbiträde) dans le cadre d’un accord de traitement des données, et ne peut pas les utiliser à ses propres fins.</li>
-<li><strong>Sous-traitants ultérieurs</strong> – Namez AB fait appel à des prestataires pour l’hébergement et le stockage sur des serveurs situés dans l’UE/EEE, l’envoi d’e-mails et des services techniques similaires.</li>
+<li><span data-if="seller.is_independent"><strong>Fournisseur de la plateforme (sous-traitant)</strong> – la boutique fonctionne sur la plateforme de commerce en ligne ShopsDoor, fournie par Namez AB, numéro d’immatriculation 559295-1007, Hagavägen 36, 784 40 Borlänge, Suède. Namez AB exploite la plateforme technique de la boutique et traite les données personnelles pour notre compte en tant que sous-traitant (personuppgiftsbiträde) dans le cadre d’un accord de traitement des données, et ne peut pas les utiliser à ses propres fins.</span><span data-if="seller.is_platform"><strong>Plateforme</strong> – la boutique est exploitée sur la plateforme de commerce en ligne ShopsDoor par Namez AB, qui est le vendeur et le responsable du traitement. Les produits sont présentés par le créateur de la boutique. Les données nécessaires à la livraison sont transmises au fournisseur qui expédie votre commande.</span></li>
+<li><span data-if="seller.is_independent"><strong>Sous-traitants ultérieurs</strong></span><span data-if="seller.is_platform"><strong>Sous-traitants</strong></span> – Namez AB fait appel à des prestataires pour l’hébergement et le stockage sur des serveurs situés dans l’UE/EEE, l’envoi d’e-mails et des services techniques similaires.</li>
 <li><strong>Prestataires de paiement</strong> – selon le moyen de paiement choisi : Stripe, Kustom (page de paiement) et Klarna (paiement sur facture et en plusieurs fois). Ils traitent les données pour exécuter le paiement. Kustom et Klarna agissent en tant que responsables du traitement indépendants pour les données qu’ils collectent lors du paiement et pour la vérification de solvabilité, selon leurs propres politiques de confidentialité ; Stripe également pour la prévention de la fraude et le respect des obligations réglementaires.</li>
 <li><strong>Transporteurs</strong> – nom, adresse et coordonnées pour livrer votre colis et vous envoyer des notifications de livraison.</li>
 <li><strong>Autorités et conseillers</strong> – lorsque la loi l’exige (par exemple l’administration fiscale suédoise), pour défendre nos droits, ainsi qu’à notre expert-comptable ou commissaire aux comptes.</li>
@@ -307,8 +310,8 @@ const PRIVACY: LocalizedTemplates = {
 <h2>5. الجهات التي نشارك البيانات معها</h2>
 <p>لا نبيع بياناتك الشخصية أبداً، ولا نشاركها إلا عند الضرورة:</p>
 <ul>
-<li><strong>مزوّد المنصة (معالج البيانات)</strong> – يعمل المتجر على منصة التجارة الإلكترونية ShopsDoor التي تقدّمها شركة Namez AB، رقم التسجيل 559295-1007، Hagavägen 36, 784 40 Borlänge، السويد. تشغّل Namez AB المنصة التقنية للمتجر وتعالج البيانات الشخصية نيابةً عنّا بصفتها معالجاً للبيانات (personuppgiftsbiträde) بموجب اتفاقية معالجة بيانات، ولا يحق لها استخدام البيانات لأغراضها الخاصة.</li>
-<li><strong>المعالجون الفرعيون</strong> – تستعين Namez AB بمقاولين فرعيين للاستضافة والتخزين على خوادم داخل الاتحاد الأوروبي/المنطقة الاقتصادية الأوروبية، وإرسال البريد الإلكتروني، وخدمات تقنية مماثلة.</li>
+<li><span data-if="seller.is_independent"><strong>مزوّد المنصة (معالج البيانات)</strong> – يعمل المتجر على منصة التجارة الإلكترونية ShopsDoor التي تقدّمها شركة Namez AB، رقم التسجيل 559295-1007، Hagavägen 36, 784 40 Borlänge، السويد. تشغّل Namez AB المنصة التقنية للمتجر وتعالج البيانات الشخصية نيابةً عنّا بصفتها معالجاً للبيانات (personuppgiftsbiträde) بموجب اتفاقية معالجة بيانات، ولا يحق لها استخدام البيانات لأغراضها الخاصة.</span><span data-if="seller.is_platform"><strong>المنصة</strong> – يُدار المتجر على منصة التجارة الإلكترونية ShopsDoor من قِبل شركة Namez AB، وهي البائع والمتحكّم في البيانات. ويعرض صانع المتجر المنتجات. وتُشارَك البيانات اللازمة للتوصيل مع المورّد الذي يشحن طلبك.</span></li>
+<li><span data-if="seller.is_independent"><strong>المعالجون الفرعيون</strong></span><span data-if="seller.is_platform"><strong>معالجو البيانات</strong></span> – تستعين Namez AB بمقاولين فرعيين للاستضافة والتخزين على خوادم داخل الاتحاد الأوروبي/المنطقة الاقتصادية الأوروبية، وإرسال البريد الإلكتروني، وخدمات تقنية مماثلة.</li>
 <li><strong>مزوّدو خدمات الدفع</strong> – بحسب وسيلة الدفع التي تختارها: Stripe، وKustom (صفحة الدفع)، وKlarna (الدفع بالفاتورة وبالتقسيط). يعالجون البيانات لتنفيذ الدفع. وتُعدّ Kustom وKlarna متحكّمتين مستقلتين في البيانات التي تجمعانها في صفحة الدفع وعند التحقق الائتماني، وفق سياسات الخصوصية الخاصة بهما؛ وكذلك Stripe فيما يتعلق بمنع الاحتيال والامتثال التنظيمي.</li>
 <li><strong>شركات الشحن</strong> – الاسم والعنوان وبيانات الاتصال لتوصيل طردك وإرسال إشعارات التوصيل.</li>
 <li><strong>الجهات الرسمية والمستشارون</strong> – عندما يفرض القانون ذلك (مثل مصلحة الضرائب السويدية)، أو لحماية حقوقنا القانونية، وكذلك لمحاسبنا أو مدقق حساباتنا.</li>
@@ -369,8 +372,8 @@ const PRIVACY: LocalizedTemplates = {
 <h2>5. Verileri paylaştığımız taraflar</h2>
 <p>Kişisel verilerinizi asla satmayız. Yalnızca gerekli olduğunda paylaşırız:</p>
 <ul>
-<li><strong>Platform sağlayıcısı (veri işleyen)</strong> – mağaza, Namez AB (sicil no. 559295-1007, Hagavägen 36, 784 40 Borlänge, İsveç) tarafından sağlanan e-ticaret platformu ShopsDoor üzerinde çalışır. Namez AB mağazanın teknik platformunu işletir ve kişisel verileri bir veri işleme sözleşmesi kapsamında bizim adımıza veri işleyen (personuppgiftsbiträde) sıfatıyla işler; verileri kendi amaçları için kullanamaz.</li>
-<li><strong>Alt işleyenler</strong> – Namez AB; AB/AEA içindeki sunucularda barındırma ve depolama, e-posta gönderimi ve benzeri teknik hizmetler için alt yükleniciler kullanır.</li>
+<li><span data-if="seller.is_independent"><strong>Platform sağlayıcısı (veri işleyen)</strong> – mağaza, Namez AB (sicil no. 559295-1007, Hagavägen 36, 784 40 Borlänge, İsveç) tarafından sağlanan e-ticaret platformu ShopsDoor üzerinde çalışır. Namez AB mağazanın teknik platformunu işletir ve kişisel verileri bir veri işleme sözleşmesi kapsamında bizim adımıza veri işleyen (personuppgiftsbiträde) sıfatıyla işler; verileri kendi amaçları için kullanamaz.</span><span data-if="seller.is_platform"><strong>Platform</strong> – mağaza, ShopsDoor e-ticaret platformunda satıcı ve veri sorumlusu olan Namez AB tarafından işletilmektedir. Ürünleri mağazayı oluşturan kişi sunar. Teslimat için gerekli bilgiler, siparişinizi gönderen tedarikçiyle paylaşılır.</span></li>
+<li><span data-if="seller.is_independent"><strong>Alt işleyenler</strong></span><span data-if="seller.is_platform"><strong>Veri işleyenler</strong></span> – Namez AB; AB/AEA içindeki sunucularda barındırma ve depolama, e-posta gönderimi ve benzeri teknik hizmetler için alt yükleniciler kullanır.</li>
 <li><strong>Ödeme hizmeti sağlayıcıları</strong> – seçtiğiniz ödeme yöntemine bağlı olarak: Stripe, Kustom (ödeme sayfası) ve Klarna (fatura ile ödeme ve taksit). Ödemeyi gerçekleştirmek için verileri işlerler. Kustom ve Klarna, ödeme sayfasında ve kredi değerlendirmesinde topladıkları veriler için kendi gizlilik politikalarına göre bağımsız veri sorumlusudur; Stripe da dolandırıcılığın önlenmesi ve mevzuata uyum açısından bağımsız veri sorumlusudur.</li>
 <li><strong>Kargo şirketleri</strong> – paketinizi teslim etmek ve teslimat bildirimleri göndermek için ad, adres ve iletişim bilgileri.</li>
 <li><strong>Resmî makamlar ve danışmanlar</strong> – yasanın gerektirdiği durumlarda (örneğin İsveç Vergi İdaresi), hukuki haklarımızı korumak için ve muhasebecimiz veya denetçimizle.</li>
@@ -410,6 +413,7 @@ const TERMS: LocalizedTemplates = {
 <p>Dessa köpvillkor gäller när du som konsument köper varor från {{store.name}} ({{store.url}}). Genom att lägga en beställning godkänner du de villkor som gäller vid beställningstillfället.</p>
 <h2>1. Säljare</h2>
 <p>{{store.name}} drivs av {{trader.legal_name}}<span data-if="trader.org_number">, org.nr {{trader.org_number}}</span><span data-if="trader.vat_number">, momsregistreringsnummer {{trader.vat_number}}</span>.</p>
+<p><span data-if="seller.is_platform">Butiken finns på plattformen ShopsDoor. Namez AB är säljare och din avtalspart; butikens skapare presenterar produkterna.</span></p>
 <p><span data-if="trader.address">Adress: {{trader.address}}</span></p>
 <p>E-post: <a href="mailto:{{trader.email}}">{{trader.email}}</a><span data-if="trader.phone"> · Telefon: {{trader.phone}}</span></p>
 <h2>2. Beställning och avtal</h2>
@@ -444,6 +448,7 @@ const TERMS: LocalizedTemplates = {
 <p>These terms of sale apply when you, as a consumer, buy goods from {{store.name}} ({{store.url}}). By placing an order you accept the terms in force at the time of your order.</p>
 <h2>1. Seller</h2>
 <p>{{store.name}} is operated by {{trader.legal_name}}<span data-if="trader.org_number">, company reg. no. {{trader.org_number}}</span><span data-if="trader.vat_number">, VAT number {{trader.vat_number}}</span>.</p>
+<p><span data-if="seller.is_platform">The store runs on the ShopsDoor platform. Namez AB is the seller and your contracting party; the store’s creator presents the products.</span></p>
 <p><span data-if="trader.address">Address: {{trader.address}}</span></p>
 <p>Email: <a href="mailto:{{trader.email}}">{{trader.email}}</a><span data-if="trader.phone"> · Phone: {{trader.phone}}</span></p>
 <h2>2. Orders and contract</h2>
@@ -478,6 +483,7 @@ const TERMS: LocalizedTemplates = {
 <p>Diese Geschäftsbedingungen gelten, wenn Sie als Verbraucher Waren bei {{store.name}} ({{store.url}}) kaufen. Mit Ihrer Bestellung akzeptieren Sie die zum Zeitpunkt der Bestellung gültigen Bedingungen.</p>
 <h2>1. Verkäufer</h2>
 <p>{{store.name}} wird betrieben von {{trader.legal_name}}<span data-if="trader.org_number">, Org.-Nr. {{trader.org_number}}</span><span data-if="trader.vat_number">, USt-IdNr. {{trader.vat_number}}</span>.</p>
+<p><span data-if="seller.is_platform">Der Shop läuft auf der Plattform ShopsDoor. Namez AB ist Verkäufer und Ihr Vertragspartner; die Person, die den Shop erstellt hat, präsentiert die Produkte.</span></p>
 <p><span data-if="trader.address">Adresse: {{trader.address}}</span></p>
 <p>E-Mail: <a href="mailto:{{trader.email}}">{{trader.email}}</a><span data-if="trader.phone"> · Telefon: {{trader.phone}}</span></p>
 <h2>2. Bestellung und Vertragsschluss</h2>
@@ -512,6 +518,7 @@ const TERMS: LocalizedTemplates = {
 <p>Les présentes conditions générales de vente s’appliquent lorsque vous achetez, en tant que consommateur, des produits sur {{store.name}} ({{store.url}}). En passant commande, vous acceptez les conditions en vigueur au moment de votre commande.</p>
 <h2>1. Vendeur</h2>
 <p>{{store.name}} est exploité par {{trader.legal_name}}<span data-if="trader.org_number">, numéro d’immatriculation {{trader.org_number}}</span><span data-if="trader.vat_number">, numéro de TVA {{trader.vat_number}}</span>.</p>
+<p><span data-if="seller.is_platform">La boutique fonctionne sur la plateforme ShopsDoor. Namez AB est le vendeur et votre cocontractant ; le créateur de la boutique présente les produits.</span></p>
 <p><span data-if="trader.address">Adresse : {{trader.address}}</span></p>
 <p>E-mail : <a href="mailto:{{trader.email}}">{{trader.email}}</a><span data-if="trader.phone"> · Téléphone : {{trader.phone}}</span></p>
 <h2>2. Commande et formation du contrat</h2>
@@ -546,6 +553,7 @@ const TERMS: LocalizedTemplates = {
 <p>تسري شروط البيع هذه عندما تشتري، بصفتك مستهلكاً، منتجات من {{store.name}} ‏({{store.url}}). وبتقديمك الطلب فإنك توافق على الشروط السارية وقت الطلب.</p>
 <h2>1. البائع</h2>
 <p>يدير {{store.name}} البائعُ {{trader.legal_name}}<span data-if="trader.org_number">، رقم التسجيل {{trader.org_number}}</span><span data-if="trader.vat_number">، رقم ضريبة القيمة المضافة {{trader.vat_number}}</span>.</p>
+<p><span data-if="seller.is_platform">يعمل المتجر على منصة ShopsDoor. وNamez AB هي البائع والطرف المتعاقد معك، ويعرض صانع المتجر المنتجات.</span></p>
 <p><span data-if="trader.address">العنوان: {{trader.address}}</span></p>
 <p>البريد الإلكتروني: <a href="mailto:{{trader.email}}">{{trader.email}}</a><span data-if="trader.phone"> · الهاتف: {{trader.phone}}</span></p>
 <h2>2. الطلب وإبرام العقد</h2>
@@ -580,6 +588,7 @@ const TERMS: LocalizedTemplates = {
 <p>Bu satış koşulları, bir tüketici olarak {{store.name}} ({{store.url}}) üzerinden ürün satın aldığınızda geçerlidir. Sipariş vererek sipariş anında yürürlükte olan koşulları kabul etmiş olursunuz.</p>
 <h2>1. Satıcı</h2>
 <p>{{store.name}}, {{trader.legal_name}} tarafından işletilmektedir<span data-if="trader.org_number">; sicil no. {{trader.org_number}}</span><span data-if="trader.vat_number">, KDV numarası {{trader.vat_number}}</span>.</p>
+<p><span data-if="seller.is_platform">Mağaza ShopsDoor platformunda çalışır. Satıcı ve sözleşme tarafınız Namez AB’dir; ürünleri mağazayı oluşturan kişi sunar.</span></p>
 <p><span data-if="trader.address">Adres: {{trader.address}}</span></p>
 <p>E-posta: <a href="mailto:{{trader.email}}">{{trader.email}}</a><span data-if="trader.phone"> · Telefon: {{trader.phone}}</span></p>
 <h2>2. Sipariş ve sözleşmenin kurulması</h2>
@@ -628,7 +637,7 @@ const REFUND: LocalizedTemplates = {
 </ul>
 <p>Ange ditt namn, ordernummer och vilka varor det gäller. Det räcker att du skickar meddelandet innan fristen löper ut. Att enbart skicka tillbaka varan räknas inte som att du har ångrat köpet, om du inte samtidigt skickar med ett tydligt meddelande.</p>
 <h2>3. Returnera varan</h2>
-<p>Skicka tillbaka varan senast 14 dagar efter att du meddelade att du ångrar köpet, till den returadress vi anger när du kontaktar oss<span data-if="trader.address">, annars till {{trader.address}}</span>. Packa varan väl, gärna i originalförpackningen, och spara kvittot från inlämningen.</p>
+<p>Skicka tillbaka varan senast 14 dagar efter att du meddelade att du ångrar köpet, till den returadress vi anger när du kontaktar oss<span data-if="seller.is_independent"><span data-if="trader.address">, annars till {{trader.address}}</span></span>. Packa varan väl, gärna i originalförpackningen, och spara kvittot från inlämningen.</p>
 <p>Du betalar själv kostnaden för att returnera varan, om inte annat anges i kassan eller i orderbekräftelsen.</p>
 <h2>4. Varans skick</h2>
 <p>Du får undersöka varan på samma sätt som i en fysisk butik, till exempel prova ett plagg. Om du har hanterat varan mer än vad som behövs för att fastställa dess egenskaper och funktion får vi göra ett avdrag från återbetalningen som motsvarar varans värdeminskning.</p>
@@ -678,7 +687,7 @@ const REFUND: LocalizedTemplates = {
 </ul>
 <p>Please state your name, order number and which items your withdrawal concerns. It is enough to send your notice before the period ends. Simply returning the goods is not a withdrawal unless you include a clear statement.</p>
 <h2>3. Returning the goods</h2>
-<p>Send the goods back no later than 14 days after you notified us of your withdrawal, to the return address we give you when you contact us<span data-if="trader.address">, or otherwise to {{trader.address}}</span>. Pack the goods securely, preferably in the original packaging, and keep the proof of postage.</p>
+<p>Send the goods back no later than 14 days after you notified us of your withdrawal, to the return address we give you when you contact us<span data-if="seller.is_independent"><span data-if="trader.address">, or otherwise to {{trader.address}}</span></span>. Pack the goods securely, preferably in the original packaging, and keep the proof of postage.</p>
 <p>You pay the cost of returning the goods unless stated otherwise at checkout or in the order confirmation.</p>
 <h2>4. Condition of the goods</h2>
 <p>You may examine the goods as you would in a physical shop, for example try on a garment. If you have handled the goods more than necessary to establish their nature, characteristics and functioning, we may deduct an amount corresponding to the loss in value from the refund.</p>
@@ -728,7 +737,7 @@ const REFUND: LocalizedTemplates = {
 </ul>
 <p>Bitte geben Sie Ihren Namen, Ihre Bestellnummer und die betroffenen Artikel an. Zur Wahrung der Frist genügt es, die Mitteilung vor Fristablauf abzusenden. Die bloße Rücksendung der Ware gilt nicht als Widerruf, es sei denn, Sie legen eine eindeutige Erklärung bei.</p>
 <h2>3. Rücksendung der Ware</h2>
-<p>Senden Sie die Ware spätestens 14 Tage nach Ihrer Widerrufsmitteilung an die Rücksendeadresse, die wir Ihnen bei Ihrer Kontaktaufnahme nennen<span data-if="trader.address">, andernfalls an {{trader.address}}</span>. Verpacken Sie die Ware sorgfältig, möglichst in der Originalverpackung, und bewahren Sie den Einlieferungsbeleg auf.</p>
+<p>Senden Sie die Ware spätestens 14 Tage nach Ihrer Widerrufsmitteilung an die Rücksendeadresse, die wir Ihnen bei Ihrer Kontaktaufnahme nennen<span data-if="seller.is_independent"><span data-if="trader.address">, andernfalls an {{trader.address}}</span></span>. Verpacken Sie die Ware sorgfältig, möglichst in der Originalverpackung, und bewahren Sie den Einlieferungsbeleg auf.</p>
 <p>Sie tragen die unmittelbaren Kosten der Rücksendung, sofern im Checkout oder in der Bestellbestätigung nichts anderes angegeben ist.</p>
 <h2>4. Zustand der Ware</h2>
 <p>Sie dürfen die Ware so prüfen, wie Sie es in einem Ladengeschäft tun würden, etwa ein Kleidungsstück anprobieren. Haben Sie die Ware über das zur Prüfung ihrer Beschaffenheit, Eigenschaften und Funktionsweise notwendige Maß hinaus genutzt, können wir einen dem Wertverlust entsprechenden Betrag von der Erstattung abziehen.</p>
@@ -778,7 +787,7 @@ const REFUND: LocalizedTemplates = {
 </ul>
 <p>Indiquez votre nom, votre numéro de commande et les articles concernés. Il suffit d’envoyer votre déclaration avant l’expiration du délai. Le simple renvoi des produits ne vaut pas rétractation, sauf si vous y joignez une déclaration claire.</p>
 <h2>3. Retour des produits</h2>
-<p>Renvoyez les produits au plus tard 14 jours après nous avoir informés de votre rétractation, à l’adresse de retour que nous vous indiquons lorsque vous nous contactez<span data-if="trader.address"> ou, à défaut, à {{trader.address}}</span>. Emballez soigneusement les produits, de préférence dans leur emballage d’origine, et conservez la preuve d’envoi.</p>
+<p>Renvoyez les produits au plus tard 14 jours après nous avoir informés de votre rétractation, à l’adresse de retour que nous vous indiquons lorsque vous nous contactez<span data-if="seller.is_independent"><span data-if="trader.address"> ou, à défaut, à {{trader.address}}</span></span>. Emballez soigneusement les produits, de préférence dans leur emballage d’origine, et conservez la preuve d’envoi.</p>
 <p>Les frais directs de renvoi sont à votre charge, sauf indication contraire lors du paiement ou dans la confirmation de commande.</p>
 <h2>4. État des produits</h2>
 <p>Vous pouvez examiner les produits comme vous le feriez en magasin, par exemple essayer un vêtement. Si vous avez manipulé les produits au-delà de ce qui est nécessaire pour établir leur nature, leurs caractéristiques et leur bon fonctionnement, nous pouvons déduire du remboursement un montant correspondant à la dépréciation.</p>
@@ -828,7 +837,7 @@ const REFUND: LocalizedTemplates = {
 </ul>
 <p>يُرجى ذكر اسمك ورقم الطلب والمنتجات المعنية. ويكفي أن ترسل إشعارك قبل انتهاء المدة. ولا يُعدّ إرجاع المنتج وحده عدولاً، ما لم ترفق به بياناً واضحاً.</p>
 <h2>3. إرجاع المنتج</h2>
-<p>أعد المنتج في موعد أقصاه 14 يوماً من إبلاغنا بالعدول، إلى عنوان الإرجاع الذي نزوّدك به عند تواصلك معنا<span data-if="trader.address">، وإلا فإلى {{trader.address}}</span>. غلّف المنتج جيداً، ويُفضّل في عبوته الأصلية، واحتفظ بإيصال الشحن.</p>
+<p>أعد المنتج في موعد أقصاه 14 يوماً من إبلاغنا بالعدول، إلى عنوان الإرجاع الذي نزوّدك به عند تواصلك معنا<span data-if="seller.is_independent"><span data-if="trader.address">، وإلا فإلى {{trader.address}}</span></span>. غلّف المنتج جيداً، ويُفضّل في عبوته الأصلية، واحتفظ بإيصال الشحن.</p>
 <p>تتحمّل أنت تكلفة إرجاع المنتج، ما لم يُذكر خلاف ذلك في صفحة الدفع أو في تأكيد الطلب.</p>
 <h2>4. حالة المنتج</h2>
 <p>يحق لك فحص المنتج كما تفعل في متجر فعلي، كتجربة قطعة ملابس مثلاً. أما إذا استخدمت المنتج بما يتجاوز القدر اللازم لمعرفة طبيعته وخصائصه وطريقة عمله، فيجوز لنا أن نخصم من المبلغ المسترد ما يعادل النقص في قيمته.</p>
@@ -878,7 +887,7 @@ const REFUND: LocalizedTemplates = {
 </ul>
 <p>Lütfen adınızı, sipariş numaranızı ve ilgili ürünleri belirtin. Bildiriminizi süre dolmadan göndermeniz yeterlidir. Ürünü yalnızca geri göndermek, yanına açık bir beyan eklemediğiniz sürece cayma olarak kabul edilmez.</p>
 <h2>3. Ürünün iadesi</h2>
-<p>Ürünü, caymanızı bildirdikten sonra en geç 14 gün içinde, bizimle iletişime geçtiğinizde bildireceğimiz iade adresine<span data-if="trader.address">, aksi hâlde {{trader.address}} adresine</span> gönderin. Ürünü, mümkünse orijinal ambalajında, sağlam şekilde paketleyin ve gönderi makbuzunu saklayın.</p>
+<p>Ürünü, caymanızı bildirdikten sonra en geç 14 gün içinde, bizimle iletişime geçtiğinizde bildireceğimiz iade adresine<span data-if="seller.is_independent"><span data-if="trader.address">, aksi hâlde {{trader.address}} adresine</span></span> gönderin. Ürünü, mümkünse orijinal ambalajında, sağlam şekilde paketleyin ve gönderi makbuzunu saklayın.</p>
 <p>Ödeme sayfasında veya sipariş onayında aksi belirtilmedikçe iade gönderim masrafını siz ödersiniz.</p>
 <h2>4. Ürünün durumu</h2>
 <p>Ürünü fiziksel bir mağazada yapacağınız gibi inceleyebilirsiniz; örneğin bir giysiyi deneyebilirsiniz. Ürünü niteliğini, özelliklerini ve işleyişini anlamak için gerekenden fazla kullandıysanız, değer kaybına karşılık gelen tutarı geri ödemeden düşebiliriz.</p>

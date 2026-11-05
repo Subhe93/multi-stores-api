@@ -425,6 +425,17 @@ function deriveFulfillmentStatus(
   }
 }
 
+// Item statuses a fulfiller may not leave when moving items to `target`:
+// shipped / delivered lines never go backwards.
+function lockedFulfillmentStatuses(
+  target: FulfillmentStatus,
+): FulfillmentStatus[] {
+  if (target === FulfillmentStatus.DELIVERED) return [];
+  if (target === FulfillmentStatus.SHIPPED)
+    return [FulfillmentStatus.DELIVERED];
+  return [FulfillmentStatus.SHIPPED, FulfillmentStatus.DELIVERED];
+}
+
 // Progress ranks used to derive an order's overall status from its items: the
 // order reflects the *slowest* item (it's only SHIPPED once every item ships).
 const FULFILLMENT_RANK: Record<FulfillmentStatus, number> = {
@@ -3731,20 +3742,31 @@ export class OrdersService {
       throw new BadRequestException('This status cannot be set by a fulfiller');
     }
 
-    const res = await this.prisma.orderItem.updateMany({
-      where: {
-        order_id: id,
-        fulfiller_id: fulfillerId,
-        fulfiller_type: expectedType,
-      },
-      data: { fulfillment_status: targetFulfillment, ...shipTracking(dto) },
-    });
-    if (res.count === 0) {
+    const ownWhere = {
+      order_id: id,
+      fulfiller_id: fulfillerId,
+      fulfiller_type: expectedType,
+    };
+    const owned = await this.prisma.orderItem.count({ where: ownWhere });
+    if (owned === 0) {
       throw new ForbiddenException({
         code: 'ORDER_NO_OWNED_ITEMS',
         message: 'You have no items to fulfill in this order',
       });
     }
+
+    // Shipped / delivered items never move backwards (e.g. a QC reject to
+    // MANUFACTURING only moves the lines that have not shipped yet).
+    const locked = lockedFulfillmentStatuses(targetFulfillment);
+    const res = await this.prisma.orderItem.updateMany({
+      where: {
+        ...ownWhere,
+        ...(locked.length ? { fulfillment_status: { notIn: locked } } : {}),
+      },
+      data: { fulfillment_status: targetFulfillment, ...shipTracking(dto) },
+    });
+    // Every own line is already past the target: nothing to do.
+    if (res.count === 0) return this.findById(id, actorId, actorRole);
 
     await this.prisma.orderTimeline.create({
       data: {
@@ -3787,7 +3809,12 @@ export class OrdersService {
     // are fine here — each side updates only the items they actually fulfill.
     const item = await this.prisma.orderItem.findFirst({
       where: { id: itemId, order_id: orderId },
-      select: { id: true, fulfiller_id: true, fulfiller_type: true },
+      select: {
+        id: true,
+        fulfiller_id: true,
+        fulfiller_type: true,
+        fulfillment_status: true,
+      },
     });
     if (!item)
       throw new NotFoundException({
@@ -3811,16 +3838,55 @@ export class OrdersService {
           message: 'You can only update fulfillment for items you fulfill',
         });
       }
+      // A shipped / delivered line never moves backwards for a fulfiller.
+      if (
+        item.fulfillment_status &&
+        lockedFulfillmentStatuses(dto.fulfillment_status).includes(
+          item.fulfillment_status,
+        )
+      ) {
+        throw new BadRequestException({
+          code: 'ORDER_FULFILLMENT_BACKWARDS',
+          message: 'A shipped or delivered item cannot be moved back',
+        });
+      }
     }
+
+    // Blank strings are "not given" (keep the saved value), never a wipe.
+    const trackingNumber = dto.tracking_number?.trim() || undefined;
+    const trackingUrl = dto.tracking_url?.trim() || undefined;
+    const carrier = dto.carrier?.trim() || undefined;
 
     const updated = await this.prisma.orderItem.update({
       where: { id: itemId, order_id: orderId },
       data: {
         fulfillment_status: dto.fulfillment_status,
-        tracking_number: dto.tracking_number,
-        tracking_url: dto.tracking_url,
+        tracking_number: trackingNumber,
+        tracking_url: trackingUrl,
       },
     });
+
+    // A per-item shipment with carrier / tracking leaves a timeline trace,
+    // like the order-level SHIPPED update does.
+    if (
+      dto.fulfillment_status === FulfillmentStatus.SHIPPED &&
+      (carrier || trackingNumber)
+    ) {
+      // The entry carries the header's current status: one shipped line does
+      // not make the whole order SHIPPED.
+      const current = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: { status: true },
+      });
+      await this.prisma.orderTimeline.create({
+        data: {
+          order_id: orderId,
+          status: current?.status ?? OrderStatus.PROCESSING,
+          note: `Item shipped${carrier ? ` via ${carrier}` : ''}${trackingNumber ? ` (${trackingNumber})` : ''}`,
+          actor: actorId,
+        },
+      });
+    }
 
     // Re-derive the overall order status from all items (slowest item wins).
     const transition = await this.recomputeOrderStatusFromItems(orderId);

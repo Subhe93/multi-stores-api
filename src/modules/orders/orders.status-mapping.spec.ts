@@ -30,6 +30,21 @@ interface Item {
   fulfillment_status: FulfillmentStatus;
 }
 
+interface ItemWhere {
+  fulfiller_id?: string;
+  fulfiller_type?: FulfillerType;
+  fulfillment_status?: { notIn: FulfillmentStatus[] };
+}
+
+// Honours the filters the service uses, including the `notIn` lock.
+function matches(i: Item, where: ItemWhere) {
+  return (
+    (!where.fulfiller_id || i.fulfiller_id === where.fulfiller_id) &&
+    (!where.fulfiller_type || i.fulfiller_type === where.fulfiller_type) &&
+    !where.fulfillment_status?.notIn.includes(i.fulfillment_status)
+  );
+}
+
 function build(status: OrderStatus, items: Item[]) {
   const order = { id: 'o1', status, store_id: 's1', payment_method: 'COD' };
   const timeline: { status: OrderStatus }[] = [];
@@ -59,20 +74,18 @@ function build(status: OrderStatus, items: Item[]) {
           return Promise.resolve({ ...it });
         },
       ),
+      count: jest.fn(({ where }: { where: ItemWhere }) =>
+        Promise.resolve(items.filter((i) => matches(i, where)).length),
+      ),
       updateMany: jest.fn(
         ({
           where,
           data,
         }: {
-          where: { fulfiller_id?: string; fulfiller_type?: FulfillerType };
+          where: ItemWhere;
           data: { fulfillment_status: FulfillmentStatus };
         }) => {
-          const hit = items.filter(
-            (i) =>
-              (!where.fulfiller_id || i.fulfiller_id === where.fulfiller_id) &&
-              (!where.fulfiller_type ||
-                i.fulfiller_type === where.fulfiller_type),
-          );
+          const hit = items.filter((i) => matches(i, where));
           hit.forEach((i) => (i.fulfillment_status = data.fulfillment_status));
           return Promise.resolve({ count: hit.length });
         },
@@ -279,5 +292,195 @@ describe('OrdersService QUALITY_CHECK status mapping (M4.3)', () => {
       FulfillmentStatus.MANUFACTURING,
     );
     expect(ctx.order.status).toBe(OrderStatus.MANUFACTURING);
+  });
+});
+
+describe('OrdersService per-item fulfillment ownership + tracking', () => {
+  it('rejects a provider updating an item fulfilled by another provider', async () => {
+    const ctx = build(OrderStatus.MANUFACTURING, [
+      providerItem('i1', FulfillmentStatus.MANUFACTURING),
+      {
+        id: 'i2',
+        fulfiller_id: 'other-provider',
+        fulfiller_type: FulfillerType.PROVIDER,
+        fulfillment_status: FulfillmentStatus.MANUFACTURING,
+      },
+    ]);
+    await expect(
+      ctx.service.updateFulfillment(
+        'o1',
+        'i2',
+        { fulfillment_status: FulfillmentStatus.SHIPPED, tracking_number: 'X' },
+        'u2',
+        UserRole.PROVIDER,
+      ),
+    ).rejects.toMatchObject({
+      response: { code: 'ORDER_FULFILLMENT_NOT_OWNED' },
+    });
+    expect(ctx.items[1].fulfillment_status).toBe(
+      FulfillmentStatus.MANUFACTURING,
+    );
+  });
+
+  it('rejects a provider updating a creator-fulfilled item', async () => {
+    const ctx = build(OrderStatus.MANUFACTURING, [
+      creatorItem('i1', FulfillmentStatus.MANUFACTURING),
+      providerItem('i2', FulfillmentStatus.MANUFACTURING),
+    ]);
+    await expect(
+      ctx.service.updateFulfillment(
+        'o1',
+        'i1',
+        { fulfillment_status: FulfillmentStatus.SHIPPED },
+        'u2',
+        UserRole.PROVIDER,
+      ),
+    ).rejects.toMatchObject({
+      response: { code: 'ORDER_FULFILLMENT_NOT_OWNED' },
+    });
+    expect(ctx.items[0].fulfillment_status).toBe(
+      FulfillmentStatus.MANUFACTURING,
+    );
+  });
+
+  it('stores trimmed tracking on the own item and notes the carrier', async () => {
+    const ctx = build(OrderStatus.MANUFACTURING, [
+      providerItem('i1', FulfillmentStatus.MANUFACTURING),
+      providerItem('i2', FulfillmentStatus.MANUFACTURING),
+    ]);
+    await ctx.service.updateFulfillment(
+      'o1',
+      'i2',
+      {
+        fulfillment_status: FulfillmentStatus.SHIPPED,
+        tracking_number: '  TRK1 ',
+        tracking_url: ' ',
+        carrier: 'DHL',
+      },
+      'u2',
+      UserRole.PROVIDER,
+    );
+    const prisma = (
+      ctx.service as unknown as {
+        prisma: { orderItem: { update: jest.Mock } };
+      }
+    ).prisma;
+    expect(prisma.orderItem.update).toHaveBeenCalledWith({
+      where: { id: 'i2', order_id: 'o1' },
+      data: {
+        fulfillment_status: FulfillmentStatus.SHIPPED,
+        tracking_number: 'TRK1',
+        tracking_url: undefined,
+      },
+    });
+    // The entry keeps the header's current status, not SHIPPED.
+    expect(ctx.timeline).toContainEqual(
+      expect.objectContaining({
+        status: OrderStatus.MANUFACTURING,
+        note: 'Item shipped via DHL (TRK1)',
+      }),
+    );
+    // The other own line is still in production, so the header waits.
+    expect(ctx.order.status).toBe(OrderStatus.MANUFACTURING);
+    expect(ctx.items[0].fulfillment_status).toBe(
+      FulfillmentStatus.MANUFACTURING,
+    );
+  });
+
+  describe('shipped / delivered lines never move backwards', () => {
+    it('a provider QC reject moves only the unshipped line', async () => {
+      const ctx = build(OrderStatus.QUALITY_CHECK, [
+        providerItem('A', FulfillmentStatus.SHIPPED),
+        providerItem('B', FulfillmentStatus.QUALITY_CHECK),
+      ]);
+      await ctx.service.updateStatus(
+        'o1',
+        { status: OrderStatus.MANUFACTURING },
+        'u2',
+        UserRole.PROVIDER,
+      );
+      expect(ctx.items.map((i) => i.fulfillment_status)).toEqual([
+        FulfillmentStatus.SHIPPED,
+        FulfillmentStatus.MANUFACTURING,
+      ]);
+    });
+
+    it('owned lines that are all locked are a silent no-op', async () => {
+      const ctx = build(OrderStatus.SHIPPED, [
+        providerItem('A', FulfillmentStatus.DELIVERED),
+      ]);
+      await expect(
+        ctx.service.updateStatus(
+          'o1',
+          { status: OrderStatus.SHIPPED },
+          'u2',
+          UserRole.PROVIDER,
+        ),
+      ).resolves.toBeDefined();
+      expect(ctx.items[0].fulfillment_status).toBe(FulfillmentStatus.DELIVERED);
+      expect(ctx.timeline).toHaveLength(0);
+    });
+
+    it('owning no lines still raises ORDER_NO_OWNED_ITEMS', async () => {
+      const ctx = build(OrderStatus.PROCESSING, [
+        creatorItem('A', FulfillmentStatus.PROCESSING),
+      ]);
+      await expect(
+        ctx.service.updateStatus(
+          'o1',
+          { status: OrderStatus.MANUFACTURING },
+          'u2',
+          UserRole.PROVIDER,
+        ),
+      ).rejects.toMatchObject({
+        response: { code: 'ORDER_NO_OWNED_ITEMS' },
+      });
+    });
+
+    it('per-item: a fulfiller cannot move a shipped line back', async () => {
+      const ctx = build(OrderStatus.SHIPPED, [
+        providerItem('A', FulfillmentStatus.SHIPPED),
+      ]);
+      await expect(
+        ctx.service.updateFulfillment(
+          'o1',
+          'A',
+          { fulfillment_status: FulfillmentStatus.MANUFACTURING },
+          'u2',
+          UserRole.PROVIDER,
+        ),
+      ).rejects.toMatchObject({
+        response: { code: 'ORDER_FULFILLMENT_BACKWARDS' },
+      });
+      expect(ctx.items[0].fulfillment_status).toBe(FulfillmentStatus.SHIPPED);
+    });
+
+    it('per-item: shipped → delivered is still allowed', async () => {
+      const ctx = build(OrderStatus.SHIPPED, [
+        providerItem('A', FulfillmentStatus.SHIPPED),
+      ]);
+      await ctx.service.updateFulfillment(
+        'o1',
+        'A',
+        { fulfillment_status: FulfillmentStatus.DELIVERED },
+        'u2',
+        UserRole.PROVIDER,
+      );
+      expect(ctx.items[0].fulfillment_status).toBe(FulfillmentStatus.DELIVERED);
+    });
+
+    it('per-item: an admin may still move a delivered line back', async () => {
+      const ctx = build(OrderStatus.DELIVERED, [
+        providerItem('A', FulfillmentStatus.DELIVERED),
+      ]);
+      await ctx.service.updateFulfillment(
+        'o1',
+        'A',
+        { fulfillment_status: FulfillmentStatus.SHIPPED },
+        'admin',
+        UserRole.ADMIN,
+      );
+      expect(ctx.items[0].fulfillment_status).toBe(FulfillmentStatus.SHIPPED);
+    });
   });
 });

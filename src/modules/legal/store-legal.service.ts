@@ -22,7 +22,12 @@ import {
   type StorefrontViewer,
 } from '../storefront/storefront-gate.service';
 import { loadPublicHost } from '../stores/storefront-hosts';
-import { LegalService } from './legal.service';
+import {
+  PLATFORM_ADDRESS,
+  PLATFORM_COMPANY,
+  PLATFORM_CONTACT_EMAIL,
+  PLATFORM_ORG_NUMBER,
+} from './platform-seller';
 import {
   STORE_LEGAL_KIND,
   STORE_LEGAL_PAGE_SLUG,
@@ -77,20 +82,13 @@ interface LegalStore {
 export interface StoreLegalListRow {
   slug: StoreLegalSlug;
   title: string;
-  source: 'platform' | 'store_page' | 'template';
+  /** MARKETPLACE stores always get 'template' (filled with Namez AB). */
+  source: 'store_page' | 'template';
   /** The own page's slug (its `/{page_slug}` URL) when source='store_page'. */
   page_slug: string | null;
 }
 
 export type StoreLegalPagePayload =
-  | {
-      source: 'platform';
-      title: string;
-      content: string;
-      /** Locale the text is written in (after fallback), for `dir`/`lang`. */
-      locale: string;
-      updated_at: Date;
-    }
   | {
       source: 'store_page';
       title: string;
@@ -126,13 +124,15 @@ function str(v: unknown): string {
  * Store legal pages (plans/store-legal-pages/SPEC.md). On a storefront,
  * `/legal/{slug}` shows the store's own page when it has a published one,
  * else a default template filled with the store's trader details.
- * MARKETPLACE stores keep the platform texts (the platform is the seller).
+ * MARKETPLACE stores (Namez AB is the seller of record) always show the same
+ * templates filled with the platform company as the seller; the creator can
+ * not override them. The platform's own LegalPage texts (ShopsDoor-merchant
+ * terms) are only shown on the platform domain.
  */
 @Injectable()
 export class StoreLegalService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly legal: LegalService,
     private readonly revalidation: RevalidationService,
     private readonly config: ConfigService,
     // Optional and trailing so lean unit wiring works without them.
@@ -151,12 +151,10 @@ export class StoreLegalService {
     const store = await this.publicStore(storeSlug, opts.viewer);
     const locale = await this.requestLocale(store, opts);
     if (store.store_type === StoreType.MARKETPLACE) {
-      const platform = await this.legal.list(locale);
-      const bySlug = new Map(platform.map((p) => [p.slug, p.title]));
       return STORE_LEGAL_SLUGS.map((slug) => ({
         slug,
-        title: bySlug.get(slug) || pickTemplate(slug, locale)?.title || slug,
-        source: 'platform' as const,
+        title: pickTemplate(slug, locale)?.title || slug,
+        source: 'template' as const,
         page_slug: null,
       }));
     }
@@ -195,14 +193,7 @@ export class StoreLegalService {
     const store = await this.publicStore(storeSlug, opts.viewer);
     const locale = await this.requestLocale(store, opts);
     if (store.store_type === StoreType.MARKETPLACE) {
-      const page = await this.legal.findBySlug(slug, locale);
-      return {
-        source: 'platform',
-        title: page.title,
-        content: page.content,
-        locale: page.locale,
-        updated_at: page.updated_at,
-      };
+      return this.templatePayload(store, slug, locale);
     }
     const rows = await loadStoreLegalRows(this.prisma, store.id);
     const resolved = resolveLegalPage(slug, rows);
@@ -225,6 +216,15 @@ export class StoreLegalService {
         updated_at: resolved.page.updated_at,
       };
     }
+    return this.templatePayload(store, slug, locale);
+  }
+
+  /** The filled default template of a slug (INDEPENDENT fallback / MARKETPLACE). */
+  private async templatePayload(
+    store: LegalStore,
+    slug: StoreLegalSlug,
+    locale: string,
+  ): Promise<StoreLegalPagePayload> {
     const template = pickTemplate(slug, locale);
     if (!template) throw this.legalNotFound();
     const ctx = await this.templateContext(store, template.locale);
@@ -264,7 +264,10 @@ export class StoreLegalService {
           state: resolved.state,
           page_id: resolved.page?.id ?? null,
           page_system: resolved.system,
-          // MARKETPLACE storefronts show the platform texts, never a template.
+          // MARKETPLACE storefronts always show the platform-seller template,
+          // which the creator can not replace: no own page is in play, so
+          // uses_template (= "the default template stands in for your own
+          // page") stays false; the dashboard shows one info line instead.
           uses_template: !marketplace && resolved.state !== 'published',
           storefront_path: `/legal/${slug}`,
         };
@@ -477,15 +480,25 @@ export class StoreLegalService {
    * Placeholder values of a store's templates (see templates.data.ts). The
    * legal name falls back to the store name so the seller is never blank
    * (older stores may lack trader details); optional values are wrapped in
-   * `data-if` in the templates.
+   * `data-if` in the templates. MARKETPLACE stores get the platform company
+   * as the trader (platformSellerContext); `seller.is_independent` /
+   * `seller.is_platform` pick the matching sentences.
    */
   private async templateContext(
     store: Pick<
       LegalStore,
-      'id' | 'slug' | 'name' | 'trader_details' | 'custom_domain'
+      'id' | 'slug' | 'name' | 'store_type' | 'trader_details' | 'custom_domain'
     >,
     locale: string,
   ): Promise<StoreTemplateContext> {
+    const storeUrl = await this.storeUrl(store);
+    if (store.store_type === StoreType.MARKETPLACE) {
+      return platformSellerContext(
+        { name: str(store.name), url: storeUrl },
+        await this.platformContactEmail(),
+        locale,
+      );
+    }
     const t = (store.trader_details ?? {}) as Record<string, unknown>;
     return {
       'trader.legal_name': str(t.legal_name) || str(store.name),
@@ -495,8 +508,18 @@ export class StoreLegalService {
       'trader.email': str(t.support_email),
       'trader.phone': str(t.phone),
       'store.name': str(store.name),
-      'store.url': await this.storeUrl(store),
+      'store.url': storeUrl,
+      'seller.is_independent': '1',
+      'seller.is_platform': '',
     };
+  }
+
+  /** PlatformConfig.support_email, else the platform's public contact address. */
+  private async platformContactEmail(): Promise<string> {
+    const cfg = await this.prisma.platformConfig
+      .findFirst({ select: { support_email: true } })
+      .catch(() => null);
+    return str(cfg?.support_email) || PLATFORM_CONTACT_EMAIL;
   }
 
   /** The store's public origin: its public host, else the slug subdomain. */
@@ -525,6 +548,30 @@ export interface StorefrontLegalOptions {
   market?: string;
   preview?: boolean;
   viewer?: StorefrontViewer | null;
+}
+
+/**
+ * Template values of a MARKETPLACE store: Namez AB is the seller (and the
+ * GDPR controller); the store name / URL stay the influencer store's own.
+ * VAT number and phone stay empty (no platform fields for them).
+ */
+export function platformSellerContext(
+  store: { name: string; url: string },
+  email: string,
+  locale: string,
+): StoreTemplateContext {
+  return {
+    'trader.legal_name': PLATFORM_COMPANY,
+    'trader.org_number': PLATFORM_ORG_NUMBER,
+    'trader.vat_number': '',
+    'trader.address': formatTraderAddress({ ...PLATFORM_ADDRESS }, locale),
+    'trader.email': email,
+    'trader.phone': '',
+    'store.name': store.name,
+    'store.url': store.url,
+    'seller.is_independent': '',
+    'seller.is_platform': '1',
+  };
 }
 
 /**

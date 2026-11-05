@@ -170,11 +170,19 @@ export class UpdateFulfillmentDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(120)
   tracking_number?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(2048)
   tracking_url?: string;
+
+  // Not stored on the item; with SHIPPED it is written to the timeline note.
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  carrier?: string;
 }
 
 // One purchase line for `POST /orders/quote` — the shape `POST /cart/items`

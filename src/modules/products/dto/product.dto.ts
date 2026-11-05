@@ -39,12 +39,15 @@ export class ProductTranslationDto {
   @IsString()
   slug: string;
 
+  // Text columns; the caps bound SEO input (search engines show ~60 / ~160).
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   meta_title?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(1000)
   meta_desc?: string;
 
   // Short HTML summary (M4.4). On update, `undefined` keeps the stored value

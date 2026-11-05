@@ -3,11 +3,19 @@
 // admins can edit it later from the dashboard. Values not public yet are
 // marked with [PLACEHOLDERS] so they are easy to find and fill in.
 
-const COMPANY = 'Namez AB';
-const BRAND = 'ShopsDoor';
-const EMAIL = 'hello@shopsdoor.com';
-const ORG = '559295-1007';
-const ADDRESS = 'Hagavägen 36, 784 40 Borlänge, Sweden';
+import {
+  PLATFORM_ADDRESS_EN,
+  PLATFORM_BRAND,
+  PLATFORM_COMPANY,
+  PLATFORM_CONTACT_EMAIL,
+  PLATFORM_ORG_NUMBER,
+} from '../../src/modules/legal/platform-seller';
+
+const COMPANY = PLATFORM_COMPANY;
+const BRAND = PLATFORM_BRAND;
+const EMAIL = PLATFORM_CONTACT_EMAIL;
+const ORG = PLATFORM_ORG_NUMBER;
+const ADDRESS = PLATFORM_ADDRESS_EN;
 const UPDATED = '2 November 2026';
 
 const mail = `<a href="mailto:${EMAIL}">${EMAIL}</a>`;

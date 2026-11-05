@@ -7,7 +7,6 @@ import type { ConfigService } from '@nestjs/config';
 import { Prisma, StoreStatus, StoreType } from '@prisma/client';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { RevalidationService } from '../../common/revalidation/revalidation.service';
-import type { LegalService } from './legal.service';
 import { StoreLegalService, formatTraderAddress } from './store-legal.service';
 
 const TRADER = {
@@ -29,6 +28,8 @@ interface Fixture {
   existingV2?: { id: string } | null;
   secondary?: string[];
   trader?: Record<string, unknown> | null;
+  /** PlatformConfig.support_email (undefined → no config row). */
+  platformEmail?: string | null;
   /** Published snapshot meta per version id (default: 1 section, live titles). */
   versionMeta?: Record<
     string,
@@ -81,6 +82,15 @@ function build(f: Fixture = {}) {
     },
     staticPage: { findMany: jest.fn(() => Promise.resolve(f.legacy ?? [])) },
     storeDomain: { findMany: jest.fn(() => Promise.resolve([])) },
+    platformConfig: {
+      findFirst: jest.fn(() =>
+        Promise.resolve(
+          f.platformEmail === undefined
+            ? null
+            : { support_email: f.platformEmail },
+        ),
+      ),
+    },
     // The snapshot JSON path query of loadStoreLegalRows.
     $queryRaw: jest.fn(() =>
       Promise.resolve(
@@ -101,34 +111,16 @@ function build(f: Fixture = {}) {
     ),
     $transaction: jest.fn((fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
   };
-  const legal = {
-    list: jest.fn(() =>
-      Promise.resolve([
-        { slug: 'privacy', title: 'Platform privacy', updated_at: new Date(0) },
-        { slug: 'terms', title: 'Platform terms', updated_at: new Date(0) },
-      ]),
-    ),
-    findBySlug: jest.fn((slug: string) =>
-      Promise.resolve({
-        slug,
-        title: 'Platform privacy',
-        content: '<p>platform</p>',
-        locale: 'en',
-        updated_at: new Date(0),
-      }),
-    ),
-  };
   const revalidation = {
     revalidateStoreById: jest.fn(() => Promise.resolve()),
   };
   const config = { get: () => 'https://shopsdoor.com' };
   const service = new StoreLegalService(
     prisma as unknown as PrismaService,
-    legal as unknown as LegalService,
     revalidation as unknown as RevalidationService,
     config as unknown as ConfigService,
   );
-  return { service, prisma, legal, revalidation, created, sections, tx };
+  return { service, prisma, revalidation, created, sections, tx };
 }
 
 const publishedV2 = {
@@ -288,22 +280,53 @@ describe('StoreLegalService.storefrontPage', () => {
     }
   });
 
-  it('MARKETPLACE → platform legal page', async () => {
-    const { service, legal, prisma } = build({
+  it('MARKETPLACE → template with Namez AB as the seller (own pages ignored)', async () => {
+    const { service, prisma } = build({
       storeType: StoreType.MARKETPLACE,
       v2: [publishedV2],
+      platformEmail: 'support@shopsdoor.com',
     });
-    await expect(
-      service.storefrontPage('anna', 'privacy', { locale: 'en' }),
-    ).resolves.toEqual({
-      source: 'platform',
-      title: 'Platform privacy',
-      content: '<p>platform</p>',
+    const res = await service.storefrontPage('anna', 'privacy', {
       locale: 'en',
-      updated_at: new Date(0),
     });
-    expect(legal.findBySlug).toHaveBeenCalledWith('privacy', 'en');
+    expect(res).toMatchObject({
+      source: 'template',
+      title: 'Privacy Policy',
+      locale: 'en',
+      updated_at: null,
+    });
+    const html = (res as { content: string }).content;
+    expect(html).toContain(
+      'Namez AB, company reg. no. 559295-1007, Hagavägen 36, 784 40 Borlänge, Sweden, is the controller',
+    );
+    expect(html).toContain('mailto:support@shopsdoor.com');
+    expect(html).toContain('which is the seller and the controller');
+    expect(html).not.toContain('processes personal data on our behalf');
+    // The influencer's trader details and own pages are not used.
+    expect(html).not.toContain('Anna &lt;Shop&gt; AB');
+    expect(html).not.toContain('help@anna.se');
+    expect(html).toContain('Anna (https://anna.se)');
     expect(prisma.page.findMany).not.toHaveBeenCalled();
+  });
+
+  it('MARKETPLACE: localized platform address, contact email fallback', async () => {
+    const { service } = build({ storeType: StoreType.MARKETPLACE });
+    const sv = await service.storefrontPage('anna', 'privacy', {
+      locale: 'sv',
+    });
+    const html = (sv as { content: string }).content;
+    expect(html).toContain('Hagavägen 36, 784 40 Borlänge, Sverige');
+    expect(html).toContain('mailto:hello@shopsdoor.com');
+    expect(html).not.toContain('personuppgiftsbiträdesavtal');
+    for (const slug of ['privacy', 'terms', 'refund', 'shipping']) {
+      for (const locale of ['sv', 'en', 'de', 'fr', 'ar', 'tr']) {
+        const res = await service.storefrontPage('anna', slug, { locale });
+        const out = (res as { content: string }).content;
+        expect(out).not.toMatch(/\{\{|data-if/);
+        if (slug !== 'shipping') expect(out).toContain('Namez AB');
+        expect(out).not.toMatch(/<(p|li)>\s*<\/\1>/);
+      }
+    }
   });
 
   it('unknown slug → 404; closed store → 404', async () => {
@@ -332,19 +355,22 @@ describe('StoreLegalService.storefrontList', () => {
     expect(rows[2].title).toBeTruthy();
   });
 
-  it('MARKETPLACE: platform titles', async () => {
-    const { service } = build({ storeType: StoreType.MARKETPLACE });
+  it('MARKETPLACE: template titles, own pages ignored', async () => {
+    const { service } = build({
+      storeType: StoreType.MARKETPLACE,
+      v2: [publishedV2],
+    });
     const rows = await service.storefrontList('anna');
     expect(rows.map((r) => r.source)).toEqual([
-      'platform',
-      'platform',
-      'platform',
-      'platform',
+      'template',
+      'template',
+      'template',
+      'template',
     ]);
     expect(rows[0]).toEqual({
       slug: 'privacy',
-      title: 'Platform privacy',
-      source: 'platform',
+      title: 'Integritetspolicy',
+      source: 'template',
       page_slug: null,
     });
   });

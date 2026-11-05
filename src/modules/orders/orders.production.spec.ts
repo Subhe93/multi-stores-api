@@ -349,6 +349,16 @@ describe('OrdersService production hooks (M4.3 slot 2)', () => {
       fulfillment_status: FulfillmentStatus;
     }
 
+    interface ItemWhere {
+      fulfiller_id?: string;
+      fulfiller_type?: FulfillerType;
+      fulfillment_status?: { notIn: FulfillmentStatus[] };
+    }
+    const matches = (i: Item, where: ItemWhere) =>
+      i.fulfiller_id === where.fulfiller_id &&
+      i.fulfiller_type === where.fulfiller_type &&
+      !where.fulfillment_status?.notIn.includes(i.fulfillment_status);
+
     function buildStatus(status: OrderStatus, items: Item[]) {
       const order = {
         id: 'o1',
@@ -369,19 +379,18 @@ describe('OrdersService production hooks (M4.3 slot 2)', () => {
           findMany: jest.fn(() =>
             Promise.resolve(items.map((i) => ({ ...i }))),
           ),
+          count: jest.fn(({ where }: { where: ItemWhere }) =>
+            Promise.resolve(items.filter((i) => matches(i, where)).length),
+          ),
           updateMany: jest.fn(
             ({
               where,
               data,
             }: {
-              where: { fulfiller_id?: string; fulfiller_type?: FulfillerType };
+              where: ItemWhere;
               data: { fulfillment_status: FulfillmentStatus };
             }) => {
-              const hit = items.filter(
-                (i) =>
-                  i.fulfiller_id === where.fulfiller_id &&
-                  i.fulfiller_type === where.fulfiller_type,
-              );
+              const hit = items.filter((i) => matches(i, where));
               hit.forEach(
                 (i) => (i.fulfillment_status = data.fulfillment_status),
               );

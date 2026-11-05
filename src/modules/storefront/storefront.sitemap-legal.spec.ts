@@ -107,13 +107,17 @@ describe('StorefrontService.getSitemapData legal pages', () => {
     expect(staticSlugs).toEqual(['om-oss']);
   });
 
-  it('MARKETPLACE: the platform legal pages, unchanged', async () => {
+  it('MARKETPLACE: the 4 template-backed slugs with the store date', async () => {
     const { service, prisma } = build(StoreType.MARKETPLACE);
     const data = await service.getSitemapData('anna');
     expect(data.legal_pages).toEqual([
-      { slug: 'privacy', lastmod: new Date(0) },
-      { slug: 'terms', lastmod: new Date(0) },
+      { slug: 'privacy', lastmod: STORE_UPDATED },
+      { slug: 'terms', lastmod: STORE_UPDATED },
+      { slug: 'refund', lastmod: STORE_UPDATED },
+      { slug: 'shipping', lastmod: STORE_UPDATED },
     ]);
+    // Neither own pages nor the platform LegalPage rows are read.
     expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    expect(prisma.legalPage.findMany).not.toHaveBeenCalled();
   });
 });

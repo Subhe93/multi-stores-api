@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   NotFoundException,
   Logger,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -144,12 +145,20 @@ export class TranslationsService {
     sourceLocale: string,
     targetLocale: string,
   ) {
-    const translated = await this.callMyMemory(
-      text,
-      sourceLocale,
-      targetLocale,
-    );
-    return { translated };
+    // No silent fallback here: the caller asked for a translation, so a
+    // provider failure (quota, non-200, network) is reported, not echoed.
+    try {
+      const translated = await this.callMyMemory(
+        text,
+        sourceLocale,
+        targetLocale,
+      );
+      return { translated };
+    } catch (err) {
+      if (err instanceof ServiceUnavailableException) throw err;
+      this.logger.warn(`MyMemory request failed: ${String(err)}`);
+      throw translationUnavailable();
+    }
   }
 
   /**
@@ -652,19 +661,25 @@ export class TranslationsService {
     for (const chunk of chunks) {
       const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(chunk)}&langpair=${sourceLang}|${targetLang}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-      const data = (await res.json()) as {
-        responseData: { translatedText: string };
-        responseStatus: number;
-      };
+      const data = (await res.json().catch(() => null)) as {
+        responseData?: { translatedText?: string };
+        responseStatus?: number | string;
+      } | null;
 
-      if (data.responseStatus === 200 && data.responseData?.translatedText) {
-        translatedChunks.push(data.responseData.translatedText);
-      } else {
+      // Non-200 (quota exhausted, bad pair, provider down) throws: the
+      // entity flows (translateFields) catch it and keep the source text,
+      // translate-text reports TRANSLATION_UNAVAILABLE.
+      if (
+        !res.ok ||
+        Number(data?.responseStatus) !== 200 ||
+        !data?.responseData?.translatedText
+      ) {
         this.logger.warn(
-          `MyMemory status ${data.responseStatus} for: "${chunk.substring(0, 40)}..."`,
+          `MyMemory status ${data?.responseStatus ?? res.status} for: "${chunk.substring(0, 40)}..."`,
         );
-        translatedChunks.push(chunk);
+        throw translationUnavailable();
       }
+      translatedChunks.push(data.responseData.translatedText);
 
       if (chunks.length > 1) await new Promise((r) => setTimeout(r, 200));
     }
@@ -732,4 +747,11 @@ export class TranslationsService {
     );
     return row.slug;
   }
+}
+
+function translationUnavailable() {
+  return new ServiceUnavailableException({
+    code: 'TRANSLATION_UNAVAILABLE',
+    message: 'The translation service is unavailable, try again later',
+  });
 }

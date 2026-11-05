@@ -38,8 +38,9 @@ export class UpdateProviderDto {
   @Length(2, 2)
   country?: string;
 
+  // undefined keeps the stored logo; null clears it.
   @IsOptional()
   @IsString()
   @UploadUrl()
-  logo_url?: string;
+  logo_url?: string | null;
 }
