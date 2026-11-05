@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
+  FulfillerType,
   InvoiceKind,
   InvoiceTrigger,
   OrderStatus,
@@ -40,6 +41,8 @@ import type {
   InvoiceListResponse,
   InvoiceSnapshot,
   InvoiceSummary,
+  ProviderInvoiceListResponse,
+  ProviderInvoiceSummary,
 } from './invoices.types';
 
 export const INVOICE_LOCALES = ['en', 'ar', 'tr', 'de', 'fr', 'sv'] as const;
@@ -844,6 +847,97 @@ export class InvoicesService {
     return invoicesToCsv(csvRows);
   }
 
+  /**
+   * GET /invoices/provider: documents of orders with at least one item this
+   * provider fulfils (fulfiller_type PROVIDER). The store issues them; the
+   * provider only reads. A user without a provider profile sees nothing.
+   */
+  async listForProvider(
+    userId: string,
+    q: {
+      kind?: 'INVOICE' | 'CREDIT_NOTE';
+      from?: string;
+      to?: string;
+      q?: string;
+      paid?: boolean;
+      page?: number;
+      limit?: number;
+    },
+  ): Promise<ProviderInvoiceListResponse> {
+    const page = Math.max(1, q.page ?? 1);
+    const limit = Math.min(Math.max(1, q.limit ?? 25), 100);
+    const provider = await this.prisma.provider.findUnique({
+      where: { user_id: userId },
+      select: { id: true },
+    });
+    if (!provider) return { items: [], total: 0, page, limit };
+
+    // Store-agnostic base filter; the buyer-name match is dropped on purpose.
+    const where = this.listWhere(null, {
+      kind: q.kind,
+      from: q.from,
+      to: q.to,
+      paid: q.paid,
+    });
+    const term = q.q?.trim();
+    if (term) {
+      where.OR = [
+        { number: { contains: term, mode: 'insensitive' } },
+        { order_number: { contains: term, mode: 'insensitive' } },
+      ];
+    }
+    where.order = {
+      items: {
+        some: {
+          fulfiller_type: FulfillerType.PROVIDER,
+          fulfiller_id: provider.id,
+        },
+      },
+    };
+
+    const [total, rows] = await Promise.all([
+      this.prisma.invoice.count({ where }),
+      this.prisma.invoice.findMany({
+        where,
+        orderBy: [{ issue_date: 'desc' }, { issued_at: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+        select: { ...summarySelect, store_id: true },
+      }),
+    ]);
+
+    const storeIds = [...new Set(rows.map((r) => r.store_id))];
+    const stores = storeIds.length
+      ? await this.prisma.store.findMany({
+          where: { id: { in: storeIds } },
+          select: { id: true, name: true },
+        })
+      : [];
+    const storeName = new Map(stores.map((s) => [s.id, s.name]));
+
+    const items = rows.map((r): ProviderInvoiceSummary => {
+      const s = this.toSummary(r);
+      return {
+        id: s.id,
+        kind: s.kind,
+        number: s.number,
+        issue_date: s.issue_date,
+        order_id: s.order_id,
+        order_number: s.order_number,
+        store_id: r.store_id,
+        store_name: storeName.get(r.store_id) ?? null,
+        currency: s.currency,
+        net_total: s.net_total,
+        vat_total: s.vat_total,
+        gross_total: s.gross_total,
+        paid: s.paid,
+        credited_invoice: s.credited_invoice,
+        pdf_available: s.pdf_available,
+      };
+    });
+    return { items, total, page, limit };
+  }
+
   /** GET /invoices/my/:id. */
   async detail(storeId: string, id: string): Promise<InvoiceDetail> {
     const row = await this.prisma.invoice.findUnique({
@@ -901,7 +995,7 @@ export class InvoicesService {
       select: {
         store_id: true,
         customer: { select: { user_id: true } },
-        items: { select: { fulfiller_id: true } },
+        items: { select: { fulfiller_type: true, fulfiller_id: true } },
       },
     });
     if (!order || !(await this.canRead(order, user))) {
@@ -913,7 +1007,10 @@ export class InvoicesService {
     order: {
       store_id: string | null;
       customer: { user_id: string } | null;
-      items: { fulfiller_id: string | null }[];
+      items: {
+        fulfiller_type: FulfillerType | null;
+        fulfiller_id: string | null;
+      }[];
     },
     user: Reader,
   ): Promise<boolean> {
@@ -933,8 +1030,15 @@ export class InvoicesService {
           where: { user_id: user.id },
           select: { id: true },
         });
+        // Ids of providers and creators live in different tables: match the
+        // fulfiller type too, so an id collision can never grant access.
         return (
-          !!provider && order.items.some((i) => i.fulfiller_id === provider.id)
+          !!provider &&
+          order.items.some(
+            (i) =>
+              i.fulfiller_type === FulfillerType.PROVIDER &&
+              i.fulfiller_id === provider.id,
+          )
         );
       }
       case UserRole.CREATOR: {
@@ -944,7 +1048,11 @@ export class InvoicesService {
         });
         if (!creator) return false;
         if (creator.store && order.store_id === creator.store.id) return true;
-        return order.items.some((i) => i.fulfiller_id === creator.id);
+        return order.items.some(
+          (i) =>
+            i.fulfiller_type === FulfillerType.CREATOR &&
+            i.fulfiller_id === creator.id,
+        );
       }
       default:
         return false;

@@ -1,9 +1,19 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { loadStorefrontHosts } from '../stores/storefront-hosts';
+import {
+  traderDetailsComplete,
+  validateTraderDetails,
+} from '../stores/trader-details';
+import { TraderVatCheckService } from '../stores/trader-vat-check';
 import {
   CreateProviderDto,
   UpdateProviderDto,
@@ -16,7 +26,15 @@ export class ProvidersService {
     private readonly storeApps: StoreAppsService,
     private readonly mail: MailService,
     private readonly config: ConfigService,
+    private readonly vatCheck: TraderVatCheckService,
   ) {}
+
+  private profileNotFound(): NotFoundException {
+    return new NotFoundException({
+      code: 'PROVIDER_PROFILE_NOT_FOUND',
+      message: 'Provider profile not found',
+    });
+  }
 
   async create(userId: string, dto: CreateProviderDto) {
     return this.prisma.provider.create({
@@ -47,6 +65,59 @@ export class ProvidersService {
       ...provider,
       verified: provider.verified,
       approval_required: cfg?.require_provider_approval ?? true,
+      legal_details_complete: traderDetailsComplete(provider.legal_details),
+    };
+  }
+
+  /**
+   * GET /providers/me/legal-details: the supplier's legal company identity
+   * (same shape as a store's trader details) and whether it is complete.
+   */
+  async getLegalDetails(userId: string) {
+    const provider = await this.prisma.provider.findUnique({
+      where: { user_id: userId },
+      select: { legal_details: true },
+    });
+    if (!provider) throw this.profileNotFound();
+    return {
+      legal_details: provider.legal_details ?? null,
+      complete: traderDetailsComplete(provider.legal_details),
+    };
+  }
+
+  /**
+   * PUT /providers/me/legal-details: validated with the store trader-details
+   * rules (400 TRADER_DETAILS_INVALID + fields). A given VAT number is
+   * checked against VIES: invalid → 400 TRADER_VAT_INVALID; unavailable →
+   * stored with `vat_check.valid = null`.
+   */
+  async updateLegalDetails(userId: string, body: Record<string, unknown>) {
+    const provider = await this.prisma.provider.findUnique({
+      where: { user_id: userId },
+      select: { id: true },
+    });
+    if (!provider) throw this.profileNotFound();
+    const details = validateTraderDetails(body);
+    if (details.vat_number) {
+      const vat_check = await this.vatCheck.check(details.vat_number);
+      if (vat_check.valid === false) {
+        throw new BadRequestException({
+          code: 'TRADER_VAT_INVALID',
+          message: 'The VAT number is not registered in VIES',
+          fields: ['vat_number'],
+          vat_check,
+        });
+      }
+      details.vat_check = vat_check;
+    }
+    const updated = await this.prisma.provider.update({
+      where: { id: provider.id },
+      data: { legal_details: details as unknown as Prisma.InputJsonObject },
+      select: { legal_details: true },
+    });
+    return {
+      legal_details: updated.legal_details,
+      complete: traderDetailsComplete(updated.legal_details),
     };
   }
 
@@ -60,7 +131,10 @@ export class ProvidersService {
         code: 'PROVIDER_NOT_FOUND',
         message: 'Provider not found',
       });
-    return provider;
+    return {
+      ...provider,
+      legal_details_complete: traderDetailsComplete(provider.legal_details),
+    };
   }
 
   async update(userId: string, dto: UpdateProviderDto) {

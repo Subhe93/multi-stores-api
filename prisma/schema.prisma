@@ -190,6 +190,9 @@ model Provider {
   stripe_payouts_enabled         Boolean   @default(false)
   stripe_onboarding_completed_at DateTime?
   verified                       Boolean   @default(false)
+  // Legal company identity (same shape as Store.trader_details): legal name,
+  // org/VAT number + vat_check, address, phone, support_email, completed_at.
+  legal_details                  Json?
   created_at                     DateTime  @default(now())
   updated_at                     DateTime  @updatedAt
 

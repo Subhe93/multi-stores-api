@@ -412,3 +412,35 @@ export interface InvoiceSnapshot {
  * when the printed layout changes in a way an auditor should be able to see.
  */
 export const INVOICE_TEMPLATE_VERSION = 2;
+
+/**
+ * GET /invoices/provider row: a document of an order the provider fulfils
+ * items of. Deliberately narrower than InvoiceSummary: no buyer name, type,
+ * VAT number or country, and no credit/trigger bookkeeping.
+ */
+export interface ProviderInvoiceSummary {
+  id: string;
+  kind: InvoiceKind;
+  number: string;
+  /** YYYY-MM-DD in the seller's timezone. */
+  issue_date: string;
+  order_id: string;
+  order_number: string;
+  store_id: string;
+  /** Null when the store no longer exists. */
+  store_name: string | null;
+  currency: string;
+  net_total: number;
+  vat_total: number;
+  gross_total: number;
+  paid: boolean;
+  credited_invoice: { id: string; number: string } | null;
+  pdf_available: boolean;
+}
+
+export interface ProviderInvoiceListResponse {
+  items: ProviderInvoiceSummary[];
+  total: number;
+  page: number;
+  limit: number;
+}

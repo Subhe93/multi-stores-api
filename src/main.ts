@@ -144,8 +144,9 @@ async function bootstrap() {
     },
     credentials: true,
     // Let browser clients read the attachment filename of file downloads
-    // (backup dumps, tax CSV reports) on cross-origin responses.
-    exposedHeaders: ['Content-Disposition'],
+    // (backup dumps, tax CSV reports) on cross-origin responses, and the
+    // truncation flag of capped CSV exports.
+    exposedHeaders: ['Content-Disposition', 'X-Truncated'],
   });
 
   // SIGTERM/SIGINT run onModuleDestroy hooks (the designer print worker

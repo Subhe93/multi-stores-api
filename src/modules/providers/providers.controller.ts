@@ -14,6 +14,7 @@ import {
   CreateProviderDto,
   UpdateProviderDto,
 } from './dto/create-provider.dto';
+import { TraderDetailsDto } from '../stores/dto/store.dto';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '@prisma/client';
@@ -45,6 +46,28 @@ export class ProvidersController {
     @Body() dto: UpdateProviderDto,
   ) {
     return this.providersService.update(userId, dto);
+  }
+
+  @Get('me/legal-details')
+  @Roles(UserRole.PROVIDER)
+  @UseGuards(RolesGuard)
+  getMyLegalDetails(@CurrentUser('id') userId: string) {
+    return this.providersService.getLegalDetails(userId);
+  }
+
+  // Same shape check as the store trader details; validateTraderDetails owns
+  // the rules and reports offending keys as TRADER_DETAILS_INVALID `fields`.
+  @Put('me/legal-details')
+  @Roles(UserRole.PROVIDER)
+  @UseGuards(RolesGuard)
+  updateMyLegalDetails(
+    @CurrentUser('id') userId: string,
+    @Body() dto: TraderDetailsDto,
+  ) {
+    return this.providersService.updateLegalDetails(
+      userId,
+      dto as Record<string, unknown>,
+    );
   }
 
   @Get('me/stores')

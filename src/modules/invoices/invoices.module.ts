@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { InvoicesCreatorController } from './invoices-creator.controller';
 import { InvoicesDocumentsController } from './invoices-documents.controller';
 import { InvoicesAdminController } from './invoices-admin.controller';
+import { InvoicesProviderController } from './invoices-provider.controller';
 import { InvoicesService } from './invoices.service';
 import { InvoiceTriggersService } from './invoice-triggers.service';
 import { InvoiceNumberingService } from './invoice-numbering.service';
@@ -17,6 +18,7 @@ import { INVOICE_PDF_PROVIDERS } from './pdf';
     InvoicesCreatorController,
     InvoicesDocumentsController,
     InvoicesAdminController,
+    InvoicesProviderController,
   ],
   providers: [
     LegalProfileService,

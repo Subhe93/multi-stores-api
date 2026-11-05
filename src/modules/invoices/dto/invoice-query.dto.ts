@@ -57,3 +57,38 @@ export class InvoiceQueryDto {
 export class BacklogQueryDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(200) limit?: number;
 }
+
+/** GET /invoices/provider: no buyer search, no CSV, no store override. */
+export class ProviderInvoiceQueryDto {
+  @IsOptional() @IsIn(['INVOICE', 'CREDIT_NOTE']) kind?:
+    | 'INVOICE'
+    | 'CREDIT_NOTE';
+
+  /** Issue date from (inclusive), YYYY-MM-DD. */
+  @IsOptional()
+  @Matches(DATE, { message: 'from must be YYYY-MM-DD' })
+  from?: string;
+
+  /** Issue date to (inclusive), YYYY-MM-DD. */
+  @IsOptional()
+  @Matches(DATE, { message: 'to must be YYYY-MM-DD' })
+  to?: string;
+
+  /** Matches the document number or the order number. */
+  @IsOptional() @IsString() @MaxLength(100) q?: string;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === 'true' || value === true
+      ? true
+      : value === 'false' || value === false
+        ? false
+        : value,
+  )
+  @IsBoolean()
+  paid?: boolean;
+
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
+
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) limit?: number;
+}
