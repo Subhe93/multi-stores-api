@@ -7,6 +7,7 @@
  * Amounts are signed numbers in MAJOR units (credit notes are negative).
  * VAT rates are basis points (2500 = 25 %).
  */
+import { currencyDecimals } from '../../../common/money/currency.util';
 import type { InvoiceAddress, InvoiceSnapshot } from '../invoices.types';
 
 export type PdfLocale = 'en' | 'ar' | 'tr' | 'de' | 'fr' | 'sv';
@@ -175,6 +176,12 @@ export interface SnapshotForPdf {
   refs: PdfRefs;
   /** b2b app M2.5: absent / null = taxed (v1 snapshots never have it). */
   tax_exemption?: PdfTaxExemption | null;
+  /**
+   * Supplier copy for a provider (see toSupplierCopy): not a tax invoice.
+   * The template then prints the banner, the delivery block, the lines and
+   * one subtotal only.
+   */
+  supplier_copy?: boolean;
 }
 
 function address(a: InvoiceAddress | null | undefined): PdfAddress | null {
@@ -276,5 +283,85 @@ export function toSnapshotForPdf(stored: unknown): SnapshotForPdf {
       reason: s.refs?.reason,
     },
     tax_exemption: s.tax_exemption ?? null,
+  };
+}
+
+/**
+ * Redacted view model of a supplier copy: the document header (number,
+ * dates, store), the buyer NAME and DELIVERY address only, the given lines
+ * (indexes into `full.lines`, i.e. the provider's own lines) and their
+ * subtotal. Everything else is dropped from the data itself, not only
+ * hidden by the template: buyer email / phone / org and VAT numbers, the
+ * billing address, other parties' lines, order totals, the VAT summary,
+ * payment and bank details, the tax-exemption block (buyer VAT number) and
+ * free-text notes.
+ */
+export function toSupplierCopy(
+  full: SnapshotForPdf,
+  lineIndexes: readonly number[],
+): SnapshotForPdf {
+  const keep = new Set(lineIndexes);
+  const lines = (full.lines ?? []).filter((_, i) => keep.has(i));
+  const factor = 10 ** currencyDecimals(full.currency);
+  const subtotal =
+    lines.reduce((sum, l) => sum + Math.round(Number(l.line_net) * factor), 0) /
+      factor || 0;
+  // Delivery address only: the billing address is never the provider's
+  // business, so an order without one prints no address block at all.
+  const ship = full.buyer?.shipping_address ?? null;
+  const delivery: PdfAddress | null = ship
+    ? {
+        name: ship.name,
+        company: ship.company,
+        line1: ship.line1,
+        line2: ship.line2,
+        postal_code: ship.postal_code,
+        city: ship.city,
+        state: ship.state,
+        country_code: ship.country_code,
+        // The buyer's phone number is not part of the supplier copy.
+        phone: null,
+      }
+    : null;
+  const seller = full.seller ?? ({ legal_name: '' } as PdfSeller);
+  return {
+    template_version: full.template_version,
+    kind: full.kind,
+    number: full.number,
+    issue_date: full.issue_date,
+    due_date: null,
+    locale: full.locale,
+    currency: full.currency,
+    seller: {
+      legal_name: seller.legal_name,
+      brand_name: seller.brand_name,
+      address_line1: seller.address_line1,
+      address_line2: seller.address_line2,
+      postal_code: seller.postal_code,
+      city: seller.city,
+      country_code: seller.country_code,
+      logo_url: seller.logo_url,
+    },
+    buyer: {
+      type: full.buyer?.type === 'COMPANY' ? 'COMPANY' : 'PERSON',
+      name: full.buyer?.name ?? '',
+      billing_address: null,
+      shipping_address: delivery,
+    },
+    lines,
+    vat_summary: [],
+    totals: { net: subtotal, vat: 0, gross: subtotal, layout: 'excl' },
+    payment: { method: '', label: null, status: 'unpaid', paid_at: null },
+    bank: null,
+    refs: {
+      order_number: full.refs?.order_number ?? '',
+      order_date: full.refs?.order_date ?? null,
+      credited_invoice_number: full.refs?.credited_invoice_number ?? null,
+      credited_invoice_date: full.refs?.credited_invoice_date ?? null,
+      reason_code: null,
+      reason: null,
+    },
+    tax_exemption: null,
+    supplier_copy: true,
   };
 }

@@ -414,9 +414,11 @@ export interface InvoiceSnapshot {
 export const INVOICE_TEMPLATE_VERSION = 2;
 
 /**
- * GET /invoices/provider row: a document of an order the provider fulfils
- * items of. Deliberately narrower than InvoiceSummary: no buyer name, type,
- * VAT number or country, and no credit/trigger bookkeeping.
+ * GET /invoices/provider row: a supplier copy of a document of an order the
+ * provider fulfils items of. Deliberately narrower than InvoiceSummary: no
+ * buyer data, no whole-order totals and no credit/trigger bookkeeping; the
+ * only amount is the subtotal of the provider's own lines. Documents with
+ * none of the provider's lines are not listed.
  */
 export interface ProviderInvoiceSummary {
   id: string;
@@ -430,9 +432,10 @@ export interface ProviderInvoiceSummary {
   /** Null when the store no longer exists. */
   store_name: string | null;
   currency: string;
-  net_total: number;
-  vat_total: number;
-  gross_total: number;
+  /** Σ line net (excl. VAT) of the provider's lines; negative on credits. */
+  provider_subtotal: number;
+  /** Number of the provider's lines on the document. */
+  provider_line_count: number;
   paid: boolean;
   credited_invoice: { id: string; number: string } | null;
   pdf_available: boolean;
@@ -443,4 +446,6 @@ export interface ProviderInvoiceListResponse {
   total: number;
   page: number;
   limit: number;
+  /** The scan cap was hit: only the latest documents were considered. */
+  truncated: boolean;
 }

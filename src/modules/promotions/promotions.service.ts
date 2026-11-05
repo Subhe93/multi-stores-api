@@ -269,6 +269,15 @@ export class PromotionsService {
       });
     }
 
+    // Provider-owned coupons are disabled: the commission split charges any
+    // discount to the store owner, who never issued it. Treated as unknown.
+    if (promo.provider_id) {
+      throw new BadRequestException({
+        code: 'PROMOTION_COUPON_INVALID',
+        message: 'Invalid coupon code',
+      });
+    }
+
     // Scope the coupon to its owner. `coupon_code` is globally unique, so
     // without this any store's code would discount every other store's orders —
     // and on an independent store the creator would eat a discount they never

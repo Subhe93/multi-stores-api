@@ -233,6 +233,14 @@ table.lines tr.adj td { color: #444d56; }
 `;
 }
 
+/** CSS of the supplier-copy variant (appended to supplier copies only). */
+function supplierCopyCss(): string {
+  return `.supplier-banner { margin-top: 5mm; border: 0.4mm dashed #9a6700; background: #fff8e6; border-radius: 1.2mm; padding: 2.4mm 4mm; break-inside: avoid; }
+.supplier-banner .title { font-size: 11pt; font-weight: 700; color: #7a4d00; }
+.supplier-banner .note { margin-top: 0.8mm; color: #444d56; }
+`;
+}
+
 /**
  * b2b app M2.5: CSS of the exemption block, appended only to exempt
  * documents so every other document's HTML stays byte-identical.
@@ -648,6 +656,135 @@ function bankBlock(s: SnapshotForPdf, p: InvoicePhrases): string {
 </div>`;
 }
 
+// ---------------------------------------------------------------- supplier copy
+
+/** Document box of a supplier copy: reference data only, no payment rows. */
+function supplierDocBlock(
+  s: SnapshotForPdf,
+  p: InvoicePhrases,
+  locale: PdfLocale,
+): string {
+  const credit = s.kind === 'CREDIT_NOTE';
+  const rows = [
+    kv(credit ? p.creditNoteNumber : p.number, ltr(s.number)),
+    kv(
+      credit ? p.creditNoteDate : p.issueDate,
+      ltr(formatDate(s.issue_date, locale)),
+    ),
+    kv(p.orderNumber, ltr(s.refs?.order_number)),
+    present(s.refs?.order_date)
+      ? kv(p.orderDate, ltr(formatDate(s.refs.order_date, locale)))
+      : '',
+  ].join('');
+  return `
+<div class="doc">
+  <h1>${esc(p.supplierCopy)}</h1>
+  <table class="kvt">${rows}</table>
+</div>`;
+}
+
+function supplierBannerBlock(p: InvoicePhrases): string {
+  return `
+<div class="supplier-banner">
+  <div class="title">${esc(p.supplierCopyBanner)}</div>
+  <div class="note small">${esc(p.supplierCopyNote)}</div>
+</div>`;
+}
+
+/** Buyer name + delivery address only (what is needed to ship). */
+function supplierDeliveryBlock(
+  s: SnapshotForPdf,
+  p: InvoicePhrases,
+  locale: PdfLocale,
+): string {
+  const b = s.buyer;
+  const ship = b.shipping_address;
+  // No delivery address (e.g. a digital order): no block at all.
+  if (!ship) return '';
+  const same = (v: string | null | undefined) =>
+    present(v) && String(v).trim() === String(b.name ?? '').trim();
+  const lines = addressLines(
+    {
+      ...ship,
+      company: same(ship.company) ? null : ship.company,
+      name: same(ship.name) ? null : ship.name,
+      phone: null,
+    },
+    locale,
+  );
+  return `
+<div class="parties">
+<div class="party">
+  <h2>${esc(p.deliveryAddress)}</h2>
+  <div class="name">${txt(b.name)}</div>
+  <div>${lines.map(txt).join('<br>')}</div>
+</div>
+</div>`;
+}
+
+/** The credited invoice reference of a supplier copy (no reason text). */
+function supplierCreditRefBlock(
+  s: SnapshotForPdf,
+  p: InvoicePhrases,
+  locale: PdfLocale,
+): string {
+  if (s.kind !== 'CREDIT_NOTE' || !present(s.refs?.credited_invoice_number)) {
+    return '';
+  }
+  return `
+<div class="credit-ref">
+  <div class="title">${phrase(p.creditFor, {
+    number: ltr(s.refs.credited_invoice_number),
+    date: ltr(formatDate(s.refs.credited_invoice_date, locale)),
+  })}</div>
+</div>`;
+}
+
+/** One subtotal row: Σ line_net of the supplier's lines (no order totals). */
+function supplierSubtotalBlock(
+  s: SnapshotForPdf,
+  p: InvoicePhrases,
+  locale: PdfLocale,
+): string {
+  const money = (v: number) => ltr(formatMoney(v, s.currency, locale));
+  return `
+<div class="bottom">
+  <div class="vat-summary"></div>
+  <div class="totals totals-supplier"><table><tr class="grand"><th>${esc(
+    p.supplierSubtotal,
+  )}</th><td>${money(s.totals?.net ?? 0)}</td></tr></table></div>
+</div>`;
+}
+
+/** Body of a supplier copy (see toSupplierCopy for what the data holds). */
+function renderSupplierCopyHtml(
+  s: SnapshotForPdf,
+  p: InvoicePhrases,
+  locale: PdfLocale,
+  rtl: boolean,
+  opts: InvoiceTemplateOptions,
+): string {
+  return `<!doctype html>
+<html lang="${esc(locale)}" dir="${rtl ? 'rtl' : 'ltr'}">
+<head>
+<meta charset="utf-8">
+<title>${esc(p.supplierCopy)} ${esc(s.number)}</title>
+<style>${css(opts.fontCss ?? '', rtl)}${supplierCopyCss()}</style>
+</head>
+<body class="supplier-copy">
+<div class="header">
+  ${sellerBlock(s, p, locale, opts.logoDataUri)}
+  ${supplierDocBlock(s, p, locale)}
+</div>
+${supplierBannerBlock(p)}
+${supplierCreditRefBlock(s, p, locale)}
+${supplierDeliveryBlock(s, p, locale)}
+${linesTable(s, p, locale)}
+${supplierSubtotalBlock(s, p, locale)}
+</body>
+</html>`;
+}
+
 // ---------------------------------------------------------------- public
 
 /** Full HTML document for the invoice body. Pure: same input, same output. */
@@ -660,6 +797,7 @@ export function renderInvoiceHtml(
   const rtl = locale === 'ar';
   const s = snapshot;
   const p = phrases;
+  if (s.supplier_copy) return renderSupplierCopyHtml(s, p, locale, rtl, opts);
   return `<!doctype html>
 <html lang="${esc(locale)}" dir="${rtl ? 'rtl' : 'ltr'}">
 <head>

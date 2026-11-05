@@ -11,9 +11,11 @@ import { CurrentUser, type RequestUser } from '../../common/decorators';
 import { InvoicesService } from './invoices.service';
 
 /**
- * Document reads for any signed-in role (customer account page, creator and
- * admin order pages). Ownership follows the order-read rules and is checked
- * in the service; a foreign order or document answers 404 INVOICE_NOT_FOUND.
+ * Document reads for signed-in customers, creators and admins (customer
+ * account page, creator and admin order pages). Ownership follows the
+ * order-read rules and is checked in the service; a foreign order or
+ * document answers 404 INVOICE_NOT_FOUND. Providers are refused here too:
+ * they only get supplier copies (GET /invoices/provider, /:id/pdf).
  */
 @Controller('invoices/documents')
 @UseGuards(AuthGuard('jwt'))

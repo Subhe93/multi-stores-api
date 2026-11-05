@@ -94,6 +94,11 @@ const en = {
   sellerVatNumber: 'Seller VAT no.',
   buyerVatNumber: 'Buyer VAT no.',
   viesReference: 'VIES consultation no. {ref}, {date}',
+  // Supplier copy (provider PDF): not a tax invoice, own lines only.
+  supplierCopy: 'Supplier copy',
+  supplierCopyBanner: 'Supplier copy — not a tax invoice',
+  supplierCopyNote: 'This copy lists only the items you fulfil for this order.',
+  supplierSubtotal: 'Subtotal of your items excl. VAT',
 };
 
 export type InvoicePhrases = typeof en;
@@ -175,6 +180,12 @@ const sv: InvoicePhrases = {
   sellerVatNumber: 'Säljarens momsreg.nr',
   buyerVatNumber: 'Köparens momsreg.nr',
   viesReference: 'VIES-kontrollnummer {ref}, {date}',
+  // Supplier copy (provider PDF): not a tax invoice, own lines only.
+  supplierCopy: 'Leverantörskopia',
+  supplierCopyBanner: 'Leverantörskopia — inte en faktura',
+  supplierCopyNote:
+    'Kopian visar endast de artiklar ni levererar i denna order.',
+  supplierSubtotal: 'Delsumma för era artiklar exkl. moms',
 };
 
 const de: InvoicePhrases = {
@@ -255,6 +266,12 @@ const de: InvoicePhrases = {
   sellerVatNumber: 'USt-IdNr. des Verkäufers',
   buyerVatNumber: 'USt-IdNr. des Käufers',
   viesReference: 'VIES-Abfragenummer {ref}, {date}',
+  // Supplier copy (provider PDF): not a tax invoice, own lines only.
+  supplierCopy: 'Lieferantenkopie',
+  supplierCopyBanner: 'Lieferantenkopie — keine Rechnung',
+  supplierCopyNote:
+    'Diese Kopie enthält nur die Artikel, die Sie für diese Bestellung liefern.',
+  supplierSubtotal: 'Zwischensumme Ihrer Artikel netto',
 };
 
 const fr: InvoicePhrases = {
@@ -334,6 +351,12 @@ const fr: InvoicePhrases = {
   sellerVatNumber: 'N° de TVA du vendeur',
   buyerVatNumber: "N° de TVA de l'acheteur",
   viesReference: 'Consultation VIES n° {ref}, {date}',
+  // Supplier copy (provider PDF): not a tax invoice, own lines only.
+  supplierCopy: 'Copie fournisseur',
+  supplierCopyBanner: 'Copie fournisseur — ne vaut pas facture',
+  supplierCopyNote:
+    'Cette copie ne contient que les articles que vous fournissez pour cette commande.',
+  supplierSubtotal: 'Sous-total de vos articles HT',
 };
 
 const tr: InvoicePhrases = {
@@ -412,6 +435,12 @@ const tr: InvoicePhrases = {
   sellerVatNumber: 'Satıcı KDV No',
   buyerVatNumber: 'Alıcı KDV No',
   viesReference: 'VIES sorgu no. {ref}, {date}',
+  // Supplier copy (provider PDF): not a tax invoice, own lines only.
+  supplierCopy: 'Tedarikçi kopyası',
+  supplierCopyBanner: 'Tedarikçi kopyası — fatura değildir',
+  supplierCopyNote:
+    'Bu kopya yalnızca bu siparişte sizin tedarik ettiğiniz ürünleri içerir.',
+  supplierSubtotal: 'Ürünlerinizin ara toplamı (KDV hariç)',
 };
 
 const ar: InvoicePhrases = {
@@ -490,6 +519,12 @@ const ar: InvoicePhrases = {
   sellerVatNumber: 'الرقم الضريبي للبائع',
   buyerVatNumber: 'الرقم الضريبي للمشتري',
   viesReference: 'رقم استعلام VIES {ref}، {date}',
+  // Supplier copy (provider PDF): not a tax invoice, own lines only.
+  supplierCopy: 'نسخة المورّد',
+  supplierCopyBanner: 'نسخة المورّد — ليست فاتورة ضريبية',
+  supplierCopyNote:
+    'تعرض هذه النسخة فقط المنتجات التي تقوم بتوريدها في هذا الطلب.',
+  supplierSubtotal: 'المجموع الفرعي لمنتجاتك دون الضريبة',
 };
 
 export const INVOICE_PHRASES: Record<PdfLocale, InvoicePhrases> = {

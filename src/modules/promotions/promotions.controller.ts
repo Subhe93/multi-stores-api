@@ -27,7 +27,9 @@ export class PromotionsController {
 
   @Post()
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.PROVIDER, UserRole.CREATOR)
+  // Providers may not create or edit promotions until provider-funded
+  // discounts exist (a provider coupon was charged to the store owner).
+  @Roles(UserRole.CREATOR)
   create(
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: UserRole,
@@ -66,7 +68,9 @@ export class PromotionsController {
 
   @Put(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.PROVIDER, UserRole.CREATOR)
+  // Providers may not create or edit promotions until provider-funded
+  // discounts exist (a provider coupon was charged to the store owner).
+  @Roles(UserRole.CREATOR)
   update(
     @Param('id') id: string,
     @Body() dto: UpdatePromotionDto,

@@ -199,7 +199,7 @@ function pick<T extends { locale: string }>(
   );
 }
 
-function itemTitle(item: SnapshotOrderItem, locale: string): string {
+export function itemTitle(item: SnapshotOrderItem, locale: string): string {
   return (
     pick(item.custom_product?.translations, locale)?.title ||
     pick(item.product?.translations, locale)?.title ||
@@ -207,7 +207,39 @@ function itemTitle(item: SnapshotOrderItem, locale: string): string {
   );
 }
 
-function itemDetails(
+/** SKU printed on an item line. */
+export function itemSku(item: SnapshotOrderItem): string | null {
+  return item.variant?.sku || item.product?.sku || null;
+}
+
+/**
+ * VAT rate and pre-discount nets (minor units) of an item line. Shared by
+ * the builder and the supplier-copy line matching, so both always agree.
+ */
+export function itemLineMinor(
+  item: Pick<SnapshotOrderItem, 'unit_price' | 'total_price' | 'tax_rate_bp'>,
+  currency: string,
+  inclusive: boolean,
+): { rate: number; unitNet: number; lineNet: number } {
+  const { toMinor } = money(currency);
+  const rate = Math.max(
+    0,
+    Math.min(MAX_RATE_BP, Number(item.tax_rate_bp) || 0),
+  );
+  const base = toMinor(item.total_price);
+  const unit = toMinor(item.unit_price);
+  const lineNet = inclusive ? base - includedTaxMinor(base, rate) : base;
+  const unitNet = inclusive
+    ? roundSymmetric((unit * MAX_RATE_BP) / (MAX_RATE_BP + rate))
+    : unit;
+  return { rate, unitNet, lineNet };
+}
+
+/**
+ * Detail rows (variant options, personalization) printed under an item
+ * line. Shared by the builder and the supplier-copy line matching.
+ */
+export function itemDetails(
   item: SnapshotOrderItem,
   locale: string,
   primaryLocale?: string | null,
@@ -442,22 +474,13 @@ export function buildInvoiceSnapshot(
   const itemRates = new Set<number>();
   let itemsNet = 0;
   for (const item of order.items) {
-    const rate = Math.max(
-      0,
-      Math.min(MAX_RATE_BP, Number(item.tax_rate_bp) || 0),
-    );
+    const { rate, unitNet, lineNet } = itemLineMinor(item, currency, inclusive);
     itemRates.add(rate);
-    const base = toMinor(item.total_price);
-    const unit = toMinor(item.unit_price);
-    const lineNet = inclusive ? base - includedTaxMinor(base, rate) : base;
-    const unitNet = inclusive
-      ? roundSymmetric((unit * MAX_RATE_BP) / (MAX_RATE_BP + rate))
-      : unit;
     itemsNet += lineNet;
     lines.push({
       kind: 'item',
       description: itemTitle(item, locale),
-      sku: item.variant?.sku || item.product?.sku || null,
+      sku: itemSku(item),
       details: itemDetails(item, locale, input.primaryLocale),
       qty: item.quantity,
       unit_net: toMajor(unitNet),

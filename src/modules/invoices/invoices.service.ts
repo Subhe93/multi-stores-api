@@ -30,9 +30,11 @@ import {
   type SnapshotOrder,
 } from './invoice-snapshot.builder';
 import { invoicesToCsv, type InvoiceCsvRow } from './invoices-csv';
+import { providerLinesOf } from './provider-lines';
 import {
   InvoicePdfService,
   PdfUnavailableError,
+  supplierCopyPdfFilename,
 } from './pdf/invoice-pdf.service';
 import type {
   InvoiceBacklog,
@@ -58,6 +60,69 @@ const NOT_INVOICEABLE_PAYMENT = ['failed', 'refunded'];
 const BULK_ISSUE_MAX = 500;
 /** Max rows of one CSV export. */
 const CSV_MAX_ROWS = 10_000;
+/**
+ * Max documents the provider list scans: rows without the provider's lines
+ * are dropped after matching, so pagination happens in memory.
+ */
+const PROVIDER_LIST_MAX_SCAN = 2_000;
+
+/**
+ * Order item columns the supplier-copy line matching reads: money, title,
+ * SKU and the detail rows (variant options, personalization). `locales`
+ * narrows the translations to the ones the matching can pick (document
+ * locales, store primary locales, 'en'); omitted = all.
+ */
+function providerMatchItemSelect(locales?: string[]) {
+  const where = locales ? { locale: { in: locales } } : undefined;
+  return {
+    quantity: true,
+    unit_price: true,
+    total_price: true,
+    tax_rate_bp: true,
+    fulfiller_type: true,
+    fulfiller_id: true,
+    product: {
+      select: {
+        sku: true,
+        translations: { where, select: { locale: true, title: true } },
+      },
+    },
+    variant: { select: { sku: true, options: true } },
+    custom_product: {
+      select: {
+        translations: { where, select: { locale: true, title: true } },
+        product: { select: { sku: true } },
+      },
+    },
+    custom_field_values: {
+      orderBy: { id: 'asc' },
+      select: {
+        value: true,
+        file_url: true,
+        field_name: true,
+        field_type: true,
+        field_label: true,
+        display_value: true,
+        sort_order: true,
+        group_key: true,
+        group_index: true,
+        group_label: true,
+        source: true,
+        meta: true,
+        custom_field: {
+          select: {
+            name: true,
+            type: true,
+            translations: {
+              where,
+              select: { locale: true, label: true, option_labels: true },
+            },
+          },
+        },
+      },
+    },
+  } satisfies Prisma.OrderItemSelect;
+}
 
 /** Everything the snapshot builder reads from an order. */
 export const orderForInvoiceInclude = {
@@ -848,9 +913,12 @@ export class InvoicesService {
   }
 
   /**
-   * GET /invoices/provider: documents of orders with at least one item this
-   * provider fulfils (fulfiller_type PROVIDER). The store issues them; the
-   * provider only reads. A user without a provider profile sees nothing.
+   * GET /invoices/provider: supplier copies of the documents of orders with
+   * at least one item this provider fulfils (fulfiller_type PROVIDER). Each
+   * row carries the subtotal of the provider's own lines instead of the
+   * order totals; documents without any of its lines (a partial credit note
+   * spread per VAT rate, lines the matching cannot attribute) are left out.
+   * A user without a provider profile sees nothing.
    */
   async listForProvider(
     userId: string,
@@ -866,11 +934,10 @@ export class InvoicesService {
   ): Promise<ProviderInvoiceListResponse> {
     const page = Math.max(1, q.page ?? 1);
     const limit = Math.min(Math.max(1, q.limit ?? 25), 100);
-    const provider = await this.prisma.provider.findUnique({
-      where: { user_id: userId },
-      select: { id: true },
-    });
-    if (!provider) return { items: [], total: 0, page, limit };
+    const provider = await this.providerOf(userId);
+    if (!provider) {
+      return { items: [], total: 0, page, limit, truncated: false };
+    }
 
     // Store-agnostic base filter; the buyer-name match is dropped on purpose.
     const where = this.listWhere(null, {
@@ -895,27 +962,72 @@ export class InvoicesService {
       },
     };
 
-    const [total, rows] = await Promise.all([
-      this.prisma.invoice.count({ where }),
-      this.prisma.invoice.findMany({
-        where,
-        orderBy: [{ issue_date: 'desc' }, { issued_at: 'desc' }],
-        skip: (page - 1) * limit,
-        take: limit,
-        select: { ...summarySelect, store_id: true },
-      }),
-    ]);
+    const rows = await this.prisma.invoice.findMany({
+      where,
+      orderBy: [{ issue_date: 'desc' }, { issued_at: 'desc' }],
+      take: PROVIDER_LIST_MAX_SCAN,
+      select: { ...summarySelect, store_id: true, snapshot: true },
+    });
+    const truncated = rows.length === PROVIDER_LIST_MAX_SCAN;
+    if (truncated) {
+      this.logger.warn(
+        `Provider ${provider.id} invoice list hit the scan cap (${PROVIDER_LIST_MAX_SCAN})`,
+      );
+    }
 
+    // Stores first (names + primary locale), then the order items with only
+    // the translations the matching can pick, in one query for all rows.
     const storeIds = [...new Set(rows.map((r) => r.store_id))];
     const stores = storeIds.length
       ? await this.prisma.store.findMany({
           where: { id: { in: storeIds } },
-          select: { id: true, name: true },
+          select: {
+            id: true,
+            name: true,
+            language_config: { select: { primary_locale: true } },
+          },
         })
       : [];
-    const storeName = new Map(stores.map((s) => [s.id, s.name]));
+    const storeById = new Map(stores.map((s) => [s.id, s]));
+    const snapshotOf = (r: (typeof rows)[number]) =>
+      r.snapshot as unknown as InvoiceSnapshot;
+    const locales = [
+      ...new Set(
+        [
+          'en',
+          ...rows.map((r) => snapshotOf(r)?.locale),
+          ...stores.map((s) => s.language_config?.primary_locale),
+        ].filter((l): l is string => !!l),
+      ),
+    ];
+    const orderIds = [...new Set(rows.map((r) => r.order_id))];
+    const orderItems = orderIds.length
+      ? await this.prisma.orderItem.findMany({
+          where: { order_id: { in: orderIds } },
+          select: { order_id: true, ...providerMatchItemSelect(locales) },
+        })
+      : [];
+    const itemsByOrder = new Map<string, typeof orderItems>();
+    for (const it of orderItems) {
+      const list = itemsByOrder.get(it.order_id) ?? [];
+      list.push(it);
+      itemsByOrder.set(it.order_id, list);
+    }
 
-    const items = rows.map((r): ProviderInvoiceSummary => {
+    const own = rows
+      .map((r) => ({
+        row: r,
+        lines: providerLinesOf(
+          snapshotOf(r),
+          itemsByOrder.get(r.order_id) ?? [],
+          provider.id,
+          storeById.get(r.store_id)?.language_config?.primary_locale,
+        ),
+      }))
+      .filter((x) => x.lines.indexes.length > 0);
+    const pageRows = own.slice((page - 1) * limit, page * limit);
+
+    const items = pageRows.map(({ row: r, lines }): ProviderInvoiceSummary => {
       const s = this.toSummary(r);
       return {
         id: s.id,
@@ -925,17 +1037,79 @@ export class InvoicesService {
         order_id: s.order_id,
         order_number: s.order_number,
         store_id: r.store_id,
-        store_name: storeName.get(r.store_id) ?? null,
+        store_name: storeById.get(r.store_id)?.name ?? null,
         currency: s.currency,
-        net_total: s.net_total,
-        vat_total: s.vat_total,
-        gross_total: s.gross_total,
+        provider_subtotal: lines.subtotal,
+        provider_line_count: lines.indexes.length,
         paid: s.paid,
         credited_invoice: s.credited_invoice,
         pdf_available: s.pdf_available,
       };
     });
-    return { items, total, page, limit };
+    return { items, total: own.length, page, limit, truncated };
+  }
+
+  /**
+   * GET /invoices/provider/:id/pdf: the supplier copy of a document (never
+   * the tax invoice itself). 404 INVOICE_NOT_FOUND when the user has no
+   * provider profile, fulfils nothing on the order or has no line on it.
+   */
+  async supplierCopyPdf(
+    invoiceId: string,
+    userId: string,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const provider = await this.providerOf(userId);
+    if (!provider) throw invoiceErrors.notFound();
+    const row = await this.prisma.invoice.findUnique({
+      where: { id: invoiceId },
+      select: {
+        number: true,
+        locale: true,
+        snapshot: true,
+        store_id: true,
+        order: { select: { items: { select: providerMatchItemSelect() } } },
+      },
+    });
+    const items = row?.order?.items ?? [];
+    const fulfils = items.some(
+      (i) =>
+        i.fulfiller_type === FulfillerType.PROVIDER &&
+        i.fulfiller_id === provider.id,
+    );
+    if (!row || !fulfils) throw invoiceErrors.notFound();
+    // Invoice.store_id has no relation (survives store deletion).
+    const store = await this.prisma.store.findUnique({
+      where: { id: row.store_id },
+      select: { language_config: { select: { primary_locale: true } } },
+    });
+    const lines = providerLinesOf(
+      row.snapshot as unknown as InvoiceSnapshot,
+      items,
+      provider.id,
+      store?.language_config?.primary_locale,
+    );
+    if (!lines.indexes.length) throw invoiceErrors.notFound();
+    try {
+      const buffer = await this.pdf.renderSupplierCopy(
+        row.snapshot,
+        lines.indexes,
+      );
+      return {
+        buffer,
+        filename: supplierCopyPdfFilename(row.locale, row.number),
+      };
+    } catch (e) {
+      if (e instanceof PdfUnavailableError)
+        throw invoiceErrors.pdfUnavailable();
+      throw e;
+    }
+  }
+
+  private providerOf(userId: string): Promise<{ id: string } | null> {
+    return this.prisma.provider.findUnique({
+      where: { user_id: userId },
+      select: { id: true },
+    });
   }
 
   /** GET /invoices/my/:id. */
@@ -953,6 +1127,9 @@ export class InvoicesService {
 
   /** GET /invoices/documents/orders/:orderId: invoices, then credit notes. */
   async findForOrder(orderId: string, user: Reader): Promise<InvoiceSummary[]> {
+    // Full summaries carry buyer data and order totals: providers use
+    // GET /invoices/provider (supplier copies) instead.
+    if (user?.role === UserRole.PROVIDER) throw invoiceErrors.notFound();
     await this.assertCanReadOrder(orderId, user);
     const rows = await this.prisma.invoice.findMany({
       where: { order_id: orderId },
@@ -962,11 +1139,16 @@ export class InvoicesService {
     return rows.map((r) => this.toSummary(r));
   }
 
-  /** GET /invoices/documents/:id/pdf. */
+  /**
+   * GET /invoices/documents/:id/pdf: the tax invoice itself. Providers are
+   * refused (404, like a foreign document): they only get the supplier copy
+   * (GET /invoices/provider/:id/pdf).
+   */
   async pdfForUser(
     invoiceId: string,
     user: Reader,
   ): Promise<{ buffer: Buffer; filename: string }> {
+    if (user?.role === UserRole.PROVIDER) throw invoiceErrors.notFound();
     const row = await this.prisma.invoice.findUnique({
       where: { id: invoiceId },
       select: { order_id: true },
@@ -983,9 +1165,11 @@ export class InvoicesService {
   }
 
   /**
-   * Same rules as OrdersService.userCanReadOrder (duplicated: OrdersService
-   * is not importable from here). Admin always; customer = the buyer;
-   * provider = fulfils an item; creator = owns the store or fulfils an item.
+   * Based on OrdersService.userCanReadOrder (duplicated: OrdersService is
+   * not importable from here) but stricter for creators. Admin always;
+   * customer = the buyer;
+   * provider = fulfils an item; creator = owns the order's store (a creator
+   * that only fulfils items of another store's order is refused).
    * Foreign → 404 INVOICE_NOT_FOUND. No app check: reads stay available
    * whenever documents exist (L1).
    */
@@ -1046,12 +1230,13 @@ export class InvoicesService {
           where: { user_id: user.id },
           select: { id: true, store: { select: { id: true } } },
         });
-        if (!creator) return false;
-        if (creator.store && order.store_id === creator.store.id) return true;
-        return order.items.some(
-          (i) =>
-            i.fulfiller_type === FulfillerType.CREATOR &&
-            i.fulfiller_id === creator.id,
+        // Full documents (buyer data, order totals, every line) are the
+        // store owner's only: a creator that merely fulfils items of
+        // another store's order is refused, like a provider.
+        return (
+          !!creator?.store &&
+          !!order.store_id &&
+          order.store_id === creator.store.id
         );
       }
       default:

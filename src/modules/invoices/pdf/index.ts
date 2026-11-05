@@ -43,6 +43,7 @@ export const INVOICE_PDF_PROVIDERS: Provider[] = [
 export {
   InvoicePdfService,
   invoicePdfFilename,
+  supplierCopyPdfFilename,
   loadLogoDataUri,
   type InvoicePdf,
 } from './invoice-pdf.service';
@@ -66,7 +67,11 @@ export {
   resolvePdfLocale,
   type InvoicePhrases,
 } from './invoice-phrases';
-export { toSnapshotForPdf, type SnapshotForPdf } from './snapshot-for-pdf';
+export {
+  toSnapshotForPdf,
+  toSupplierCopy,
+  type SnapshotForPdf,
+} from './snapshot-for-pdf';
 export {
   INVOICE_STORAGE,
   LocalDiskInvoiceStorage,

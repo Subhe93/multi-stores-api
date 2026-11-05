@@ -28,7 +28,11 @@ import {
   PdfUnavailableError,
   type PdfRenderer,
 } from './pdf-renderer';
-import { toSnapshotForPdf, type SnapshotForPdf } from './snapshot-for-pdf';
+import {
+  toSnapshotForPdf,
+  toSupplierCopy,
+  type SnapshotForPdf,
+} from './snapshot-for-pdf';
 import {
   PublicStorage,
   publicMediaKeyFromUrl,
@@ -69,6 +73,17 @@ export function invoicePdfFilename(
   const label =
     asciiSlug(getInvoicePhrases(snapshot.locale)[key]) ||
     asciiSlug(INVOICE_PHRASES.en[key]);
+  return `${label}-${asciiSlug(number) || 'document'}.pdf`;
+}
+
+/** "Leverantorskopia-1001.pdf", "Supplier-copy-1001.pdf" (ar). */
+export function supplierCopyPdfFilename(
+  locale: string | null | undefined,
+  number: string,
+): string {
+  const label =
+    asciiSlug(getInvoicePhrases(locale).supplierCopy) ||
+    asciiSlug(INVOICE_PHRASES.en.supplierCopy);
   return `${label}-${asciiSlug(number) || 'document'}.pdf`;
 }
 
@@ -129,7 +144,24 @@ export class InvoicePdfService {
 
   /** Renders a snapshot without touching storage (previews, smoke tests). */
   async renderSnapshot(stored: unknown): Promise<Buffer> {
-    const snap = toSnapshotForPdf(stored);
+    return this.renderView(toSnapshotForPdf(stored));
+  }
+
+  /**
+   * Supplier copy of a stored snapshot: only `lineIndexes` (the provider's
+   * own lines), rendered on every request and never stored, so the stored
+   * tax-invoice PDF and its bookkeeping columns are untouched.
+   */
+  async renderSupplierCopy(
+    stored: unknown,
+    lineIndexes: readonly number[],
+  ): Promise<Buffer> {
+    return this.renderView(
+      toSupplierCopy(toSnapshotForPdf(stored), lineIndexes),
+    );
+  }
+
+  private async renderView(snap: SnapshotForPdf): Promise<Buffer> {
     const phrases = getInvoicePhrases(snap.locale);
     const fontCss = getInvoiceFontCss();
     const logoDataUri = await loadLogoDataUri(
