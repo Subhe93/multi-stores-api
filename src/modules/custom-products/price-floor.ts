@@ -321,3 +321,78 @@ export function priceFloorInfo(
     currency: setup.currency,
   };
 }
+
+type FloorMoney = number | { toString(): string };
+
+/** Base product fields the minimum price check reads. */
+export interface FloorBaseProduct {
+  base_price: FloorMoney;
+  provider_id: string | null;
+  tax_class_id: string | null;
+  tax_exempt: boolean;
+  /** Active variants only. */
+  variants: { id: string; price_adjustment: FloorMoney }[];
+}
+
+/** Custom product fields the below-minimum check reads. */
+export interface FloorCustomProductInput {
+  pricing_type: PricingType;
+  final_price: FloorMoney;
+  margin_amount: FloorMoney | null;
+  selected_variants?: {
+    variant_id: string;
+    custom_price: FloorMoney | null;
+  }[];
+  product: FloorBaseProduct;
+}
+
+/**
+ * The variants a custom product sells, as the floor check sees them: the
+ * selected rows still active on the base product, else every active
+ * variant (AS_IS rows mirror them), else none.
+ */
+export function floorVariantsOf(
+  product: Pick<FloorBaseProduct, 'variants'>,
+  selected:
+    | { variant_id: string; custom_price?: FloorMoney | null }[]
+    | undefined,
+): PriceFloorVariant[] {
+  const active = new Map(
+    product.variants.map((v) => [v.id, Number(v.price_adjustment) || 0]),
+  );
+  const rows = (selected ?? []).filter((sv) => active.has(sv.variant_id));
+  if (rows.length > 0) {
+    return rows.map((sv) => ({
+      variant_id: sv.variant_id,
+      price_adjustment: active.get(sv.variant_id) ?? 0,
+      custom_price: sv.custom_price == null ? null : Number(sv.custom_price),
+    }));
+  }
+  return product.variants.map((v) => ({
+    variant_id: v.id,
+    price_adjustment: Number(v.price_adjustment) || 0,
+  }));
+}
+
+/**
+ * The below-minimum check of a stored custom product against its store's
+ * floor setup (what the creator's list flags as `below_minimum`). Null when
+ * the price is fine or the product has no provider base.
+ */
+export function customProductFloorViolation(
+  cp: FloorCustomProductInput,
+  info: PriceFloorInfo,
+): PriceFloorViolation | null {
+  if (!cp.product?.provider_id) return null;
+  return findPriceFloorViolation(
+    {
+      pricingType: cp.pricing_type,
+      finalPrice: Number(cp.final_price) || 0,
+      marginAmount: Number(cp.margin_amount) || 0,
+      basePrice: Number(cp.product.base_price),
+      variants: floorVariantsOf(cp.product, cp.selected_variants),
+    },
+    info.vat_rate_bp,
+    info.prices_include_vat,
+  );
+}

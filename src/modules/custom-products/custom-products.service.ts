@@ -44,7 +44,9 @@ import {
 import { BundleOfferLike } from '../bundles/bundle-pricing.util';
 import { TaxService } from '../taxes/tax.service';
 import {
+  customProductFloorViolation,
   findPriceFloorViolation,
+  floorVariantsOf,
   loadPriceFloorSetup,
   minimumCustomerPrice,
   priceFloorInfo,
@@ -119,30 +121,12 @@ export class CustomProductsService {
       : null;
   }
 
-  /**
-   * The variants a custom product sells, as the floor check sees them: the
-   * selected rows still active on the base product, else every active
-   * variant (AS_IS rows mirror them), else none.
-   */
+  /** See floorVariantsOf (price-floor.ts). */
   private floorVariants(
     product: FloorProduct,
     selected: { variant_id: string; custom_price?: Money | null }[] | undefined,
   ): PriceFloorVariant[] {
-    const active = new Map(
-      product.variants.map((v) => [v.id, Number(v.price_adjustment) || 0]),
-    );
-    const rows = (selected ?? []).filter((sv) => active.has(sv.variant_id));
-    if (rows.length > 0) {
-      return rows.map((sv) => ({
-        variant_id: sv.variant_id,
-        price_adjustment: active.get(sv.variant_id) ?? 0,
-        custom_price: sv.custom_price == null ? null : Number(sv.custom_price),
-      }));
-    }
-    return product.variants.map((v) => ({
-      variant_id: v.id,
-      price_adjustment: Number(v.price_adjustment) || 0,
-    }));
+    return floorVariantsOf(product, selected);
   }
 
   /**
@@ -228,17 +212,7 @@ export class CustomProductsService {
       return { ...cp, price_floor: null, below_minimum: false };
     }
     const info = priceFloorInfo(setup, cp.product);
-    const violation = findPriceFloorViolation(
-      {
-        pricingType: cp.pricing_type,
-        finalPrice: Number(cp.final_price) || 0,
-        marginAmount: Number(cp.margin_amount) || 0,
-        basePrice: Number(cp.product.base_price),
-        variants: this.floorVariants(cp.product, cp.selected_variants),
-      },
-      info.vat_rate_bp,
-      info.prices_include_vat,
-    );
+    const violation = customProductFloorViolation(cp, info);
     return { ...cp, price_floor: info, below_minimum: !!violation };
   }
 
