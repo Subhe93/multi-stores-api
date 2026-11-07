@@ -39,7 +39,9 @@ export type PaymentProviderCheck = 'ok' | 'missing' | 'unknown';
 export type StripeCheckReason =
   | 'no_standard_account'
   | 'account_not_ready'
-  | 'currency_not_supported_by_stripe';
+  | 'currency_not_supported_by_stripe'
+  // The store's own Stripe key is a TEST key: no public card payments.
+  | 'own_key_test_mode';
 
 /** Why Kustom cannot charge the market currency (details.kustom.reason_code). */
 export type KustomCheckReason = 'not_configured' | 'currency_not_supported';
@@ -50,6 +52,9 @@ export interface PaymentCheck {
   checked_at: string;
   details: {
     stripe?: {
+      // 'OWN_KEY' when the store charges on its own Stripe key (no Connect
+      // account checked); absent for the Connect account check.
+      route?: 'OWN_KEY';
       account_id?: string;
       account_country?: string;
       charges_enabled?: boolean;

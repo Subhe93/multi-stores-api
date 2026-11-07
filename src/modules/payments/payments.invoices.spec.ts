@@ -111,7 +111,12 @@ describe('PaymentsService invoices call sites (Stripe)', () => {
     expect(b.prisma.order.findUnique).toHaveBeenCalledWith({
       where: { id: 'o1' },
       select: {
+        order_number: true,
         stripe_account_id: true,
+        payment_route: true,
+        stripe_key_fingerprint: true,
+        stripe_payment_id: true,
+        payment_status: true,
         store_id: true,
         total: true,
         currency: true,

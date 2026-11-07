@@ -81,7 +81,18 @@ export class StorefrontGateService {
   async viewerFromRequest(
     req: ViewerRequest | undefined,
   ): Promise<StorefrontViewer | null> {
-    const header = req?.headers?.authorization;
+    return this.viewerFromHeader(req?.headers?.authorization);
+  }
+
+  /**
+   * The viewer behind a `Bearer <token>` header value (session JWT, else
+   * edit-hint token), or null. Same verification as StorefrontViewerGuard;
+   * used where the Authorization header carries another identity (checkout:
+   * `X-Storefront-Viewer` next to the customer JWT). Never throws.
+   */
+  async viewerFromHeader(
+    header: string | string[] | undefined,
+  ): Promise<StorefrontViewer | null> {
     const raw = Array.isArray(header) ? header[0] : header;
     const match = raw?.match(/^Bearer\s+(.+)$/i);
     if (!match) return null;
@@ -144,6 +155,30 @@ export class StorefrontGateService {
       return { kind: 'edit-hint', store_id: own.id, user_id: claims.user_id };
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Whether `viewer` is the owner of `storeId` (session or edit-hint) or an
+   * admin: the people allowed to preview a store's checkout, including a
+   * TEST-mode own Stripe key. Never throws.
+   */
+  async isOwnerOrAdmin(
+    storeId: string,
+    viewer: StorefrontViewer | null | undefined,
+  ): Promise<boolean> {
+    if (!viewer) return false;
+    if (isEditHintViewer(viewer)) return viewer.store_id === storeId;
+    if (viewer.role === UserRole.ADMIN) return true;
+    if (viewer.role !== UserRole.CREATOR) return false;
+    try {
+      const own = await this.prisma.store.findFirst({
+        where: { id: storeId, creator: { user_id: viewer.id } },
+        select: { id: true },
+      });
+      return own !== null;
+    } catch {
+      return false;
     }
   }
 

@@ -204,7 +204,7 @@ function triggersMock() {
 }
 
 function lifecyclePrisma() {
-  return {
+  const base = {
     order: {
       findUnique: jest.fn((): Promise<unknown> => Promise.resolve(null)),
       update: jest.fn(() => Promise.resolve({})),
@@ -224,6 +224,14 @@ function lifecyclePrisma() {
       updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
     },
   };
+  // Interactive transaction (recordPartialRefund's advisory lock): runs the
+  // callback on the same mocks. Non-enumerable so prismaCalls skips it.
+  Object.defineProperty(base, '$transaction', {
+    enumerable: false,
+    value: (fn: (tx: unknown) => unknown) =>
+      fn({ ...base, $executeRaw: () => Promise.resolve(1) }),
+  });
+  return base;
 }
 
 function buildLifecycle(invoices?: unknown) {

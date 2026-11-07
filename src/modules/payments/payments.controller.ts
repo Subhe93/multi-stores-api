@@ -14,7 +14,7 @@ import {
 import type { RawBodyRequest } from '@nestjs/common';
 import type { Request } from 'express';
 import { AuthGuard } from '@nestjs/passport';
-import { SkipThrottle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { PaymentsService } from './payments.service';
 import { isPreview } from '../markets/preview-query';
 import {
@@ -30,12 +30,22 @@ import type { RequestUser } from '../../common/decorators/current-user.decorator
 import { PaymentKeysGuardService } from '../security/payment-keys-guard.service';
 import { ReauthDto } from '../security/dto/security.dto';
 import { ReqMeta, type RequestMeta } from '../security/request-meta';
+import {
+  StorefrontGateService,
+  StorefrontViewerGuard,
+  Viewer,
+  type StorefrontViewer,
+} from '../storefront/storefront-gate.service';
+
+/** Optional storefront viewer bearer of the checkout (owner preview). */
+const STOREFRONT_VIEWER_HEADER = 'x-storefront-viewer';
 
 @Controller('payments')
 export class PaymentsController {
   constructor(
     private paymentsService: PaymentsService,
     private paymentKeys: PaymentKeysGuardService,
+    private gate: StorefrontGateService,
   ) {}
 
   // Public — frontend checks if Stripe is available. With ?store=<slug>, the
@@ -43,8 +53,13 @@ export class PaymentsController {
   // account Stripe.js must target for their direct charges. With the markets
   // app, ?market=<key> evaluates kustomEnabled against the market currency.
   // ?preview=1 (market-preview host): evaluated against a DRAFT market too.
+  // Optional bearer (session JWT or dashboard edit-hint token): the store's
+  // owner / an admin also gets a TEST-mode own key (`test_mode: true`) and
+  // the config of a store that is not live yet.
   @Get('config')
+  @UseGuards(StorefrontViewerGuard)
   getConfig(
+    @Viewer() viewer: StorefrontViewer | null,
     @Query('store') store?: string,
     @Query('market') market?: string,
     @Query('preview') preview?: string,
@@ -53,6 +68,7 @@ export class PaymentsController {
       store,
       market,
       isPreview(preview),
+      viewer ? (storeId) => this.gate.isOwnerOrAdmin(storeId, viewer) : undefined,
     );
   }
 
@@ -152,20 +168,30 @@ export class PaymentsController {
 
   // ── Checkout (order-first) ──────────────────────────────────────────────────
 
+  // Optional `X-Storefront-Viewer: Bearer <token>` (the same preview /
+  // edit-hint or session token /payments/config gets): when it proves the
+  // store's owner or an admin, a TEST-mode own key may take the payment
+  // (owner checkout preview). It is used for nothing else: the order still
+  // has to belong to the customer of the Authorization JWT.
   @Post('create-intent')
   @UseGuards(AuthGuard('jwt'))
-  createIntent(
+  async createIntent(
     @CurrentUser('id') userId: string,
     @Body() dto: CreatePaymentIntentDto,
+    @Headers(STOREFRONT_VIEWER_HEADER) viewerHeader?: string,
   ) {
+    const viewer = await this.gate.viewerFromHeader(viewerHeader);
     return this.paymentsService.createPaymentIntentForOrder(
       userId,
       dto.order_id,
+      viewer ? (storeId) => this.gate.isOwnerOrAdmin(storeId, viewer) : undefined,
     );
   }
 
   // Customer — finalize own order right after confirming the card payment,
-  // so status doesn't depend on the webhook arriving.
+  // so status doesn't depend on the webhook arriving. X-Storefront-Viewer is
+  // accepted like on create-intent but not needed: confirm reads the intent
+  // back on the route / key the order recorded at create-intent.
   @Post('confirm')
   @UseGuards(AuthGuard('jwt'))
   confirm(
@@ -236,6 +262,43 @@ export class PaymentsController {
       throw new BadRequestException('Invalid webhook signature');
     }
     await this.paymentsService.handleWebhookEvent(event);
+    return { received: true };
+  }
+
+  // ── Own-key store webhook ───────────────────────────────────────────────────
+  // Public + signature-verified with the signing secret of the endpoint the
+  // platform created on an INDEPENDENT store's own Stripe account. Handlers
+  // only touch OWN_KEY orders of that store and read them back with its
+  // merchant client. Unlike the platform endpoints the URL is guessable per
+  // store, so requests without a signature are refused before any DB work
+  // and a generous per-IP limit applies (Stripe bursts stay far below it).
+  @Throttle({ default: { limit: 600, ttl: 60_000 } })
+  @Post('webhook/store/:storeId')
+  async storeWebhook(
+    @Param('storeId') storeId: string,
+    @Req() req: RawBodyRequest<Request>,
+    @Headers('stripe-signature') signature: string,
+  ) {
+    if (!signature) {
+      throw new BadRequestException('Missing stripe-signature header');
+    }
+    if (!req.rawBody) {
+      throw new BadRequestException('Missing request body');
+    }
+    let event;
+    try {
+      event = await this.paymentsService.constructStoreWebhookEvent(
+        storeId,
+        req.rawBody,
+        signature,
+      );
+    } catch {
+      // Unknown store, no secret, bad signature or malformed payload.
+      throw new BadRequestException('Invalid webhook signature');
+    }
+    await this.paymentsService.handleWebhookEvent(event, {
+      ownKeyStoreId: storeId,
+    });
     return { received: true };
   }
 }

@@ -164,6 +164,17 @@ describe('computeProviderLine', () => {
     expect(
       computeProviderLine(row({ stripe_account_id: 'acct_1' }), ME).status,
     ).toBe('offline');
+    // Own Stripe key / direct-route orders never reach platform payouts,
+    // even without a connected-account snapshot.
+    expect(
+      computeProviderLine(row({ payment_route: 'OWN_KEY' }), ME).status,
+    ).toBe('offline');
+    expect(
+      computeProviderLine(row({ payment_route: 'CONNECT_DIRECT' }), ME).status,
+    ).toBe('offline');
+    expect(
+      computeProviderLine(row({ payment_route: 'PLATFORM' }), ME).status,
+    ).toBe('pending');
     // A charge id alone is enough for a platform transfer.
     expect(
       computeProviderLine(
@@ -466,6 +477,16 @@ describe('ProviderEarningsService', () => {
     );
     expect(json(service.statusWhere(ME, 'offline'))).toContain(
       '"stripe_account_id":{"not":null}',
+    );
+    // OWN_KEY / CONNECT_DIRECT routes are offline, legacy null stays pending.
+    expect(json(service.statusWhere(ME, 'offline'))).toContain(
+      '"payment_route":{"in":["OWN_KEY","CONNECT_DIRECT"]}',
+    );
+    expect(json(service.statusWhere(ME, 'pending'))).toContain(
+      '"payment_route":{"notIn":["OWN_KEY","CONNECT_DIRECT"]}',
+    );
+    expect(json(service.statusWhere(ME, 'pending'))).toContain(
+      '"payment_route":null',
     );
   });
 

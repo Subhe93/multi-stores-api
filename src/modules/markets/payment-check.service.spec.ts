@@ -115,6 +115,102 @@ function checker(
 }
 
 describe('PaymentCheckService — Stripe', () => {
+  it('a TEST-mode own key is missing for the market (own_key_test_mode)', async () => {
+    const stripe = makeStripe();
+    const prisma = makeCheckPrisma(null);
+    prisma.store.findUnique.mockResolvedValue({
+      store_type: 'INDEPENDENT',
+      stripe_keys: { status: 'ACTIVE', livemode: false },
+      creator: {
+        ...readyCreator,
+        stripe_account_id: null,
+        stripe_account_type: null,
+      },
+    } as never);
+    const svc = new TestPaymentCheckService(prisma, stripe);
+    const check = await svc.checkMarket(STORE_ID, {
+      currency: 'sek',
+      countries: ['SE'],
+    });
+    expect(check.stripe).toBe('missing');
+    expect(check.details.stripe).toEqual({
+      route: 'OWN_KEY',
+      reason_code: 'own_key_test_mode',
+    });
+    expect(stripe.accounts.retrieve).not.toHaveBeenCalled();
+  });
+
+  it('a TEST own key on a legacy Connect-ready store falls back to the Connect check', async () => {
+    const stripe = makeStripe();
+    const prisma = makeCheckPrisma(null);
+    prisma.store.findUnique.mockResolvedValue({
+      store_type: 'INDEPENDENT',
+      stripe_keys: { status: 'ACTIVE', livemode: false },
+      creator: readyCreator,
+    } as never);
+    const check = await new TestPaymentCheckService(prisma, stripe).checkMarket(
+      STORE_ID,
+      { currency: 'sek', countries: ['SE'] },
+    );
+    // The public checkout charges on the Standard account: no false missing.
+    expect(check.stripe).toBe('ok');
+    expect(check.details.stripe?.reason_code).toBeUndefined();
+    expect(stripe.accounts.retrieve).toHaveBeenCalledWith('acct_1');
+  });
+
+  it('ok without any Connect account check when the INDEPENDENT store has an ACTIVE own key', async () => {
+    const stripe = makeStripe();
+    const prisma = makeCheckPrisma(null);
+    prisma.store.findUnique.mockResolvedValue({
+      store_type: 'INDEPENDENT',
+      stripe_keys: { status: 'ACTIVE', livemode: true },
+      creator: {
+        ...readyCreator,
+        stripe_account_id: null,
+        stripe_account_type: null,
+      },
+    } as never);
+    const svc = new TestPaymentCheckService(prisma, stripe);
+    const check = await svc.checkMarket(STORE_ID, {
+      currency: 'sek',
+      countries: ['SE'],
+    });
+    expect(check.stripe).toBe('ok');
+    expect(check.details.stripe).toEqual({
+      route: 'OWN_KEY',
+      currency_supported: true,
+    });
+    expect(stripe.accounts.retrieve).not.toHaveBeenCalled();
+    const bad = await svc.checkMarket(STORE_ID, {
+      currency: 'xxx',
+      countries: ['SE'],
+    });
+    expect(bad.stripe).toBe('missing');
+    expect(bad.details.stripe?.reason_code).toBe(
+      'currency_not_supported_by_stripe',
+    );
+  });
+
+  it('an own key that needs reconnecting falls back to the Connect check', async () => {
+    const stripe = makeStripe();
+    const prisma = makeCheckPrisma(null);
+    prisma.store.findUnique.mockResolvedValue({
+      store_type: 'INDEPENDENT',
+      stripe_keys: { status: 'NEEDS_RECONNECT' },
+      creator: {
+        ...readyCreator,
+        stripe_account_id: null,
+        stripe_account_type: null,
+      },
+    } as never);
+    const check = await new TestPaymentCheckService(prisma, stripe).checkMarket(
+      STORE_ID,
+      { currency: 'sek', countries: ['SE'] },
+    );
+    expect(check.stripe).toBe('missing');
+    expect(check.details.stripe?.reason_code).toBe('no_standard_account');
+  });
+
   it('ok: Standard account, charges enabled, card payments active, currency supported', async () => {
     const stripe = makeStripe();
     const check = await checker(readyCreator, stripe).checkMarket(STORE_ID, {

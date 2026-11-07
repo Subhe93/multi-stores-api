@@ -25,7 +25,14 @@ import {
   resolveLegalPage,
 } from '../legal/store-templates/store-legal-resolver';
 import { isDisposableEmail } from '../../common/email/disposable-domains';
-import { isKustomEnabledForStore, kustomCreatorSelect } from '../payments/kustom/kustom.eligibility';
+import {
+  isKustomEnabledForStore,
+  kustomCreatorSelect,
+} from '../payments/kustom/kustom.eligibility';
+import {
+  isOwnKeyCardReady,
+  isOwnKeyTestMode,
+} from '../payments/payment-route';
 
 /** Statuses a creator may request go-live from. */
 const GOLIVE_FROM: ReadonlySet<StoreStatus> = new Set([
@@ -47,6 +54,8 @@ export interface GoLiveChecklist {
   has_published_product: boolean;
   has_published_theme: boolean;
   payments_ready: boolean;
+  /** 'OWN_KEY_TEST_MODE': a test own key does not satisfy payments_ready. */
+  payments_hint?: 'OWN_KEY_TEST_MODE' | null;
   legal_pages_published: boolean;
   ready: boolean;
   blocking: string[];
@@ -175,6 +184,8 @@ export class StoreLifecycleService {
             user: { select: { email_verified_at: true } },
           },
         },
+        // Own Stripe key (INDEPENDENT): status + mode only.
+        stripe_keys: { select: { status: true, livemode: true } },
       },
     });
     if (!store) throw this.notFound();
@@ -220,10 +231,13 @@ export class StoreLifecycleService {
     ]);
 
     const creator = store.creator;
+    // INDEPENDENT: an ACTIVE LIVE own Stripe key, or the legacy Standard
+    // account. A TEST-mode key never makes the store payment-ready.
     const cardReady =
       store.store_type === StoreType.INDEPENDENT
-        ? creator.stripe_account_type === 'standard' &&
-          creator.stripe_charges_enabled
+        ? isOwnKeyCardReady(store) ||
+          (creator.stripe_account_type === 'standard' &&
+            creator.stripe_charges_enabled)
         : creator.stripe_account_type !== 'standard' &&
           creator.stripe_payouts_enabled;
     const kustomReady = isKustomEnabledForStore({
@@ -254,7 +268,14 @@ export class StoreLifecycleService {
     const blocking = (
       independent ? INDEPENDENT_BLOCKING_ITEMS : BLOCKING_ITEMS
     ).filter((k) => !items[k]);
-    return { ...items, ready: blocking.length === 0, blocking };
+    return {
+      ...items,
+      ready: blocking.length === 0,
+      blocking,
+      // Hint for the dashboard: the connected own key is a TEST key, so the
+      // public checkout offers no card payments (connect a live key).
+      payments_hint: isOwnKeyTestMode(store) ? 'OWN_KEY_TEST_MODE' : null,
+    };
   }
 
   /**
@@ -379,7 +400,10 @@ export class StoreLifecycleService {
   async setStatus(
     storeId: string,
     status: StoreStatus,
-    extra: { status_reason?: string | null; golive_requested_at?: Date | null } = {},
+    extra: {
+      status_reason?: string | null;
+      golive_requested_at?: Date | null;
+    } = {},
   ) {
     const current = await this.prisma.store.findUnique({
       where: { id: storeId },
@@ -458,11 +482,17 @@ export class StoreLifecycleService {
           created_at: true,
           golive_requested_at: true,
           went_live_at: true,
+          // Own Stripe key status only (no key material).
+          stripe_keys: {
+            select: { status: true, livemode: true, last_check_at: true },
+          },
           creator: {
             select: {
               id: true,
               display_name: true,
-              user: { select: { id: true, email: true, email_verified_at: true } },
+              user: {
+                select: { id: true, email: true, email_verified_at: true },
+              },
             },
           },
         },
@@ -482,6 +512,13 @@ export class StoreLifecycleService {
           created_at: s.created_at,
           golive_requested_at: s.golive_requested_at,
           went_live_at: s.went_live_at,
+          stripe_own_key: s.stripe_keys
+            ? {
+                status: s.stripe_keys.status,
+                livemode: s.stripe_keys.livemode,
+                last_check_at: s.stripe_keys.last_check_at,
+              }
+            : null,
           owner: {
             creator_id: s.creator.id,
             user_id: s.creator.user.id,
@@ -563,7 +600,11 @@ export class StoreLifecycleService {
         .sendOnboarding(
           'store_changes_requested',
           owner,
-          { ...common, reason: trimmed ?? '', dashboard_url: this.dashboardUrl() },
+          {
+            ...common,
+            reason: trimmed ?? '',
+            dashboard_url: this.dashboardUrl(),
+          },
           locale,
         )
         .catch(() => undefined);
@@ -653,10 +694,8 @@ export class StoreLifecycleService {
     checklist: GoLiveChecklist,
   ) {
     const recipients = await this.mail.adminRecipients();
-    const summary = (
-      Object.keys(checklist) as Array<keyof GoLiveChecklist>
-    )
-      .filter((k) => k !== 'ready' && k !== 'blocking')
+    const summary = (Object.keys(checklist) as Array<keyof GoLiveChecklist>)
+      .filter((k) => k !== 'ready' && k !== 'blocking' && k !== 'payments_hint')
       .map((k) => `${k}: ${checklist[k] ? 'yes' : 'no'}`)
       .join(', ');
     const vars = {

@@ -13,6 +13,10 @@ import {
   checkKustomCountries,
   isKustomMarketCurrency,
 } from '../payments/kustom/kustom.markets';
+import {
+  isOwnKeyCardReady,
+  isOwnKeyTestMode,
+} from '../payments/payment-route';
 import type { PaymentCheck, PaymentProviderCheck } from './market.types';
 
 /** What the check needs to know about a market. */
@@ -86,9 +90,25 @@ export class PaymentCheckService {
     market: PaymentCheckMarket,
   ): Promise<PaymentCheck> {
     const currency = market.currency.trim().toUpperCase();
-    const creator = await this.creatorOf(storeId);
+    const { creator, ownKey, ownKeyTest } = await this.creatorOf(storeId);
+    // A TEST own key never takes public card payments, so the public
+    // checkout routes like a store without one: a legacy Connect-ready
+    // store still charges on its Standard account (checkStripe decides).
+    const legacyConnect =
+      !!creator?.stripe_account_id &&
+      creator.stripe_account_type === 'standard';
     const [stripe, kustom] = await Promise.all([
-      this.checkStripe(creator, currency),
+      ownKeyTest && !legacyConnect
+        ? Promise.resolve({
+            status: 'missing' as PaymentProviderCheck,
+            details: {
+              route: 'OWN_KEY' as const,
+              reason_code: 'own_key_test_mode' as const,
+            },
+          })
+        : ownKey
+          ? Promise.resolve(this.checkOwnKey(currency))
+          : this.checkStripe(creator, currency),
       Promise.resolve(this.checkKustom(creator, currency, market.countries)),
     ]);
     return {
@@ -99,12 +119,16 @@ export class PaymentCheckService {
     };
   }
 
-  private async creatorOf(
-    storeId: string,
-  ): Promise<CreatorPaymentFields | null> {
+  private async creatorOf(storeId: string): Promise<{
+    creator: CreatorPaymentFields | null;
+    ownKey: boolean;
+    ownKeyTest: boolean;
+  }> {
     const store = await this.prisma.store.findUnique({
       where: { id: storeId },
       select: {
+        store_type: true,
+        stripe_keys: { select: { status: true, livemode: true } },
         creator: {
           select: {
             stripe_account_id: true,
@@ -114,10 +138,41 @@ export class PaymentCheckService {
         },
       },
     });
-    return store?.creator ?? null;
+    return {
+      creator: store?.creator ?? null,
+      ownKey: store ? isOwnKeyCardReady(store) : false,
+      // A TEST own key: the public checkout takes no card payments.
+      ownKeyTest: store ? isOwnKeyTestMode(store) : false,
+    };
   }
 
   // ── Stripe ──────────────────────────────────────────────────────────────
+
+  /**
+   * INDEPENDENT store on its own Stripe key (ACTIVE): no Connect account to
+   * check. The key module already verified the account when the key was
+   * saved, and Stripe accepts any supported presentment currency, so the
+   * check is the currency list only.
+   */
+  private checkOwnKey(currency: string): {
+    status: PaymentProviderCheck;
+    details: StripeDetails;
+  } {
+    if (!isSupportedCurrency(currency)) {
+      return {
+        status: 'missing',
+        details: {
+          route: 'OWN_KEY',
+          currency_supported: false,
+          reason_code: 'currency_not_supported_by_stripe',
+        },
+      };
+    }
+    return {
+      status: 'ok',
+      details: { route: 'OWN_KEY', currency_supported: true },
+    };
+  }
 
   private async checkStripe(
     creator: CreatorPaymentFields | null,

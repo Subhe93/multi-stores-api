@@ -42,6 +42,10 @@ import {
   isKustomEnabledForStore,
   kustomCreatorSelect,
 } from '../payments/kustom/kustom.eligibility';
+import {
+  isOwnKeyCardReady,
+  isOwnKeyTestMode,
+} from '../payments/payment-route';
 import { PersonalizationService } from '../personalization/personalization.service';
 import {
   legacyRow,
@@ -758,9 +762,19 @@ export class StorefrontService {
       if (!(await this.open(row, viewer))) {
         return storeClosedPayload(slug, row);
       }
-      return { ...(await this.fullStore(slug, marketKey, preview, row)), preview: true };
+      // Served non-LIVE only to the owner / an admin (gate above).
+      return {
+        ...(await this.fullStore(slug, marketKey, preview, row, true)),
+        preview: true,
+      };
     }
-    return this.fullStore(slug, marketKey, preview, row);
+    // Only a TEST-mode own key depends on who is looking (owner / admin
+    // checkout preview), so a LIVE store costs no extra query otherwise.
+    const ownerView =
+      !!viewer && !!this.gate && isOwnKeyTestMode(row)
+        ? await this.gate.isOwnerOrAdmin(row.id, viewer)
+        : false;
+    return this.fullStore(slug, marketKey, preview, row, ownerView);
   }
 
   /**
@@ -798,7 +812,7 @@ export class StorefrontService {
       });
       if (!own) throw forbidden();
     }
-    const full = await this.fullStore(slug, marketKey, true);
+    const full = await this.fullStore(slug, marketKey, true, undefined, true);
     return { ...full, preview: true };
   }
 
@@ -824,6 +838,8 @@ export class StorefrontService {
             stripe_account_type: true,
           },
         },
+        // Own Stripe key (INDEPENDENT): status + mode, never key material.
+        stripe_keys: { select: { status: true, livemode: true } },
       },
     });
   }
@@ -832,7 +848,12 @@ export class StorefrontService {
     slug: string,
     marketKey?: string,
     preview?: boolean,
-    loaded?: NonNullable<Awaited<ReturnType<StorefrontService['loadStoreRow']>>>,
+    loaded?: NonNullable<
+      Awaited<ReturnType<StorefrontService['loadStoreRow']>>
+    >,
+    // The viewer is the owner / an admin: a TEST-mode own key counts as
+    // card-ready for them only (same rule as /payments/config).
+    ownerView = false,
   ) {
     const store = loaded ?? (await this.loadStoreRow(slug));
     if (!store) throw this.storeNotFound();
@@ -925,11 +946,13 @@ export class StorefrontService {
       // Card checkout availability. Marketplace stores need the creator able
       // to receive payout transfers (Express onboarding complete); independent
       // stores charge directly, so they need a Standard account that can take
-      // charges. Note: checkout still re-checks the recipients at payment time.
+      // charges — or their own Stripe key (OWN_KEY) being ACTIVE. Note:
+      // checkout still re-checks the recipients at payment time.
       card_payments_enabled:
         store.store_type === StoreType.INDEPENDENT
-          ? store.creator.stripe_account_type === 'standard' &&
-            store.creator.stripe_charges_enabled
+          ? isOwnKeyCardReady(store, { allowTest: ownerView }) ||
+            (store.creator.stripe_account_type === 'standard' &&
+              store.creator.stripe_charges_enabled)
           : // Marketplace needs an account that can receive transfers — a
             // Standard account left over from an independent phase cannot,
             // so the card option must not be offered.
@@ -2371,10 +2394,7 @@ export class StorefrontService {
     };
   }
 
-  async getSampleProduct(
-    storeSlug: string,
-    viewer?: StorefrontViewer | null,
-  ) {
+  async getSampleProduct(storeSlug: string, viewer?: StorefrontViewer | null) {
     const store = await this.prisma.store.findUnique({
       where: { slug: storeSlug },
       include: { creator: true },

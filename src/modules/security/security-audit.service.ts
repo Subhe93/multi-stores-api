@@ -9,6 +9,10 @@ export const SECURITY_ACTIONS = [
   'payment_keys.platform.updated',
   'payment_keys.kustom.updated',
   'payment_keys.stripe_connect.disconnected',
+  // Own Stripe account (restricted key) of an INDEPENDENT store.
+  'payment_keys.stripe_own_key.updated',
+  'payment_keys.stripe_own_key.removed',
+  'payment_keys.stripe_own_key.revoked',
   'two_factor.enabled',
   'two_factor.disabled',
   'two_factor.recovery_regenerated',
@@ -91,7 +95,13 @@ export class SecurityAuditService {
   alert(
     recipients: string[],
     kind: SecurityAlertKind,
-    input: { actorEmail: string; fields?: string[]; meta?: RequestMeta },
+    input: {
+      actorEmail: string;
+      fields?: string[];
+      meta?: RequestMeta;
+      /** Button link of alerts that ask for an action. */
+      actionUrl?: string;
+    },
     locale?: string,
   ): void {
     const unique = [...new Set(recipients.filter(Boolean))];
@@ -106,6 +116,7 @@ export class SecurityAuditService {
             at: new Date(),
             ip: input.meta?.ip,
             userAgent: input.meta?.userAgent,
+            ...(input.actionUrl ? { actionUrl: input.actionUrl } : {}),
           },
           locale,
         )

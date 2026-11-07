@@ -41,6 +41,11 @@ export interface ProviderOrderRow {
   stripe_payment_id: string | null;
   /** Direct charge on the creator's own account (no platform split). */
   stripe_account_id: string | null;
+  /**
+   * Stripe route of the charge (PLATFORM | CONNECT_DIRECT | OWN_KEY; null =
+   * legacy). OWN_KEY / CONNECT_DIRECT money never reaches the platform.
+   */
+  payment_route?: string | null;
   /** Every PROVIDER item of the order (all providers: the share needs the total). */
   items: {
     fulfiller_id: string;
@@ -150,8 +155,16 @@ export function hasPlatformCharge(
   row: Pick<
     ProviderOrderRow,
     'stripe_charge_id' | 'stripe_payment_id' | 'stripe_account_id'
-  >,
+  > & { payment_route?: string | null },
 ): boolean {
+  // OWN_KEY (the owner's own Stripe account) and CONNECT_DIRECT charges are
+  // settled outside platform payouts: no transfer can ever happen.
+  if (
+    row.payment_route === 'OWN_KEY' ||
+    row.payment_route === 'CONNECT_DIRECT'
+  ) {
+    return false;
+  }
   return (
     !row.stripe_account_id && !!(row.stripe_charge_id || row.stripe_payment_id)
   );
@@ -366,8 +379,16 @@ export class ProviderEarningsService {
       OR: [{ payment_status: 'paid' }, { status: OrderStatus.DELIVERED }],
     };
     // SQL twin of hasPlatformCharge.
+    // payment_route is nullable (legacy orders): `notIn` alone drops NULL.
+    const platformRoute: Prisma.OrderWhereInput = {
+      OR: [
+        { payment_route: null },
+        { payment_route: { notIn: ['OWN_KEY', 'CONNECT_DIRECT'] } },
+      ],
+    };
     const platformCharge: Prisma.OrderWhereInput = {
       AND: [
+        platformRoute,
         { stripe_account_id: null },
         {
           OR: [
@@ -379,6 +400,7 @@ export class ProviderEarningsService {
     };
     const noPlatformCharge: Prisma.OrderWhereInput = {
       OR: [
+        { payment_route: { in: ['OWN_KEY', 'CONNECT_DIRECT'] } },
         { stripe_account_id: { not: null } },
         { AND: [{ stripe_charge_id: null }, { stripe_payment_id: null }] },
       ],
@@ -438,6 +460,7 @@ export class ProviderEarningsService {
       stripe_charge_id: true,
       stripe_payment_id: true,
       stripe_account_id: true,
+      payment_route: true,
       items: {
         where: { fulfiller_type: FulfillerType.PROVIDER },
         select: {

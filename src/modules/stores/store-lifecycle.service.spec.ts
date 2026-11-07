@@ -229,6 +229,34 @@ describe('StoreLifecycleService.checklist', () => {
     });
   });
 
+  it('payments_ready: an ACTIVE own Stripe key counts as card-ready (INDEPENDENT)', async () => {
+    const b = build();
+    const store = b.store as Record<string, unknown> & {
+      creator: Record<string, unknown>;
+    };
+    store.creator.stripe_account_type = null;
+    store.creator.stripe_charges_enabled = false;
+    store.stripe_keys = { status: 'NEEDS_RECONNECT' };
+    expect((await b.service.checklist('s1')).payments_ready).toBe(false);
+    store.stripe_keys = { status: 'ACTIVE', livemode: true };
+    const live = await b.service.checklist('s1');
+    expect(live.payments_ready).toBe(true);
+    expect(live.payments_hint).toBeNull();
+  });
+
+  it('payments_ready: a TEST-mode own key does not count (hint OWN_KEY_TEST_MODE)', async () => {
+    const b = build();
+    const store = b.store as Record<string, unknown> & {
+      creator: Record<string, unknown>;
+    };
+    store.creator.stripe_account_type = null;
+    store.creator.stripe_charges_enabled = false;
+    store.stripe_keys = { status: 'ACTIVE', livemode: false };
+    const c = await b.service.checklist('s1');
+    expect(c.payments_ready).toBe(false);
+    expect(c.payments_hint).toBe('OWN_KEY_TEST_MODE');
+  });
+
   it('names the blocking items', async () => {
     const { service } = build({ verified: false, trader: null, products: 0 });
     const c = await service.checklist('s1');

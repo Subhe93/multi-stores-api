@@ -46,6 +46,7 @@ import { ThemesModule } from './modules/themes/themes.module';
 import { MenusModule } from './modules/menus/menus.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { PaymentsModule } from './modules/payments/payments.module';
+import { OwnKeyModule } from './modules/payments/own-key/own-key.module';
 import { MailModule } from './modules/mail/mail.module';
 import { LegalModule } from './modules/legal/legal.module';
 import { NotificationTemplatesModule } from './modules/notification-templates/notification-templates.module';
@@ -115,6 +116,8 @@ import { CspReportModule } from './modules/csp-report/csp-report.module';
     ThemesModule,
     MenusModule,
     NotificationsModule,
+    // Global: provides OWN_KEY_API to the payment flow (restricted keys).
+    OwnKeyModule,
     PaymentsModule,
     MailModule,
     LegalModule,

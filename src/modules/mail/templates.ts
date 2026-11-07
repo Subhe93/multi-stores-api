@@ -956,6 +956,8 @@ export type SecurityAlertKind =
   | 'platform_keys_changed'
   | 'kustom_keys_changed'
   | 'stripe_disconnected'
+  | 'stripe_own_key_changed'
+  | 'stripe_own_key_revoked'
   | 'two_factor_enabled'
   | 'two_factor_disabled'
   | 'recovery_codes_regenerated'
@@ -972,6 +974,8 @@ export interface SecurityAlertData {
   ip?: string | null;
   userAgent?: string | null;
   platformName?: string;
+  /** Call-to-action link (button) — `stripe_own_key_revoked` only. */
+  actionUrl?: string;
 }
 
 interface SecurityText {
@@ -983,6 +987,10 @@ interface SecurityText {
   ip: string;
   device: string;
   notYou: string;
+  /** Footer of `stripe_own_key_revoked` (what to do), instead of notYou. */
+  reconnect: string;
+  /** Button label of `stripe_own_key_revoked` (links to `actionUrl`). */
+  reconnectButton: string;
   dir: 'ltr' | 'rtl';
 }
 
@@ -995,6 +1003,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Security alert: your Kustom payment credentials were changed',
       stripe_disconnected:
         'Security alert: your Stripe account was disconnected',
+      stripe_own_key_changed: 'Security alert: the Stripe key of your store was changed',
+      stripe_own_key_revoked: 'Action needed: your Stripe key stopped working',
       two_factor_enabled: 'Two-factor authentication was turned on',
       two_factor_disabled:
         'Security alert: two-factor authentication was turned off',
@@ -1011,6 +1021,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'The Kustom credentials used to receive payments for your store were changed.',
       stripe_disconnected:
         'The Stripe account that receives your payouts was disconnected.',
+      stripe_own_key_changed: 'The Stripe key your store uses to receive card payments on your own Stripe account was connected, replaced or removed.',
+      stripe_own_key_revoked: 'Stripe rejected the restricted key of your store (it was revoked, expired or deleted). Card payments are paused until you connect a new key.',
       two_factor_enabled:
         'Two-factor authentication is now required to sign in to your account.',
       two_factor_disabled:
@@ -1029,6 +1041,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
     when: 'Time (UTC)',
     ip: 'IP address',
     device: 'Device',
+    reconnect: 'Create a new restricted key in your Stripe Dashboard and connect it under Settings > Payments. Other payment methods keep working meanwhile.',
+    reconnectButton: 'Reconnect your Stripe key',
     notYou:
       "If this wasn't you, change your password immediately, turn on two-factor authentication and check your payment settings.",
     dir: 'ltr',
@@ -1039,6 +1053,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
       kustom_keys_changed:
         'تنبيه أمني: تم تغيير بيانات اعتماد Kustom الخاصة بك',
       stripe_disconnected: 'تنبيه أمني: تم فصل حساب Stripe الخاص بك',
+      stripe_own_key_changed: 'تنبيه أمني: تم تغيير مفتاح Stripe الخاص بمتجرك',
+      stripe_own_key_revoked: 'إجراء مطلوب: مفتاح Stripe الخاص بك توقف عن العمل',
       two_factor_enabled: 'تم تفعيل المصادقة الثنائية',
       two_factor_disabled: 'تنبيه أمني: تم إيقاف المصادقة الثنائية',
       recovery_codes_regenerated:
@@ -1053,6 +1069,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
       kustom_keys_changed:
         'تم تغيير بيانات Kustom المستخدمة لاستقبال مدفوعات متجرك.',
       stripe_disconnected: 'تم فصل حساب Stripe الذي تُحوَّل إليه أرباحك.',
+      stripe_own_key_changed: 'تم ربط أو استبدال أو إزالة مفتاح Stripe الذي يستخدمه متجرك لاستقبال مدفوعات البطاقات على حساب Stripe الخاص بك.',
+      stripe_own_key_revoked: 'رفض Stripe المفتاح المقيّد لمتجرك (تم إلغاؤه أو انتهت صلاحيته أو حُذف). تم إيقاف مدفوعات البطاقات مؤقتاً حتى تربط مفتاحاً جديداً.',
       two_factor_enabled:
         'أصبح رمز المصادقة الثنائية مطلوباً لتسجيل الدخول إلى حسابك.',
       two_factor_disabled:
@@ -1069,6 +1087,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
     when: 'الوقت (UTC)',
     ip: 'عنوان IP',
     device: 'الجهاز',
+    reconnect: 'أنشئ مفتاحاً مقيّداً جديداً من لوحة تحكم Stripe واربطه من الإعدادات > المدفوعات. طرق الدفع الأخرى تبقى تعمل في هذه الأثناء.',
+    reconnectButton: 'أعد ربط مفتاح Stripe',
     notYou:
       'إذا لم تكن أنت من قام بذلك، غيّر كلمة المرور فوراً، وفعّل المصادقة الثنائية، وراجع إعدادات الدفع.',
     dir: 'rtl',
@@ -1081,6 +1101,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Säkerhetsvarning: dina Kustom-uppgifter har ändrats',
       stripe_disconnected:
         'Säkerhetsvarning: ditt Stripe-konto har kopplats bort',
+      stripe_own_key_changed: 'Säkerhetsvarning: butikens Stripe-nyckel har ändrats',
+      stripe_own_key_revoked: 'Åtgärd krävs: din Stripe-nyckel slutade fungera',
       two_factor_enabled: 'Tvåstegsverifiering har aktiverats',
       two_factor_disabled:
         'Säkerhetsvarning: tvåstegsverifiering har stängts av',
@@ -1098,6 +1120,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Kustom-uppgifterna som tar emot betalningar för din butik har ändrats.',
       stripe_disconnected:
         'Stripe-kontot som tar emot dina utbetalningar har kopplats bort.',
+      stripe_own_key_changed: 'Stripe-nyckeln som din butik använder för att ta emot kortbetalningar på ditt eget Stripe-konto har kopplats, bytts ut eller tagits bort.',
+      stripe_own_key_revoked: 'Stripe avvisade butikens begränsade nyckel (den har återkallats, gått ut eller raderats). Kortbetalningar är pausade tills du kopplar en ny nyckel.',
       two_factor_enabled:
         'En tvåstegskod krävs nu för att logga in på ditt konto.',
       two_factor_disabled:
@@ -1116,6 +1140,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
     when: 'Tid (UTC)',
     ip: 'IP-adress',
     device: 'Enhet',
+    reconnect: 'Skapa en ny begränsad nyckel i Stripe Dashboard och koppla den under Inställningar > Betalningar. Andra betalsätt fungerar under tiden.',
+    reconnectButton: 'Koppla din Stripe-nyckel igen',
     notYou:
       'Om det inte var du: byt lösenord direkt, aktivera tvåstegsverifiering och kontrollera dina betalinställningar.',
     dir: 'ltr',
@@ -1128,6 +1154,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Güvenlik uyarısı: Kustom ödeme bilgileriniz değiştirildi',
       stripe_disconnected:
         'Güvenlik uyarısı: Stripe hesabınızın bağlantısı kesildi',
+      stripe_own_key_changed: 'Güvenlik uyarısı: mağazanızın Stripe anahtarı değiştirildi',
+      stripe_own_key_revoked: 'İşlem gerekli: Stripe anahtarınız çalışmayı durdurdu',
       two_factor_enabled: 'İki adımlı doğrulama açıldı',
       two_factor_disabled: 'Güvenlik uyarısı: iki adımlı doğrulama kapatıldı',
       recovery_codes_regenerated:
@@ -1144,6 +1172,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Mağazanızın ödemelerini almak için kullanılan Kustom bilgileri değiştirildi.',
       stripe_disconnected:
         'Ödemelerinizi alan Stripe hesabının bağlantısı kesildi.',
+      stripe_own_key_changed: 'Mağazanızın kendi Stripe hesabınızda kart ödemesi almak için kullandığı Stripe anahtarı bağlandı, değiştirildi veya kaldırıldı.',
+      stripe_own_key_revoked: 'Stripe mağazanızın kısıtlı anahtarını reddetti (iptal edildi, süresi doldu veya silindi). Yeni bir anahtar bağlayana kadar kart ödemeleri duraklatıldı.',
       two_factor_enabled:
         'Hesabınıza giriş için artık iki adımlı doğrulama kodu gerekiyor.',
       two_factor_disabled:
@@ -1161,6 +1191,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
     when: 'Zaman (UTC)',
     ip: 'IP adresi',
     device: 'Cihaz',
+    reconnect: 'Stripe Dashboard üzerinden yeni bir kısıtlı anahtar oluşturun ve Ayarlar > Ödemeler bölümünden bağlayın. Diğer ödeme yöntemleri bu sırada çalışmaya devam eder.',
+    reconnectButton: 'Stripe anahtarınızı yeniden bağlayın',
     notYou:
       'Bunu siz yapmadıysanız hemen şifrenizi değiştirin, iki adımlı doğrulamayı açın ve ödeme ayarlarınızı kontrol edin.',
     dir: 'ltr',
@@ -1173,6 +1205,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Sicherheitswarnung: Ihre Kustom-Zahlungsdaten wurden geändert',
       stripe_disconnected:
         'Sicherheitswarnung: Ihr Stripe-Konto wurde getrennt',
+      stripe_own_key_changed: 'Sicherheitswarnung: Der Stripe-Schlüssel Ihres Shops wurde geändert',
+      stripe_own_key_revoked: 'Handlung erforderlich: Ihr Stripe-Schlüssel funktioniert nicht mehr',
       two_factor_enabled: 'Zwei-Faktor-Authentifizierung wurde aktiviert',
       two_factor_disabled:
         'Sicherheitswarnung: Zwei-Faktor-Authentifizierung wurde deaktiviert',
@@ -1192,6 +1226,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Die Kustom-Daten, über die Ihr Shop Zahlungen erhält, wurden geändert.',
       stripe_disconnected:
         'Das Stripe-Konto, das Ihre Auszahlungen erhält, wurde getrennt.',
+      stripe_own_key_changed: 'Der Stripe-Schlüssel, mit dem Ihr Shop Kartenzahlungen auf Ihrem eigenen Stripe-Konto empfängt, wurde verbunden, ersetzt oder entfernt.',
+      stripe_own_key_revoked: 'Stripe hat den eingeschränkten Schlüssel Ihres Shops abgelehnt (widerrufen, abgelaufen oder gelöscht). Kartenzahlungen sind pausiert, bis Sie einen neuen Schlüssel verbinden.',
       two_factor_enabled:
         'Für die Anmeldung bei Ihrem Konto ist jetzt ein Zwei-Faktor-Code erforderlich.',
       two_factor_disabled:
@@ -1210,6 +1246,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
     when: 'Zeit (UTC)',
     ip: 'IP-Adresse',
     device: 'Gerät',
+    reconnect: 'Erstellen Sie im Stripe-Dashboard einen neuen eingeschränkten Schlüssel und verbinden Sie ihn unter Einstellungen > Zahlungen. Andere Zahlungsarten funktionieren weiterhin.',
+    reconnectButton: 'Stripe-Schlüssel neu verbinden',
     notYou:
       'Wenn Sie das nicht waren, ändern Sie sofort Ihr Passwort, aktivieren Sie die Zwei-Faktor-Authentifizierung und prüfen Sie Ihre Zahlungseinstellungen.',
     dir: 'ltr',
@@ -1222,6 +1260,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Alerte de sécurité : vos identifiants de paiement Kustom ont été modifiés',
       stripe_disconnected:
         'Alerte de sécurité : votre compte Stripe a été déconnecté',
+      stripe_own_key_changed: 'Alerte de sécurité : la clé Stripe de votre boutique a été modifiée',
+      stripe_own_key_revoked: 'Action requise : votre clé Stripe ne fonctionne plus',
       two_factor_enabled: "L'authentification à deux facteurs a été activée",
       two_factor_disabled:
         "Alerte de sécurité : l'authentification à deux facteurs a été désactivée",
@@ -1241,6 +1281,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Les identifiants Kustom utilisés pour recevoir les paiements de votre boutique ont été modifiés.',
       stripe_disconnected:
         'Le compte Stripe qui reçoit vos versements a été déconnecté.',
+      stripe_own_key_changed: 'La clé Stripe utilisée par votre boutique pour recevoir les paiements par carte sur votre propre compte Stripe a été connectée, remplacée ou supprimée.',
+      stripe_own_key_revoked: 'Stripe a refusé la clé restreinte de votre boutique (révoquée, expirée ou supprimée). Les paiements par carte sont suspendus jusqu’à ce que vous connectiez une nouvelle clé.',
       two_factor_enabled:
         'Un code à deux facteurs est désormais requis pour vous connecter à votre compte.',
       two_factor_disabled:
@@ -1259,6 +1301,8 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
     when: 'Heure (UTC)',
     ip: 'Adresse IP',
     device: 'Appareil',
+    reconnect: 'Créez une nouvelle clé restreinte dans le Dashboard Stripe et connectez-la dans Paramètres > Paiements. Les autres moyens de paiement continuent de fonctionner.',
+    reconnectButton: 'Reconnecter votre clé Stripe',
     notYou:
       "Si ce n'était pas vous, changez immédiatement votre mot de passe, activez l'authentification à deux facteurs et vérifiez vos paramètres de paiement.",
     dir: 'ltr',
@@ -1284,11 +1328,17 @@ export function securityAlertEmail(
         `<tr><td style="padding:4px 12px 4px 0;font-size:13px;color:#71717a;white-space:nowrap;vertical-align:top;">${esc(label)}</td><td style="padding:4px 0;font-size:13px;color:#18181b;word-break:break-word;"><bdi>${esc(value)}</bdi></td></tr>`,
     )
     .join('');
+  const revoked = data.kind === 'stripe_own_key_revoked';
+  const footer = revoked ? t.reconnect : t.notYou;
+  const action =
+    revoked && data.actionUrl
+      ? `<p style="margin:20px 0;">${button(t.reconnectButton, data.actionUrl)}</p>`
+      : '';
   const html = layout(
     esc(t.subject[data.kind]),
     `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">${esc(t.body[data.kind])}</p>
      <table style="border-collapse:collapse;margin:16px 0;">${table}</table>
-     <p style="font-size:13px;line-height:1.6;color:#b91c1c;">${esc(t.notYou)}</p>`,
+     <p style="font-size:13px;line-height:1.6;color:#b91c1c;">${esc(footer)}</p>${action}`,
     { platformName: data.platformName },
     t.dir,
   );
@@ -1299,7 +1349,8 @@ export function securityAlertEmail(
     '',
     ...rows.map(([label, value]) => `${label}: ${value}`),
     '',
-    t.notYou,
+    footer,
+    ...(action ? ['', `${t.reconnectButton}: ${data.actionUrl}`] : []),
   ].join('\n');
   return { subject: t.subject[data.kind], html, text };
 }

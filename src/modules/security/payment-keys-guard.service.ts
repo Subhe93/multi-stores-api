@@ -6,7 +6,12 @@ import { SecurityAuditService } from './security-audit.service';
 import type { RequestMeta } from './request-meta';
 import type { SecurityAlertKind } from '../mail/templates';
 
-type Scope = 'platform' | 'kustom' | 'stripe_connect';
+type Scope =
+  | 'platform'
+  | 'kustom'
+  | 'stripe_connect'
+  | 'stripe_own_key'
+  | 'stripe_own_key_removed';
 
 const SCOPES: Record<
   Scope,
@@ -14,7 +19,9 @@ const SCOPES: Record<
     action:
       | 'payment_keys.platform.updated'
       | 'payment_keys.kustom.updated'
-      | 'payment_keys.stripe_connect.disconnected';
+      | 'payment_keys.stripe_connect.disconnected'
+      | 'payment_keys.stripe_own_key.updated'
+      | 'payment_keys.stripe_own_key.removed';
     alert: SecurityAlertKind;
     require2fa: boolean;
   }
@@ -34,6 +41,18 @@ const SCOPES: Record<
     alert: 'stripe_disconnected',
     require2fa: false,
   },
+  // The owner's own restricted Stripe key decides where card money goes,
+  // so it needs 2FA like the platform keys.
+  stripe_own_key: {
+    action: 'payment_keys.stripe_own_key.updated',
+    alert: 'stripe_own_key_changed',
+    require2fa: true,
+  },
+  stripe_own_key_removed: {
+    action: 'payment_keys.stripe_own_key.removed',
+    alert: 'stripe_own_key_changed',
+    require2fa: true,
+  },
 };
 
 /**
@@ -41,8 +60,8 @@ const SCOPES: Record<
  * change, then write the audit row and send the alert emails. Field VALUES
  * never leave this class — only names, with "(cleared)" for removals.
  *
- * Future credential types (e.g. the owner's restricted Stripe key) should go
- * through here too.
+ * The owner's restricted Stripe key (scopes stripe_own_key /
+ * stripe_own_key_removed) goes through here too.
  */
 @Injectable()
 export class PaymentKeysGuardService {

@@ -15,6 +15,7 @@ import { InvoicesModule } from '../invoices/invoices.module';
 import { DesignerRenderModule } from '../designer/designer-render.module';
 import { DesignerCoreModule } from '../designer/designer-core.module';
 import { MagicLinkModule } from '../auth/magic-link.module';
+import { StorefrontGateModule } from '../storefront/storefront-gate.service';
 
 // PrismaModule, CryptoModule and MailModule are @Global, so PrismaService,
 // CryptoService and MailService are injectable here without importing them.
@@ -46,6 +47,8 @@ import { MagicLinkModule } from '../auth/magic-link.module';
     InvoicesModule,
     DesignerRenderModule,
     DesignerCoreModule,
+    // Optional-auth viewer of GET /payments/config (test-key preview).
+    StorefrontGateModule,
   ],
   controllers: [PaymentsController, KustomController, KustomCheckoutController],
   providers: [PaymentsService, KustomService, KustomCheckoutService],

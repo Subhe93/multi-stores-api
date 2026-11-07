@@ -1,7 +1,10 @@
 import {
   Injectable,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
+  HttpException,
+  Inject,
   NotFoundException,
   Logger,
   Optional,
@@ -9,6 +12,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
 import { UserRole, FulfillerType, StoreType } from '@prisma/client';
+import type { OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CryptoService } from '../../common/crypto/crypto.service';
 import {
@@ -18,7 +22,11 @@ import {
 } from '../../common/money/currency.util';
 import { splitProviderShares } from '../../common/money/provider-share.util';
 import { MarketsContextService } from '../markets/markets-context.service';
-import { OrdersService } from '../orders/orders.service';
+import {
+  OrdersService,
+  type AbandonedPaymentCheckOptions,
+  type AbandonedPaymentDecision,
+} from '../orders/orders.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
 import { InvoiceTriggersService } from '../invoices/invoice-triggers.service';
@@ -27,6 +35,18 @@ import {
   isKustomEnabledForStore,
   kustomCreatorSelect,
 } from './kustom/kustom.eligibility';
+import {
+  OWN_KEY_API,
+  OWN_KEY_ERRORS,
+  type OwnKeyApi,
+} from './own-key/own-key.types';
+import {
+  isStripeAuthError,
+  redactStripeSecrets,
+  resolvePaymentRoute,
+  routeOfOrder,
+  type PaymentRoute,
+} from './payment-route';
 
 // The stripe package does not surface the `Stripe.*` resource namespace through
 // its package entry under nodenext, so we derive the types we need from the
@@ -41,9 +61,142 @@ type StripeCharge = Awaited<ReturnType<StripeClient['charges']['retrieve']>>;
 type PaymentIntentCreateParams = Parameters<
   StripeClient['paymentIntents']['create']
 >[0];
+type StripeRequestOptions = { stripeAccount: string } | undefined;
+
+/** The Stripe client + request options an order's objects live behind. */
+interface OrderStripe {
+  route: PaymentRoute;
+  storeId: string | null;
+  stripe: StripeClient;
+  opts: StripeRequestOptions;
+  /** OWN_KEY: fingerprint of the key behind `stripe` (null otherwise). */
+  fingerprint?: string | null;
+}
+
+/** Customer-facing error codes of the card checkout (web maps them). */
+export const PAYMENT_ERRORS = {
+  /** The payment route changed and the old attempt could not be closed. */
+  ROUTE_CHANGED_RETRY: 'PAYMENT_ROUTE_CHANGED_RETRY',
+  /** Total below the Stripe minimum charge for the currency. */
+  AMOUNT_TOO_SMALL: 'PAYMENT_AMOUNT_TOO_SMALL',
+  /** Generic provider failure (own-key stores: no merchant Stripe text). */
+  PROVIDER_ERROR: 'PAYMENT_PROVIDER_ERROR',
+  PROCESSING: 'PAYMENT_PROCESSING',
+} as const;
+
+/**
+ * Stripe minimum charge per presentment currency, in minor units
+ * (docs.stripe.com/currencies#minimum-and-maximum-charge-amounts). Stripe
+ * checks the settlement currency too, so a Stripe `amount_too_small` error
+ * is mapped to the same code as a fallback.
+ */
+const STRIPE_MIN_AMOUNT: Record<string, number> = {
+  usd: 50, eur: 50, gbp: 30, chf: 50, aud: 50, cad: 50, nzd: 50, sgd: 50,
+  sek: 300, nok: 300, dkk: 250, pln: 200, czk: 1500, huf: 17500, ron: 200,
+  bgn: 100, hkd: 400, jpy: 50, mxn: 1000, aed: 200, inr: 50, brl: 50,
+  thb: 1000, myr: 200,
+};
+
+export function belowStripeMinimum(minor: number, currency: string): boolean {
+  const min = STRIPE_MIN_AMOUNT[currency.toLowerCase()];
+  return min !== undefined && minor < min;
+}
+
+/**
+ * POST /payments/create-intent: a client secret to confirm, or the order's
+ * payment state when there is nothing to confirm (already paid, a zero
+ * total, or a payment Stripe is still processing).
+ */
+export type CreateIntentResult =
+  | { clientSecret: string; paymentIntentId: string; route: PaymentRoute }
+  | { status: 'paid' | 'processing' };
+
+/**
+ * Whether an intent's payment really failed: canceled, or back to
+ * `requires_payment_method` AFTER a declined attempt (last_payment_error).
+ * A never-confirmed intent is also `requires_payment_method` — that is not
+ * a failure (the customer may still pay).
+ */
+export function intentHasFailed(pi: {
+  status: string;
+  last_payment_error?: unknown;
+}): boolean {
+  return (
+    pi.status === 'canceled' ||
+    (pi.status === 'requires_payment_method' && !!pi.last_payment_error)
+  );
+}
+
+
+
+/** Timeline note of an order confirmed without a payment (total 0). */
+export const ZERO_TOTAL_PAID_NOTE = 'No payment required (total 0)';
+
+/**
+ * A Stripe failure worth a retry with a NEW idempotency key: 5xx (Stripe
+ * caches it under the key for 24h) or no response at all (connection).
+ */
+export function isRetryableStripeError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { statusCode?: number; type?: string };
+  return (
+    (typeof e.statusCode === 'number' && e.statusCode >= 500) ||
+    e.type === 'StripeConnectionError' ||
+    e.type === 'StripeAPIError'
+  );
+}
+
+/** A Stripe failure that will not clear on a retry (401 / 403 / 404). */
+export function isPermanentStripeError(err: unknown): boolean {
+  const status = (err as { statusCode?: unknown } | null)?.statusCode;
+  return status === 401 || status === 403 || status === 404;
+}
+
+/**
+ * Which webhook endpoint delivered an event. `ownKeyStoreId` is set for the
+ * per-store own-key endpoint; null for the platform / Connect endpoints.
+ * Handlers called without a context (reconcile, refund sync) skip the
+ * endpoint check because they act on an order they already resolved.
+ */
+export interface WebhookContext {
+  ownKeyStoreId: string | null;
+}
+
+/** Fields of a Refund object the refund.* handlers read. */
+interface RefundLike {
+  id?: string;
+  charge?: string | { id: string } | null;
+  payment_intent?: string | { id: string } | null;
+  status?: string | null;
+  amount?: number;
+  currency?: string;
+  failure_reason?: string | null;
+}
+
+/** Fields of a Dispute object the charge.dispute.* handler reads. */
+interface DisputeLike {
+  charge?: string | { id: string } | null;
+  payment_intent?: string | { id: string } | null;
+  amount?: number;
+  currency?: string;
+  status?: string;
+  reason?: string;
+}
+
+/** Order fields the route / endpoint decisions of webhook handlers need. */
+const ORDER_ROUTE_SELECT = {
+  id: true,
+  order_number: true,
+  store_id: true,
+  payment_route: true,
+  stripe_account_id: true,
+  stripe_payment_id: true,
+  stripe_key_fingerprint: true,
+  payment_status: true,
+} as const;
 
 @Injectable()
-export class PaymentsService {
+export class PaymentsService implements OnModuleInit {
   private readonly logger = new Logger(PaymentsService.name);
   // Cached client + the secret it was built from, so we rebuild only when the
   // admin changes the key. Platform keys live in PlatformConfig (admin-managed)
@@ -63,7 +216,23 @@ export class PaymentsService {
     @Optional() private readonly invoices?: InvoiceTriggersService,
     // Designer app (M4.2 WP5): optional and last; no-op without the app.
     @Optional() private readonly designerTriggers?: DesignerTriggersService,
+    // Own Stripe key of INDEPENDENT stores (restricted key, no Connect).
+    // Optional so the payment flow keeps working without the own-key module.
+    @Optional()
+    @Inject(OWN_KEY_API)
+    private readonly ownKey?: OwnKeyApi,
   ) {}
+
+  /**
+   * The abandonment sweep (OrdersService) asks us before releasing a card
+   * order that has a PaymentIntent, so an async payment (bank debit,
+   * wallet, 3DS in progress) is never failed while it may still succeed.
+   */
+  onModuleInit(): void {
+    this.orders.registerAbandonedPaymentChecker?.((order, opts) =>
+      this.checkAbandonedOrder(order, opts),
+    );
+  }
 
   // ── Config resolution (DB first, env fallback) ─────────────────────────────
 
@@ -100,6 +269,178 @@ export class PaymentsService {
     return stripe;
   }
 
+  // ── Payment routes (own key / connect direct / platform) ───────────────────
+
+  /** Whether the store's own Stripe key is ACTIVE (false without the module). */
+  private async ownKeyActive(
+    storeId: string | null | undefined,
+    allowTest = false,
+  ): Promise<boolean> {
+    if (!storeId || !this.ownKey) return false;
+    try {
+      return await this.ownKey.isActive(storeId, { allowTest });
+    } catch (err) {
+      this.logger.warn(
+        `Own key status lookup failed for store ${storeId}: ${this.describe(err)}`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Route for a NEW payment of a store: OWN_KEY > CONNECT_DIRECT > PLATFORM.
+   * A TEST-mode own key only routes with `allowTest` (the owner / an admin
+   * previewing the store); the public checkout never pays on a test key.
+   */
+  async resolveRouteForStore(
+    store: { id: string; store_type: StoreType | string } | null,
+    opts: { allowTest?: boolean } = {},
+  ): Promise<PaymentRoute> {
+    const independent = store?.store_type === StoreType.INDEPENDENT;
+    return resolvePaymentRoute({
+      storeType: store?.store_type,
+      ownKeyActive: independent
+        ? await this.ownKeyActive(store.id, opts.allowTest === true)
+        : false,
+    });
+  }
+
+  private ownKeyNotActive(): BadRequestException {
+    return new BadRequestException({
+      code: OWN_KEY_ERRORS.NOT_ACTIVE,
+      message:
+        'This store cannot accept card payments right now. Please choose another payment method.',
+    });
+  }
+
+  /**
+   * The store's own merchant client (throws OWN_KEY_NOT_ACTIVE). With the
+   * order's key fingerprint, an order paid with a replaced key is read back
+   * with that (retained, read-only) key.
+   */
+  private async merchantCtx(
+    storeId: string | null,
+    fingerprint?: string | null,
+  ): Promise<OrderStripe> {
+    if (!storeId || !this.ownKey) throw this.ownKeyNotActive();
+    try {
+      const entry = await this.ownKey.getClientEntry(storeId, { fingerprint });
+      return {
+        route: 'OWN_KEY',
+        storeId,
+        stripe: entry.client,
+        opts: undefined,
+        fingerprint: entry.fingerprint,
+      };
+    } catch {
+      throw this.ownKeyNotActive();
+    }
+  }
+
+  /** True for the OWN_KEY_NOT_ACTIVE error (client missing or revoked). */
+  private isOwnKeyUnavailable(err: unknown): boolean {
+    if (!(err instanceof HttpException)) return false;
+    const res = err.getResponse() as { code?: unknown } | string;
+    return typeof res === 'object' && res?.code === OWN_KEY_ERRORS.NOT_ACTIVE;
+  }
+
+  /**
+   * Client + request options for an order's Stripe objects, picked by
+   * `order.payment_route` (null = legacy: a connected-account snapshot means
+   * a direct charge, else the platform).
+   */
+  private async stripeForOrder(order: {
+    payment_route?: string | null;
+    stripe_account_id?: string | null;
+    store_id?: string | null;
+    stripe_key_fingerprint?: string | null;
+  }): Promise<OrderStripe> {
+    const route = routeOfOrder(order);
+    const storeId = order.store_id ?? null;
+    if (route === 'OWN_KEY') {
+      return this.merchantCtx(storeId, order.stripe_key_fingerprint ?? null);
+    }
+    return {
+      route,
+      storeId,
+      stripe: await this.requireStripe(),
+      opts:
+        route === 'CONNECT_DIRECT' && order.stripe_account_id
+          ? { stripeAccount: order.stripe_account_id }
+          : undefined,
+    };
+  }
+
+  /**
+   * Run a call on an order's client. A 401 on a merchant key means the key
+   * was revoked or expired: flag it (NEEDS_RECONNECT + owner notice) and
+   * surface OWN_KEY_NOT_ACTIVE instead of a raw Stripe error.
+   */
+  private async callStripe<T>(
+    ctx: OrderStripe,
+    fn: (stripe: StripeClient, opts: StripeRequestOptions) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await fn(ctx.stripe, ctx.opts);
+    } catch (err) {
+      if (ctx.route === 'OWN_KEY' && isStripeAuthError(err)) {
+        if (ctx.storeId && this.ownKey) {
+          try {
+            await this.ownKey.markRevoked(
+              ctx.storeId,
+              'auth_failed',
+              ctx.fingerprint ?? null,
+            );
+          } catch (markErr) {
+            this.logger.error(
+              `Could not flag the own key of store ${ctx.storeId}: ${this.describe(markErr)}`,
+            );
+          }
+        }
+        this.logger.warn(
+          `Own Stripe key of store ${ctx.storeId} was rejected (401); marked for reconnect`,
+        );
+        throw this.ownKeyNotActive();
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Webhook endpoint isolation: the per-store endpoint only touches OWN_KEY
+   * orders of THAT store; the platform / Connect endpoints never touch an
+   * OWN_KEY order (its objects live on the merchant's own account).
+   */
+  private webhookMayTouch(
+    ctx: WebhookContext | undefined,
+    order: {
+      id: string;
+      store_id: string | null;
+      payment_route?: string | null;
+      stripe_account_id?: string | null;
+    },
+    eventType: string,
+  ): boolean {
+    if (!ctx) return true;
+    const route = routeOfOrder(order);
+    const ok = ctx.ownKeyStoreId
+      ? order.store_id === ctx.ownKeyStoreId && route === 'OWN_KEY'
+      : route !== 'OWN_KEY';
+    if (!ok) {
+      this.logger.warn(
+        `Ignoring ${eventType} for order ${order.id}: not handled by this webhook endpoint` +
+          (ctx.ownKeyStoreId ? ` (store ${ctx.ownKeyStoreId})` : ''),
+      );
+    }
+    return ok;
+  }
+
+  private describe(err: unknown): string {
+    return redactStripeSecrets(
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
   async isStripeConfigured(): Promise<boolean> {
     return (await this.resolveStripe()) !== null;
   }
@@ -130,17 +471,25 @@ export class PaymentsService {
     storeSlug?: string,
     marketKey?: string,
     preview?: boolean,
+    /**
+     * Whether the caller (optional bearer, StorefrontViewerGuard) is the
+     * store's owner or an admin. Only they may pay on a TEST-mode own key
+     * (`test_mode: true`) and read the config of a store that is not live.
+     */
+    viewerCanPreview?: (storeId: string) => Promise<boolean>,
   ) {
     const stripeConfigured = await this.isStripeConfigured();
     const publishableKey = await this.getPublishableKey();
 
     // Inactive stores get platform defaults, mirroring storefront.getStore's
-    // is_active handling — an unpublished store must not leak its account.
-    const store = storeSlug
+    // is_active handling — an unpublished store must not leak its account
+    // (its owner / an admin previewing it excepted).
+    const row = storeSlug
       ? await this.prisma.store.findUnique({
-          where: { slug: storeSlug, is_active: true },
+          where: { slug: storeSlug },
           select: {
             id: true,
+            is_active: true,
             store_type: true,
             currency: true,
             creator: {
@@ -154,30 +503,26 @@ export class PaymentsService {
           },
         })
       : null;
+    let ownerPreview = false;
+    if (row && viewerCanPreview) {
+      ownerPreview = await viewerCanPreview(row.id).catch(() => false);
+    }
+    const store = row && (row.is_active !== false || ownerPreview) ? row : null;
 
     if (!store || store.store_type !== StoreType.INDEPENDENT) {
       return {
         stripeConfigured,
         publishableKey,
         stripeAccount: null,
+        route: 'PLATFORM' as PaymentRoute,
         kustomEnabled: false,
       };
     }
 
-    const creator = store.creator;
-    const stripeAccount =
-      creator.stripe_account_type === 'standard' &&
-      creator.stripe_charges_enabled
-        ? creator.stripe_account_id
-        : null;
-    return {
-      stripeConfigured:
-        Boolean(publishableKey) && stripeConfigured && stripeAccount != null,
-      publishableKey,
-      stripeAccount,
-      // Kustom also needs a currency it can process: the market's when the
-      // markets app applies, else the store's.
-      kustomEnabled: isKustomEnabledForStore({
+    // Kustom also needs a currency it can process: the market's when the
+    // markets app applies, else the store's.
+    const kustomEnabled = async () =>
+      isKustomEnabledForStore({
         ...store,
         currency: resolveOrderCurrency(
           store,
@@ -192,7 +537,41 @@ export class PaymentsService {
               })
             : await this.markets.resolve(store.id, marketKey),
         ),
-      }),
+      });
+
+    // Own Stripe key: Stripe.js runs on the merchant's own publishable key,
+    // no connected account involved.
+    const route = await this.resolveRouteForStore(store, {
+      allowTest: ownerPreview,
+    });
+    if (route === 'OWN_KEY') {
+      const ownPublishableKey =
+        (await this.ownKey?.getPublishableKey(store.id)) ?? null;
+      // Only reached with a test key when the viewer may preview.
+      const testMode = ownPublishableKey?.startsWith('pk_test_') === true;
+      return {
+        stripeConfigured: Boolean(ownPublishableKey),
+        publishableKey: ownPublishableKey,
+        stripeAccount: null,
+        route,
+        kustomEnabled: await kustomEnabled(),
+        ...(testMode ? { test_mode: true } : {}),
+      };
+    }
+
+    const creator = store.creator;
+    const stripeAccount =
+      creator.stripe_account_type === 'standard' &&
+      creator.stripe_charges_enabled
+        ? creator.stripe_account_id
+        : null;
+    return {
+      stripeConfigured:
+        Boolean(publishableKey) && stripeConfigured && stripeAccount != null,
+      publishableKey,
+      stripeAccount,
+      route,
+      kustomEnabled: await kustomEnabled(),
     };
   }
 
@@ -318,12 +697,33 @@ export class PaymentsService {
    * Stripe message, so the client sees the real cause (e.g. "Connect is not
    * enabled on this account") instead of an opaque 500.
    */
-  private async runStripe<T>(fn: () => Promise<T>, action: string): Promise<T> {
+  private async runStripe<T>(
+    fn: () => Promise<T>,
+    action: string,
+    route?: PaymentRoute,
+  ): Promise<T> {
     try {
       return await fn();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.logger.error(`Stripe error while trying to ${action}: ${message}`);
+      // Already a client-facing error (e.g. OWN_KEY_NOT_ACTIVE): keep it.
+      if (err instanceof HttpException) throw err;
+      const message = this.describe(err);
+      this.logger.error(
+        `Stripe error while trying to ${action}${route ? ` (${route})` : ''}: ${message}`,
+      );
+      if ((err as { code?: unknown } | null)?.code === 'amount_too_small') {
+        throw this.amountTooSmall();
+      }
+      // The text of a merchant's own Stripe account (OWN_KEY) can name its
+      // settings / account; customers get a generic message + code, the
+      // redacted detail stays in the log above.
+      if (route === 'OWN_KEY') {
+        throw new BadRequestException({
+          code: PAYMENT_ERRORS.PROVIDER_ERROR,
+          message:
+            'The card payment could not be started. Please try again or choose another payment method.',
+        });
+      }
       throw new BadRequestException(`Stripe error: ${message}`);
     }
   }
@@ -402,6 +802,30 @@ export class PaymentsService {
   }
 
   /**
+   * Connect is phased out for INDEPENDENT stores: they take payments on their
+   * own Stripe account (restricted key). A creator of an independent store
+   * without a connected account gets 409 USE_OWN_STRIPE_KEY; stores already
+   * on Connect, marketplace creators and providers are unchanged.
+   */
+  private assertConnectAllowed(party: {
+    kind: 'creator' | 'provider';
+    independentStore: boolean;
+    stripeAccountId: string | null;
+  }) {
+    if (
+      party.kind === 'creator' &&
+      party.independentStore &&
+      !party.stripeAccountId
+    ) {
+      throw new ConflictException({
+        code: OWN_KEY_ERRORS.USE_OWN_STRIPE_KEY,
+        message:
+          'Independent stores connect their own Stripe account with a restricted key.',
+      });
+    }
+  }
+
+  /**
    * Ensure the party has a Stripe connected account, creating one on first
    * call. Payout recipients (providers, marketplace creators) get an Express
    * account with the `transfers` capability; creators of INDEPENDENT stores
@@ -415,8 +839,9 @@ export class PaymentsService {
     userId: string,
     role: UserRole,
   ): Promise<string> {
-    const stripe = await this.requireStripe();
     const party = await this.resolveParty(userId, role);
+    this.assertConnectAllowed(party);
+    const stripe = await this.requireStripe();
 
     const useStandard = party.kind === 'creator' && party.independentStore;
     // Stripe cannot convert an account's type in place, so a mismatch is fixed
@@ -481,8 +906,9 @@ export class PaymentsService {
     userId: string,
     role: UserRole,
   ): Promise<{ url: string }> {
-    const stripe = await this.requireStripe();
     const party = await this.resolveParty(userId, role);
+    this.assertConnectAllowed(party);
+    const stripe = await this.requireStripe();
     const accountId = await this.getOrCreateConnectedAccount(userId, role);
     const dashboardUrl =
       this.config.get<string>('DASHBOARD_URL') || 'http://localhost:3002';
@@ -649,10 +1075,23 @@ export class PaymentsService {
    * recipient (every involved provider + the store creator) via transfers, and
    * the platform keeps its commission. We therefore require every recipient to
    * have completed Connect onboarding before allowing a card payment.
+   *
+   * INDEPENDENT stores charge directly: on the owner's own Stripe account
+   * when their restricted key is ACTIVE (OWN_KEY), else on the legacy
+   * Standard connected account (CONNECT_DIRECT). Every route enables the
+   * payment methods the charging account has turned on (Payment Element).
    */
-  async createPaymentIntentForOrder(userId: string, orderId: string) {
-    const stripe = await this.requireStripe();
-
+  async createPaymentIntentForOrder(
+    userId: string,
+    orderId: string,
+    /**
+     * Whether the storefront viewer (X-Storefront-Viewer: the same preview /
+     * edit-hint or session bearer /payments/config is called with) is the
+     * store's owner or an admin. Decides ONLY whether a TEST-mode own key
+     * may take this payment; order ownership comes from the customer JWT.
+     */
+    viewerCanPreview?: (storeId: string) => Promise<boolean>,
+  ): Promise<CreateIntentResult> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
@@ -671,23 +1110,35 @@ export class PaymentsService {
     if (order.customer.user_id !== userId) {
       throw new ForbiddenException('You can only pay for your own orders');
     }
-    if (order.payment_status === 'paid') {
+    // Already paid (a webhook / confirm won the race, or a reload after
+    // paying): answer 200 so the checkout goes straight to confirmation.
+    if (order.payment_status === 'paid') return { status: 'paid' };
+    if (order.payment_status === 'refunded') {
       throw new BadRequestException('Order is already paid');
     }
 
-    // Best-effort: re-derive the commission split from the store's CURRENT
-    // store_type before charging, so an admin flipping the type while this
-    // order sat unpaid can't leave a stale ledger driving the wrong payouts.
-    // Never blocks payment — a failure here just keeps the existing row.
-    try {
-      await this.orders.recomputeCommissionForOrder(order.id);
-    } catch (err) {
-      this.logger.warn(
-        `Could not recompute commission for order ${order.id}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+    // Zero total (100% discount): nothing to charge, never sent to Stripe.
+    // The order is confirmed as paid right away through the same finalize
+    // path as a Stripe payment (invoices, designer, emails), minus transfers.
+    if (!(Number(order.total) > 0)) {
+      await this.recomputeCommission(order.id);
+      const result = await this.orders.markOrderPaid(
+        order.id,
+        undefined,
+        'none',
+        { note: ZERO_TOTAL_PAID_NOTE },
       );
+      await this.finalizePaidOrder(order.id, order.store_id, result, {
+        transfers: false,
+      });
+      return { status: 'paid' };
     }
+    const amount = toStripeAmount(Number(order.total), order.currency);
+    if (belowStripeMinimum(amount, order.currency)) {
+      throw this.amountTooSmall();
+    }
+
+    await this.recomputeCommission(order.id);
 
     // Independent stores charge the customer DIRECTLY on the creator's Standard
     // connected account (direct charge) — no platform commission, no transfers.
@@ -695,9 +1146,11 @@ export class PaymentsService {
       ? await this.prisma.store.findUnique({
           where: { id: order.store_id },
           select: {
+            id: true,
             store_type: true,
             creator: {
               select: {
+                user_id: true,
                 stripe_account_id: true,
                 stripe_account_type: true,
                 stripe_charges_enabled: true,
@@ -707,6 +1160,16 @@ export class PaymentsService {
         })
       : null;
     const isIndependent = store?.store_type === StoreType.INDEPENDENT;
+    // A TEST-mode own key only takes payments from the store owner or an
+    // admin previewing the checkout, decided with the same storefront viewer
+    // as /payments/config (the customer JWT is a per-store customer account
+    // and never the owner). Real customers never pay on a test key.
+    const allowTest =
+      isIndependent &&
+      !!store &&
+      !!viewerCanPreview &&
+      (await viewerCanPreview(store.id).catch(() => false));
+    const route = await this.resolveRouteForStore(store, { allowTest });
 
     let directAccountId: string | null = null;
     if (isIndependent) {
@@ -721,7 +1184,9 @@ export class PaymentsService {
         );
       }
       const creator = store.creator;
-      if (
+      if (route === 'OWN_KEY') {
+        // The owner's own account: no connected account, no transfers.
+      } else if (
         !creator?.stripe_account_id ||
         !creator.stripe_charges_enabled ||
         creator.stripe_account_type !== 'standard'
@@ -729,13 +1194,20 @@ export class PaymentsService {
         throw new BadRequestException(
           'This store cannot accept card payments yet. Please choose cash on delivery.',
         );
+      } else {
+        directAccountId = creator.stripe_account_id;
       }
-      directAccountId = creator.stripe_account_id;
     } else {
       // Every payout recipient must be able to receive transfers before we take
       // the customer's money, otherwise the funds could not be split out.
       await this.assertRecipientsOnboarded(order.store_id, order.items);
     }
+
+    // Calling create-intent again (retry, reload, deferred-intent submit)
+    // reuses the order's open intent instead of opening a second one that
+    // could also charge the customer.
+    const reused = await this.reuseOpenIntent(order, route, directAccountId);
+    if (reused) return reused;
 
     // The PaymentIntent carries the total (line-item detail isn't supported by
     // PaymentIntents — the itemized invoice lives in our order). We still attach
@@ -746,7 +1218,7 @@ export class PaymentsService {
     const params: PaymentIntentCreateParams = {
       // Not a plain ×100: zero-decimal currencies (JPY, KRW…) are already in
       // their smallest unit, so multiplying would charge 100× the total.
-      amount: toStripeAmount(Number(order.total), order.currency),
+      amount,
       currency: order.currency.toLowerCase(),
       description: `Order ${order.order_number} — ${unitCount} item(s)`,
       metadata: {
@@ -769,34 +1241,323 @@ export class PaymentsService {
           ? { tax_exempt_reason: order.tax_exempt_reason }
           : {}),
       },
-      automatic_payment_methods: {
-        enabled: true,
-        allow_redirects: 'never',
-      },
+      // Every method the charging account enabled (card, wallets, Link,
+      // Klarna, bank debits...) through the Payment Element; redirect-based
+      // methods return to the checkout's return_url.
+      automatic_payment_methods: { enabled: true },
     };
 
+    // Every route: scoped to the route / account, the order, the amount and
+    // the intent this order already has, so a double submit reuses one
+    // intent while a later retry (after a failed / canceled attempt, or a
+    // changed total) gets a fresh one.
+    const ctx: OrderStripe =
+      route === 'OWN_KEY'
+        ? await this.merchantCtx(store!.id)
+        : {
+            route,
+            storeId: order.store_id,
+            stripe: await this.requireStripe(),
+            opts: directAccountId
+              ? { stripeAccount: directAccountId }
+              : undefined,
+          };
+    // Stripe caches the response of an idempotency key for 24h, a 500 too:
+    // after a 5xx / connection error the order's attempt counter is bumped
+    // so the retry gets a fresh key (absent while 0: keys stay unchanged).
+    const attempt = order.stripe_intent_attempt ?? 0;
+    const idempotencyKey = [
+      'pi',
+      route,
+      route === 'OWN_KEY' ? (ctx.fingerprint ?? '') : (directAccountId ?? 'platform'),
+      order.id,
+      `${params.amount}${params.currency}`,
+      order.stripe_payment_id ?? 'first',
+      ...(attempt > 0 ? [`a${attempt}`] : []),
+    ].join('_');
     const intent = await this.runStripe(
-      () =>
-        directAccountId
-          ? stripe.paymentIntents.create(params, {
-              stripeAccount: directAccountId,
-            })
-          : stripe.paymentIntents.create(params),
+      async () => {
+        try {
+          return await this.callStripe(ctx, (s, o) =>
+            s.paymentIntents.create(params, { ...(o ?? {}), idempotencyKey }),
+          );
+        } catch (err) {
+          if (isRetryableStripeError(err)) await this.bumpIntentAttempt(order.id);
+          throw err;
+        }
+      },
       'create payment intent',
+      route,
     );
 
     // Record the intent id on the order up front to aid reconciliation, plus
-    // the connected account it lives on when this was a direct charge — every
-    // later retrieval of this PaymentIntent/charge must target that account.
+    // the route + connected account (or own-key fingerprint) it lives on —
+    // every later retrieval of this PaymentIntent/charge must target that
+    // same account / key.
     await this.prisma.order.update({
       where: { id: order.id },
       data: {
         stripe_payment_id: intent.id,
         stripe_account_id: directAccountId,
+        payment_route: route,
+        stripe_key_fingerprint:
+          route === 'OWN_KEY' ? (ctx.fingerprint ?? null) : null,
+        payment_processing_at: null,
       },
     });
 
-    return { clientSecret: intent.client_secret!, paymentIntentId: intent.id };
+    return {
+      clientSecret: intent.client_secret!,
+      paymentIntentId: intent.id,
+      route,
+    };
+  }
+
+  /** Next PaymentIntent create of the order uses a fresh idempotency key. */
+  private async bumpIntentAttempt(orderId: string): Promise<void> {
+    try {
+      await this.prisma.order.update({
+        where: { id: orderId },
+        data: { stripe_intent_attempt: { increment: 1 } },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Could not bump the intent attempt of order ${orderId}: ${this.describe(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Best-effort: re-derive the commission split from the store's CURRENT
+   * store_type before charging, so an admin flipping the type while the
+   * order sat unpaid can't leave a stale ledger driving the wrong payouts.
+   * Never blocks payment: a failure just keeps the existing row.
+   */
+  private async recomputeCommission(orderId: string): Promise<void> {
+    try {
+      await this.orders.recomputeCommissionForOrder(orderId);
+    } catch (err) {
+      this.logger.warn(
+        `Could not recompute commission for order ${orderId}: ${this.describe(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Everything that follows an order becoming paid, shared by a Stripe
+   * payment (onPaymentSucceeded) and a zero total: card details, invoice,
+   * designer renders, payouts (only `transfers`: a PLATFORM charge; no-op
+   * for direct routes inside issueOrderTransfers) and, the first time, the
+   * customer / owner notifications + emails. Steps that are not gated on
+   * `changed` are idempotent, so a retried delivery heals a partial run.
+   */
+  private async finalizePaidOrder(
+    orderId: string,
+    storeId: string | null,
+    result: Awaited<ReturnType<OrdersService['markOrderPaid']>>,
+    opts: {
+      chargeId?: string | null;
+      transfers: boolean;
+      rethrowTransfers?: boolean;
+    },
+  ): Promise<void> {
+    // Capture the card/receipt details for tracking (best-effort, non-fatal).
+    if (opts.chargeId) {
+      await this.captureChargeDetails(orderId, opts.chargeId);
+    }
+
+    // Invoices app: issue after the card label is captured and before the
+    // transfers (which may throw) and the confirmation email (which attaches
+    // the invoice). Not gated on `changed`, so a retried delivery heals a
+    // failed issuance; issuing is idempotent.
+    await this.invoices?.onOrderPaid({
+      id: orderId,
+      store_id: storeId,
+      payment_status: 'paid',
+    });
+
+    // Designer app: queue the print renders of the order's designed items
+    // (enqueue only, never throws; idempotent on a replayed event).
+    await this.designerTriggers?.onOrderPaid({
+      id: orderId,
+      store_id: storeId,
+      payment_status: 'paid',
+    });
+
+    // Split the captured funds out to the payout recipients. Always attempted
+    // (not gated on `changed`) so a webhook retry after a partial failure still
+    // completes the transfers; Stripe idempotency keys prevent duplicates.
+    if (opts.transfers) {
+      await this.issueOrderTransfers(orderId, {
+        rethrow: opts.rethrowTransfers !== false,
+      });
+    }
+
+    if (result?.changed) await this.afterOrderPaid(orderId, result);
+  }
+
+  private amountTooSmall(): BadRequestException {
+    return new BadRequestException({
+      code: PAYMENT_ERRORS.AMOUNT_TOO_SMALL,
+      message:
+        'The order total is below the minimum card payment amount. Please choose another payment method.',
+    });
+  }
+
+  /** Customer + owner notifications and emails of a newly paid order. */
+  private async afterOrderPaid(
+    orderId: string,
+    result: { order: { customer: { user_id: string }; order_number: string } },
+  ) {
+    await this.notifications.create(
+      result.order.customer.user_id,
+      'order_paid',
+      'Payment received',
+      `We received your payment for order ${result.order.order_number}.`,
+      { order_id: orderId },
+    );
+    // Send the paid order confirmation email + notify the owner (best-effort).
+    // The dispatcher loads the order with items and resolves locale from the
+    // store, so this stays a one-liner per event.
+    await this.mail.dispatchOrderEmail(orderId, 'order_confirmation');
+    await this.mail.dispatchOrderEmail(orderId, 'new_order_owner');
+  }
+
+  /**
+   * The order's existing PaymentIntent, when it can still be confirmed on the
+   * same account for exactly the order total. A succeeded intent finalises
+   * the order (`{ status: 'paid' }`); a processing one answers
+   * `{ status: 'processing' }`; a stale one (other route / account, other
+   * amount) is canceled so at most one live intent exists per order. When
+   * the route changed and the old intent cannot be read or canceled, the
+   * call is refused (409 PAYMENT_ROUTE_CHANGED_RETRY) rather than opening a
+   * second intent that could also charge. Returns null when a fresh intent
+   * must be created.
+   */
+  private async reuseOpenIntent(
+    order: {
+      id: string;
+      order_number?: string;
+      store_id: string | null;
+      payment_route: string | null;
+      stripe_account_id: string | null;
+      stripe_payment_id: string | null;
+      stripe_key_fingerprint?: string | null;
+      total: unknown;
+      currency: string;
+    },
+    route: PaymentRoute,
+    directAccountId: string | null,
+  ): Promise<CreateIntentResult | null> {
+    if (!order.stripe_payment_id) return null;
+    const piId = order.stripe_payment_id;
+    const sameAccount =
+      routeOfOrder(order) === route &&
+      (route !== 'CONNECT_DIRECT' ||
+        order.stripe_account_id === directAccountId);
+    const routeChanged = () =>
+      new ConflictException({
+        code: PAYMENT_ERRORS.ROUTE_CHANGED_RETRY,
+        message:
+          'The payment setup of this store changed. Please try again in a moment or choose another payment method.',
+      });
+    /**
+     * The previous intent lives on ANOTHER route and could not be read or
+     * canceled. Opening a second intent while the old one may still be
+     * confirmable risks a double charge, so the first such call answers
+     * 409 (a transient Stripe error usually clears on the retry). When it
+     * is permanently unreachable (own key revoked / removed, 401 / 403 /
+     * 404) or the retry fails again, the old attempt is recorded as
+     * `abandoned_unreachable` (timeline + owner notification) and the order
+     * switches to the new route. Should the abandoned intent still be paid,
+     * onPaymentSucceeded flags it PAYMENT_STALE_INTENT for a refund.
+     * Only reached for an order that is not paid (checked by the caller).
+     */
+    const abandonOrRetry = async (err: unknown): Promise<null> => {
+      if (!isPermanentStripeError(err) && !this.isOwnKeyUnavailable(err)) {
+        const first = await this.orders.recordPaymentNote(
+          order.id,
+          'PAYMENT_ROUTE_RETRY',
+          `The previous payment attempt (${piId}) could not be closed; retry requested`,
+        );
+        if (first.changed) throw routeChanged();
+      }
+      const noted = await this.orders.recordPaymentNote(
+        order.id,
+        'PAYMENT_INTENT_ABANDONED',
+        `abandoned_unreachable: the previous payment attempt (${piId}) could not be closed after the payment setup changed; check it in Stripe`,
+      );
+      if (noted.changed) {
+        await this.notifyStoreCreator(
+          order.store_id,
+          'order_payment_attempt_abandoned',
+          'Old payment attempt left open',
+          `Order ${order.order_number ?? order.id} switched to your new payment setup, but its previous payment attempt (${piId}) could not be closed. If it is ever paid, refund it in that Stripe account.`,
+          order.id,
+        );
+      }
+      this.logger.warn(
+        `Order ${order.id}: previous intent abandoned_unreachable, switching route`,
+      );
+      return null;
+    };
+
+    let ctx: OrderStripe;
+    let pi: StripePaymentIntent;
+    try {
+      ctx = await this.stripeForOrder(order);
+      pi = await this.callStripe(ctx, (s, o) =>
+        s.paymentIntents.retrieve(piId, undefined, o),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Could not read the previous intent of order ${order.id}: ${this.describe(err)}`,
+      );
+      // A merchant 401 on the CURRENT route must reach the client.
+      if (sameAccount && err instanceof HttpException) throw err;
+      // The old attempt may still be confirmable on the other account.
+      if (!sameAccount) return abandonOrRetry(err);
+      return null;
+    }
+
+    if (pi.status === 'succeeded') {
+      await this.onPaymentSucceeded(pi, { rethrowTransfers: false });
+      return { status: 'paid' };
+    }
+    if (pi.status === 'processing' || pi.status === 'requires_capture') {
+      return { status: 'processing' };
+    }
+    if (pi.status === 'canceled') return null;
+
+    const reusable =
+      pi.status === 'requires_payment_method' ||
+      pi.status === 'requires_confirmation' ||
+      pi.status === 'requires_action';
+    const matches =
+      pi.amount === toStripeAmount(Number(order.total), order.currency) &&
+      (pi.currency ?? '').toLowerCase() === order.currency.toLowerCase();
+    if (sameAccount && reusable && matches && pi.client_secret) {
+      return {
+        clientSecret: pi.client_secret,
+        paymentIntentId: pi.id,
+        route,
+      };
+    }
+
+    // Stale intent: close it so it can never charge alongside the new one.
+    try {
+      await this.callStripe(ctx, (s, o) =>
+        // 'duplicate' tells the canceled webhook this was our own
+        // replacement, not a failed payment (see onPaymentFailed).
+        s.paymentIntents.cancel(piId, { cancellation_reason: 'duplicate' }, o),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Could not cancel the previous intent of order ${order.id}: ${this.describe(err)}`,
+      );
+      if (!sameAccount) return abandonOrRetry(err);
+    }
+    return null;
   }
 
   /**
@@ -873,13 +1634,20 @@ export class PaymentsService {
    * Used right after the client confirms a card payment and as an admin "verify"
    * action, so order status doesn't depend on the webhook arriving.
    */
-  async reconcilePayment(orderId: string) {
+  async reconcilePayment(orderId: string): Promise<{
+    payment_status: string;
+    intent_status?: string;
+    code?: string;
+  }> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       select: {
         payment_status: true,
         stripe_payment_id: true,
         stripe_account_id: true,
+        payment_route: true,
+        stripe_key_fingerprint: true,
+        store_id: true,
       },
     });
     if (!order) throw new NotFoundException('Order not found');
@@ -901,29 +1669,164 @@ export class PaymentsService {
       return { payment_status: order.payment_status ?? 'awaiting_payment' };
     }
 
-    const stripe = await this.requireStripe();
-    // Direct-charge intents live on the connected account, not the platform.
-    const pi = await this.runStripe(
-      () =>
-        stripe.paymentIntents.retrieve(
-          order.stripe_payment_id!,
-          undefined,
-          order.stripe_account_id
-            ? { stripeAccount: order.stripe_account_id }
-            : undefined,
-        ),
-      'retrieve payment intent',
-    );
+    // Direct-charge intents live on the connected account (or the owner's own
+    // account for OWN_KEY), not the platform.
+    let pi: StripePaymentIntent;
+    try {
+      const ctx = await this.stripeForOrder(order);
+      pi = await this.runStripe(
+        () =>
+          this.callStripe(ctx, (s, opts) =>
+            s.paymentIntents.retrieve(order.stripe_payment_id!, undefined, opts),
+          ),
+        'retrieve payment intent',
+        routeOfOrder(order),
+      );
+    } catch (err) {
+      // The store's own key is gone / revoked: the order is left open (the
+      // per-store webhook or the owner reconnecting finishes it).
+      if (this.isOwnKeyUnavailable(err)) {
+        return {
+          payment_status: order.payment_status ?? 'awaiting_payment',
+          code: OWN_KEY_ERRORS.NOT_ACTIVE,
+        };
+      }
+      throw err;
+    }
 
     if (pi.status === 'succeeded') {
       await this.onPaymentSucceeded(pi, { rethrowTransfers: false });
       return { payment_status: 'paid' };
     }
-    if (pi.status === 'canceled' || pi.status === 'requires_payment_method') {
+    if (intentHasFailed(pi)) {
       await this.onPaymentFailed(pi);
       return { payment_status: 'failed' };
     }
-    return { payment_status: order.payment_status ?? 'awaiting_payment' };
+    if (pi.status === 'processing') {
+      await this.markProcessing(orderId);
+    }
+    // e.g. `processing` (bank debits, some wallets), or an intent that was
+    // never confirmed (`requires_payment_method` without an error: a confirm
+    // call after a network blip must not kill a good order): the order keeps
+    // waiting. `intent_status` lets the checkout tell them apart.
+    return {
+      payment_status: order.payment_status ?? 'awaiting_payment',
+      intent_status: pi.status,
+    };
+  }
+
+  /** Flags an order whose payment Stripe is processing (sweep skips it). */
+  private async markProcessing(orderId: string): Promise<void> {
+    await this.prisma.order.updateMany({
+      where: {
+        id: orderId,
+        payment_processing_at: null,
+        payment_status: { notIn: ['paid', 'refunded'] },
+      },
+      data: { payment_processing_at: new Date() },
+    });
+  }
+
+  /**
+   * Live check of an order the abandonment sweep wants to release
+   * (OrdersService.releaseExpiredAwaitingPaymentOrders): succeeded -> paid;
+   * processing / requires_action / requires_capture -> keep; an intent that
+   * can no longer be paid or was never paid -> canceled first (so a late
+   * confirmation cannot charge a released order) and then failed. Unknown
+   * state (Stripe unreachable, own key revoked / removed) -> keep: the
+   * webhook or the owner reconnecting finishes those.
+   */
+  async checkAbandonedOrder(
+    order: {
+      id: string;
+      store_id: string | null;
+      payment_route: string | null;
+      stripe_account_id: string | null;
+      stripe_payment_id: string | null;
+      stripe_key_fingerprint?: string | null;
+    },
+    caps: AbandonedPaymentCheckOptions = {},
+  ): Promise<AbandonedPaymentDecision> {
+    if (!order.stripe_payment_id) return 'fail';
+    // Past the hard caps (OrdersService): an order nobody can finish is
+    // failed instead of being kept forever.
+    const hardCap = caps.hardCap === true || caps.processingExpired === true;
+    const piId = order.stripe_payment_id;
+    let ctx: OrderStripe;
+    let pi: StripePaymentIntent;
+    try {
+      ctx = await this.stripeForOrder(order);
+      pi = await this.callStripe(ctx, (s, o) =>
+        s.paymentIntents.retrieve(piId, undefined, o),
+      );
+    } catch (err) {
+      const status = (err as { statusCode?: unknown } | null)?.statusCode;
+      if (status === 404) return 'fail';
+      this.logger.warn(
+        `Sweep: could not check the intent of order ${order.id}: ${this.describe(err)}` +
+          (hardCap ? ' (past the maximum age: released)' : ''),
+      );
+      // Unreadable (Stripe down, own key revoked / removed): kept until the
+      // hard cap, then failed; a late success still lands (late-pay path).
+      return hardCap ? 'fail' : 'keep';
+    }
+    if (pi.status === 'succeeded') {
+      await this.onPaymentSucceeded(pi, { rethrowTransfers: false });
+      return 'paid';
+    }
+    if (pi.status === 'processing' || pi.status === 'requires_capture') {
+      // Async payments (SEPA can take several business days) are kept up to
+      // PROCESSING_PAYMENT_MAX_AGE_MS. Stripe cannot cancel a processing
+      // intent; past the cap the order is released and a late success is
+      // still accepted by markOrderPaid.
+      if (caps.processingExpired) {
+        await this.cancelForSweep(ctx, piId, order.id);
+        return 'fail';
+      }
+      await this.markProcessing(order.id);
+      return 'keep';
+    }
+    if (pi.status === 'requires_action') {
+      if (!hardCap) return 'keep';
+      // 3DS / redirect never finished within the cap: close it, then fail.
+      await this.cancelForSweep(ctx, piId, order.id);
+      return 'fail';
+    }
+    if (pi.status === 'canceled') return 'fail';
+    // requires_payment_method / requires_confirmation: abandoned. Close the
+    // intent first; if that fails (e.g. it was just confirmed), keep.
+    try {
+      await this.callStripe(ctx, (s, o) =>
+        s.paymentIntents.cancel(
+          piId,
+          { cancellation_reason: 'abandoned' },
+          o,
+        ),
+      );
+      return 'fail';
+    } catch (err) {
+      this.logger.warn(
+        `Sweep: could not cancel the intent of order ${order.id}: ${this.describe(err)}`,
+      );
+      return hardCap ? 'fail' : 'keep';
+    }
+  }
+
+  /** Best-effort cancel of an intent the sweep releases past its cap. */
+  private async cancelForSweep(
+    ctx: OrderStripe,
+    piId: string,
+    orderId: string,
+  ): Promise<void> {
+    try {
+      await this.callStripe(ctx, (s, o) =>
+        s.paymentIntents.cancel(piId, { cancellation_reason: 'abandoned' }, o),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Sweep: could not cancel the intent of order ${orderId} (released anyway): ${this.describe(err)}`,
+      );
+    }
   }
 
   /**
@@ -934,17 +1837,19 @@ export class PaymentsService {
   private async syncRefundState(orderId: string): Promise<boolean> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      select: { stripe_charge_id: true, stripe_account_id: true },
+      select: {
+        stripe_charge_id: true,
+        stripe_account_id: true,
+        payment_route: true,
+        stripe_key_fingerprint: true,
+        store_id: true,
+      },
     });
     if (!order?.stripe_charge_id) return false;
     try {
-      const stripe = await this.requireStripe();
-      const charge = await stripe.charges.retrieve(
-        order.stripe_charge_id,
-        undefined,
-        order.stripe_account_id
-          ? { stripeAccount: order.stripe_account_id }
-          : undefined,
+      const ctx = await this.stripeForOrder(order);
+      const charge = await this.callStripe(ctx, (s, opts) =>
+        s.charges.retrieve(order.stripe_charge_id!, undefined, opts),
       );
       if (!charge.refunded && charge.amount_refunded === 0) return false;
       // Reuse the webhook path so both routes apply identical effects.
@@ -952,9 +1857,7 @@ export class PaymentsService {
       return charge.refunded;
     } catch (err) {
       this.logger.error(
-        `Refund sync failed for order ${orderId}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        `Refund sync failed for order ${orderId}: ${this.describe(err)}`,
       );
       return false;
     }
@@ -1005,30 +1908,112 @@ export class PaymentsService {
   }
 
   /**
+   * Verify an event from an INDEPENDENT store's own Stripe account, delivered
+   * to that store's endpoint (`/payments/webhook/store/:storeId`) and signed
+   * with the secret stored when the endpoint was created. Verification is
+   * local (static helper), so no merchant API call is needed.
+   */
+  async constructStoreWebhookEvent(
+    storeId: string,
+    rawBody: Buffer,
+    signature: string,
+  ): Promise<StripeEvent> {
+    if (!signature) {
+      throw new BadRequestException('Missing stripe-signature header');
+    }
+    // The current endpoint's secret and, while a replaced key is retained,
+    // the secret of the endpoint left on that key's account.
+    const secrets = this.ownKey
+      ? await this.ownKey.getWebhookSecrets(storeId)
+      : [];
+    if (!secrets.length) {
+      throw new BadRequestException('Store webhook is not configured');
+    }
+    let lastErr: unknown = null;
+    for (const secret of secrets) {
+      try {
+        return Stripe.webhooks.constructEvent(
+          rawBody,
+          signature,
+          secret,
+        ) as StripeEvent;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr instanceof Error
+      ? lastErr
+      : new BadRequestException('Invalid webhook signature');
+  }
+
+  /**
    * Dispatch a verified Stripe event. Errors are logged and rethrown so the
    * controller returns 5xx and Stripe retries the delivery — important because
    * a transient failure here happens *after* the customer was already charged.
    * Unknown orders / unhandled event types resolve normally (no retry).
+   *
+   * `ctx` names the endpoint: the platform / Connect endpoints (default) never
+   * touch OWN_KEY orders; the per-store endpoint only touches OWN_KEY orders
+   * of its own store, and reads them back with that store's merchant client.
    */
-  async handleWebhookEvent(event: StripeEvent): Promise<void> {
+  async handleWebhookEvent(
+    event: StripeEvent,
+    ctx: WebhookContext = { ownKeyStoreId: null },
+  ): Promise<void> {
     try {
       switch (event.type) {
         case 'payment_intent.succeeded': {
           const pi = event.data.object as StripePaymentIntent;
-          await this.onPaymentSucceeded(pi);
+          await this.onPaymentSucceeded(pi, { webhook: ctx });
           break;
         }
         case 'payment_intent.payment_failed': {
           const pi = event.data.object as StripePaymentIntent;
-          await this.onPaymentFailed(pi);
+          await this.onPaymentFailed(pi, { webhook: ctx });
+          break;
+        }
+        case 'payment_intent.canceled': {
+          const pi = event.data.object as StripePaymentIntent;
+          await this.onPaymentFailed(pi, {
+            webhook: ctx,
+            canceled: true,
+          });
+          break;
+        }
+        case 'payment_intent.processing': {
+          const pi = event.data.object as StripePaymentIntent;
+          await this.onPaymentProcessing(pi, ctx);
           break;
         }
         case 'charge.refunded': {
           const charge = event.data.object as StripeCharge;
-          await this.onChargeRefunded(charge);
+          await this.onChargeRefunded(charge, ctx);
+          break;
+        }
+        case 'refund.created':
+        case 'refund.updated':
+        case 'refund.failed':
+        case 'charge.refund.updated': {
+          await this.onRefundEvent(
+            event.data.object as unknown as RefundLike,
+            ctx,
+            event.type,
+          );
+          break;
+        }
+        case 'charge.dispute.created':
+        case 'charge.dispute.updated':
+        case 'charge.dispute.closed': {
+          await this.onDisputeEvent(
+            event.type,
+            event.data.object as unknown as DisputeLike,
+            ctx,
+          );
           break;
         }
         case 'account.updated': {
+          // Connect only — an own-key account has no Connect onboarding.
+          if (ctx.ownKeyStoreId) break;
           await this.syncConnectAccount(event.data.object as StripeAccount);
           break;
         }
@@ -1039,7 +2024,9 @@ export class PaymentsService {
     } catch (err) {
       this.logger.error(
         `Failed handling Stripe event ${event.type} (${event.id})`,
-        err instanceof Error ? err.stack : String(err),
+        redactStripeSecrets(
+          err instanceof Error ? (err.stack ?? err.message) : String(err),
+        ),
       );
       // Rethrow so the webhook responds 5xx and Stripe retries the delivery.
       throw err;
@@ -1048,7 +2035,7 @@ export class PaymentsService {
 
   private async onPaymentSucceeded(
     pi: StripePaymentIntent,
-    opts: { rethrowTransfers?: boolean } = {},
+    opts: { rethrowTransfers?: boolean; webhook?: WebhookContext } = {},
   ) {
     const orderId = pi.metadata?.order_id;
     if (!orderId) return;
@@ -1056,26 +2043,62 @@ export class PaymentsService {
     const orderRow = await this.prisma.order.findUnique({
       where: { id: orderId },
       select: {
+        order_number: true,
         stripe_account_id: true,
+        payment_route: true,
+        stripe_key_fingerprint: true,
+        stripe_payment_id: true,
+        payment_status: true,
         store_id: true,
         total: true,
         currency: true,
       },
     });
     if (!orderRow) return;
+    if (
+      !this.webhookMayTouch(
+        opts.webhook,
+        { id: orderId, ...orderRow },
+        'payment_intent.succeeded',
+      )
+    ) {
+      return;
+    }
 
     // SECURITY: never trust the (possibly replayed/forged-metadata) event
     // payload alone — re-read the PaymentIntent live from Stripe and only mark
     // the order paid when Stripe itself says it succeeded. A retrieval failure
     // propagates (the webhook handler logs + rethrows so Stripe retries).
-    const stripe = await this.requireStripe();
-    const live = await stripe.paymentIntents.retrieve(
-      pi.id,
-      undefined,
-      orderRow.stripe_account_id
-        ? { stripeAccount: orderRow.stripe_account_id }
-        : undefined,
-    );
+    //
+    // One exception: an OWN_KEY event delivered to the store's own endpoint
+    // (signature verified with that store's secret, so the payload comes from
+    // the merchant's account) while the merchant key is revoked / removed.
+    // The customer has paid; the order is finished from the payload under the
+    // same checks (order id, intent id, amount, currency) instead of failing
+    // every retry with a 5xx.
+    let live: StripePaymentIntent;
+    try {
+      const ctx = await this.stripeForOrder(orderRow);
+      live = await this.callStripe(ctx, (s, o) =>
+        s.paymentIntents.retrieve(pi.id, undefined, o),
+      );
+    } catch (err) {
+      const fromStoreEndpoint =
+        !!opts.webhook?.ownKeyStoreId &&
+        routeOfOrder(orderRow) === 'OWN_KEY' &&
+        orderRow.store_id === opts.webhook.ownKeyStoreId;
+      if (!fromStoreEndpoint || !this.isOwnKeyUnavailable(err)) throw err;
+      if (!orderRow.stripe_payment_id || pi.id !== orderRow.stripe_payment_id) {
+        this.logger.warn(
+          `Ignoring payment_intent.succeeded for order ${orderId}: own key unavailable and the event is not the order's intent`,
+        );
+        return;
+      }
+      this.logger.warn(
+        `Own key of store ${orderRow.store_id} unavailable: finishing order ${orderId} from the verified webhook payload`,
+      );
+      live = pi;
+    }
     if (live.status !== 'succeeded') {
       this.logger.warn(
         `Ignoring payment_intent.succeeded for order ${orderId}: live status is ${live.status}`,
@@ -1086,6 +2109,31 @@ export class PaymentsService {
       this.logger.warn(
         `Ignoring payment_intent.succeeded for order ${orderId}: live intent belongs to a different order`,
       );
+      return;
+    }
+    // An older attempt of this order (replaced by a newer intent, e.g. after a
+    // route change or a total change) that still got paid: never counted as
+    // the order's payment, whatever amount it collected (checked BEFORE the
+    // amount, an old attempt usually carries the old total). The owner is
+    // told to refund it in Stripe.
+    if (orderRow.stripe_payment_id && live.id !== orderRow.stripe_payment_id) {
+      this.logger.error(
+        `payment_intent.succeeded for order ${orderId} is not its current intent (${live.id}); flagged for refund`,
+      );
+      const noted = await this.orders.recordPaymentNote(
+        orderId,
+        'PAYMENT_STALE_INTENT',
+        `A payment was received on an old payment attempt (${live.id}); refund it in Stripe`,
+      );
+      if (noted.changed) {
+        await this.notifyStoreCreator(
+          orderRow.store_id,
+          'order_payment_stale_intent',
+          'Payment received on an old attempt',
+          `Order ${orderRow.order_number} received a payment on an old payment attempt (${live.id}). Refund that payment in your Stripe dashboard.`,
+          orderId,
+        );
+      }
       return;
     }
     // The intent must have collected exactly the order total, in the order
@@ -1110,49 +2158,11 @@ export class PaymentsService {
         ? live.latest_charge
         : live.latest_charge?.id;
 
-    // Capture the card/receipt details for tracking (best-effort, non-fatal).
-    await this.captureChargeDetails(orderId, chargeId);
-
-    // Invoices app: issue after the card label is captured and before the
-    // transfers (which may throw) and the confirmation email (which attaches
-    // the invoice). Not gated on `changed`, so a retried delivery heals a
-    // failed issuance; issuing is idempotent.
-    await this.invoices?.onOrderPaid({
-      id: orderId,
-      store_id: orderRow.store_id,
-      payment_status: 'paid',
+    await this.finalizePaidOrder(orderId, orderRow.store_id, result, {
+      chargeId,
+      transfers: true,
+      rethrowTransfers: opts.rethrowTransfers,
     });
-
-    // Designer app: queue the print renders of the order's designed items
-    // (enqueue only, never throws; idempotent on a replayed event).
-    await this.designerTriggers?.onOrderPaid({
-      id: orderId,
-      store_id: orderRow.store_id,
-      payment_status: 'paid',
-    });
-
-    // Split the captured funds out to the payout recipients. Always attempted
-    // (not gated on `changed`) so a webhook retry after a partial failure still
-    // completes the transfers — Stripe idempotency keys prevent duplicates.
-    await this.issueOrderTransfers(orderId, {
-      rethrow: opts.rethrowTransfers !== false,
-    });
-
-    if (result?.changed) {
-      await this.notifications.create(
-        result.order.customer.user_id,
-        'order_paid',
-        'Payment received',
-        `We received your payment for order ${result.order.order_number}.`,
-        { order_id: orderId },
-      );
-
-      // Send the paid order confirmation email + notify the owner (best-effort).
-      // The dispatcher loads the order with items and resolves locale from the
-      // store, so this stays a one-liner per event.
-      await this.mail.dispatchOrderEmail(orderId, 'order_confirmation');
-      await this.mail.dispatchOrderEmail(orderId, 'new_order_owner');
-    }
   }
 
   /**
@@ -1177,7 +2187,6 @@ export class PaymentsService {
     opts: { rethrow?: boolean } = {},
   ) {
     const rethrow = opts.rethrow !== false;
-    const stripe = await this.requireStripe();
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
@@ -1193,9 +2202,11 @@ export class PaymentsService {
     });
     if (!order || !order.commission) return;
 
-    // Direct charge (independent store): the money was captured straight on the
-    // creator's own connected account — nothing to split, no payout ledger rows.
-    if (order.stripe_account_id) return;
+    // Direct charge (independent store, connected account or own key): the
+    // money was captured straight on the owner's account — nothing to split,
+    // no payout ledger rows.
+    if (routeOfOrder(order) !== 'PLATFORM') return;
+    const stripe = await this.requireStripe();
 
     // Resolve the charge and its settlement currency/FX rate.
     let chargeId = order.stripe_charge_id;
@@ -1383,10 +2394,36 @@ export class PaymentsService {
     }
   }
 
-  private async onPaymentFailed(pi: StripePaymentIntent) {
+  /**
+   * payment_intent.payment_failed / canceled. From a webhook, the order must
+   * belong to the delivering endpoint; a cancellation only counts for the
+   * order's CURRENT intent (an older abandoned intent being canceled must not
+   * fail an order that is being paid with a newer one).
+   */
+  private async onPaymentFailed(
+    pi: StripePaymentIntent,
+    opts: { webhook?: WebhookContext; canceled?: boolean } = {},
+  ) {
     const orderId = pi.metadata?.order_id;
     if (!orderId) return;
-    const result = await this.orders.markOrderFailed(orderId);
+    const row = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: ORDER_ROUTE_SELECT,
+    });
+    if (!row) return;
+    const type = opts.canceled
+      ? 'payment_intent.canceled'
+      : 'payment_intent.payment_failed';
+    if (!this.webhookMayTouch(opts.webhook, row, type)) return;
+    // Only the order's CURRENT intent fails it: an older attempt failing or
+    // being canceled says nothing about the newer one being paid.
+    if (row.stripe_payment_id && row.stripe_payment_id !== pi.id) return;
+    // Replaced by a newer intent for the same order (reuseOpenIntent).
+    if (opts.canceled && pi.cancellation_reason === 'duplicate') return;
+    const result = await this.orders.markOrderFailed(
+      orderId,
+      ...(opts.canceled ? ['Stripe payment was canceled'] : []),
+    );
 
     // Record the failure reason on the order for tracking.
     const err = pi.last_payment_error;
@@ -1417,7 +2454,164 @@ export class PaymentsService {
    * the order's payment as refunded, record it on the timeline and notify the
    * store creator. The fulfillment status is left alone — the admin manages it.
    */
-  private async onChargeRefunded(charge: StripeCharge) {
+  /**
+   * payment_intent.processing (bank debits, some wallets): the order stays
+   * awaiting payment until payment_intent.succeeded; the timeline records
+   * that Stripe is processing it.
+   */
+  private async onPaymentProcessing(
+    pi: StripePaymentIntent,
+    ctx?: WebhookContext,
+  ) {
+    const orderId = pi.metadata?.order_id;
+    if (!orderId) return;
+    const row = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: ORDER_ROUTE_SELECT,
+    });
+    if (!row) return;
+    if (!this.webhookMayTouch(ctx, row, 'payment_intent.processing')) return;
+    if (row.stripe_payment_id && row.stripe_payment_id !== pi.id) return;
+    if (row.payment_status === 'paid' || row.payment_status === 'refunded') {
+      return;
+    }
+    // The abandonment sweep never releases an order in this state.
+    await this.markProcessing(orderId);
+    await this.orders.recordPaymentNote(
+      orderId,
+      'PAYMENT_PROCESSING',
+      'Stripe is processing the payment; the order is confirmed once it succeeds',
+    );
+  }
+
+  /**
+   * refund.* / charge.refund.updated (refunds are made in the merchant's own
+   * Stripe dashboard): re-sync the refund state from the live charge through
+   * the same path as charge.refunded. A failed refund (refund.failed, or an
+   * update to status `failed`) also gets a timeline note + owner notice; the
+   * re-sync then counts only succeeded refunds, so an order a failed full
+   * refund had moved to REFUNDED goes back to paid.
+   */
+  private async onRefundEvent(
+    refund: RefundLike,
+    ctx?: WebhookContext,
+    type?: string,
+  ) {
+    const chargeId =
+      typeof refund.charge === 'string' ? refund.charge : refund.charge?.id;
+    if (!chargeId) return;
+    const piId =
+      typeof refund.payment_intent === 'string'
+        ? refund.payment_intent
+        : (refund.payment_intent?.id ?? null);
+    if (type === 'refund.failed' || refund.status === 'failed') {
+      await this.onRefundFailed(refund, chargeId, piId, ctx);
+    }
+    await this.onChargeRefunded(
+      {
+        id: chargeId,
+        payment_intent: piId,
+        metadata: {},
+      } as unknown as StripeCharge,
+      ctx,
+    );
+  }
+
+  private async onRefundFailed(
+    refund: RefundLike,
+    chargeId: string,
+    piId: string | null,
+    ctx?: WebhookContext,
+  ) {
+    let order = await this.prisma.order.findFirst({
+      where: { stripe_charge_id: chargeId },
+      select: ORDER_ROUTE_SELECT,
+    });
+    if (!order && piId) {
+      order = await this.prisma.order.findFirst({
+        where: { stripe_payment_id: piId },
+        select: ORDER_ROUTE_SELECT,
+      });
+    }
+    if (!order) return;
+    if (!this.webhookMayTouch(ctx, order, 'refund.failed')) return;
+    const amount =
+      typeof refund.amount === 'number' && refund.currency
+        ? ` ${fromStripeAmount(refund.amount, refund.currency)} ${refund.currency.toUpperCase()}`
+        : '';
+    const noted = await this.orders.recordPaymentNote(
+      order.id,
+      'REFUND_FAILED',
+      `Stripe refund failed${refund.id ? ` (${refund.id})` : ''}:${amount}${
+        refund.failure_reason ? ` (${refund.failure_reason})` : ''
+      }`,
+    );
+    if (noted.changed) {
+      await this.notifyStoreCreator(
+        order.store_id,
+        'order_refund_failed',
+        'Refund failed',
+        `A refund on order ${order.order_number} failed in Stripe; the money was not returned to the customer. Check the refund in your Stripe dashboard.`,
+        order.id,
+      );
+    }
+  }
+
+  /**
+   * charge.dispute.*: there is no dispute model, so the dispute is recorded
+   * on the order timeline (deduplicated per status) and the store owner is
+   * notified when one opens. Money movement follows Stripe's own flow.
+   */
+  private async onDisputeEvent(
+    type: string,
+    dispute: DisputeLike,
+    ctx?: WebhookContext,
+  ) {
+    const chargeId =
+      typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id;
+    const piId =
+      typeof dispute.payment_intent === 'string'
+        ? dispute.payment_intent
+        : (dispute.payment_intent?.id ?? null);
+    let order = chargeId
+      ? await this.prisma.order.findFirst({
+          where: { stripe_charge_id: chargeId },
+          select: ORDER_ROUTE_SELECT,
+        })
+      : null;
+    if (!order && piId) {
+      order = await this.prisma.order.findFirst({
+        where: { stripe_payment_id: piId },
+        select: ORDER_ROUTE_SELECT,
+      });
+    }
+    if (!order) return;
+    if (!this.webhookMayTouch(ctx, order, type)) return;
+
+    const amount =
+      typeof dispute.amount === 'number' && dispute.currency
+        ? ` ${fromStripeAmount(dispute.amount, dispute.currency)} ${dispute.currency.toUpperCase()}`
+        : '';
+    const note = `Stripe dispute ${dispute.status ?? 'updated'}${
+      dispute.reason ? ` (${dispute.reason})` : ''
+    }:${amount}`;
+    const recorded = await this.orders.recordPaymentNote(
+      order.id,
+      'PAYMENT_DISPUTE',
+      note,
+    );
+    if (recorded.changed && type === 'charge.dispute.created') {
+      await this.notifyStoreCreator(
+        order.store_id,
+        'order_disputed',
+        'Payment disputed',
+        `A payment dispute was opened for order ${order.order_number}. Respond in your Stripe dashboard.`,
+        order.id,
+      );
+    }
+  }
+
+  private async onChargeRefunded(charge: StripeCharge, ctx?: WebhookContext) {
     // Resolve the order: by charge id first, then by the PaymentIntent's
     // metadata (charges inherit the PI metadata), then by the PI id itself.
     const piId =
@@ -1432,7 +2626,9 @@ export class PaymentsService {
         payment_status: true,
         store_id: true,
         stripe_account_id: true,
+        payment_route: true,
         stripe_payment_id: true,
+        stripe_key_fingerprint: true,
       },
     });
     if (!order && charge.metadata?.order_id) {
@@ -1444,7 +2640,9 @@ export class PaymentsService {
           payment_status: true,
           store_id: true,
           stripe_account_id: true,
+          payment_route: true,
           stripe_payment_id: true,
+          stripe_key_fingerprint: true,
         },
       });
     }
@@ -1457,25 +2655,38 @@ export class PaymentsService {
           payment_status: true,
           store_id: true,
           stripe_account_id: true,
+          payment_route: true,
           stripe_payment_id: true,
+          stripe_key_fingerprint: true,
         },
       });
     }
     if (!order) return;
+    if (!this.webhookMayTouch(ctx, order, 'charge.refunded')) return;
 
     // SECURITY: mirror onPaymentSucceeded — never trust the event payload
     // alone. Re-read the charge live from Stripe (from the connected account
-    // for direct charges) and act on what Stripe itself reports. A retrieval
-    // failure propagates (the webhook handler logs + rethrows so Stripe
-    // retries the delivery).
-    const stripe = await this.requireStripe();
-    const live = await stripe.charges.retrieve(
-      charge.id,
-      undefined,
-      order.stripe_account_id
-        ? { stripeAccount: order.stripe_account_id }
-        : undefined,
-    );
+    // for direct charges, the owner's own account for OWN_KEY) and act on
+    // what Stripe itself reports. A retrieval failure propagates (the webhook
+    // handler logs + rethrows so Stripe retries the delivery) — except an
+    // OWN_KEY store whose key is revoked / removed: retries cannot help, so
+    // the event is acknowledged and the owner re-syncs after reconnecting.
+    let stripeCtx: OrderStripe;
+    let live: StripeCharge;
+    try {
+      stripeCtx = await this.stripeForOrder(order);
+      live = await this.callStripe(stripeCtx, (s, o) =>
+        s.charges.retrieve(charge.id, undefined, o),
+      );
+    } catch (err) {
+      if (ctx?.ownKeyStoreId && this.isOwnKeyUnavailable(err)) {
+        this.logger.warn(
+          `Refund sync of order ${order.id} skipped: the store's own Stripe key is unavailable`,
+        );
+        return;
+      }
+      throw err;
+    }
 
     // The charge must belong to this order's payment: a charge found through
     // its (copyable) metadata but made by another PaymentIntent never moves
@@ -1491,13 +2702,46 @@ export class PaymentsService {
       return;
     }
 
-    if (!live.refunded) {
+    // Only SUCCEEDED refunds count: a pending one may still fail, and a
+    // failed one returned nothing. (charge.amount_refunded includes pending
+    // refunds, so the refund list decides when it can be read.)
+    const refundedMinor = await this.succeededRefundTotal(stripeCtx, live);
+    const capturedMinor =
+      typeof live.amount_captured === 'number' && live.amount_captured > 0
+        ? live.amount_captured
+        : typeof live.amount === 'number'
+          ? live.amount
+          : null;
+    const fullyRefunded =
+      refundedMinor > 0 &&
+      (capturedMinor !== null
+        ? refundedMinor >= capturedMinor
+        : live.refunded === true);
+
+    if (!fullyRefunded) {
+      // A full refund that later failed: back to paid (see revertRefund
+      // for what is and is not undone).
+      if (order.payment_status === 'refunded') {
+        const reverted = await this.orders.revertRefund(
+          order.id,
+          'A refund failed in Stripe; the order is paid again',
+        );
+        if (reverted?.changed) {
+          await this.notifyStoreCreator(
+            order.store_id,
+            'order_refund_reverted',
+            'Refund failed — order paid again',
+            `The refund of order ${order.order_number} failed in Stripe, so the order is marked paid again. Check the credit note and the customer email that went out with the refund.`,
+            order.id,
+          );
+        }
+      }
       // Partial refund: the order stands, but the money movement is recorded
       // so it isn't invisible to the creator and admin.
-      if (live.amount_refunded > 0) {
-        const amount = fromStripeAmount(live.amount_refunded, live.currency);
-        // Stripe's amount_refunded is the running total, which is what the
-        // invoices app expects as `cumulativeRefunded`.
+      if (refundedMinor > 0) {
+        const amount = fromStripeAmount(refundedMinor, live.currency);
+        // The running succeeded total is what the invoices app expects as
+        // `cumulativeRefunded`.
         const recorded = await this.orders.recordPartialRefund(
           order.id,
           amount,
@@ -1533,6 +2777,31 @@ export class PaymentsService {
     );
   }
 
+  /**
+   * Sum of the charge's SUCCEEDED refunds (minor units). Falls back to the
+   * charge's amount_refunded when the refund list cannot be read.
+   */
+  private async succeededRefundTotal(
+    ctx: OrderStripe,
+    charge: StripeCharge,
+  ): Promise<number> {
+    try {
+      const list = await this.callStripe(ctx, (s, o) =>
+        s.refunds.list({ charge: charge.id, limit: 100 }, o),
+      );
+      if (!list || !Array.isArray(list.data)) return charge.amount_refunded;
+      return list.data
+        .filter((r) => r.status === 'succeeded')
+        .reduce((sum, r) => sum + (r.amount ?? 0), 0);
+    } catch (err) {
+      if (this.isOwnKeyUnavailable(err)) throw err;
+      this.logger.warn(
+        `Could not list the refunds of charge ${charge.id}: ${this.describe(err)}`,
+      );
+      return charge.amount_refunded;
+    }
+  }
+
   /** Best-effort in-app notification to the store's owner. */
   private async notifyStoreCreator(
     storeId: string | null,
@@ -1555,20 +2824,25 @@ export class PaymentsService {
   /** Store the charge's card brand/last4 + receipt URL on the order. */
   private async captureChargeDetails(orderId: string, chargeId?: string) {
     if (!chargeId) return;
-    const stripe = await this.resolveStripe();
-    if (!stripe) return;
     try {
-      // Direct-charge orders keep their charge on the connected account.
+      // Direct-charge orders keep their charge on the connected account (or
+      // the owner's own account for OWN_KEY).
       const orderRow = await this.prisma.order.findUnique({
         where: { id: orderId },
-        select: { stripe_account_id: true },
+        select: {
+          stripe_account_id: true,
+          payment_route: true,
+          stripe_key_fingerprint: true,
+          store_id: true,
+        },
       });
-      const charge = await stripe.charges.retrieve(
-        chargeId,
-        undefined,
-        orderRow?.stripe_account_id
-          ? { stripeAccount: orderRow.stripe_account_id }
-          : undefined,
+      if (routeOfOrder(orderRow ?? {}) !== 'OWN_KEY') {
+        // Legacy behaviour: no platform client means nothing to capture.
+        if (!(await this.resolveStripe())) return;
+      }
+      const ctx = await this.stripeForOrder(orderRow ?? {});
+      const charge = await this.callStripe(ctx, (s, o) =>
+        s.charges.retrieve(chargeId, undefined, o),
       );
       const card = charge.payment_method_details?.card;
       await this.prisma.order.update({
@@ -1584,9 +2858,7 @@ export class PaymentsService {
       });
     } catch (err) {
       this.logger.warn(
-        `Could not capture charge details for order ${orderId}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        `Could not capture charge details for order ${orderId}: ${this.describe(err)}`,
       );
     }
   }

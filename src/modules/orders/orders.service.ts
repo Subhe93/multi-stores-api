@@ -471,6 +471,56 @@ const ABANDONED_PAYMENT_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 // stock reservation is released. Validation rejects a released order, so a
 // late completion can never oversell.
 const ABANDONED_KUSTOM_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+// A Stripe order the sweep's live check kept (processing, 3DS pending,
+// Stripe unreachable, own key revoked) is checked again after this long.
+const SWEEP_RECHECK_MS = 15 * 60 * 1000;
+const SWEEP_KEPT_MAX = 500;
+// Hard cap of a Stripe order the live check keeps (3DS never finished,
+// Stripe unreachable, own key revoked / removed): past this age it is
+// released anyway; its intent is canceled first when it can still be read.
+export const ABANDONED_STRIPE_MAX_AGE_MS = 48 * 60 * 60 * 1000; // 48 hours
+// An order whose payment Stripe reported as processing (payment_processing_at:
+// bank debits such as SEPA can take several business days) is kept up to this
+// age, then released too. A payment that still succeeds afterwards lands
+// through markOrderPaid's late-pay path (stock re-taken without going
+// negative, coupon counted again), so releasing never loses the payment.
+// SEPA Direct Debit can take up to 14 business days (Stripe docs); 21 calendar days covers it.
+export const PROCESSING_PAYMENT_MAX_AGE_MS = 21 * 24 * 60 * 60 * 1000; // 21 days
+// The customer's own stale orders released (awaited) before their checkout.
+const OWN_STALE_ORDERS_MAX = 5;
+
+/** Live decision of the abandonment sweep for one Stripe order. */
+export type AbandonedPaymentDecision = 'paid' | 'keep' | 'fail';
+export interface AbandonedPaymentCheckOptions {
+  /** Past ABANDONED_STRIPE_MAX_AGE_MS: only paid / processing may keep it. */
+  hardCap?: boolean;
+  /** Past PROCESSING_PAYMENT_MAX_AGE_MS: only a succeeded payment keeps it. */
+  processingExpired?: boolean;
+}
+export type AbandonedPaymentChecker = (
+  order: {
+    id: string;
+    store_id: string | null;
+    payment_route: string | null;
+    stripe_account_id: string | null;
+    stripe_payment_id: string | null;
+    stripe_key_fingerprint: string | null;
+  },
+  opts?: AbandonedPaymentCheckOptions,
+) => Promise<AbandonedPaymentDecision>;
+
+/** Order fields the abandonment sweep reads. */
+const SWEEP_ORDER_SELECT = {
+  id: true,
+  store_id: true,
+  created_at: true,
+  payment_method: true,
+  payment_route: true,
+  payment_processing_at: true,
+  stripe_account_id: true,
+  stripe_payment_id: true,
+  stripe_key_fingerprint: true,
+} as const;
 
 const ORDER_STATUS_RANK: Record<string, number> = {
   PENDING: 0,
@@ -2143,7 +2193,7 @@ export class OrdersService {
     // A snapshot order (opts.lines) is created inside Kustom's 3 s validation
     // callback, where every extra query counts; the sweep runs on the next
     // cart checkout instead.
-    if (!opts.lines) await this.releaseExpiredAwaitingPaymentOrders();
+    if (!opts.lines) void this.releaseExpiredAwaitingPaymentOrders();
 
     const customer = await this.prisma.customer.findUnique({
       where: { user_id: userId },
@@ -2157,6 +2207,12 @@ export class OrdersService {
     // Per-store accounts: the order must be placed in the customer's own
     // store (403 CUSTOMER_STORE_MISMATCH).
     assertCustomerStore(customer.user, dto.store_id);
+    // The customer's OWN expired orders still hold stock: release them
+    // (awaited, bounded) before this checkout validates stock, so a buyer
+    // retrying after an abandoned attempt is never blocked by themselves.
+    // The global sweep above stays fire-and-forget. Skipped for a snapshot
+    // order (Kustom's 3 s validation callback).
+    if (!opts.lines) await this.releaseCustomerStaleOrders(customer.id);
 
     // Source of the lines: the caller's snapshot, else the customer's cart.
     let cart: { id: string } | null = null;
@@ -3923,6 +3979,8 @@ export class OrdersService {
     orderId: string,
     stripePaymentId?: string,
     provider = 'Stripe',
+    /** Timeline note instead of "Payment confirmed via <provider>". */
+    opts: { note?: string } = {},
   ) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
@@ -3948,50 +4006,200 @@ export class OrdersService {
     });
     if (flip.count === 0) return { order, changed: false };
 
-    // A previously-failed order had its stock restored (by the abandonment
-    // sweep or a failure webhook). Payment landing afterwards means those units
-    // really did sell, so take them back out — unguarded, so the count can go
-    // negative and honestly block further sales instead of hiding an oversell.
-    if (order.payment_status === 'failed') {
-      await this.decrementOrderItemsStock(orderId);
-    }
-
     await this.prisma.orderTimeline.create({
       data: {
         order_id: orderId,
         status: 'PAID',
-        note: `Payment confirmed via ${provider}`,
+        note: opts.note ?? `Payment confirmed via ${provider}`,
         actor: 'system',
       },
     });
-    return { order, changed: true };
+
+    // A previously-failed order had its stock restored (by the abandonment
+    // sweep or a failure webhook) and its coupon handed back. Payment landing
+    // afterwards means those units really did sell: take them back out where
+    // the stock still covers them; a line it no longer covers is never
+    // driven negative — the order stays paid, is flagged STOCK_SHORTFALL on
+    // the timeline and the store owner is notified to resolve it.
+    let stockShortfall = false;
+    if (order.payment_status === 'failed') {
+      const short = await this.retakeOrderItemsStock(orderId);
+      if (short.length) {
+        stockShortfall = true;
+        await this.flagStockShortfall(order, short);
+      }
+      await this.retakeOrderCoupon(orderId);
+    }
+    return { order, changed: true, stockShortfall };
+  }
+
+  /**
+   * Re-takes the stock of a failed order that got paid after all. Each line
+   * is decremented only while the stock still covers it (conditional
+   * update); the lines it no longer covers are returned (nothing taken).
+   */
+  private async retakeOrderItemsStock(
+    orderId: string,
+  ): Promise<{ name: string; quantity: number }[]> {
+    const items = await this.prisma.orderItem.findMany({
+      where: { order_id: orderId },
+      select: {
+        product_id: true,
+        variant_id: true,
+        quantity: true,
+        product: { select: { sku: true } },
+      },
+    });
+    const short: { name: string; quantity: number }[] = [];
+    for (const it of items) {
+      try {
+        if (it.variant_id) {
+          const taken = await this.prisma.productVariant.updateMany({
+            where: {
+              id: it.variant_id,
+              stock_quantity: { not: null, gte: it.quantity },
+            },
+            data: { stock_quantity: { decrement: it.quantity } },
+          });
+          if (taken.count === 0) {
+            const v = await this.prisma.productVariant.findUnique({
+              where: { id: it.variant_id },
+              select: { stock_quantity: true },
+            });
+            if (v && v.stock_quantity !== null) {
+              short.push({ name: itemLabel(it), quantity: it.quantity });
+            }
+          }
+        } else if (it.product_id) {
+          const taken = await this.prisma.product.updateMany({
+            where: {
+              id: it.product_id,
+              track_inventory: true,
+              stock_quantity: { not: null, gte: it.quantity },
+            },
+            data: { stock_quantity: { decrement: it.quantity } },
+          });
+          if (taken.count === 0) {
+            const p = await this.prisma.product.findUnique({
+              where: { id: it.product_id },
+              select: { stock_quantity: true, track_inventory: true },
+            });
+            if (p && p.track_inventory && p.stock_quantity !== null) {
+              short.push({ name: itemLabel(it), quantity: it.quantity });
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[StockRestore] order item re-take failed', it, err);
+      }
+    }
+    return short;
+  }
+
+  /** Timeline flag + owner notification of a late-paid order short on stock. */
+  private async flagStockShortfall(
+    order: { id: string; order_number: string; store_id: string | null },
+    short: { name: string; quantity: number }[],
+  ) {
+    const lines = short.map((l) => `${l.quantity} x ${l.name}`).join(', ');
+    try {
+      await this.prisma.orderTimeline.create({
+        data: {
+          order_id: order.id,
+          status: 'STOCK_SHORTFALL',
+          note: `Paid after it was released, but the stock no longer covers: ${lines}`,
+          actor: 'system',
+        },
+      });
+      if (!order.store_id) return;
+      const store = await this.prisma.store.findUnique({
+        where: { id: order.store_id },
+        select: { creator: { select: { user_id: true } } },
+      });
+      if (!store?.creator) return;
+      await this.prisma.notification.create({
+        data: {
+          user_id: store.creator.user_id,
+          type: 'order_stock_shortfall',
+          title: 'Paid order short on stock',
+          body: `Order ${order.order_number} was paid after its reservation was released, and the stock no longer covers: ${lines}. Restock or refund the order.`,
+          data: { order_id: order.id },
+        },
+      });
+    } catch (err) {
+      console.error('[OrderPaid] Failed to flag stock shortfall', order.id, err);
+    }
   }
 
   /**
    * Hand back the coupon redemption an order consumed. create() records one
    * PromotionUsage row per order and counts the redemption (claimRedemption
    * for limited coupons, recordUsage for unlimited ones); when the order is
-   * abandoned right after creation — a Kustom validation that failed after
-   * create() succeeded — the slot must be freed or the coupon's usage limit
-   * is burnt on an order that will never be paid. Idempotent: the usage row
-   * is deleted with the release, so a second call finds nothing.
+   * abandoned right after creation (a Kustom validation that failed after
+   * create() succeeded) the slot must be freed or the coupon's usage limit
+   * is burnt on an order that will never be paid.
+   *
+   * The PromotionUsage rows are KEPT (no per-customer rule reads them; they
+   * are the audit trail): only usage_count goes back, once, guarded by
+   * coupon_released_at. A late payment (markOrderPaid on the failed order)
+   * finds the rows and counts the redemption again (retakeOrderCoupon), so a
+   * paid order never ends up with an uncounted coupon. Idempotent and shared
+   * with markOrderFailed's release.
    */
   async releaseOrderCoupon(orderId: string): Promise<void> {
+    await this.releaseFailedOrderCoupon(orderId);
+  }
+
+  /**
+   * A failed order hands its coupon redemption back (usage_count - 1) so a
+   * limited coupon is not burnt by an order that will never be paid. The
+   * PromotionUsage rows stay (audit + per-customer history), and the
+   * coupon_released_at marker makes it run once and lets a late payment
+   * take the redemption again (retakeOrderCoupon). Best effort.
+   */
+  private async releaseFailedOrderCoupon(orderId: string): Promise<void> {
     try {
       const usages = await this.prisma.promotionUsage.findMany({
         where: { order_id: orderId },
-        select: { id: true, promotion_id: true },
+        select: { promotion_id: true },
       });
+      if (!usages.length) return;
+      const claimed = await this.prisma.order.updateMany({
+        where: { id: orderId, coupon_released_at: null },
+        data: { coupon_released_at: new Date() },
+      });
+      if (claimed.count !== 1) return;
       for (const usage of usages) {
-        const removed = await this.prisma.promotionUsage.deleteMany({
-          where: { id: usage.id },
-        });
-        if (removed.count === 1) {
-          await this.promotionsService.releaseRedemption(usage.promotion_id);
-        }
+        await this.promotionsService.releaseRedemption(usage.promotion_id);
       }
     } catch (err) {
       console.error('[OrderCoupon] Failed to release coupon for', orderId, err);
+    }
+  }
+
+  /**
+   * A released order was paid after all: count its redemption again. The
+   * customer already paid the discounted price, so this is not limit-checked.
+   */
+  private async retakeOrderCoupon(orderId: string): Promise<void> {
+    try {
+      const reclaimed = await this.prisma.order.updateMany({
+        where: { id: orderId, coupon_released_at: { not: null } },
+        data: { coupon_released_at: null },
+      });
+      if (reclaimed.count !== 1) return;
+      const usages = await this.prisma.promotionUsage.findMany({
+        where: { order_id: orderId },
+        select: { promotion_id: true },
+      });
+      for (const usage of usages) {
+        await this.prisma.promotion.update({
+          where: { id: usage.promotion_id },
+          data: { usage_count: { increment: 1 } },
+        });
+      }
+    } catch (err) {
+      console.error('[OrderCoupon] Failed to re-take coupon for', orderId, err);
     }
   }
 
@@ -4077,6 +4285,8 @@ export class OrdersService {
     // permanently locked by an order that won't ship. Idempotent because
     // markOrderFailed only runs the flip once per order (guarded payment_status).
     await this.restoreOrderItemsStock(orderId);
+    // ...and hand the coupon redemption back (taken again on a late payment).
+    await this.releaseFailedOrderCoupon(orderId);
     // Designer app: nothing was bought — the order's designs become terminal
     // and the frozen designs editable / orderable again (a Kustom retry of
     // the same session re-orders them).
@@ -4189,67 +4399,296 @@ export class OrdersService {
     }
 
     const note = `Partially refunded via ${provider}: ${amountRefunded} ${currency.toUpperCase()}`;
+    // Several refund events of one refund (refund.created / updated,
+    // charge.refunded, charge.refund.updated) arrive together: check + insert
+    // under a per-order advisory lock so they cannot both add the row.
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`order_refund:${orderId}`}))`;
+      const existing = await tx.orderTimeline.findFirst({
+        where: { order_id: orderId, status: 'PARTIALLY_REFUNDED', note },
+        select: { id: true },
+      });
+      if (existing) return { changed: false };
+      await tx.orderTimeline.create({
+        data: {
+          order_id: orderId,
+          status: 'PARTIALLY_REFUNDED',
+          note,
+          actor: 'system',
+        },
+      });
+      return { changed: true };
+    });
+  }
+
+  /**
+   * A full refund that failed after it had moved the order to REFUNDED
+   * (Stripe refund.failed): the money stayed with the merchant, so the order
+   * is paid again. Undone: payment_status (back to paid), the order status
+   * (the last status before the refund, CONFIRMED when unknown), the
+   * commission status and the stock (re-taken without going negative; a
+   * shortfall is flagged). NOT undone: the credit note the invoices app
+   * issued, the refund email the customer got and the designer app's
+   * terminal state — the owner is told to check those. Idempotent.
+   */
+  async revertRefund(orderId: string, note: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        order_number: true,
+        store_id: true,
+        status: true,
+        payment_status: true,
+      },
+    });
+    if (!order || order.payment_status !== 'refunded') {
+      return { changed: false };
+    }
+    const refundedRow = await this.prisma.orderTimeline.findFirst({
+      where: { order_id: orderId, status: 'REFUNDED' },
+      orderBy: { created_at: 'desc' },
+      select: { created_at: true },
+    });
+    const statuses = Object.values(OrderStatus) as string[];
+    const before = await this.prisma.orderTimeline.findMany({
+      where: {
+        order_id: orderId,
+        status: { in: statuses.filter((st) => st !== OrderStatus.REFUNDED) },
+        ...(refundedRow ? { created_at: { lt: refundedRow.created_at } } : {}),
+      },
+      orderBy: { created_at: 'desc' },
+      take: 1,
+      select: { status: true },
+    });
+    const restored = (before[0]?.status as OrderStatus) ?? OrderStatus.CONFIRMED;
+    const flip = await this.prisma.order.updateMany({
+      where: { id: orderId, payment_status: 'refunded' },
+      data: { payment_status: 'paid', status: restored },
+    });
+    if (flip.count === 0) return { changed: false };
+    await this.prisma.orderTimeline.create({
+      data: { order_id: orderId, status: 'REFUND_REVERTED', note, actor: 'system' },
+    });
+    await this.prisma.orderCommission.updateMany({
+      where: { order_id: orderId },
+      data: { status: deriveCommissionStatus(restored) },
+    });
+    const short = await this.retakeOrderItemsStock(orderId);
+    if (short.length) await this.flagStockShortfall(order, short);
+    return { changed: true, status: restored };
+  }
+
+  /**
+   * A payment-provider event worth a timeline trace without a state change
+   * (payment processing, disputes). Deduplicated on status + note so a
+   * replayed webhook doesn't stack rows.
+   */
+  async recordPaymentNote(orderId: string, status: string, note: string) {
     const existing = await this.prisma.orderTimeline.findFirst({
-      where: { order_id: orderId, status: 'PARTIALLY_REFUNDED', note },
+      where: { order_id: orderId, status, note },
       select: { id: true },
     });
     if (existing) return { changed: false };
-
     await this.prisma.orderTimeline.create({
-      data: {
-        order_id: orderId,
-        status: 'PARTIALLY_REFUNDED',
-        note,
-        actor: 'system',
-      },
+      data: { order_id: orderId, status, note, actor: 'system' },
     });
     return { changed: true };
   }
 
+  // Live payment check of the abandonment sweep, registered by
+  // PaymentsService (no DI cycle: orders never imports payments).
+  private abandonedPaymentChecker?: AbandonedPaymentChecker;
+  // Orders the checker said to keep, rechecked only after SWEEP_RECHECK_MS
+  // so they never starve the bounded batch (per instance, bounded size).
+  private readonly sweepKept = new Map<string, number>();
+  private sweepRunning = false;
+
+  registerAbandonedPaymentChecker(fn: AbandonedPaymentChecker): void {
+    this.abandonedPaymentChecker = fn;
+  }
+
   /**
    * Cancel card orders that reserved stock and were never paid for, restoring
-   * their inventory. A Stripe PaymentIntent cannot be confirmed anywhere near
-   * this far after creation, so an order still `awaiting_payment` past the
-   * window was abandoned — the buyer closed the tab, or the client failed
+   * their inventory. An order still `awaiting_payment` past the window was
+   * usually abandoned — the buyer closed the tab, or the client failed
    * between creating the order and confirming the card. Kustom sessions live
-   * longer (48h), but the same window applies: a Kustom push arriving after
-   * the sweep still lands, because markOrderPaid accepts a `failed` order and
-   * re-takes its stock.
+   * longer, but the same idea applies: a Kustom push arriving after the
+   * sweep still lands, because markOrderPaid accepts a `failed` order and
+   * re-takes its stock (without going negative).
    *
-   * Deliberately bounded and best-effort: it runs inside a checkout request, so
-   * it must never slow that request down or fail it. `markOrderFailed` does the
-   * actual work and is idempotent, so a concurrent webhook cannot double-restock.
+   * Async payments are never released blindly: an order flagged
+   * `payment_processing_at` (payment_intent.processing) is skipped, and a
+   * Stripe order with a PaymentIntent is checked live first through the
+   * registered checker (succeeded -> paid, processing / requires_action ->
+   * kept, own key revoked or Stripe unreachable -> kept, abandoned -> its
+   * intent is canceled and the order failed).
+   *
+   * Deliberately bounded and best-effort: it runs on the checkout path, so
+   * it is not awaited by the request, one run at a time per instance, and
+   * never throws. `markOrderFailed` is idempotent, so a concurrent webhook
+   * cannot double-restock.
    */
-  private async releaseExpiredAwaitingPaymentOrders(): Promise<void> {
+  private releaseExpiredAwaitingPaymentOrders(): Promise<void> {
+    if (this.sweepRunning) return Promise.resolve();
+    this.sweepRunning = true;
+    return this.runAbandonedSweep().finally(() => {
+      this.sweepRunning = false;
+    });
+  }
+
+  /** WHERE of an awaiting order past its abandonment window. */
+  private expiredAwaitingWhere(now: number): Prisma.OrderWhereInput {
+    return {
+      payment_status: 'awaiting_payment',
+      OR: [
+        {
+          payment_method: { not: PaymentMethod.KUSTOM },
+          created_at: { lt: new Date(now - ABANDONED_PAYMENT_TTL_MS) },
+        },
+        {
+          payment_method: PaymentMethod.KUSTOM,
+          created_at: { lt: new Date(now - ABANDONED_KUSTOM_TTL_MS) },
+        },
+      ],
+    };
+  }
+
+  private async runAbandonedSweep(): Promise<void> {
     try {
       const now = Date.now();
+      for (const [id, until] of this.sweepKept) {
+        if (until <= now) this.sweepKept.delete(id);
+      }
+      const kept = [...this.sweepKept.keys()].slice(0, SWEEP_KEPT_MAX);
+      const notKept = kept.length ? { id: { notIn: kept } } : {};
       const stale = await this.prisma.order.findMany({
         where: {
-          payment_status: 'awaiting_payment',
-          OR: [
-            {
-              payment_method: { not: PaymentMethod.KUSTOM },
-              created_at: { lt: new Date(now - ABANDONED_PAYMENT_TTL_MS) },
-            },
-            {
-              payment_method: PaymentMethod.KUSTOM,
-              created_at: { lt: new Date(now - ABANDONED_KUSTOM_TTL_MS) },
-            },
-          ],
+          ...this.expiredAwaitingWhere(now),
+          payment_processing_at: null,
+          ...notKept,
         },
-        select: { id: true },
+        select: SWEEP_ORDER_SELECT,
         orderBy: { created_at: 'asc' },
         take: 20,
       });
-      for (const order of stale) {
-        await this.markOrderFailed(
-          order.id,
-          'Payment was not completed in time; the order was released',
-        );
+      // Payments Stripe reported as processing are only looked at once
+      // they are past PROCESSING_PAYMENT_MAX_AGE_MS.
+      const processing = await this.prisma.order.findMany({
+        where: {
+          payment_status: 'awaiting_payment',
+          payment_processing_at: { not: null },
+          created_at: { lt: new Date(now - PROCESSING_PAYMENT_MAX_AGE_MS) },
+          ...notKept,
+        },
+        select: SWEEP_ORDER_SELECT,
+        orderBy: { created_at: 'asc' },
+        take: 10,
+      });
+      for (const order of [...stale, ...processing]) {
+        await this.releaseAbandonedOrder(order, now);
       }
     } catch (err) {
       console.error('[OrderSweep] Failed to release abandoned orders', err);
     }
+  }
+
+  /**
+   * Awaited before a checkout: the same release for the customer's OWN
+   * expired orders only (bounded), so their reserved stock is back before
+   * the new order validates it. Best effort, never throws.
+   */
+  private async releaseCustomerStaleOrders(customerId: string): Promise<void> {
+    try {
+      const now = Date.now();
+      const own = await this.prisma.order.findMany({
+        where: {
+          AND: [
+            this.expiredAwaitingWhere(now),
+            { customer_id: customerId },
+            {
+              OR: [
+                { payment_processing_at: null },
+                {
+                  created_at: {
+                    lt: new Date(now - PROCESSING_PAYMENT_MAX_AGE_MS),
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        select: SWEEP_ORDER_SELECT,
+        orderBy: { created_at: 'asc' },
+        take: OWN_STALE_ORDERS_MAX,
+      });
+      for (const order of own) {
+        // Kept by a recent live check (3DS pending...): not rechecked yet.
+        if ((this.sweepKept.get(order.id) ?? 0) > now) continue;
+        await this.releaseAbandonedOrder(order, now);
+      }
+    } catch (err) {
+      console.error('[OrderSweep] Failed to release own stale orders', err);
+    }
+  }
+
+  /**
+   * One expired order. A Stripe order with an intent is checked live first:
+   * paid -> paid; kept -> rechecked after SWEEP_RECHECK_MS. Past the hard
+   * caps (48 h, or 7 days for a processing payment) the checker cancels the
+   * intent when it can and only a succeeded (or, before 7 days, processing)
+   * payment keeps the order. Everything else is failed (stock restored,
+   * coupon handed back; a late payment re-takes both).
+   */
+  private async releaseAbandonedOrder(
+    order: {
+      id: string;
+      store_id: string | null;
+      created_at: Date;
+      payment_method: PaymentMethod;
+      payment_route: string | null;
+      payment_processing_at: Date | null;
+      stripe_account_id: string | null;
+      stripe_payment_id: string | null;
+      stripe_key_fingerprint: string | null;
+    },
+    now: number,
+  ): Promise<void> {
+    const age = now - order.created_at.getTime();
+    const processingExpired =
+      !!order.payment_processing_at && age > PROCESSING_PAYMENT_MAX_AGE_MS;
+    // A processing payment younger than its cap is never released.
+    if (order.payment_processing_at && !processingExpired) return;
+    const hardCap = age > ABANDONED_STRIPE_MAX_AGE_MS;
+    if (
+      order.payment_method === PaymentMethod.STRIPE &&
+      order.stripe_payment_id &&
+      this.abandonedPaymentChecker
+    ) {
+      // A failing checker keeps the order, except past the hard cap.
+      let decision: AbandonedPaymentDecision = hardCap ? 'fail' : 'keep';
+      try {
+        decision = await this.abandonedPaymentChecker(order, {
+          hardCap,
+          processingExpired,
+        });
+      } catch (err) {
+        console.error('[OrderSweep] Live check failed for', order.id, err);
+      }
+      if (decision !== 'fail') {
+        if (decision === 'keep' && this.sweepKept.size < SWEEP_KEPT_MAX) {
+          this.sweepKept.set(order.id, now + SWEEP_RECHECK_MS);
+        }
+        return;
+      }
+    }
+    this.sweepKept.delete(order.id);
+    await this.markOrderFailed(
+      order.id,
+      hardCap
+        ? 'Payment was not completed within the maximum time; the order was released'
+        : 'Payment was not completed in time; the order was released',
+    );
   }
 
   /**
@@ -4346,6 +4785,15 @@ export class OrdersService {
       }
     }
   }
+}
+
+/** Owner-facing label of an order line in a shortfall note (SKU or id). */
+function itemLabel(it: {
+  product_id: string | null;
+  variant_id: string | null;
+  product?: { sku: string | null } | null;
+}): string {
+  return it.product?.sku || it.variant_id || it.product_id || 'item';
 }
 
 /**

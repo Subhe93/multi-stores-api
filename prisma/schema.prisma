@@ -795,6 +795,21 @@ model Order {
   // Snapshot of the connected account a direct-charge PaymentIntent was created
   // on (independent stores). Null = the payment was charged on the platform.
   stripe_account_id       String?
+  // Which Stripe route charged this order: PLATFORM | CONNECT_DIRECT | OWN_KEY
+  // (set when the PaymentIntent is created; null = legacy rules).
+  payment_route           String?             @db.VarChar(16)
+  // OWN_KEY: short hash of the restricted key the PaymentIntent was created
+  // with (never the key), so a replaced key's orders use the previous key.
+  stripe_key_fingerprint  String?             @db.VarChar(32)
+  // Set on payment_intent.processing (bank debits, some wallets): the
+  // abandonment sweep never releases an order whose payment is in flight.
+  payment_processing_at   DateTime?
+  // Set when a failed order handed its coupon redemption back (usage_count
+  // decremented); cleared again when a late payment re-takes it.
+  coupon_released_at      DateTime?
+  // Bumped after a Stripe 5xx / connection error on PaymentIntent creation,
+  // so the retry uses a fresh idempotency key (not a cached 500 for 24h).
+  stripe_intent_attempt   Int                 @default(0)
   // Stripe payment details captured from the webhook for tracking/reconciliation.
   stripe_charge_id        String?
   card_brand              String?
@@ -1199,6 +1214,9 @@ model Store {
   logo_url                String?
   favicon_url             String?
   store_type              StoreType      @default(MARKETPLACE)
+  // Short lease serializing own Stripe key save / verify / remove across API
+  // instances (no DB transaction is held while Stripe is called).
+  stripe_key_lock_until   DateTime?
   // Presentment currency for this store. Null means "inherit the platform
   // default". Only INDEPENDENT stores may set it: they charge directly on the
   // creator's own connected account, so the currency is theirs to choose.
@@ -1276,6 +1294,7 @@ model Store {
   markets                   Market[]
   domains                   StoreDomain[]
   legal_profiles            StoreLegalProfile[]
+  stripe_keys               StoreStripeKeys?
   tax_exemptions            StoreCustomerTaxExemption[]
   personalization_templates PersonalizationFieldTemplate[]
   import_sources            ImportSource[]
@@ -3169,4 +3188,38 @@ model OpsJobTick {
 
   @@id([job, instance])
   @@index([ticked_at])
+}
+
+// Own Stripe account of an INDEPENDENT store (restricted key, no Connect).
+// plans/stripe-restricted-keys/SPEC.md. Secrets are KMS-envelope encrypted.
+model StoreStripeKeys {
+  id                           String    @id @default(uuid())
+  store_id                     String    @unique
+  publishable_key              String
+  restricted_key_enc           String
+  key_last4                    String    @db.VarChar(4)
+  livemode                     Boolean
+  account_id                   String?
+  status                       String    @default("ACTIVE") @db.VarChar(16) // ACTIVE | NEEDS_RECONNECT | DISABLED
+  permissions                  Json      @default("{}")
+  webhook_endpoint_id          String?
+  webhook_secret_enc           String?
+  payment_method_domains       Json      @default("{}")
+  verified_at                  DateTime?
+  last_check_at                DateTime?
+  last_error_code              String?
+  // Short hash of the current restricted key (never the key itself).
+  key_fingerprint              String?   @db.VarChar(32)
+  // The key this one replaced, kept read-only until `previous_until` so the
+  // orders paid with it can still be reconciled and its webhook endpoint
+  // (left in place on the old account) still verifies.
+  previous_restricted_key_enc  String?
+  previous_key_fingerprint     String?   @db.VarChar(32)
+  previous_webhook_endpoint_id String?
+  previous_webhook_secret_enc  String?
+  previous_until               DateTime?
+  created_at                   DateTime  @default(now())
+  updated_at                   DateTime  @updatedAt
+
+  store Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
 }
