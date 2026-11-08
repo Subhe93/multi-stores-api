@@ -10,6 +10,7 @@ import type { PrismaService } from '../../../prisma/prisma.service';
 import type { MarketsContextService } from '../../markets/markets-context.service';
 import type { MarketContext } from '../../markets/market-context';
 import { B2bService } from '../../b2b/b2b.service';
+import { cartItemsUnavailable } from '../../orders/cart-items-availability';
 import type { StoreAppsService } from '../../store-apps/store-apps.service';
 
 // The market wiring of the session-first flow (M1-DESIGN §3.5): with a
@@ -1095,5 +1096,39 @@ describe('KustomCheckoutService.handleValidation account credentials', () => {
     expect(res.ok).toBe(false);
     await flush();
     expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+// FIXES-1 item 5: a deleted / unavailable cart line surfaces as the quote's
+// 409 CART_ITEMS_UNAVAILABLE (not a 404 / 500), and no Kustom call is made.
+describe('KustomCheckoutService sessions with unavailable cart lines', () => {
+  const unavailable = () =>
+    cartItemsUnavailable([{ product_id: 'p-gone' }]);
+
+  it('createSession: 409 CART_ITEMS_UNAVAILABLE, session row dropped', async () => {
+    const { service, prisma, orders, createCheckout } = build(null);
+    orders.quoteLines.mockRejectedValue(unavailable() as never);
+    await expect(service.createSession(null, dto)).rejects.toMatchObject({
+      status: 409,
+      response: {
+        code: 'CART_ITEMS_UNAVAILABLE',
+        unavailable: [{ product_id: 'p-gone' }],
+      },
+    });
+    expect(createCheckout).not.toHaveBeenCalled();
+    expect(prisma.kustomCheckoutSession.delete).toHaveBeenCalled();
+  });
+
+  it('updateSession: 409 CART_ITEMS_UNAVAILABLE, Kustom untouched', async () => {
+    const { service, orders, updateCheckout } = build(null, {
+      session: sessionRow({}),
+    });
+    orders.quoteLines.mockRejectedValue(unavailable() as never);
+    await expect(
+      service.updateSession('sess-1', { token: 'sf-token', notes: 'x' }),
+    ).rejects.toMatchObject({
+      response: { code: 'CART_ITEMS_UNAVAILABLE' },
+    });
+    expect(updateCheckout).not.toHaveBeenCalled();
   });
 });

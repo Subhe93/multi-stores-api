@@ -8,7 +8,11 @@ import {
 import { BundleOffer, CartItem, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { customerStoreMismatch } from '../../common/customers/customer-store';
-import { storeClosed, storeNotLive } from '../../common/stores/store-gate';
+import {
+  storeClosed,
+  storeNotLive,
+  type PreLiveViewerCheck,
+} from '../../common/stores/store-gate';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
@@ -394,14 +398,29 @@ export class CartService {
    * Public gate (SPEC §3): only a LIVE store takes cart lines; anything
    * else is 409 STORE_NOT_LIVE. Judged on the customer's own store
    * (per-store accounts); order creation re-checks the store of the lines.
+   * FIXES-1 item 4: the owner / an admin previewing the store (viewer
+   * header) may still fill the cart; ordering keeps its own pre-live rule.
    */
-  private async assertStoreLive(storeId: string | null): Promise<void> {
+  private async assertStoreLive(
+    storeId: string | null,
+    preLiveViewer?: PreLiveViewerCheck,
+  ): Promise<void> {
     if (!storeId) return;
     const store = await this.prisma.store.findUnique({
       where: { id: storeId },
       select: { is_active: true, status: true },
     });
-    if (storeClosed(store)) throw storeNotLive();
+    if (!storeClosed(store)) return;
+    if (
+      preLiveViewer &&
+      store?.status &&
+      (await preLiveViewer({ id: storeId, status: store.status }).catch(
+        () => false,
+      ))
+    ) {
+      return;
+    }
+    throw storeNotLive();
   }
 
   /**
@@ -1442,6 +1461,8 @@ export class CartService {
     marketKey?: string,
     buyer?: string,
     preview?: boolean,
+    /** FIXES-1 item 4: X-Storefront-Viewer check (owner pre-live preview). */
+    preLiveViewer?: PreLiveViewerCheck,
   ) {
     const cart = await this.getOrCreateCart(userId);
 
@@ -1458,7 +1479,7 @@ export class CartService {
       await this.assertVariantOfProduct(dto.product_id, dto.variant_id);
     }
     await this.assertLineInAccountStore(cart.account_store_id, dto);
-    await this.assertStoreLive(cart.account_store_id);
+    await this.assertStoreLive(cart.account_store_id, preLiveViewer);
     await this.assertAvailableInMarket(dto, locale, marketKey, preview);
     // M4.2 designer (C29 step 2): a line with a design, or of a product the
     // designer is active for, is validated (and the design claimed for this

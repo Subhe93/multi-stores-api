@@ -7,6 +7,7 @@ import {
   Body,
   Query,
   UseGuards,
+  Headers,
   BadRequestException,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
@@ -19,18 +20,37 @@ import {
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { OrderStatus, UserRole } from '@prisma/client';
+import {
+  STOREFRONT_VIEWER_HEADER,
+  StorefrontGateService,
+} from '../storefront/storefront-gate.service';
 
 @Controller('orders')
 @UseGuards(AuthGuard('jwt'))
 export class OrdersController {
-  constructor(private ordersService: OrdersService) {}
+  constructor(
+    private ordersService: OrdersService,
+    private gate: StorefrontGateService,
+  ) {}
 
   // Customer — إنشاء طلب من السلة
   @Post()
   @UseGuards(RolesGuard)
   @Roles(UserRole.CUSTOMER)
-  create(@CurrentUser('id') userId: string, @Body() dto: CreateOrderDto) {
-    return this.ordersService.create(userId, dto);
+  // Optional `X-Storefront-Viewer: Bearer <token>` (FIXES-1 item 4): on a
+  // store that is not LIVE the owner / an admin may place a Stripe order
+  // paid through the store's TEST own key (created with is_test).
+  create(
+    @CurrentUser('id') userId: string,
+    @Body() dto: CreateOrderDto,
+    @Headers(STOREFRONT_VIEWER_HEADER) viewerHeader?: string,
+  ) {
+    const preLiveViewer = this.gate.preLiveCheck(viewerHeader);
+    return this.ordersService.create(
+      userId,
+      dto,
+      preLiveViewer ? { preLiveViewer } : {},
+    );
   }
 
   // Customer — طلباتي

@@ -83,6 +83,8 @@ export interface OverviewResponse {
     currency: string;
     status: string;
     payment_status: string | null;
+    /** Test order (FIXES-1): listed, never counted in the figures. */
+    is_test: boolean;
     created_at: string;
   }[];
   todo: {
@@ -386,11 +388,15 @@ export class OverviewService {
     };
   }
 
-  /** Every order of the period (counted or not) per status. */
+  /** Every real order of the period (counted or not) per status. */
   private async statusBreakdown(store: StoreCtx, w: OverviewWindow) {
     const rows = await this.prisma.order.groupBy({
       by: ['status'],
-      where: { store_id: store.id, created_at: { gte: w.from, lt: w.to } },
+      where: {
+        store_id: store.id,
+        is_test: false,
+        created_at: { gte: w.from, lt: w.to },
+      },
       _count: { _all: true },
     });
     return rows
@@ -606,6 +612,7 @@ export class OverviewService {
         currency: true,
         status: true,
         payment_status: true,
+        is_test: true,
         created_at: true,
         customer: { select: { first_name: true, last_name: true } },
         address: { select: { full_name: true } },
@@ -622,6 +629,7 @@ export class OverviewService {
       currency: o.currency,
       status: o.status,
       payment_status: o.payment_status,
+      is_test: o.is_test,
       created_at: o.created_at.toISOString(),
     }));
   }
@@ -642,6 +650,7 @@ export class OverviewService {
             )::int AS unfulfilled,
             COUNT(*) FILTER (
               WHERE o.payment_status = 'awaiting_payment'
+                AND o.is_test = false
                 AND o.status::text NOT IN ('CANCELLED', 'REFUNDED')
                 AND o.created_at >= (now() AT TIME ZONE 'UTC') - CASE
                       WHEN o.payment_method::text = 'KUSTOM'

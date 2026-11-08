@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { StoreStatus, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import type { PreLiveViewerCheck } from '../../common/stores/store-gate';
 import {
   tokenIssuedAfterCutoff,
   tokenStoreMatches,
@@ -36,6 +37,9 @@ export interface EditHintViewer {
   store_id: string;
   user_id: string;
 }
+
+/** Header carrying the storefront viewer bearer next to a customer JWT. */
+export const STOREFRONT_VIEWER_HEADER = 'x-storefront-viewer';
 
 /** Who is reading a storefront: the principal behind a valid bearer token. */
 export type StorefrontViewer = SessionViewer | EditHintViewer;
@@ -180,6 +184,30 @@ export class StorefrontGateService {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Owner pre-live checkout (FIXES-1 item 4): a check for the
+   * `X-Storefront-Viewer` header value of a quote / order / cart request.
+   * Undefined without a header. The viewer is resolved lazily (only when a
+   * non-LIVE store is met) and once per request; the rule is `allows` with
+   * a real viewer: the owner (previewable status) or an admin. Never throws.
+   */
+  preLiveCheck(
+    header: string | string[] | undefined,
+  ): PreLiveViewerCheck | undefined {
+    if (!header || (Array.isArray(header) && !header.length)) return undefined;
+    let viewer: Promise<StorefrontViewer | null> | null = null;
+    return async (store) => {
+      try {
+        viewer ??= this.viewerFromHeader(header);
+        const v = await viewer;
+        if (!v) return false;
+        return await this.allows(store, v);
+      } catch {
+        return false;
+      }
+    };
   }
 
   /**

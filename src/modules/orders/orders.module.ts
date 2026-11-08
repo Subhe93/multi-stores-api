@@ -13,6 +13,7 @@ import { CustomerUploadsModule } from '../customer-uploads/customer-uploads.modu
 import { PersonalizationModule } from '../personalization/personalization.module';
 import { ProductionCoreModule } from '../production/production-core.module';
 import { DesignerCoreModule } from '../designer/designer-core.module';
+import { StorefrontGateModule } from '../storefront/storefront-gate.service';
 
 @Module({
   imports: [
@@ -33,6 +34,9 @@ import { DesignerCoreModule } from '../designer/designer-core.module';
     // M4.2 (C28): cycle-free designer core (cart line service, snapshot,
     // triggers port).
     DesignerCoreModule,
+    // FIXES-1 item 4: X-Storefront-Viewer on quote / order creation
+    // (imports JwtModule + EditHintTokenModule only, no cycle).
+    StorefrontGateModule,
   ],
   controllers: [OrdersController, OrdersQuoteController],
   providers: [OrdersService],

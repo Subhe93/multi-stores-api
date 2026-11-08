@@ -1,4 +1,5 @@
 import { ConflictException } from '@nestjs/common';
+import type { StoreStatus } from '@prisma/client';
 
 /**
  * Public gate of the commerce paths (SPEC §3): cart, checkout and order
@@ -23,3 +24,13 @@ export function storeClosed(
   if (store.status !== undefined) return store.status !== 'LIVE';
   return store.is_active === false;
 }
+
+/**
+ * Owner pre-live checkout (FIXES-1 item 4): whether the storefront viewer of
+ * the request (`X-Storefront-Viewer`) may use the checkout of `store` while it
+ * is not LIVE: its owner (a previewable status) or an admin. Never throws.
+ */
+export type PreLiveViewerCheck = (store: {
+  id: string;
+  status: StoreStatus;
+}) => Promise<boolean>;

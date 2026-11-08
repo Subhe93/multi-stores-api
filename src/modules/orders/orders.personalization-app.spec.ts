@@ -1,4 +1,8 @@
-import { BadRequestException, HttpException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  HttpException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { StoreType } from '@prisma/client';
 import { OrdersService } from './orders.service';
@@ -628,16 +632,20 @@ describe('OrdersService personalization app (M4.1 fixes)', () => {
     expect(body).toMatchObject({ code: 'PERSONALIZATION_INVALID' });
   });
 
-  it('a variant of another product is rejected like a foreign item', async () => {
+  it('a variant of another product is an unavailable line (FIXES-1 item 5)', async () => {
     const { service } = build();
-    const body = await caught(
-      service.quoteLines(
+    const err = await service
+      .quoteLines(
         STORE_ID,
         [line(validValues(), 1, { product_id: 'p-other' })],
         { countryCode: 'SE' },
-      ),
-    );
-    expect(body).toMatchObject({ code: 'ORDER_ITEM_NOT_SOLD_BY_STORE' });
+      )
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as ConflictException).getResponse()).toMatchObject({
+      code: 'CART_ITEMS_UNAVAILABLE',
+      unavailable: [{ product_id: 'p-other', variant_id: VARIANT.id }],
+    });
   });
 
   it('fails closed: app state unreadable for a product with app config → 503', async () => {

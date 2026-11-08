@@ -613,8 +613,10 @@ export class TaxManagementService {
         message: 'from must be a date on or before to.',
       });
     }
+    // Test orders (FIXES-1) moved no money: never in a tax report.
     const where: Prisma.OrderWhereInput = {
       payment_status: 'paid',
+      is_test: false,
       created_at: { gte: from, lte: to },
       tax_lines: { not: Prisma.DbNull },
     };
@@ -759,6 +761,7 @@ export class TaxManagementService {
         where: {
           store_id: scope.store_id,
           tax_exempt_reason: 'REVERSE_CHARGE',
+          order: { is_test: false },
           issue_date: { gte: from, lte: to },
         },
         select: {
@@ -791,6 +794,7 @@ export class TaxManagementService {
         where: {
           store_id: scope.store_id,
           tax_exempt_reason: 'REVERSE_CHARGE',
+          is_test: false,
           OR: [
             {
               payment_status: { in: ['paid', 'refunded'] },

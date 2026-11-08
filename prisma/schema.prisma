@@ -866,6 +866,10 @@ model Order {
   tax_exempt_reason       TaxExemptReason?
   vat_validation          Json?
   notes                   String?
+  // Test order: paid through an own Stripe key in TEST mode, or placed by the
+  // owner / an admin on a store that is not LIVE yet. Listed like any order,
+  // excluded from every stats / earnings / revenue figure.
+  is_test                 Boolean             @default(false)
   created_at              DateTime            @default(now())
   updated_at              DateTime            @updatedAt
 

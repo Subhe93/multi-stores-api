@@ -348,6 +348,11 @@ export class InvoicesService {
     });
     if (already) return { invoice: already, created: false };
 
+    // FIXES-1: test orders (TEST own key / pre-live owner checkout) moved no
+    // money; an invoice (and later its credit notes) would consume real
+    // numbers of the store's gap-free invoice series.
+    if (order.is_test) throw invoiceErrors.testOrder();
+
     if (NOT_INVOICEABLE_STATUS.includes(order.status)) {
       throw invoiceErrors.orderNotEligible(
         `A ${order.status.toLowerCase()} order cannot be invoiced.`,
@@ -728,6 +733,8 @@ export class InvoicesService {
   private backlogWhere(storeId: string): Prisma.OrderWhereInput {
     return {
       store_id: storeId,
+      // FIXES-1: test orders are never invoiced (see issueForOrder).
+      is_test: false,
       status: { notIn: NOT_INVOICEABLE_STATUS },
       invoices: { none: { kind: InvoiceKind.INVOICE } },
       OR: [

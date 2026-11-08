@@ -589,6 +589,7 @@ export class StoreCustomersService {
             payment_method: true,
             total: true,
             currency: true,
+            is_test: true,
             created_at: true,
           },
         }),

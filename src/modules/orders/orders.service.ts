@@ -12,7 +12,11 @@ import {
 import { randomBytes, randomUUID } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
-import { storeNotLive } from '../../common/stores/store-gate';
+import {
+  storeNotLive,
+  type PreLiveViewerCheck,
+} from '../../common/stores/store-gate';
+import { isOwnKeyTestMode } from '../payments/payment-route';
 import {
   CommissionStatus,
   FulfillerType,
@@ -23,6 +27,7 @@ import {
   PricingType,
   ProductStatus,
   ShippingMethodType,
+  StoreStatus,
   StoreType,
   TaxPricingMode,
   UserRole,
@@ -135,6 +140,13 @@ import {
 import { backTextRowsOf } from '../designer/designer-back';
 import { assertCustomerStore } from '../../common/customers/customer-store';
 import {
+  LineUnavailableError,
+  cartItemsUnavailable,
+  isLineUnavailable,
+  unavailableEntry,
+  type UnavailableCartItem,
+} from './cart-items-availability';
+import {
   DESIGNER_TRIGGERS_PORT,
   type DesignerTriggersPort,
 } from '../../common/ports/designer-triggers.port';
@@ -208,6 +220,23 @@ interface OrderStoreContext extends TaxStoreFields {
   buyerType: BuyerType;
   /** Personalization app (M4.1 D2): in effect for the store (false when off). */
   personalizationEnabled: boolean;
+  /**
+   * FIXES-1 item 4: the store is not LIVE and the owner / an admin is
+   * testing its checkout through the ACTIVE own Stripe key in TEST mode.
+   * The order is created with `is_test`.
+   */
+  preLiveTest: boolean;
+}
+
+/**
+ * Owner pre-live checkout (FIXES-1 item 4): who may order on a store that is
+ * not LIVE, and with which payment method.
+ */
+export interface PreLiveOrderInput {
+  /** Viewer check of the request (X-Storefront-Viewer); absent = public. */
+  viewer?: PreLiveViewerCheck;
+  /** Order creation: the requested method (only STRIPE qualifies). */
+  paymentMethod?: PaymentMethod;
 }
 
 /** A stock reservation to apply atomically right before the order row. */
@@ -372,6 +401,12 @@ export interface CreateOrderOptions {
    * `lines`, only these designs are trusted; absent = none.
    */
   verifiedDesignIds?: readonly string[];
+  /**
+   * FIXES-1 item 4: the storefront viewer check of the request
+   * (`X-Storefront-Viewer`); lets the owner / an admin place a TEST-key
+   * Stripe order on a store that is not LIVE (created with `is_test`).
+   */
+  preLiveViewer?: PreLiveViewerCheck;
 }
 
 function deriveCommissionStatus(orderStatus: OrderStatus): CommissionStatus {
@@ -892,6 +927,8 @@ export class OrdersService {
      * refused with MARKET_NOT_LIVE.
      */
     preview?: boolean,
+    /** FIXES-1 item 4: owner pre-live checkout of a non-LIVE store. */
+    preLive?: PreLiveOrderInput,
   ): Promise<OrderStoreContext> {
     const orderStore = await this.prisma.store.findUnique({
       where: { id: storeId },
@@ -902,6 +939,7 @@ export class OrdersService {
         currency: true,
         cod_enabled: true,
         is_active: true,
+        status: true,
         language_config: { select: { primary_locale: true } },
         creator: { select: kustomCreatorSelect },
       },
@@ -913,8 +951,15 @@ export class OrdersService {
       });
     }
     // Public gate (SPEC §3): is_active is derived from Store.status (LIVE).
-    if (!orderStore.is_active) throw storeNotLive();
-    const { language_config, ...store } = orderStore;
+    // FIXES-1 item 4: the owner / an admin may still test a TEST-key Stripe
+    // checkout; everything else stays 409 STORE_NOT_LIVE.
+    let preLiveTest = false;
+    if (!orderStore.is_active) {
+      preLiveTest = await this.preLiveTestAllowed(orderStore, preLive);
+      if (!preLiveTest) throw storeNotLive();
+    }
+    const { language_config, status: _status, ...store } = orderStore;
+    void _status;
     // Markets app: null when off (every pricing step below then runs the
     // pre-markets code); 404 for an unknown or draft key (draft allowed for
     // a preview quote).
@@ -941,7 +986,43 @@ export class OrdersService {
       b2bEnabled,
       buyerType: resolvedBuyerType,
       personalizationEnabled,
+      preLiveTest,
     };
+  }
+
+  /**
+   * FIXES-1 item 4: an order (or quote) on a store that is not LIVE is only
+   * allowed for the owner / an admin viewer (same rule as the storefront
+   * preview), paying by Stripe through the store's ACTIVE own key in TEST
+   * mode. COD, Kustom, live keys, Connect and the platform account stay
+   * refused. Cheap checks first; the viewer (token + DB) last. Never throws.
+   */
+  private async preLiveTestAllowed(
+    store: { id: string; status: StoreStatus; store_type: StoreType },
+    preLive: PreLiveOrderInput | undefined,
+  ): Promise<boolean> {
+    if (!preLive?.viewer) return false;
+    if (
+      preLive.paymentMethod !== undefined &&
+      preLive.paymentMethod !== PaymentMethod.STRIPE
+    ) {
+      return false;
+    }
+    if (store.store_type !== StoreType.INDEPENDENT) return false;
+    try {
+      const keys = await this.prisma.storeStripeKeys.findUnique({
+        where: { store_id: store.id },
+        select: { status: true, livemode: true },
+      });
+      if (
+        !isOwnKeyTestMode({ store_type: store.store_type, stripe_keys: keys })
+      ) {
+        return false;
+      }
+      return await preLive.viewer({ id: store.id, status: store.status });
+    } catch {
+      return false;
+    }
   }
 
   /** The `b2b` response block (D3): display mode and net figures of a result. */
@@ -1044,10 +1125,8 @@ export class OrdersService {
             : true,
         },
       });
-      if (!cp)
-        throw new NotFoundException(
-          `Custom product ${item.custom_product_id} not found`,
-        );
+      // Deleted (FIXES-1 item 5): collected as CART_ITEMS_UNAVAILABLE.
+      if (!cp) throw new LineUnavailableError();
 
       // The storefront lists a custom product only when it belongs to this
       // store's creator and is published — enforce the same rule here.
@@ -1055,7 +1134,7 @@ export class OrdersService {
         cp.creator_id !== orderStore.creator_id ||
         cp.status !== ProductStatus.PUBLISHED
       ) {
-        this.rejectForeignItem();
+        throw new LineUnavailableError();
       }
 
       let variant: { price_adjustment: any } | null = null;
@@ -1064,11 +1143,12 @@ export class OrdersService {
           where: { id: item.variant_id },
           select: { price_adjustment: true, product_id: true, options: true },
         });
-        if (!variantRow)
-          throw new NotFoundException(`Variant ${item.variant_id} not found`);
+        if (!variantRow) throw new LineUnavailableError();
         // The variant must belong to the custom product's base product,
         // otherwise its price adjustment would be borrowed from elsewhere.
-        if (variantRow.product_id !== cp.product_id) this.rejectForeignItem();
+        if (variantRow.product_id !== cp.product_id) {
+          throw new LineUnavailableError();
+        }
         variant = variantRow;
         variantOptions = variantRow.options;
       }
@@ -1119,8 +1199,7 @@ export class OrdersService {
         where: { id: item.variant_id },
         include: { product: true },
       });
-      if (!variant)
-        throw new NotFoundException(`Variant ${item.variant_id} not found`);
+      if (!variant) throw new LineUnavailableError();
 
       // A bare variant line sells the creator's own product: it must belong
       // to this store's creator and be published. This is what stops another
@@ -1131,11 +1210,11 @@ export class OrdersService {
         variant.product.status !== ProductStatus.PUBLISHED ||
         !variant.is_active
       ) {
-        this.rejectForeignItem();
+        throw new LineUnavailableError();
       }
       // Guard against a variant borrowed from a different product.
       if (item.product_id && variant.product_id !== item.product_id) {
-        this.rejectForeignItem();
+        throw new LineUnavailableError();
       }
 
       unitPrice =
@@ -1163,8 +1242,7 @@ export class OrdersService {
       const product = await this.prisma.product.findUnique({
         where: { id: item.product_id },
       });
-      if (!product)
-        throw new NotFoundException(`Product ${item.product_id} not found`);
+      if (!product) throw new LineUnavailableError();
 
       // Same rule as the variant branch: only this store creator's own
       // published products are sellable here. Provider catalogue products
@@ -1174,7 +1252,7 @@ export class OrdersService {
         product.creator_id !== orderStore.creator_id ||
         product.status !== ProductStatus.PUBLISHED
       ) {
-        this.rejectForeignItem();
+        throw new LineUnavailableError();
       }
 
       unitPrice = Number(product.base_price);
@@ -1877,6 +1955,11 @@ export class OrdersService {
         customerId: string | null;
         verifiedDesignIds: readonly string[];
       } | null;
+      /**
+       * FIXES-1 item 4: viewer check of `POST /orders/quote`; the owner / an
+       * admin may quote a non-LIVE store that has a TEST own key.
+       */
+      preLiveViewer?: PreLiveViewerCheck;
     },
   ): Promise<OrderQuote> {
     const orderStore = await this.loadOrderStore(
@@ -1884,6 +1967,7 @@ export class OrdersService {
       opts.marketKey,
       opts.buyerType,
       opts.preview,
+      { viewer: opts.preLiveViewer },
     );
     const exemptionInputs =
       opts.exemptionInputs !== undefined
@@ -1941,6 +2025,7 @@ export class OrdersService {
     );
     // M4.1: active variants per product, one query per product per quote.
     const activeCache: ActiveVariantsCache = new Map();
+    const unavailable: UnavailableCartItem[] = [];
     const quotedValues: {
       ctx: LineContext;
       values: NormalizedValues;
@@ -1954,21 +2039,30 @@ export class OrdersService {
       // A designer line carries no field values (C29): no personalization
       // input, no field rules; its add-ons are priced in priceLine (M5.5).
       const designer = designerLines[index];
-      const priced = await this.priceLine(
-        item,
-        orderStore,
-        marketRows,
-        designer
-          ? null
-          : {
-              ctx: fieldContexts[index],
-              raw: item.custom_fields,
-              locale: opts.locale,
-              ref,
-              activeCache,
-            },
-        designer,
-      );
+      // FIXES-1 item 5: a deleted / unpublished / foreign line is collected
+      // and every such line answered in one CART_ITEMS_UNAVAILABLE.
+      let priced: PricedLine;
+      try {
+        priced = await this.priceLine(
+          item,
+          orderStore,
+          marketRows,
+          designer
+            ? null
+            : {
+                ctx: fieldContexts[index],
+                raw: item.custom_fields,
+                locale: opts.locale,
+                ref,
+                activeCache,
+              },
+          designer,
+        );
+      } catch (err) {
+        if (!isLineUnavailable(err)) throw err;
+        unavailable.push(unavailableEntry({ ...item, id: lineId ?? null }));
+        continue;
+      }
       quotedValues.push({
         ctx: fieldContexts[index],
         // M4.1: an app line's values come from the evaluator (priceLine).
@@ -2012,6 +2106,7 @@ export class OrdersService {
         tax_exempt: priced.taxExempt,
       });
     }
+    if (unavailable.length) throw cartItemsUnavailable(unavailable);
     // Customer files behind preview URLs must still be linkable to an order
     // of this store (same check as create); no query without preview URLs.
     await this.core.assertUploadsAvailable(
@@ -2128,6 +2223,8 @@ export class OrdersService {
       buyer_type?: string | null;
       vat_number?: string | null;
     },
+    /** FIXES-1 item 4: X-Storefront-Viewer check (owner pre-live quote). */
+    preLiveViewer?: PreLiveViewerCheck,
   ): Promise<OrderQuote> {
     let lines: CartLineLike[] = dto.lines ?? [];
     let lineIds: (string | undefined)[] | undefined;
@@ -2171,6 +2268,7 @@ export class OrdersService {
       buyerType: dto.buyer_type ?? null,
       vatNumber: dto.vat_number ?? null,
       userId,
+      ...(preLiveViewer ? { preLiveViewer } : {}),
     });
   }
 
@@ -2258,6 +2356,11 @@ export class OrdersService {
       dto.store_id,
       dto.market_key,
       dto.buyer_type,
+      undefined,
+      {
+        viewer: opts.preLiveViewer,
+        paymentMethod: dto.payment_method || PaymentMethod.COD,
+      },
     );
     const isIndependentStore = orderStore.store_type === StoreType.INDEPENDENT;
     // b2b app: a COMPANY request the store does not accept is refused rather
@@ -2330,6 +2433,7 @@ export class OrdersService {
     );
     // M4.1: active variants per product, one query per product per order.
     const activeCache: ActiveVariantsCache = new Map();
+    const unavailable: UnavailableCartItem[] = [];
     const designerAddonsAt = new Map<
       number,
       { lines: PricedAddon[]; total: number }
@@ -2355,21 +2459,30 @@ export class OrdersService {
       // M4.2: a designer line carries no field values (C29); its price is
       // the product's plus its add-ons (M5.5, priced in priceLine).
       const designer = designerLines[index];
-      const priced = await this.priceLine(
-        item,
-        orderStore,
-        marketRows,
-        designer
-          ? null
-          : {
-              ctx: fieldContexts[index],
-              raw: rawValues,
-              locale: dto.locale,
-              ref: lineRef,
-              activeCache,
-            },
-        designer,
-      );
+      // FIXES-1 item 5: a deleted / unpublished / foreign line is collected
+      // and every such line answered in one CART_ITEMS_UNAVAILABLE.
+      let priced: PricedLine;
+      try {
+        priced = await this.priceLine(
+          item,
+          orderStore,
+          marketRows,
+          designer
+            ? null
+            : {
+                ctx: fieldContexts[index],
+                raw: rawValues,
+                locale: dto.locale,
+                ref: lineRef,
+                activeCache,
+              },
+          designer,
+        );
+      } catch (err) {
+        if (!isLineUnavailable(err)) throw err;
+        unavailable.push(unavailableEntry({ ...item, id: item.id ?? null }));
+        continue;
+      }
       const {
         unitPrice,
         originalUnitPrice,
@@ -2456,6 +2569,7 @@ export class OrdersService {
           : {}),
       });
     }
+    if (unavailable.length) throw cartItemsUnavailable(unavailable);
 
     // M4.0 (K8, C19): snapshot rows built from the validated values and
     // created nested inside order.create below, so they can never be
@@ -2813,6 +2927,8 @@ export class OrdersService {
           data: {
             ...(orderId ? { id: orderId } : {}),
             order_number: this.generateOrderNumber(),
+            // FIXES-1: the owner's pre-live checkout is a test order.
+            ...(orderStore.preLiveTest ? { is_test: true } : {}),
             customer_id: customer.id,
             address_id: dto.address_id,
             store_id: dto.store_id || undefined,

@@ -7,6 +7,7 @@ import { B2bModule } from '../b2b/b2b.module';
 import { PersonalizationCoreModule } from '../../common/personalization/personalization-core.module';
 import { PersonalizationModule } from '../personalization/personalization.module';
 import { DesignerCoreModule } from '../designer/designer-core.module';
+import { StorefrontGateModule } from '../storefront/storefront-gate.service';
 
 // PersonalizationModule (M4.1) imports no cart/order module: no cycle.
 @Module({
@@ -18,6 +19,8 @@ import { DesignerCoreModule } from '../designer/designer-core.module';
     PersonalizationModule,
     // M4.2 (C28): cycle-free designer core (DesignerCartService).
     DesignerCoreModule,
+    // FIXES-1 item 4: X-Storefront-Viewer on POST /cart/items (no cycle).
+    StorefrontGateModule,
   ],
   controllers: [CartController],
   providers: [CartService],

@@ -396,3 +396,32 @@ describe('every public storefront read honours the owner preview', () => {
     expect(ownerLookups).not.toHaveBeenCalled();
   });
 });
+
+// FIXES-1 item 4: the owner pre-live checkout check of quote / order / cart.
+describe('StorefrontGateService.preLiveCheck', () => {
+  const s1 = (status: StoreStatus) => ({ id: 's1', status });
+
+  it('is undefined without an X-Storefront-Viewer header', () => {
+    const { gate } = build(StoreStatus.DRAFT);
+    expect(gate.preLiveCheck(undefined)).toBeUndefined();
+    expect(gate.preLiveCheck('')).toBeUndefined();
+  });
+
+  it('owner and admin pass on a previewable status; others do not', async () => {
+    const { gate } = build(StoreStatus.DRAFT);
+    await expect(gate.preLiveCheck('Bearer owner')!(s1(StoreStatus.DRAFT))).resolves.toBe(true);
+    await expect(gate.preLiveCheck('Bearer admin')!(s1(StoreStatus.DRAFT))).resolves.toBe(true);
+    await expect(gate.preLiveCheck('Bearer other')!(s1(StoreStatus.DRAFT))).resolves.toBe(false);
+    await expect(gate.preLiveCheck('Bearer forged')!(s1(StoreStatus.DRAFT))).resolves.toBe(false);
+    await expect(gate.preLiveCheck('garbage')!(s1(StoreStatus.DRAFT))).resolves.toBe(false);
+    // The edit-hint token previews exactly the store it names.
+    await expect(gate.preLiveCheck('Bearer hint:s1:owner')!(s1(StoreStatus.DRAFT))).resolves.toBe(true);
+    await expect(gate.preLiveCheck('Bearer hint:s2:owner')!(s1(StoreStatus.DRAFT))).resolves.toBe(false);
+  });
+
+  it('a SUSPENDED store stays closed to its owner (admins only)', async () => {
+    const { gate } = build(StoreStatus.SUSPENDED);
+    await expect(gate.preLiveCheck('Bearer owner')!(s1(StoreStatus.SUSPENDED))).resolves.toBe(false);
+    await expect(gate.preLiveCheck('Bearer admin')!(s1(StoreStatus.SUSPENDED))).resolves.toBe(true);
+  });
+});

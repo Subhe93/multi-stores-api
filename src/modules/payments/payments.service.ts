@@ -14,6 +14,14 @@ import Stripe from 'stripe';
 import { UserRole, FulfillerType, StoreType } from '@prisma/client';
 import type { OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  storeClosed,
+  storeNotLive,
+} from '../../common/stores/store-gate';
+import {
+  cartItemsUnavailable,
+  unavailableOrderItems,
+} from '../orders/cart-items-availability';
 import { CryptoService } from '../../common/crypto/crypto.service';
 import {
   toStripeAmount,
@@ -71,6 +79,8 @@ interface OrderStripe {
   opts: StripeRequestOptions;
   /** OWN_KEY: fingerprint of the key behind `stripe` (null otherwise). */
   fingerprint?: string | null;
+  /** OWN_KEY: mode of the key behind `stripe` (undefined otherwise). */
+  livemode?: boolean;
 }
 
 /** Customer-facing error codes of the card checkout (web maps them). */
@@ -331,6 +341,7 @@ export class PaymentsService implements OnModuleInit {
         stripe: entry.client,
         opts: undefined,
         fingerprint: entry.fingerprint,
+        livemode: entry.livemode,
       };
     } catch {
       throw this.ownKeyNotActive();
@@ -521,7 +532,10 @@ export class PaymentsService implements OnModuleInit {
 
     // Kustom also needs a currency it can process: the market's when the
     // markets app applies, else the store's.
+    // FIXES-1 item 4: an owner previewing a store that is not LIVE can only
+    // test Stripe (TEST own key); Kustom would answer STORE_NOT_LIVE.
     const kustomEnabled = async () =>
+      store.is_active !== false &&
       isKustomEnabledForStore({
         ...store,
         currency: resolveOrderCurrency(
@@ -1101,6 +1115,12 @@ export class PaymentsService implements OnModuleInit {
             fulfiller_type: true,
             fulfiller_id: true,
             quantity: true,
+            product_id: true,
+            variant_id: true,
+            custom_product_id: true,
+            product: { select: { status: true } },
+            variant: { select: { is_active: true } },
+            custom_product: { select: { status: true } },
           },
         },
       },
@@ -1116,6 +1136,55 @@ export class PaymentsService implements OnModuleInit {
     if (order.payment_status === 'refunded') {
       throw new BadRequestException('Order is already paid');
     }
+
+    // FIXES-1 item 5: a product of the unpaid order was deleted / archived /
+    // unpublished since the order was placed. Nothing can be charged for it:
+    // the order is failed (stock and coupon back) and the checkout drops the
+    // lines and places a new order. Skipped while the order already has a
+    // PaymentIntent (redirect / bank debit / 3DS may still succeed): failing
+    // it here would release stock and coupon under a live payment, so the
+    // normal reuse path and the abandonment sweep decide instead.
+    const hasIntent = !!order.stripe_payment_id || !!order.payment_processing_at;
+    const unavailable = hasIntent ? [] : unavailableOrderItems(order.items);
+    if (unavailable.length) {
+      try {
+        await this.orders.markOrderFailed(
+          order.id,
+          'An item of the order is no longer available',
+        );
+      } catch (err) {
+        this.logger.warn(
+          `Could not fail order ${order.id} with unavailable items: ${this.describe(err)}`,
+        );
+      }
+      throw cartItemsUnavailable(unavailable);
+    }
+
+    // FIXES-1 item 4: a store that is not LIVE only takes the payment of a
+    // test order (the owner's pre-live checkout); its route is checked below.
+    // Independent stores charge the customer DIRECTLY on the creator's Standard
+    // connected account (direct charge) — no platform commission, no transfers.
+    const store = order.store_id
+      ? await this.prisma.store.findUnique({
+          where: { id: order.store_id },
+          select: {
+            id: true,
+            store_type: true,
+            status: true,
+            is_active: true,
+            creator: {
+              select: {
+                user_id: true,
+                stripe_account_id: true,
+                stripe_account_type: true,
+                stripe_charges_enabled: true,
+              },
+            },
+          },
+        })
+      : null;
+    const storeIsClosed = storeClosed(store);
+    if (storeIsClosed && !order.is_test) throw storeNotLive();
 
     // Zero total (100% discount): nothing to charge, never sent to Stripe.
     // The order is confirmed as paid right away through the same finalize
@@ -1140,25 +1209,6 @@ export class PaymentsService implements OnModuleInit {
 
     await this.recomputeCommission(order.id);
 
-    // Independent stores charge the customer DIRECTLY on the creator's Standard
-    // connected account (direct charge) — no platform commission, no transfers.
-    const store = order.store_id
-      ? await this.prisma.store.findUnique({
-          where: { id: order.store_id },
-          select: {
-            id: true,
-            store_type: true,
-            creator: {
-              select: {
-                user_id: true,
-                stripe_account_id: true,
-                stripe_account_type: true,
-                stripe_charges_enabled: true,
-              },
-            },
-          },
-        })
-      : null;
     const isIndependent = store?.store_type === StoreType.INDEPENDENT;
     // A TEST-mode own key only takes payments from the store owner or an
     // admin previewing the checkout, decided with the same storefront viewer
@@ -1170,6 +1220,18 @@ export class PaymentsService implements OnModuleInit {
       !!viewerCanPreview &&
       (await viewerCanPreview(store.id).catch(() => false));
     const route = await this.resolveRouteForStore(store, { allowTest });
+    // FIXES-1 item 4: on a store that is not LIVE only the owner / an admin
+    // pays, and only through the ACTIVE own key in TEST mode. Live keys,
+    // Connect and the platform account stay refused.
+    if (storeIsClosed) {
+      const mode =
+        allowTest && route === 'OWN_KEY' && store
+          ? await this.ownKey?.getMode(store.id)
+          : null;
+      if (!mode || mode.status !== 'ACTIVE' || mode.livemode) {
+        throw storeNotLive();
+      }
+    }
 
     let directAccountId: string | null = null;
     if (isIndependent) {
@@ -1262,6 +1324,9 @@ export class PaymentsService implements OnModuleInit {
               ? { stripeAccount: directAccountId }
               : undefined,
           };
+    // FIXES-1 item 4: the client actually used must be a TEST key on a store
+    // that is not LIVE (the DB mode read above could race a key swap).
+    if (storeIsClosed && ctx.livemode !== false) throw storeNotLive();
     // Stripe caches the response of an idempotency key for 24h, a 500 too:
     // after a 5xx / connection error the order's attempt counter is bumped
     // so the retry gets a fresh key (absent while 0: keys stay unchanged).
@@ -1275,6 +1340,7 @@ export class PaymentsService implements OnModuleInit {
       order.stripe_payment_id ?? 'first',
       ...(attempt > 0 ? [`a${attempt}`] : []),
     ].join('_');
+    const testKey = route === 'OWN_KEY' && ctx.livemode === false;
     const intent = await this.runStripe(
       async () => {
         try {
@@ -1303,6 +1369,10 @@ export class PaymentsService implements OnModuleInit {
         stripe_key_fingerprint:
           route === 'OWN_KEY' ? (ctx.fingerprint ?? null) : null,
         payment_processing_at: null,
+        // FIXES-1 item 1: paid through a TEST-mode own key = a test order
+        // (excluded from every stats / earnings figure). Written only when
+        // it is or was a test order, so real orders keep their update.
+        ...(testKey || order.is_test ? { is_test: testKey } : {}),
       },
     });
 

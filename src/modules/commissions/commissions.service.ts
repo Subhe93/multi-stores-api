@@ -74,7 +74,10 @@ export class CommissionsService {
           total_orders: 0,
         };
       where = {
-        order: { items: { some: { fulfiller_id: provider.id } } },
+        order: {
+          is_test: false,
+          items: { some: { fulfiller_id: provider.id } },
+        },
       };
     } else {
       const creator = await this.prisma.creator.findUnique({
@@ -90,10 +93,11 @@ export class CommissionsService {
         };
       }
       where = {
-        order: { store_id: creator.store.id },
+        order: { store_id: creator.store.id, is_test: false },
       };
     }
 
+    // Test orders (FIXES-1) never count as earnings.
     const allCommissions = await this.prisma.orderCommission.findMany({
       where,
     });
@@ -159,7 +163,10 @@ export class CommissionsService {
   }
 
   async getPlatformSummary() {
-    const allCommissions = await this.prisma.orderCommission.findMany();
+    // Test orders (FIXES-1) never count as platform revenue.
+    const allCommissions = await this.prisma.orderCommission.findMany({
+      where: { order: { is_test: false } },
+    });
 
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -228,10 +235,14 @@ export class CommissionsService {
     const limit = Math.min(100, Math.max(1, params.limit ?? 20));
     const skip = (page - 1) * limit;
 
-    const where: Prisma.OrderCommissionWhereInput = {};
+    // Finance ledger: test orders (FIXES-1) are left out.
+    const where: Prisma.OrderCommissionWhereInput = {
+      order: { is_test: false },
+    };
     if (params.status) where.status = params.status;
     if (params.search) {
       where.order = {
+        is_test: false,
         OR: [
           { order_number: { contains: params.search, mode: 'insensitive' } },
           {

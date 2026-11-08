@@ -315,3 +315,42 @@ describe('CartService with the markets app', () => {
     expect(cart.items[0]).toMatchObject({ price: 125, currency: 'EUR' });
   });
 });
+
+// FIXES-1 item 4: the owner previewing a non-LIVE store may fill the cart
+// (guest cart moved at checkout); the public stays on 409 STORE_NOT_LIVE.
+describe('CartService store gate with the owner pre-live viewer', () => {
+  type Gate = (
+    storeId: string | null,
+    viewer?: (s: { id: string; status: string }) => Promise<boolean>,
+  ) => Promise<void>;
+  const gateOf = (status: string) => {
+    const { service, prisma } = build({ enabled: false });
+    prisma.store.findUnique.mockResolvedValue({
+      is_active: status === 'LIVE',
+      status,
+    } as never);
+    return (service as unknown as { assertStoreLive: Gate }).assertStoreLive.bind(
+      service,
+    );
+  };
+
+  it('a non-LIVE store: public refused, owner viewer allowed, non-owner refused', async () => {
+    const gate = gateOf('DRAFT');
+    await expect(gate('s1')).rejects.toMatchObject({
+      response: { code: 'STORE_NOT_LIVE' },
+    });
+    const owner = jest.fn(() => Promise.resolve(true));
+    await expect(gate('s1', owner)).resolves.toBeUndefined();
+    expect(owner).toHaveBeenCalledWith({ id: 's1', status: 'DRAFT' });
+    await expect(
+      gate('s1', jest.fn(() => Promise.resolve(false))),
+    ).rejects.toMatchObject({ response: { code: 'STORE_NOT_LIVE' } });
+  });
+
+  it('a LIVE store never consults the viewer', async () => {
+    const gate = gateOf('LIVE');
+    const viewer = jest.fn(() => Promise.resolve(false));
+    await expect(gate('s1', viewer)).resolves.toBeUndefined();
+    expect(viewer).not.toHaveBeenCalled();
+  });
+});

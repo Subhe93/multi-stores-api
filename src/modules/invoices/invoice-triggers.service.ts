@@ -21,6 +21,8 @@ export interface TriggerOrder {
 const QUIET_CODES = new Set([
   'INVOICE_CREDIT_NOTHING_LEFT',
   'INVOICE_ALREADY_ISSUED',
+  // FIXES-1: test orders are skipped by design.
+  'INVOICE_TEST_ORDER',
 ]);
 
 /**

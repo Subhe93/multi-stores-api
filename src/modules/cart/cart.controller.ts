@@ -7,6 +7,7 @@ import {
   Param,
   Query,
   Body,
+  Headers,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
@@ -16,12 +17,19 @@ import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '@prisma/client';
+import {
+  STOREFRONT_VIEWER_HEADER,
+  StorefrontGateService,
+} from '../storefront/storefront-gate.service';
 
 @Controller('cart')
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 @Roles(UserRole.CUSTOMER)
 export class CartController {
-  constructor(private cartService: CartService) {}
+  constructor(
+    private cartService: CartService,
+    private gate: StorefrontGateService,
+  ) {}
 
   // ?market= (markets app): prices are returned in that market's currency.
   // ?preview=1 (market-preview host): a DRAFT market prices the cart too.
@@ -43,6 +51,10 @@ export class CartController {
     );
   }
 
+  // Optional `X-Storefront-Viewer: Bearer <token>` (FIXES-1 item 4): the
+  // owner / an admin previewing a store that is not LIVE may fill the cart
+  // (the guest cart is moved here at checkout); order creation keeps its
+  // own pre-live rule (TEST own key + Stripe only).
   @Post('items')
   addItem(
     @CurrentUser('id') userId: string,
@@ -51,7 +63,9 @@ export class CartController {
     @Query('market') market?: string,
     @Query('buyer') buyer?: string,
     @Query('preview') preview?: string,
+    @Headers(STOREFRONT_VIEWER_HEADER) viewerHeader?: string,
   ) {
+    const preLiveViewer = this.gate.preLiveCheck(viewerHeader);
     return this.cartService.addItem(
       userId,
       dto,
@@ -59,6 +73,7 @@ export class CartController {
       market,
       buyer,
       isPreview(preview),
+      preLiveViewer,
     );
   }
 

@@ -147,6 +147,19 @@ describe('InvoicesService.issueForOrder', () => {
     expect(off.invoices).toHaveLength(0);
   });
 
+  it('never invoices a test order (FIXES-1): no number consumed, backlog skips it', async () => {
+    const t = build({ orders: [paidOrder('o1', { is_test: true })] });
+    expect(await codeOf(t.service.issueForOrder('o1', MANUAL))).toBe(
+      'INVOICE_TEST_ORDER',
+    );
+    expect(t.invoices).toHaveLength(0);
+    expect(t.seqs.INVOICE.issued_count).toBe(0);
+    await t.service.backlog(STORE_ID);
+    expect(t.mock.order.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({ is_test: false }),
+    });
+  });
+
   it('unpaid manual issue gets a due date and bank details', async () => {
     const { service } = build({
       orders: [paidOrder('o1', { payment_status: 'awaiting_payment' })],

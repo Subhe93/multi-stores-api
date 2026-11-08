@@ -27,6 +27,12 @@ export const invoiceErrors = {
     new BadRequestException({ code: 'INVOICE_NUMBERING_INVALID', message }),
   orderNotEligible: (message: string) =>
     new BadRequestException({ code: 'INVOICE_ORDER_NOT_ELIGIBLE', message }),
+  /** FIXES-1: a test order never consumes a number of the invoice series. */
+  testOrder: () =>
+    new BadRequestException({
+      code: 'INVOICE_TEST_ORDER',
+      message: 'A test order is never invoiced.',
+    }),
   snapshotInvalid: (message: string, problems: string[] = []) =>
     new UnprocessableEntityException({
       code: 'INVOICE_SNAPSHOT_INVALID',

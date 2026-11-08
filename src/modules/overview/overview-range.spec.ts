@@ -150,6 +150,11 @@ describe('overview SQL fragments', () => {
     expect(text).not.toContain('awaiting_payment');
   });
 
+  it('counted orders never include test orders (FIXES-1 item 1)', () => {
+    const text = countedOrderSql('p').sql.replace(/\s+/g, ' ');
+    expect(text).toContain('p.is_test = false');
+  });
+
   it('converts market-currency amounts with the order fx_rate_snapshot', () => {
     const sql = storeAmountSql(Prisma.sql`o.total`, 'SEK');
     const text = sql.sql.replace(/\s+/g, ' ');

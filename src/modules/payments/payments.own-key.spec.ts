@@ -83,6 +83,7 @@ interface OrderRow {
   payment_status: string | null;
   total: number;
   currency: string;
+  is_test?: boolean;
 }
 
 function build(
@@ -1685,5 +1686,206 @@ describe('PaymentsController create-intent X-Storefront-Viewer', () => {
     const c = controller({ id: 'cust', role: UserRole.CUSTOMER }, false);
     const res = await c.ctrl.createIntent('u1', { order_id: 'o1' }, 'Bearer x');
     expect(res).toEqual({ preview: false });
+  });
+});
+
+// ── FIXES-1 (2026-11-08): test orders + owner pre-live checkout ───────────
+
+describe('PaymentsService FIXES-1 — test orders and pre-live checkout', () => {
+  const draftStore = { ...independentNoConnect, status: 'DRAFT', is_active: false };
+  const owner = () => jest.fn(() => Promise.resolve(true));
+  const testMode = (b: ReturnType<typeof build>) => {
+    testKey(b);
+    b.ownKey.getMode.mockResolvedValue({ status: 'ACTIVE', livemode: false });
+    b.ownKey.getClientEntry.mockResolvedValue({
+      client: b.merchant,
+      fingerprint: 'fp_test',
+      previous: false,
+      livemode: false,
+    });
+  };
+  const updateData = (b: ReturnType<typeof build>) =>
+    (b.prisma.order.update.mock.calls as unknown as [
+      { data: Record<string, unknown> },
+    ][])
+      .map((c) => c[0].data)
+      .find((d) => 'payment_route' in d);
+
+  it('a TEST-key payment on a LIVE store marks the order is_test', async () => {
+    const b = build({
+      store: independentNoConnect,
+      order: { stripe_payment_id: null },
+    });
+    testMode(b);
+    const res = await b.service.createPaymentIntentForOrder('u1', 'o1', owner());
+    expect(res).toMatchObject({ route: 'OWN_KEY' });
+    expect(updateData(b)).toMatchObject({
+      payment_route: 'OWN_KEY',
+      is_test: true,
+    });
+  });
+
+  it('a live-key payment never writes is_test', async () => {
+    const b = build({ order: { stripe_payment_id: null } });
+    await b.service.createPaymentIntentForOrder('u1', 'o1');
+    expect(updateData(b)).not.toHaveProperty('is_test');
+  });
+
+  it('a non-LIVE store refuses a real (non-test) order with STORE_NOT_LIVE', async () => {
+    const b = build({ store: draftStore, order: { stripe_payment_id: null } });
+    testMode(b);
+    await expect(
+      b.service.createPaymentIntentForOrder('u1', 'o1', owner()),
+    ).rejects.toMatchObject({ response: { code: 'STORE_NOT_LIVE' } });
+    expect(b.merchant.paymentIntents.create).not.toHaveBeenCalled();
+  });
+
+  it('a non-LIVE store takes the owner test order on the TEST own key', async () => {
+    const b = build({
+      store: draftStore,
+      order: { stripe_payment_id: null, is_test: true },
+    });
+    testMode(b);
+    const res = await b.service.createPaymentIntentForOrder('u1', 'o1', owner());
+    expect(res).toMatchObject({ route: 'OWN_KEY' });
+    expect(updateData(b)).toMatchObject({ is_test: true });
+  });
+
+  it('a non-LIVE store refuses the test order without an owner viewer or with a live key', async () => {
+    const anon = build({
+      store: draftStore,
+      order: { stripe_payment_id: null, is_test: true },
+    });
+    testMode(anon);
+    await expect(
+      anon.service.createPaymentIntentForOrder('u1', 'o1'),
+    ).rejects.toMatchObject({ response: { code: 'STORE_NOT_LIVE' } });
+
+    const live = build({
+      store: draftStore,
+      order: { stripe_payment_id: null, is_test: true },
+    });
+    // Live key (default mocks): route OWN_KEY but livemode true.
+    await expect(
+      live.service.createPaymentIntentForOrder('u1', 'o1', owner()),
+    ).rejects.toMatchObject({ response: { code: 'STORE_NOT_LIVE' } });
+    expect(live.merchant.paymentIntents.create).not.toHaveBeenCalled();
+  });
+
+  it('an order item whose product was deleted -> 409 CART_ITEMS_UNAVAILABLE, order failed', async () => {
+    const b = build({ order: { stripe_payment_id: null } });
+    b.prisma.order.findUnique.mockResolvedValueOnce({
+      id: 'o1',
+      store_id: 's1',
+      total: 299,
+      currency: 'SEK',
+      payment_status: 'awaiting_payment',
+      customer: { user_id: 'u1' },
+      items: [
+        {
+          fulfiller_type: FulfillerType.CREATOR,
+          fulfiller_id: 'c1',
+          quantity: 1,
+          product_id: 'p-ok',
+          variant_id: null,
+          custom_product_id: null,
+          product: { status: 'PUBLISHED' },
+          variant: null,
+          custom_product: null,
+        },
+        {
+          fulfiller_type: FulfillerType.CREATOR,
+          fulfiller_id: 'c1',
+          quantity: 1,
+          product_id: 'p-archived',
+          variant_id: null,
+          custom_product_id: null,
+          product: { status: 'ARCHIVED' },
+          variant: null,
+          custom_product: null,
+        },
+      ],
+    } as never);
+    await expect(
+      b.service.createPaymentIntentForOrder('u1', 'o1'),
+    ).rejects.toMatchObject({
+      status: 409,
+      response: {
+        code: 'CART_ITEMS_UNAVAILABLE',
+        unavailable: [{ product_id: 'p-archived' }],
+      },
+    });
+    expect(b.orders.markOrderFailed).toHaveBeenCalledWith(
+      'o1',
+      expect.any(String),
+    );
+    expect(b.merchant.paymentIntents.create).not.toHaveBeenCalled();
+  });
+
+  it('public config of a non-LIVE store never offers Kustom to the owner preview', async () => {
+    const b = build({
+      store: {
+        ...draftStore,
+        creator: {
+          ...independentNoConnect.creator,
+          kustom_enabled: true,
+          kustom_merchant_id: 'm1',
+          kustom_onboarding_status: 'COMPLETE',
+        },
+      },
+    });
+    testMode(b);
+    const cfg = await b.service.getPublicConfig('shop', undefined, false, owner());
+    expect(cfg).toMatchObject({ route: 'OWN_KEY', kustomEnabled: false });
+  });
+});
+
+describe('PaymentsService FIXES-1 audit — SF1 / SF2', () => {
+  const draftStore = { ...independentNoConnect, status: 'DRAFT', is_active: false };
+  const archivedItem = {
+    fulfiller_type: FulfillerType.CREATOR,
+    fulfiller_id: 'c1',
+    quantity: 1,
+    product_id: 'p-archived',
+    variant_id: null,
+    custom_product_id: null,
+    product: { status: 'ARCHIVED' },
+    variant: null,
+    custom_product: null,
+  };
+
+  it('SF1: an order with a PaymentIntent in flight is never failed for unavailable items', async () => {
+    const b = build();
+    b.prisma.order.findUnique.mockResolvedValue({
+      id: 'o1',
+      order_number: 'MS-1',
+      store_id: 's1',
+      total: 299,
+      currency: 'SEK',
+      payment_route: 'OWN_KEY',
+      payment_status: 'awaiting_payment',
+      stripe_payment_id: 'pi_1',
+      customer: { user_id: 'u1' },
+      customer_type: 'PERSON',
+      items: [archivedItem],
+    } as never);
+    await b.service.createPaymentIntentForOrder('u1', 'o1').catch(() => undefined);
+    expect(b.orders.markOrderFailed).not.toHaveBeenCalled();
+  });
+
+  it('SF2: a non-LIVE store refuses when the client built is a LIVE key (key-swap race)', async () => {
+    const b = build({
+      store: draftStore,
+      order: { stripe_payment_id: null, is_test: true },
+    });
+    testKey(b);
+    // The DB row still says TEST, but the client entry is a live key.
+    b.ownKey.getMode.mockResolvedValue({ status: 'ACTIVE', livemode: false });
+    await expect(
+      b.service.createPaymentIntentForOrder('u1', 'o1', () =>
+        Promise.resolve(true),
+      ),
+    ).rejects.toMatchObject({ response: { code: 'STORE_NOT_LIVE' } });
+    expect(b.merchant.paymentIntents.create).not.toHaveBeenCalled();
   });
 });

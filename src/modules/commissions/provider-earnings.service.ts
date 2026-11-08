@@ -324,12 +324,16 @@ export class ProviderEarningsService {
     return provider?.id ?? null;
   }
 
-  /** Orders containing at least one item fulfilled by this provider. */
+  /**
+   * Orders containing at least one item fulfilled by this provider. Test
+   * orders (FIXES-1) never count as earnings.
+   */
   private baseWhere(
     providerId: string,
     range: ProviderEarningsRangeDto,
   ): Prisma.OrderWhereInput {
     const where: Prisma.OrderWhereInput = {
+      is_test: false,
       items: {
         some: {
           fulfiller_type: FulfillerType.PROVIDER,
