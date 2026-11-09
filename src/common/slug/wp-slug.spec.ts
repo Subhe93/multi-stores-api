@@ -15,6 +15,8 @@ import {
   uniqueV2PageSlug,
   withSlugRetry,
   type SlugDb,
+  escapeLikePattern,
+  slugLookupFilters,
 } from './wp-slug';
 
 // WordPress slug rules of the API (plans/slug-wp-rules): sanitizing with the
@@ -242,5 +244,19 @@ describe('uniqueness domains', () => {
     const other = jest.fn().mockRejectedValue(new Error('boom'));
     await expect(withSlugRetry(other)).rejects.toThrow('boom');
     expect(other).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('escapeLikePattern / slugLookupFilters insensitive fallback', () => {
+  it('escapes backslash, percent and underscore', () => {
+    expect(escapeLikePattern('a\\')).toBe('a\\\\');
+    expect(escapeLikePattern('50%_off')).toBe('50\\%\\_off');
+    expect(escapeLikePattern('plain-slug')).toBe('plain-slug');
+  });
+
+  it('keeps the exact filter unescaped and escapes the insensitive one', () => {
+    const [exact, insensitive] = slugLookupFilters('sale_50');
+    expect(exact).toEqual({ equals: 'sale_50' });
+    expect(insensitive).toEqual({ equals: 'sale\\_50', mode: 'insensitive' });
   });
 });

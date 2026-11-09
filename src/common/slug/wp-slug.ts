@@ -161,8 +161,16 @@ export function slugLookupFilters(
   const forms = [...new Set([nfc, nfc.normalize('NFD')])];
   return [
     forms.length === 1 ? { equals: nfc } : { in: forms },
-    { equals: nfc, mode: 'insensitive' },
+    // Prisma sends an insensitive `equals` as ILIKE without escaping, so
+    // `\`, `%` and `_` from the URL must be escaped: a trailing backslash
+    // otherwise fails the query (500) and `%` / `_` act as wildcards.
+    { equals: escapeLikePattern(nfc), mode: 'insensitive' },
   ];
+}
+
+/** Escapes the LIKE metacharacters (`\`, `%`, `_`) of a literal value. */
+export function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 
 /**
