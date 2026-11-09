@@ -78,6 +78,7 @@ export const CONFIG_LIMITS = {
   valueMetaText: 200,
   valueMetaLocales: 20,
   ribbonText: 40,
+  unitLabelText: 30,
   unitsMin: 2,
   unitsMax: 99,
   localeLength: 10,
@@ -775,7 +776,9 @@ export function validateTranslationExtras(
  * Problems of the M4.1 keys of a `variant_option_config` (`valueMeta`
  * keys ⊆ values, `badge_color` / `ribbon_color` hex, `count` integer
  * 0..100, `units` integer 2..99, `ribbon` ≤ 40 chars) and of the option-level
- * card keys (`card_layout` 'grid'|'list', `card_show_savings` boolean).
+ * card keys (`card_layout` 'grid'|'list', `card_show_savings` /
+ * `card_show_unit_price` boolean, `card_unit_label` ≤ 30 chars,
+ * `card_unit_label_i18n` locale → string ≤ 30).
  * Exported for the product write path; other keys (colorMap, swatchMap, …)
  * are not checked here.
  */
@@ -880,7 +883,11 @@ export function validateOptionConfig(optionConfig: unknown): ConfigIssue[] {
   return out;
 }
 
-/** Option-level card keys: `card_layout` 'grid'|'list', `card_show_savings` boolean. */
+/**
+ * Option-level card keys: `card_layout` 'grid'|'list', `card_show_savings`
+ * and `card_show_unit_price` boolean, `card_unit_label` string ≤ 30,
+ * `card_unit_label_i18n` `{<locale>: string ≤ 30}`. `null` clears a key.
+ */
 function checkCardOptionKeys(
   o: Record<string, unknown>,
   i: number,
@@ -895,13 +902,58 @@ function checkCardOptionKeys(
   ) {
     out.push({ path: `${p}.card_layout`, code: 'INVALID_VALUE' });
   }
-  const savings = o.card_show_savings;
+  for (const k of ['card_show_savings', 'card_show_unit_price'] as const) {
+    const v = o[k];
+    if (v !== undefined && v !== null && typeof v !== 'boolean') {
+      out.push({ path: `${p}.${k}`, code: 'INVALID_VALUE' });
+    }
+  }
+  const label = o.card_unit_label;
   if (
-    savings !== undefined &&
-    savings !== null &&
-    typeof savings !== 'boolean'
+    label !== undefined &&
+    label !== null &&
+    !(typeof label === 'string' && label.length <= CONFIG_LIMITS.unitLabelText)
   ) {
-    out.push({ path: `${p}.card_show_savings`, code: 'INVALID_VALUE' });
+    out.push({ path: `${p}.card_unit_label`, code: 'INVALID_VALUE' });
+  }
+  if (o.card_unit_label_i18n !== undefined && o.card_unit_label_i18n !== null) {
+    checkUnitLabelI18n(
+      o.card_unit_label_i18n,
+      `${p}.card_unit_label_i18n`,
+      out,
+    );
+  }
+}
+
+/** `card_unit_label_i18n`: `{<locale>: string ≤ 30}`; locale keys as in `valueMeta[v].i18n`. */
+function checkUnitLabelI18n(
+  raw: unknown,
+  path: string,
+  out: ConfigIssue[],
+): void {
+  if (!isPlainObject(raw)) {
+    out.push({ path, code: 'INVALID_SHAPE' });
+    return;
+  }
+  const entries = Object.entries(raw);
+  if (entries.length > CONFIG_LIMITS.valueMetaLocales) {
+    out.push({ path, code: 'OUT_OF_RANGE' });
+    return;
+  }
+  for (const [locale, text] of entries) {
+    if (
+      locale.length > CONFIG_LIMITS.localeLength ||
+      !LOCALE_KEY.test(locale)
+    ) {
+      out.push({ path, code: 'INVALID_VALUE' });
+      continue;
+    }
+    if (text === null) continue;
+    if (typeof text !== 'string') {
+      out.push({ path: `${path}.${locale}`, code: 'INVALID_VALUE' });
+    } else if (text.length > CONFIG_LIMITS.unitLabelText) {
+      out.push({ path: `${path}.${locale}`, code: 'TOO_LONG' });
+    }
   }
 }
 

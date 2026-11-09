@@ -107,7 +107,13 @@ export async function loadProductLookups(
 }
 
 /** Option-level card keys set in the dashboard only (variant cards v2). */
-const KEPT_OPTION_KEYS = ['card_layout', 'card_show_savings'] as const;
+const KEPT_OPTION_KEYS = [
+  'card_layout',
+  'card_show_savings',
+  'card_show_unit_price',
+  'card_unit_label',
+  'card_unit_label_i18n',
+] as const;
 /** valueMeta keys set in the dashboard only (variant cards v2). */
 const KEPT_VALUE_META_KEYS = ['ribbon', 'ribbon_color', 'units'] as const;
 
@@ -172,7 +178,8 @@ function keepDashboardCardKeys(
  * Option config as written: swatch source URLs → uploaded URLs (D14). A
  * swatch that could not be stored keeps the URL the option has now (`current`,
  * fix 2), so a run without media never wipes swatches. Dashboard-only card
- * keys (`card_layout`, `card_show_savings`, valueMeta `ribbon` /
+ * keys (`card_layout`, `card_show_savings`, `card_show_unit_price`,
+ * `card_unit_label`, `card_unit_label_i18n`, valueMeta `ribbon` /
  * `ribbon_color` / `units` / `i18n.*.ribbon`) of the stored option are kept.
  */
 export function resolveOptionConfig(

@@ -27,6 +27,9 @@ interface OptionShape {
   valueMeta: unknown;
   cardLayout: unknown;
   cardShowSavings: unknown;
+  cardShowUnitPrice: unknown;
+  cardUnitLabel: unknown;
+  cardUnitLabelI18n: unknown;
 }
 
 /** Option name → its values and M4.1 keys (entries without a name are skipped). */
@@ -47,6 +50,9 @@ function optionsOf(config: unknown): Map<string, OptionShape> {
       valueMeta: o.valueMeta,
       cardLayout: o.card_layout,
       cardShowSavings: o.card_show_savings,
+      cardShowUnitPrice: o.card_show_unit_price,
+      cardUnitLabel: o.card_unit_label,
+      cardUnitLabelI18n: o.card_unit_label_i18n,
     });
   }
   return out;
@@ -158,8 +164,9 @@ function usesCards(o: OptionShape): boolean {
  * ones (the app gate, "unchanged values accepted" like the custom-field
  * gate): a new `style:'card'`, a `valueMeta` that differs from the
  * stored one of the same option, or a changed option-level card key
- * (`card_layout`, `card_show_savings`) on a card option. Removing them is
- * always allowed.
+ * (`card_layout`, `card_show_savings`, `card_show_unit_price`,
+ * `card_unit_label`, `card_unit_label_i18n`) on a card option. Removing
+ * them is always allowed.
  */
 export function introducesCardConfig(
   oldConfig: unknown,
@@ -179,6 +186,21 @@ export function introducesCardConfig(
     if (
       o.cardShowSavings != null &&
       o.cardShowSavings !== was?.cardShowSavings
+    ) {
+      return true;
+    }
+    if (
+      o.cardShowUnitPrice != null &&
+      o.cardShowUnitPrice !== was?.cardShowUnitPrice
+    ) {
+      return true;
+    }
+    if (o.cardUnitLabel != null && o.cardUnitLabel !== was?.cardUnitLabel) {
+      return true;
+    }
+    if (
+      o.cardUnitLabelI18n != null &&
+      !jsonEqual(o.cardUnitLabelI18n, was?.cardUnitLabelI18n ?? null)
     ) {
       return true;
     }

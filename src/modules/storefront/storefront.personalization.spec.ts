@@ -236,6 +236,9 @@ describe('StorefrontService.getProduct variant cards v2', () => {
       style: 'card',
       card_layout: 'list',
       card_show_savings: false,
+      card_show_unit_price: false,
+      card_unit_label: 'per styck',
+      card_unit_label_i18n: { en: 'each', ar: 'للقطعة' },
       values: ['1 produkt', '3 produkter'],
       valueMeta: {
         '3 produkter': {

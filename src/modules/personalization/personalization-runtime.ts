@@ -158,7 +158,13 @@ export function shapeFieldsForStorefront<T extends FieldRowLike>(
 }
 
 /** Option-level card keys (variant cards v2), hidden with the app off. */
-const CARD_OPTION_KEYS = ['card_layout', 'card_show_savings'] as const;
+const CARD_OPTION_KEYS = [
+  'card_layout',
+  'card_show_savings',
+  'card_show_unit_price',
+  'card_unit_label',
+  'card_unit_label_i18n',
+] as const;
 
 /**
  * Storefront `variant_option_config` (D9/D10, C36/C38): with the app off,
