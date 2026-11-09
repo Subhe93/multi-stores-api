@@ -25,6 +25,8 @@ interface OptionShape {
   values: Set<string>;
   style: unknown;
   valueMeta: unknown;
+  cardLayout: unknown;
+  cardShowSavings: unknown;
 }
 
 /** Option name → its values and M4.1 keys (entries without a name are skipped). */
@@ -43,6 +45,8 @@ function optionsOf(config: unknown): Map<string, OptionShape> {
       values: new Set(values),
       style: o.style,
       valueMeta: o.valueMeta,
+      cardLayout: o.card_layout,
+      cardShowSavings: o.card_show_savings,
     });
   }
   return out;
@@ -152,8 +156,10 @@ function usesCards(o: OptionShape): boolean {
 /**
  * True when `newConfig` sets variation-card keys that are not the stored
  * ones (the app gate, "unchanged values accepted" like the custom-field
- * gate): a new `style:'card'`, or a `valueMeta` that differs from the
- * stored one of the same option. Removing them is always allowed.
+ * gate): a new `style:'card'`, a `valueMeta` that differs from the
+ * stored one of the same option, or a changed option-level card key
+ * (`card_layout`, `card_show_savings`) on a card option. Removing them is
+ * always allowed.
  */
 export function introducesCardConfig(
   oldConfig: unknown,
@@ -169,6 +175,13 @@ export function introducesCardConfig(
         ? o.valueMeta
         : null;
     if (meta && !jsonEqual(meta, was?.valueMeta ?? null)) return true;
+    if (o.cardLayout != null && o.cardLayout !== was?.cardLayout) return true;
+    if (
+      o.cardShowSavings != null &&
+      o.cardShowSavings !== was?.cardShowSavings
+    ) {
+      return true;
+    }
   }
   return false;
 }

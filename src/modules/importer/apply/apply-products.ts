@@ -106,10 +106,74 @@ export async function loadProductLookups(
   };
 }
 
+/** Option-level card keys set in the dashboard only (variant cards v2). */
+const KEPT_OPTION_KEYS = ['card_layout', 'card_show_savings'] as const;
+/** valueMeta keys set in the dashboard only (variant cards v2). */
+const KEPT_VALUE_META_KEYS = ['ribbon', 'ribbon_color', 'units'] as const;
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+/**
+ * The dashboard-only card keys of the stored option (`was`) carried onto
+ * the re-imported one (`out`): the source never has them, so a re-import
+ * must not wipe them. Only values that still exist are kept.
+ */
+function keepDashboardCardKeys(
+  out: Record<string, unknown>,
+  was: Record<string, unknown> | undefined,
+  values: readonly string[],
+): void {
+  if (!was) return;
+  for (const k of KEPT_OPTION_KEYS) {
+    if (was[k] !== undefined && out[k] === undefined) out[k] = was[k];
+  }
+  if (!isRecord(was.valueMeta)) return;
+  const meta: Record<string, unknown> = isRecord(out.valueMeta)
+    ? { ...out.valueMeta }
+    : {};
+  let changed = false;
+  for (const value of values) {
+    const old = was.valueMeta[value];
+    if (!isRecord(old)) continue;
+    const next: Record<string, unknown> = isRecord(meta[value])
+      ? { ...meta[value] }
+      : {};
+    let touched = false;
+    for (const k of KEPT_VALUE_META_KEYS) {
+      if (old[k] !== undefined && next[k] === undefined) {
+        next[k] = old[k];
+        touched = true;
+      }
+    }
+    if (isRecord(old.i18n)) {
+      const i18n: Record<string, unknown> = isRecord(next.i18n)
+        ? { ...next.i18n }
+        : {};
+      for (const [locale, texts] of Object.entries(old.i18n)) {
+        if (!isRecord(texts) || texts.ribbon === undefined) continue;
+        const cur = isRecord(i18n[locale]) ? i18n[locale] : {};
+        if (cur.ribbon !== undefined) continue;
+        i18n[locale] = { ...cur, ribbon: texts.ribbon };
+        touched = true;
+      }
+      if (Object.keys(i18n).length) next.i18n = i18n;
+    }
+    if (touched) {
+      meta[value] = next;
+      changed = true;
+    }
+  }
+  if (changed) out.valueMeta = meta;
+}
+
 /**
  * Option config as written: swatch source URLs → uploaded URLs (D14). A
  * swatch that could not be stored keeps the URL the option has now (`current`,
- * fix 2), so a run without media never wipes swatches.
+ * fix 2), so a run without media never wipes swatches. Dashboard-only card
+ * keys (`card_layout`, `card_show_savings`, valueMeta `ribbon` /
+ * `ribbon_color` / `units` / `i18n.*.ribbon`) of the stored option are kept.
  */
 export function resolveOptionConfig(
   ctx: ApplyContext,
@@ -118,6 +182,11 @@ export function resolveOptionConfig(
 ): Prisma.InputJsonValue | undefined {
   if (!config) return undefined;
   const currentSwatches = new Map<string, Record<string, string>>();
+  const currentOptions = new Map<string, Record<string, unknown>>();
+  if (Array.isArray(current))
+    for (const o of current as unknown[])
+      if (isRecord(o) && typeof o.name === 'string')
+        currentOptions.set(o.name, o);
   if (Array.isArray(current))
     for (const o of current as { name?: unknown; swatchMap?: unknown }[])
       if (
@@ -145,6 +214,7 @@ export function resolveOptionConfig(
       else if (o.style === 'image') out.style = o.valueMeta ? 'card' : 'text';
     }
     if (o.valueMeta) out.valueMeta = o.valueMeta;
+    keepDashboardCardKeys(out, currentOptions.get(o.name), o.values);
     return out;
   }) as Prisma.InputJsonValue;
 }

@@ -28,6 +28,7 @@ function build(opts: {
   optionConfig?: unknown;
   appOn: boolean;
   withService?: boolean;
+  variants?: unknown[];
 }) {
   const store = {
     id: 's1',
@@ -50,7 +51,7 @@ function build(opts: {
     translations: [],
     images: [],
     attributes: [],
-    variants: [],
+    variants: opts.variants ?? [],
     tags: [],
     category: null,
     creator_categories: [],
@@ -225,5 +226,87 @@ describe('StorefrontService.getProduct personalization (M4.1)', () => {
       parent_id: null,
       children: [],
     });
+  });
+});
+
+describe('StorefrontService.getProduct variant cards v2', () => {
+  const V2_CONFIG = [
+    {
+      name: 'Välj antal',
+      style: 'card',
+      card_layout: 'list',
+      card_show_savings: false,
+      values: ['1 produkt', '3 produkter'],
+      valueMeta: {
+        '3 produkter': {
+          label: '3 st',
+          ribbon: 'Bästsäljare',
+          ribbon_color: '#111827',
+          units: 3,
+          i18n: { en: { ribbon: 'Best seller' } },
+        },
+      },
+    },
+  ];
+  const variants = [
+    {
+      id: 'v1',
+      options: { 'Välj antal': '1 produkt' },
+      price_adjustment: 0,
+      compare_at_price: null,
+      stock_quantity: 5,
+    },
+    {
+      id: 'v3',
+      options: { 'Välj antal': '3 produkter' },
+      price_adjustment: 400,
+      compare_at_price: '1199.00',
+      stock_quantity: 5,
+    },
+  ];
+
+  it('app on: the new card keys reach the payload unchanged', async () => {
+    const { service } = build({
+      fields: plainFields(),
+      optionConfig: V2_CONFIG,
+      appOn: true,
+      variants,
+    });
+    const payload = await get(service);
+    expect(payload.variant_option_config).toEqual(V2_CONFIG);
+  });
+
+  it('app off: option-level card keys and valueMeta are hidden', async () => {
+    const { service } = build({
+      fields: plainFields(),
+      optionConfig: V2_CONFIG,
+      appOn: false,
+      variants,
+    });
+    const payload = await get(service);
+    expect(payload.variant_option_config).toEqual([
+      {
+        name: 'Välj antal',
+        style: 'text',
+        values: ['1 produkt', '3 produkter'],
+      },
+    ]);
+  });
+
+  it('each variant carries its compare_at_price as a number (absent when unset)', async () => {
+    const { service } = build({
+      fields: plainFields(),
+      optionConfig: V2_CONFIG,
+      appOn: true,
+      variants,
+    });
+    const payload = await get(service);
+    const out = payload.variants as Record<string, unknown>[];
+    expect(out[1]).toMatchObject({
+      id: 'v3',
+      price: 699,
+      compare_at_price: 1199,
+    });
+    expect(out[0].compare_at_price ?? null).toBeNull();
   });
 });

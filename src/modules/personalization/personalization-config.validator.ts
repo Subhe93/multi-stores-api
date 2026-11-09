@@ -10,7 +10,10 @@ import {
   MAX_REPEAT_INSTANCES,
   optionValues,
 } from '@multi-stores/core/personalization/evaluator';
-import { charCount, isPlainObject } from '@multi-stores/core/personalization/rules';
+import {
+  charCount,
+  isPlainObject,
+} from '@multi-stores/core/personalization/rules';
 import type { ConfigIssue } from './personalization.errors';
 
 /**
@@ -74,6 +77,9 @@ export const CONFIG_LIMITS = {
   urlLength: 2000,
   valueMetaText: 200,
   valueMetaLocales: 20,
+  ribbonText: 40,
+  unitsMin: 2,
+  unitsMax: 99,
   localeLength: 10,
 } as const;
 
@@ -110,7 +116,12 @@ const VALUE_META_KEYS = new Set([
   'badge_color',
   'count',
   'i18n',
+  'ribbon',
+  'ribbon_color',
+  'units',
 ]);
+/** Option-level card layouts (variant cards v2). */
+const CARD_LAYOUTS = new Set(['grid', 'list']);
 
 /** Types whose value is one or more option strings (per_option pricing). */
 const OPTION_PRICED_TYPES = new Set([
@@ -762,9 +773,11 @@ export function validateTranslationExtras(
 
 /**
  * Problems of the M4.1 keys of a `variant_option_config` (`valueMeta`
- * keys ⊆ values, `badge_color` hex, `count` integer 0..100). Exported for
- * the product write path; other keys (colorMap, swatchMap, …) are not
- * checked here.
+ * keys ⊆ values, `badge_color` / `ribbon_color` hex, `count` integer
+ * 0..100, `units` integer 2..99, `ribbon` ≤ 40 chars) and of the option-level
+ * card keys (`card_layout` 'grid'|'list', `card_show_savings` boolean).
+ * Exported for the product write path; other keys (colorMap, swatchMap, …)
+ * are not checked here.
  */
 export function validateOptionConfig(optionConfig: unknown): ConfigIssue[] {
   const out: ConfigIssue[] = [];
@@ -773,6 +786,7 @@ export function validateOptionConfig(optionConfig: unknown): ConfigIssue[] {
     return [{ path: 'variant_option_config', code: 'INVALID_SHAPE' }];
   }
   optionConfig.forEach((o: unknown, i: number) => {
+    if (isPlainObject(o)) checkCardOptionKeys(o, i, out);
     if (
       !isPlainObject(o) ||
       o.valueMeta === undefined ||
@@ -820,6 +834,34 @@ export function validateOptionConfig(optionConfig: unknown): ConfigIssue[] {
         out.push({ path: `${mp}.badge_color`, code: 'INVALID_HEX' });
       }
       if (
+        meta.ribbon !== undefined &&
+        meta.ribbon !== null &&
+        !(
+          typeof meta.ribbon === 'string' &&
+          meta.ribbon.length <= CONFIG_LIMITS.ribbonText
+        )
+      ) {
+        out.push({ path: `${mp}.ribbon`, code: 'INVALID_VALUE' });
+      }
+      if (
+        meta.ribbon_color !== undefined &&
+        meta.ribbon_color !== null &&
+        !(typeof meta.ribbon_color === 'string' && HEX.test(meta.ribbon_color))
+      ) {
+        out.push({ path: `${mp}.ribbon_color`, code: 'INVALID_HEX' });
+      }
+      if (
+        meta.units !== undefined &&
+        meta.units !== null &&
+        !isInt(meta.units, CONFIG_LIMITS.unitsMin, CONFIG_LIMITS.unitsMax)
+      ) {
+        out.push({
+          path: `${mp}.units`,
+          code: 'OUT_OF_RANGE',
+          params: { min: CONFIG_LIMITS.unitsMin, max: CONFIG_LIMITS.unitsMax },
+        });
+      }
+      if (
         meta.count !== undefined &&
         meta.count !== null &&
         !isInt(meta.count, 0, CONFIG_LIMITS.countMax)
@@ -838,9 +880,34 @@ export function validateOptionConfig(optionConfig: unknown): ConfigIssue[] {
   return out;
 }
 
-const VALUE_META_I18N_KEYS = new Set(['label', 'sublabel', 'badge']);
+/** Option-level card keys: `card_layout` 'grid'|'list', `card_show_savings` boolean. */
+function checkCardOptionKeys(
+  o: Record<string, unknown>,
+  i: number,
+  out: ConfigIssue[],
+): void {
+  const p = `variant_option_config[${i}]`;
+  const layout = o.card_layout;
+  if (
+    layout !== undefined &&
+    layout !== null &&
+    !(typeof layout === 'string' && CARD_LAYOUTS.has(layout))
+  ) {
+    out.push({ path: `${p}.card_layout`, code: 'INVALID_VALUE' });
+  }
+  const savings = o.card_show_savings;
+  if (
+    savings !== undefined &&
+    savings !== null &&
+    typeof savings !== 'boolean'
+  ) {
+    out.push({ path: `${p}.card_show_savings`, code: 'INVALID_VALUE' });
+  }
+}
 
-/** `valueMeta[v].i18n`: `{<locale>: {label?, sublabel?, badge?}}`, strings within limits. */
+const VALUE_META_I18N_KEYS = new Set(['label', 'sublabel', 'badge', 'ribbon']);
+
+/** `valueMeta[v].i18n`: `{<locale>: {label?, sublabel?, badge?, ribbon?}}`, strings within limits. */
 function checkValueMetaI18n(
   raw: unknown,
   path: string,
@@ -874,7 +941,12 @@ function checkValueMetaI18n(
       if (v === undefined || v === null) continue;
       if (typeof v !== 'string') {
         out.push({ path: `${lp}.${k}`, code: 'INVALID_VALUE' });
-      } else if (v.length > CONFIG_LIMITS.valueMetaText) {
+      } else if (
+        v.length >
+        (k === 'ribbon'
+          ? CONFIG_LIMITS.ribbonText
+          : CONFIG_LIMITS.valueMetaText)
+      ) {
         out.push({ path: `${lp}.${k}`, code: 'TOO_LONG' });
       }
     }

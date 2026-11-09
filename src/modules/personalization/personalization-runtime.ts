@@ -157,10 +157,13 @@ export function shapeFieldsForStorefront<T extends FieldRowLike>(
     }));
 }
 
+/** Option-level card keys (variant cards v2), hidden with the app off. */
+const CARD_OPTION_KEYS = ['card_layout', 'card_show_savings'] as const;
+
 /**
  * Storefront `variant_option_config` (D9/D10, C36/C38): with the app off,
- * `valueMeta` is removed and `style:'card'` shows as `'text'`; `swatchMap`
- * is never touched. The same array is returned when there is nothing to
+ * `valueMeta` and the option-level card keys are removed and `style:'card'`
+ * shows as `'text'`; `swatchMap` is never touched. The same array is returned when there is nothing to
  * strip (byte-identical payload).
  */
 export function shapeOptionConfigForStorefront(
@@ -170,12 +173,16 @@ export function shapeOptionConfigForStorefront(
   if (appOn || !Array.isArray(config)) return config;
   const list = config as unknown[];
   const touched = list.some(
-    (o) => isPlainObject(o) && ('valueMeta' in o || o.style === 'card'),
+    (o) =>
+      isPlainObject(o) &&
+      ('valueMeta' in o ||
+        o.style === 'card' ||
+        CARD_OPTION_KEYS.some((k) => k in o)),
   );
   if (!touched) return config;
   return list.map((o): unknown => {
     if (!isPlainObject(o)) return o;
-    const rest = omitKeys(o, ['valueMeta']);
+    const rest = omitKeys(o, ['valueMeta', ...CARD_OPTION_KEYS]);
     return rest.style === 'card' ? { ...rest, style: 'text' } : rest;
   });
 }
