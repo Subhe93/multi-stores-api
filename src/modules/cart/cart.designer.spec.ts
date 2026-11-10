@@ -54,6 +54,10 @@ function makePrisma(fields: unknown[]) {
     },
     productCustomField: { findMany: jest.fn(() => Promise.resolve(fields)) },
     customProduct: { findMany: jest.fn(() => Promise.resolve([])) },
+    // Add path: the product is PUBLISHED (assertLineSellable).
+    product: {
+      findUnique: jest.fn(() => Promise.resolve({ status: 'PUBLISHED' })),
+    },
     cartItem: {
       findFirst: jest.fn(({ where }: { where: Record<string, unknown> }) =>
         Promise.resolve(rows.find((r) => matches(r, where)) ?? null),

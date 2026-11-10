@@ -115,6 +115,7 @@ function build(status: StoreStatus) {
       findMany: jest.fn(() => Promise.resolve([])),
     },
     promotion: { findMany: jest.fn(() => Promise.resolve([])) },
+    bundle: { findMany: jest.fn(() => Promise.resolve([])) },
     productCreatorCategory: { findMany: jest.fn(() => Promise.resolve([])) },
     customProductCreatorCategory: { findMany: jest.fn(() => Promise.resolve([])) },
     product: {
@@ -394,6 +395,100 @@ describe('every public storefront read honours the owner preview', () => {
       await service.getProducts('namez', {}, undefined, undefined, viewer('other')),
     );
     expect(ownerLookups).not.toHaveBeenCalled();
+  });
+});
+
+// Owner product preview: the direct product URL serves a DRAFT product to
+// the store owner / an admin (same viewer semantics as the store preview);
+// lists stay PUBLISHED-only and everyone else keeps the 404.
+describe('GET /storefront/:slug/products/:productSlug — DRAFT product preview', () => {
+  type ProductWhere = { status?: string | { in: string[] } };
+  const allowsDraft = (where: ProductWhere) =>
+    typeof where.status === 'object' && where.status.in.includes('DRAFT');
+  const draftProduct = {
+    id: 'p-draft',
+    creator_id: 'c1',
+    provider_id: null,
+    primary_creator_category_id: null,
+    status: 'DRAFT',
+    base_price: 120,
+    compare_at_price: null,
+    cost_price: 50,
+    variant_option_config: null,
+    tax_class_id: null,
+    tax_exempt: false,
+    translations: [{ locale: 'sv', slug: 'mugg', title: 'Mugg' }],
+    images: [],
+    attributes: [],
+    variants: [],
+    category: null,
+    creator_categories: [],
+    custom_fields: [],
+    faqs: [],
+    shipping_profile: null,
+  };
+
+  /** A LIVE store whose only product with slug "mugg" is a DRAFT. */
+  function withDraft(status: StoreStatus = StoreStatus.LIVE) {
+    const b = build(status);
+    b.prisma.product.findFirst = jest.fn(({ where }: { where: ProductWhere }) =>
+      Promise.resolve(allowsDraft(where) ? draftProduct : null),
+    ) as unknown as typeof b.prisma.product.findFirst;
+    return b;
+  }
+  const get = (b: ReturnType<typeof build>, v: StorefrontViewer | null) =>
+    b.service.getProduct('namez', 'mugg', 'sv', undefined, undefined, v);
+  const notFound = async (p: Promise<unknown>) => {
+    const err = await p.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+  };
+
+  it('anonymous / another creator: PUBLISHED-only lookup, 404 for the draft', async () => {
+    for (const v of [null, viewer('other'), hint('s2')]) {
+      const b = withDraft();
+      await notFound(get(b, v));
+      // Every lookup (exact own, case-insensitive fallback) stayed public.
+      for (const call of (b.prisma.product.findFirst as jest.Mock).mock.calls) {
+        expect((call[0] as { where: ProductWhere }).where.status).toBe('PUBLISHED');
+      }
+    }
+  });
+
+  it('owner session, admin and the edit hint of this store get the draft with status DRAFT', async () => {
+    for (const v of [viewer('owner'), viewer('admin'), hint('s1')]) {
+      const b = withDraft();
+      const payload = (await get(b, v)) as { id: string; status: string; cost_price?: unknown };
+      expect(payload).toMatchObject({ id: 'p-draft', status: 'DRAFT' });
+      // Merchant-only columns are stripped from the preview exactly like
+      // from a published product.
+      expect(payload).not.toHaveProperty('cost_price');
+      expect(b.prisma.product.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ status: { in: ['PUBLISHED', 'DRAFT'] } }),
+        }),
+      );
+    }
+  });
+
+  it('the draft is previewable on a non-LIVE store too, and the owner lookup runs once', async () => {
+    const b = withDraft(StoreStatus.DRAFT);
+    await expect(get(b, viewer('owner'))).resolves.toMatchObject({ status: 'DRAFT' });
+    await notFound(get(withDraft(StoreStatus.DRAFT), null));
+  });
+
+  it('product lists never include a draft (PUBLISHED filter for the owner too)', async () => {
+    const b = withDraft();
+    await b.service.getProducts('namez', { page: 1, limit: 12 }, undefined, undefined, viewer('owner'));
+    expect(b.prisma.product.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ status: 'PUBLISHED' }) }),
+    );
+    expect(b.prisma.customProduct.findMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ status: { in: expect.anything() } }) }),
+    );
+    const sitemap = (await b.service.getSitemapData('namez', undefined, undefined, viewer('owner'))) as {
+      products: unknown[];
+    };
+    expect(sitemap.products).toEqual([]);
   });
 });
 

@@ -219,6 +219,36 @@ describe('FIXES-1 item 5 — CART_ITEMS_UNAVAILABLE', () => {
     });
   });
 
+  it('a DRAFT product (owner storefront preview) cannot be quoted, not even by the owner', async () => {
+    const draft = {
+      'p-draft': {
+        id: 'p-draft',
+        creator_id: CREATOR_ID,
+        status: 'DRAFT',
+        base_price: 1,
+      },
+    };
+    const expectation = {
+      response: {
+        code: 'CART_ITEMS_UNAVAILABLE',
+        unavailable: [{ product_id: 'p-draft' }],
+      },
+    };
+    const { service } = build({ products: draft });
+    await expect(
+      service.quoteLines(STORE_ID, [line('p-draft')], { countryCode: 'SE' }),
+    ).rejects.toMatchObject(expectation);
+    // The owner viewer (pre-live test checkout) is no exception: the draft
+    // is previewable on the product page only.
+    const own = build({ status: 'DRAFT', keys: { status: 'ACTIVE', livemode: false }, products: draft });
+    await expect(
+      own.service.quoteLines(STORE_ID, [line('p-draft')], {
+        countryCode: 'SE',
+        preLiveViewer: jest.fn(() => Promise.resolve(true)),
+      }),
+    ).rejects.toMatchObject(expectation);
+  });
+
   it('is answered without a destination (load-time availability check)', async () => {
     const { service } = build();
     await expect(

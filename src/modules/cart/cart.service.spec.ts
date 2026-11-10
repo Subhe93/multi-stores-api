@@ -316,6 +316,54 @@ describe('CartService with the markets app', () => {
   });
 });
 
+// A DRAFT product (the owner's storefront product preview) is never added
+// to a cart: 409 CART_ITEMS_UNAVAILABLE, like the quote / order answer.
+describe('CartService add of an unpublished product', () => {
+  const unavailable = (entry: Record<string, string>) => ({
+    response: { code: 'CART_ITEMS_UNAVAILABLE', unavailable: [entry] },
+  });
+
+  it('a DRAFT own product is refused at add, nothing is written', async () => {
+    const { service, prisma } = build({ enabled: false });
+    prisma.product.findUnique.mockResolvedValue({ ...product, status: 'DRAFT' } as never);
+    await expect(
+      service.addItem('u1', { product_id: 'p1', quantity: 1 }),
+    ).rejects.toMatchObject(unavailable({ product_id: 'p1' }));
+    expect(prisma.cartItem.create).not.toHaveBeenCalled();
+    expect(prisma.cartItem.update).not.toHaveBeenCalled();
+  });
+
+  it('a PUBLISHED own product is added as before', async () => {
+    const { service, prisma } = build({ enabled: false });
+    prisma.product.findUnique.mockResolvedValue({ ...product, status: 'PUBLISHED' } as never);
+    await service.addItem('u1', { product_id: 'p1', quantity: 1 });
+    expect(prisma.cartItem.create).toHaveBeenCalled();
+  });
+
+  it('a DRAFT / ARCHIVED / deleted custom product is refused too', async () => {
+    const { service, prisma } = build({ enabled: false });
+    const assert = (
+      service as unknown as {
+        assertLineSellable: (l: { custom_product_id: string }) => Promise<void>;
+      }
+    ).assertLineSellable.bind(service);
+    const cp = { findUnique: jest.fn() };
+    (prisma as unknown as { customProduct: unknown }).customProduct = cp;
+    for (const status of ['DRAFT', 'ARCHIVED']) {
+      cp.findUnique.mockResolvedValue({ status });
+      await expect(assert({ custom_product_id: 'cp1' })).rejects.toMatchObject(
+        unavailable({ custom_product_id: 'cp1' }),
+      );
+    }
+    cp.findUnique.mockResolvedValue(null);
+    await expect(assert({ custom_product_id: 'cp1' })).rejects.toMatchObject(
+      unavailable({ custom_product_id: 'cp1' }),
+    );
+    cp.findUnique.mockResolvedValue({ status: 'PUBLISHED' });
+    await expect(assert({ custom_product_id: 'cp1' })).resolves.toBeUndefined();
+  });
+});
+
 // FIXES-1 item 4: the owner previewing a non-LIVE store may fill the cart
 // (guest cart moved at checkout); the public stays on 409 STORE_NOT_LIVE.
 describe('CartService store gate with the owner pre-live viewer', () => {

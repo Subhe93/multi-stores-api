@@ -52,10 +52,19 @@ export interface InvoiceCsvRow {
   buyer_country?: string | null;
 }
 
+/**
+ * A phone number in international form ("+46 70 123 45 67", "+1 (555) 010 9999"):
+ * digits, spaces and parentheses only, so it can never evaluate as a
+ * spreadsheet formula and must not get the apostrophe prefix (Excel shows it
+ * literally). Hyphen / slash / dot forms ("+1-555-010-9999") are arithmetic
+ * to Excel (-11453), so they keep the prefix.
+ */
+const PHONE_LIKE_RE = /^\+[0-9][0-9 ()]{2,}$/;
+
 /** A text cell: neutralize spreadsheet formulas, then quote when needed. */
 export function csvText(value: string | null | undefined): string {
   let v = value ?? '';
-  if (/^[=+\-@\t\r]/.test(v)) v = `'${v}`;
+  if (/^[=+\-@\t\r]/.test(v) && !PHONE_LIKE_RE.test(v)) v = `'${v}`;
   return /[",;\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 

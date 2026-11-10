@@ -189,7 +189,12 @@ describe('planOccasionConversion', () => {
       'rich-text',
     ]);
     expect(pappa.page!.sections[1].settings.category).toBe('pappa');
-    expect(pappa.page!.sections[1].content.heading).toBe('Våra favoriter');
+    // Small plain line instead of a heading (Namez 2026-11-10).
+    expect(pappa.page!.sections[1].content.heading).toBeUndefined();
+    expect(pappa.page!.sections[1].content.subheading).toBe(
+      'Hitta din favorit',
+    );
+    expect(pappa.page!.sections[2].content.heading).toBeUndefined();
     expect(pappa.page!.sections[2].content.html).toBe(
       '<h2>Lång</h2><p>SEO text</p>',
     );

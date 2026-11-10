@@ -6,6 +6,16 @@ describe('invoices CSV', () => {
     expect(csvText('=SUM(A1)')).toBe("'=SUM(A1)");
     expect(csvText('-x')).toBe("'-x");
     expect(csvText('@me')).toBe("'@me");
+    // International phone numbers are digits + separators: no prefix.
+    expect(csvText('+46 70 869 27 89')).toBe('+46 70 869 27 89');
+    expect(csvText('+1 (555) 010 9999')).toBe('+1 (555) 010 9999');
+    // Hyphen / slash forms evaluate as arithmetic in Excel: keep the prefix.
+    expect(csvText('+1-555-010-9999')).toBe("'+1-555-010-9999");
+    expect(csvText('+46/70/869')).toBe("'+46/70/869");
+    expect(csvText('+cmd|calc')).toBe("'+cmd|calc");
+    expect(csvText('+46 70 869 27 89 =HYPERLINK()')).toBe(
+      "'+46 70 869 27 89 =HYPERLINK()",
+    );
     expect(csvText('Acme, "Inc"')).toBe('"Acme, ""Inc"""');
     expect(csvText(null)).toBe('');
   });

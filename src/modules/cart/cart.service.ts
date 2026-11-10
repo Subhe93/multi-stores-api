@@ -9,6 +9,10 @@ import { BundleOffer, CartItem, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { customerStoreMismatch } from '../../common/customers/customer-store';
 import {
+  cartItemsUnavailable,
+  unavailableEntry,
+} from '../orders/cart-items-availability';
+import {
   storeClosed,
   storeNotLive,
   type PreLiveViewerCheck,
@@ -435,6 +439,38 @@ export class CartService {
     if (!accountStoreId) return;
     const storeId = await this.lineStoreId(line);
     if (storeId && storeId !== accountStoreId) throw customerStoreMismatch();
+  }
+
+  /**
+   * Only a PUBLISHED product / custom product takes a cart line: a DRAFT
+   * (the owner's storefront product preview) or ARCHIVED one, or a deleted
+   * id, is 409 CART_ITEMS_UNAVAILABLE — the same answer the quote and the
+   * order give for such a line (cart-items-availability.ts), so the
+   * storefront handles it in one place. A row without a status column
+   * (lean fixtures) is not judged.
+   */
+  private async assertLineSellable(line: {
+    product_id?: string | null;
+    variant_id?: string | null;
+    custom_product_id?: string | null;
+  }): Promise<void> {
+    let row: { status?: string | null } | null = null;
+    if (line.custom_product_id) {
+      row = await this.prisma.customProduct.findUnique({
+        where: { id: line.custom_product_id },
+        select: { status: true },
+      });
+    } else if (line.product_id) {
+      row = await this.prisma.product.findUnique({
+        where: { id: line.product_id },
+        select: { status: true },
+      });
+    } else {
+      return;
+    }
+    if (!row || (row.status != null && row.status !== 'PUBLISHED')) {
+      throw cartItemsUnavailable([unavailableEntry(line)]);
+    }
   }
 
   /**
@@ -1478,6 +1514,7 @@ export class CartService {
       // query on the add path; loadContexts no longer looks it up, M5 A11).
       await this.assertVariantOfProduct(dto.product_id, dto.variant_id);
     }
+    await this.assertLineSellable(dto);
     await this.assertLineInAccountStore(cart.account_store_id, dto);
     await this.assertStoreLive(cart.account_store_id, preLiveViewer);
     await this.assertAvailableInMarket(dto, locale, marketKey, preview);

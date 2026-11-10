@@ -53,8 +53,8 @@ describe('occasion preset', () => {
   it('puts only translatable keys into content', () => {
     const [hero, products, text] = occasionPageSections(src);
     expect(Object.keys(hero.content)).toEqual(['heading', 'subheading']);
-    expect(Object.keys(products.content)).toEqual(['heading', 'link_label']);
-    expect(Object.keys(text.content)).toEqual(['heading', 'html']);
+    expect(Object.keys(products.content)).toEqual(['subheading', 'link_label']);
+    expect(Object.keys(text.content)).toEqual(['html']);
     expect(text.content.html).toBe('<p>SEO</p>');
   });
 

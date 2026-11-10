@@ -226,17 +226,35 @@ export function productBySlugQuery(
   productSlug: string,
   /** The case-insensitive fallback (legacy slugs with capitals). */
   insensitive = false,
+  /**
+   * Statuses the product may have: PUBLISHED alone for the public, plus
+   * DRAFT for the owner's product preview (see getProduct). ARCHIVED is
+   * never served.
+   */
+  statuses: readonly ProductPreviewStatus[] = PUBLIC_PRODUCT_STATUSES,
 ) {
   const [exact, ci] = slugLookupFilters(productSlug);
   return {
     where: {
       creator_id: creatorId,
-      status: 'PUBLISHED' as const,
+      status:
+        statuses.length === 1
+          ? statuses[0]
+          : { in: statuses as ProductPreviewStatus[] },
       translations: { some: { slug: insensitive ? ci : exact } },
     },
     orderBy: { updated_at: 'desc' as const },
   };
 }
+
+/** Product statuses the product page may serve (never ARCHIVED). */
+export type ProductPreviewStatus = 'PUBLISHED' | 'DRAFT';
+const PUBLIC_PRODUCT_STATUSES: readonly ProductPreviewStatus[] = ['PUBLISHED'];
+/** Owner / admin preview of a direct product URL: a DRAFT is served too. */
+const OWNER_PRODUCT_STATUSES: readonly ProductPreviewStatus[] = [
+  'PUBLISHED',
+  'DRAFT',
+];
 
 /** Drops the importer identity (`external_ref`) from a variant before it is served. */
 export function publicVariant<T extends { external_ref?: unknown }>(
@@ -1493,10 +1511,26 @@ export class StorefrontService {
 
     const market = await this.resolveMarket(store.id, marketKey, preview);
 
+    // Owner product preview: the direct product URL also serves a DRAFT
+    // (own or custom product) to the store owner / an admin, so a product
+    // can be checked on the storefront before it is published. Lists,
+    // search, feeds and the sitemap stay PUBLISHED-only; the payload keeps
+    // `status: 'DRAFT'` so the web shows a preview banner. Anonymous and
+    // customer viewers never trigger the owner lookup.
+    const statuses =
+      viewer && this.gate && (await this.gate.isOwnerOrAdmin(store.id, viewer))
+        ? OWNER_PRODUCT_STATUSES
+        : PUBLIC_PRODUCT_STATUSES;
+
     // Try creator's own product first (see productBySlugQuery for the order).
     const findOwn = (insensitive: boolean) =>
       this.prisma.product.findFirst({
-        ...productBySlugQuery(store.creator.id, productSlug, insensitive),
+        ...productBySlugQuery(
+          store.creator.id,
+          productSlug,
+          insensitive,
+          statuses,
+        ),
         include: {
           translations: true,
           // Product-level gallery only — variant-linked rows would flood the
@@ -1544,7 +1578,12 @@ export class StorefrontService {
       const customExact =
         store.store_type !== StoreType.INDEPENDENT &&
         !!(await this.prisma.customProduct.findFirst({
-          ...productBySlugQuery(store.creator.id, productSlug),
+          ...productBySlugQuery(
+            store.creator.id,
+            productSlug,
+            false,
+            statuses,
+          ),
           select: { id: true },
         }));
       if (!customExact) {
@@ -1687,7 +1726,12 @@ export class StorefrontService {
 
     // Fall back to custom product. Same ordering rationale as above.
     const customProduct = await this.prisma.customProduct.findFirst({
-      ...productBySlugQuery(store.creator.id, productSlug, customInsensitive),
+      ...productBySlugQuery(
+        store.creator.id,
+        productSlug,
+        customInsensitive,
+        statuses,
+      ),
       include: {
         translations: true,
         mockup_images: { orderBy: { sort_order: 'asc' } },

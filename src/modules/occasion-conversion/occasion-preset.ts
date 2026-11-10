@@ -18,12 +18,14 @@ export interface OccasionPageSource {
   label_id: string;
   /** Sanitised HTML for the SEO block (long description, else description). */
   html: string;
-  /** Heading of the products block, in the store locale. */
-  products_heading: string;
+  /**
+   * Small plain line above the products ("Find your favourite"), in the
+   * store locale. Rendered as a <p>, never as a heading: the only heading
+   * of the page is the hero (2026-11-10, Namez request).
+   */
+  products_subheading: string;
   /** "View all" label of the products block, in the store locale. */
   products_link_label: string;
-  /** Heading of the SEO block, in the store locale. */
-  text_heading: string;
 }
 
 export interface OccasionSectionBody {
@@ -46,40 +48,34 @@ export const HERO_SUBHEADING_MAX = 280;
 export const OCCASION_PRESET_TEXT: Record<
   string,
   {
-    products_heading: string;
+    /** Small plain line above the products (not a heading). */
+    products_subheading: string;
     products_link_label: string;
-    text_heading: string;
   }
 > = {
   en: {
-    products_heading: 'Our picks',
+    products_subheading: 'Find your favourite',
     products_link_label: 'View all',
-    text_heading: 'About these gifts',
   },
   ar: {
-    products_heading: 'مختاراتنا',
+    products_subheading: 'اعثر على المفضّلة لديك',
     products_link_label: 'عرض الكل',
-    text_heading: 'عن هذه الهدايا',
   },
   sv: {
-    products_heading: 'Våra favoriter',
+    products_subheading: 'Hitta din favorit',
     products_link_label: 'Visa alla',
-    text_heading: 'Om dessa presenter',
   },
   tr: {
-    products_heading: 'Seçtiklerimiz',
+    products_subheading: 'Favorini bul',
     products_link_label: 'Tümünü gör',
-    text_heading: 'Bu hediyeler hakkında',
   },
   de: {
-    products_heading: 'Unsere Auswahl',
+    products_subheading: 'Finde deinen Favoriten',
     products_link_label: 'Alle ansehen',
-    text_heading: 'Über diese Geschenke',
   },
   fr: {
-    products_heading: 'Notre sélection',
+    products_subheading: 'Trouvez votre préféré',
     products_link_label: 'Voir tout',
-    text_heading: 'À propos de ces cadeaux',
   },
 };
 
@@ -123,7 +119,7 @@ export function occasionPageSections(
       columns_mobile: 2,
     },
     content: {
-      heading: src.products_heading,
+      subheading: src.products_subheading,
       link_label: src.products_link_label,
     },
   };
@@ -135,7 +131,8 @@ export function occasionPageSections(
       padding: 'medium',
       surface: false,
     },
-    content: { heading: src.text_heading, html: src.html },
+    // No heading: the SEO text follows the products without a title.
+    content: { html: src.html },
   };
   // A collection without any description gets no empty SEO block.
   return src.html.trim() ? [hero, products, text] : [hero, products];

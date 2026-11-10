@@ -469,9 +469,8 @@ export function planOccasionConversion(
         hero_image: c.thumbnail_url,
         label_id: c.id,
         html,
-        products_heading: text.products_heading,
+        products_subheading: text.products_subheading,
         products_link_label: text.products_link_label,
-        text_heading: text.text_heading,
       }),
     };
 
