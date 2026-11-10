@@ -418,7 +418,7 @@ export class CreatorCategoriesService {
             product: {
               include: {
                 translations: true,
-                images: { take: 1, orderBy: { sort_order: 'asc' } },
+                images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
                 tags: true,
               },
             },
@@ -434,7 +434,7 @@ export class CreatorCategoriesService {
                 product: {
                   include: {
                     translations: true,
-                    images: { take: 1, orderBy: { sort_order: 'asc' } },
+                    images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
                   },
                 },
               },
@@ -852,7 +852,7 @@ export class CreatorCategoriesService {
         },
         include: {
           translations: true,
-          images: { take: 1, orderBy: { sort_order: 'asc' } },
+          images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
           tags: true,
         },
         orderBy: { created_at: 'desc' },
@@ -869,7 +869,7 @@ export class CreatorCategoriesService {
           product: {
             include: {
               translations: true,
-              images: { take: 1, orderBy: { sort_order: 'asc' } },
+              images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
               tags: true,
             },
           },
@@ -886,7 +886,7 @@ export class CreatorCategoriesService {
               product: {
                 include: {
                   translations: true,
-                  images: { take: 1, orderBy: { sort_order: 'asc' } },
+                  images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
                 },
               },
             },

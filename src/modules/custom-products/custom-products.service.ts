@@ -364,7 +364,7 @@ export class CustomProductsService {
     product: {
       include: {
         translations: true,
-        images: { orderBy: { sort_order: 'asc' as const } },
+        images: { orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
         variants: { where: { is_active: true } },
         custom_fields: {
           include: { translations: true },
@@ -372,7 +372,7 @@ export class CustomProductsService {
         },
       },
     },
-    mockup_images: true,
+    mockup_images: { orderBy: { sort_order: 'asc' as const } },
     translations: true,
     creator: { select: { display_name: true } },
     selected_variants: { include: { variant: true } },
@@ -1413,7 +1413,7 @@ export class CustomProductsService {
       where: { id },
       include: {
         translations: true,
-        mockup_images: true,
+        mockup_images: { orderBy: { sort_order: 'asc' as const } },
         selected_variants: true,
         field_values: true,
         faqs: { include: { translations: true } },

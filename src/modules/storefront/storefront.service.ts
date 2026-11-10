@@ -1222,7 +1222,7 @@ export class StorefrontService {
       selected_variants: { include: { variant: true } },
       product: {
         include: {
-          images: { take: 1, orderBy: { sort_order: 'asc' } },
+          images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
           variants: { where: { is_active: true } },
           category: { include: { translations: true } },
           provider: {
@@ -1240,7 +1240,7 @@ export class StorefrontService {
         where: ownWhere,
         include: {
           translations: true,
-          images: { take: 1, orderBy: { sort_order: 'asc' } },
+          images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
           variants: { where: { is_active: true } },
           category: { include: { translations: true } },
         },
@@ -1537,7 +1537,7 @@ export class StorefrontService {
           // gallery with one duplicate per size/color combination.
           images: {
             where: { variant_id: null },
-            orderBy: { sort_order: 'asc' },
+            orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }],
           },
           attributes: {
             include: { template: { include: { translations: true } } },
@@ -1754,7 +1754,7 @@ export class StorefrontService {
             // Product-level gallery only (see creator-product include above).
             images: {
               where: { variant_id: null },
-              orderBy: { sort_order: 'asc' },
+              orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }],
             },
             attributes: {
               include: { template: { include: { translations: true } } },
@@ -2452,7 +2452,7 @@ export class StorefrontService {
         translations: {
           select: { locale: true, title: true, description: true, slug: true },
         },
-        images: { orderBy: { sort_order: 'asc' } },
+        images: { orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
         variants: { where: { is_active: true }, include: { images: true } },
         faqs: {
           include: { translations: true },

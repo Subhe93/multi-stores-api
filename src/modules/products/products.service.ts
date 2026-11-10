@@ -108,7 +108,7 @@ export const PUBLIC_PRODUCT_LIST_SELECT = {
   created_at: true,
   updated_at: true,
   translations: true,
-  images: { take: 1, orderBy: { sort_order: 'asc' as const } },
+  images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
   category: { include: { translations: true } },
   variants: {
     select: {
@@ -946,7 +946,7 @@ export class ProductsService {
         where,
         include: {
           translations: true,
-          images: { take: 1, orderBy: { sort_order: 'asc' } },
+          images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
           category: { include: { translations: true } },
           variants: true,
           provider: { select: { id: true, company_name: true } },
@@ -1107,7 +1107,7 @@ export class ProductsService {
       take,
       include: {
         translations: true,
-        images: { take: 1, orderBy: { sort_order: 'asc' } },
+        images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
         category: { include: { translations: true } },
         variants: true,
         provider: { select: { id: true, company_name: true } },

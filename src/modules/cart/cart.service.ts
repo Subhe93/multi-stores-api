@@ -626,7 +626,7 @@ export class CartService {
             product: {
               include: {
                 translations: true,
-                images: { take: 1, orderBy: { sort_order: 'asc' as const } },
+                images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
                 custom_fields: {
                   include: { translations: true },
                   orderBy: [

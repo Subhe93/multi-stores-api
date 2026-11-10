@@ -223,7 +223,7 @@ export const orderWithItemsInclude = {
       product: {
         include: {
           translations: true,
-          images: { take: 1, orderBy: { sort_order: 'asc' } },
+          images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
         },
       },
       // `images` on the variant, plus variant_option_config on both product
@@ -236,7 +236,7 @@ export const orderWithItemsInclude = {
           mockup_images: { take: 1, orderBy: { sort_order: 'asc' } },
           product: {
             include: {
-              images: { take: 1, orderBy: { sort_order: 'asc' } },
+              images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
             },
           },
         },

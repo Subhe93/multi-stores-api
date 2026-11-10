@@ -323,7 +323,7 @@ export class ProvidersService {
         product: {
           include: {
             translations: true,
-            images: { orderBy: { sort_order: 'asc' }, take: 1 },
+            images: { orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }], take: 1 },
           },
         },
       },

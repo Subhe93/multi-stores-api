@@ -768,7 +768,7 @@ export class OrdersService {
       product: {
         include: {
           translations: true,
-          images: { take: 1, orderBy: { sort_order: 'asc' as const } },
+          images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
         },
       },
       variant: {
@@ -779,7 +779,7 @@ export class OrdersService {
           product: {
             include: {
               translations: true,
-              images: { take: 1, orderBy: { sort_order: 'asc' as const } },
+              images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
             },
           },
         },
@@ -791,7 +791,7 @@ export class OrdersService {
           product: {
             include: {
               translations: true,
-              images: { take: 1, orderBy: { sort_order: 'asc' as const } },
+              images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
             },
           },
         },
