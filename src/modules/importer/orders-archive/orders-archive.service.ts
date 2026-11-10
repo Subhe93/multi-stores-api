@@ -446,7 +446,7 @@ export class OrdersArchiveService {
           // Cross-instance guard (the in-process lock covers one API only):
           // a second apply for the same store waits for this batch instead of
           // racing the upserts into P2002.
-          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${storeId}))`;
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`orders-archive:${storeId}`}))`;
           for (const o of batch) {
             const data = {
               number: o.number,
