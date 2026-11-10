@@ -1530,6 +1530,8 @@ export class MailService {
   ): Promise<void> {
     const order = await loadOrderForEmail(this.prisma, orderId, this.storeApps);
     if (!order) return;
+    // Order trash (M69): a trashed order sends no status mail.
+    if (order.deleted_at) return;
 
     const {
       customerEmail,
@@ -1980,7 +1982,7 @@ export class MailService {
       event === 'new_order_owner' ? 'new_order_owner' : 'order_confirmation';
 
     const latest = await this.prisma.order.findFirst({
-      where: storeId ? { store_id: storeId } : {},
+      where: { ...(storeId ? { store_id: storeId } : {}), deleted_at: null },
       orderBy: { created_at: 'desc' },
       select: { id: true },
     });

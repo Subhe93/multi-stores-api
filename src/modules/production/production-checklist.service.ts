@@ -873,6 +873,7 @@ export class ProductionChecklistService {
         where: {
           id: { in: missing },
           store_id: storeId,
+          deleted_at: null,
           status: { notIn: CLOSED_STATUSES },
         },
         select: { id: true },
@@ -907,6 +908,7 @@ export class ProductionChecklistService {
   ): Promise<{ synced: number; failed: number; remaining: number }> {
     const where = {
       store_id: storeId,
+      deleted_at: null,
       status: { in: PRODUCTION_ACTIVE_STATUSES },
     } satisfies Prisma.OrderWhereInput;
     const [orders, total] = await Promise.all([

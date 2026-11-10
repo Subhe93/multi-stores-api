@@ -1,0 +1,4 @@
+order_item_id	order_item_name	order_item_type	order_id
+21	Namnskylt trä	line_item	2001
+22	Frakt	shipping	2001
+23	Mugg	line_item	2002

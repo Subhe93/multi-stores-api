@@ -19,12 +19,29 @@ export class CommissionsService {
         where: { id: orderId },
         select: {
           store_id: true,
+          deleted_at: true,
           items: { select: { fulfiller_id: true } },
         },
       });
       if (!order) return null;
 
       let allowed = false;
+      // Order trash (M69): a trashed order is gone for providers and for a
+      // creator who only fulfils an item; only the owning creator (and
+      // admins above) still see its split.
+      if (order.deleted_at) {
+        if (role !== UserRole.CREATOR) return null;
+        const creator = await this.prisma.creator.findUnique({
+          where: { user_id: userId },
+          select: { store: { select: { id: true } } },
+        });
+        if (!creator?.store || order.store_id !== creator.store.id) {
+          return null;
+        }
+        return this.prisma.orderCommission.findUnique({
+          where: { order_id: orderId },
+        });
+      }
       if (role === UserRole.PROVIDER) {
         const provider = await this.prisma.provider.findUnique({
           where: { user_id: userId },
@@ -76,6 +93,7 @@ export class CommissionsService {
       where = {
         order: {
           is_test: false,
+          deleted_at: null,
           items: { some: { fulfiller_id: provider.id } },
         },
       };
@@ -93,7 +111,7 @@ export class CommissionsService {
         };
       }
       where = {
-        order: { store_id: creator.store.id, is_test: false },
+        order: { store_id: creator.store.id, is_test: false, deleted_at: null },
       };
     }
 
@@ -165,7 +183,7 @@ export class CommissionsService {
   async getPlatformSummary() {
     // Test orders (FIXES-1) never count as platform revenue.
     const allCommissions = await this.prisma.orderCommission.findMany({
-      where: { order: { is_test: false } },
+      where: { order: { is_test: false, deleted_at: null } },
     });
 
     const now = new Date();
@@ -237,12 +255,13 @@ export class CommissionsService {
 
     // Finance ledger: test orders (FIXES-1) are left out.
     const where: Prisma.OrderCommissionWhereInput = {
-      order: { is_test: false },
+      order: { is_test: false, deleted_at: null },
     };
     if (params.status) where.status = params.status;
     if (params.search) {
       where.order = {
         is_test: false,
+        deleted_at: null,
         OR: [
           { order_number: { contains: params.search, mode: 'insensitive' } },
           {

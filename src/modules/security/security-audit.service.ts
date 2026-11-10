@@ -34,6 +34,11 @@ export const SECURITY_ACTIONS = [
   'backup.downloaded',
   'backup.restored',
   'backup.deleted',
+  // Order trash (M69): soft delete / restore by the store owner or an admin,
+  // and the admin-only test flag.
+  'order.deleted',
+  'order.restored',
+  'order.test_flag',
 ] as const;
 export type SecurityAction = (typeof SECURITY_ACTIONS)[number];
 
@@ -46,7 +51,7 @@ export interface SecurityActor {
 export interface SecurityEventInput {
   actor: SecurityActor;
   action: SecurityAction;
-  targetType?: 'platform' | 'creator' | 'provider' | 'user' | 'store';
+  targetType?: 'platform' | 'creator' | 'provider' | 'user' | 'store' | 'order';
   targetId?: string | null;
   targetLabel?: string | null;
   /** Field NAMES only — never pass a secret value here. */

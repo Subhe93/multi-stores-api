@@ -33,6 +33,12 @@ export const invoiceErrors = {
       code: 'INVOICE_TEST_ORDER',
       message: 'A test order is never invoiced.',
     }),
+  /** M69 order trash: no document for a trashed order. */
+  orderDeleted: () =>
+    new ConflictException({
+      code: 'INVOICE_ORDER_DELETED',
+      message: 'A deleted order cannot be invoiced. Restore it first.',
+    }),
   snapshotInvalid: (message: string, problems: string[] = []) =>
     new UnprocessableEntityException({
       code: 'INVOICE_SNAPSHOT_INVALID',

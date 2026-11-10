@@ -804,6 +804,11 @@ export class DesignerPrintQueueService
                   AND o.print_attempts < ${PRINT_MAX_ATTEMPTS}
                   AND o.print_locked_at < now() - ${STALE_INTERVAL})
             )
+            -- M69 order trash: a trashed order is never rendered.
+            AND NOT EXISTS (
+              SELECT 1 FROM "Order" ord
+               WHERE ord.id = o.order_id AND ord.deleted_at IS NOT NULL
+            )
             AND EXISTS (
               SELECT 1 FROM "StoreApp" sa
                WHERE sa.store_id = o.store_id
@@ -851,6 +856,7 @@ export class DesignerPrintQueueService
          AND d.files_purged_at IS NULL
          AND d.print_status = 'PENDING'
          AND o.status::text NOT IN ${BACKFILL_SKIP_STATUSES}
+         AND o.deleted_at IS NULL
          AND (o.payment_status = 'paid' OR o.payment_method::text = 'COD')
          AND EXISTS (
            SELECT 1 FROM "StoreApp" sa

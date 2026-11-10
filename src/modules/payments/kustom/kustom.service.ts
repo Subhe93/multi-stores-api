@@ -882,6 +882,7 @@ export class KustomService implements OnModuleInit {
         kustom_order_id: true,
         kustom_push_token: true,
         store_id: true,
+        deleted_at: true,
       },
     });
     if (
@@ -890,6 +891,14 @@ export class KustomService implements OnModuleInit {
       !this.safeTokenEqual(order.kustom_push_token, token)
     ) {
       throw new NotFoundException();
+    }
+    // Order trash (M69): the customer holds a live Klarna authorization, so a
+    // push on a trashed order goes through the normal path — markOrderPaid
+    // restores the order first ("Restored: payment arrived"), like Stripe.
+    if (order.deleted_at) {
+      this.logger.warn(
+        `Kustom push for deleted order ${order.id} (${order.order_number}): the order is restored by the payment`,
+      );
     }
     if (order.kustom_order_id && order.kustom_order_id !== kustomOrderId) {
       this.logger.warn(

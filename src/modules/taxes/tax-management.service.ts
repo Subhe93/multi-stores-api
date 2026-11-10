@@ -617,6 +617,7 @@ export class TaxManagementService {
     const where: Prisma.OrderWhereInput = {
       payment_status: 'paid',
       is_test: false,
+      deleted_at: null,
       created_at: { gte: from, lte: to },
       tax_lines: { not: Prisma.DbNull },
     };
@@ -795,6 +796,7 @@ export class TaxManagementService {
           store_id: scope.store_id,
           tax_exempt_reason: 'REVERSE_CHARGE',
           is_test: false,
+          deleted_at: null,
           OR: [
             {
               payment_status: { in: ['paid', 'refunded'] },

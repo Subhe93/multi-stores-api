@@ -105,6 +105,7 @@ describe('orders', () => {
     const r = await orders(prisma).findByCustomer('u1', 1, 20);
     const where = {
       customer_id: 'cu1',
+      deleted_at: null,
       OR: [{ store_id: 'store-a' }, { store_id: null }],
     };
     expect(prisma.order.findMany).toHaveBeenCalledWith(

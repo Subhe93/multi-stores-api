@@ -11,6 +11,11 @@ import { UploadsModule } from '../uploads/uploads.module';
 import { PersonalizationModule } from '../personalization/personalization.module';
 import { ImporterCreatorController } from './importer-creator.controller';
 import { ImporterAdminController } from './importer-admin.controller';
+import {
+  ArchivedOrdersController,
+  OrdersArchiveImportController,
+} from './orders-archive/archived-orders.controller';
+import { OrdersArchiveService } from './orders-archive/orders-archive.service';
 import { importerHtmlSanitizerProvider } from './html/html-sanitizer';
 import {
   PERSONALIZATION_PRESET_PORT,
@@ -39,13 +44,19 @@ import { ImporterRetentionTask } from './runs/importer-retention.task';
     PersonalizationModule,
     DesignerImportModule,
   ],
-  controllers: [ImporterCreatorController, ImporterAdminController],
+  controllers: [
+    ImporterCreatorController,
+    ImporterAdminController,
+    OrdersArchiveImportController,
+    ArchivedOrdersController,
+  ],
   providers: [
     ImportSourcesService,
     ImportRunsService,
     ImportEngineService,
     ImportWorkerService,
     ImporterRetentionTask,
+    OrdersArchiveService,
     importerHtmlSanitizerProvider,
     {
       provide: PERSONALIZATION_PRESET_PORT,

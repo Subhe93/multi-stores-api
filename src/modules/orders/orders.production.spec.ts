@@ -284,6 +284,7 @@ describe('OrdersService production hooks (M4.3 slot 2)', () => {
       );
       expect(whereOf()).toEqual({
         store_id: STORE_ID,
+        deleted_at: null,
         AND: [
           {
             status: {
@@ -307,7 +308,7 @@ describe('OrdersService production hooks (M4.3 slot 2)', () => {
         undefined,
         'in_production',
       );
-      expect(whereOf()).toEqual({ store_id: STORE_ID });
+      expect(whereOf()).toEqual({ store_id: STORE_ID, deleted_at: null });
     });
 
     it('invalid values cost no isEnabled; providers ignore the parameter', async () => {
@@ -323,7 +324,7 @@ describe('OrdersService production hooks (M4.3 slot 2)', () => {
         'bogus',
       );
       expect(triggers.isEnabled).not.toHaveBeenCalled();
-      expect(whereOf()).toEqual({ store_id: STORE_ID });
+      expect(whereOf()).toEqual({ store_id: STORE_ID, deleted_at: null });
 
       const p = buildList(true);
       await p.service.findByRole(
@@ -337,7 +338,10 @@ describe('OrdersService production hooks (M4.3 slot 2)', () => {
         'ready',
       );
       expect(p.triggers.isEnabled).not.toHaveBeenCalled();
-      expect(p.whereOf()).toEqual({ items: { some: { fulfiller_id: 'p1' } } });
+      expect(p.whereOf()).toEqual({
+        items: { some: { fulfiller_id: 'p1' } },
+        deleted_at: null,
+      });
     });
   });
 

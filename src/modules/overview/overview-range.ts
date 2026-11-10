@@ -236,7 +236,8 @@ export const tsParam = (d: Date) =>
  * starts 'pending' and is collected on delivery). Card / Kustom orders still
  * 'awaiting_payment', 'failed' (abandoned or declined) or 'refunded' do not
  * count. A test order (`is_test`: TEST-mode own key or the owner's pre-live
- * checkout) never counts. `alias` is an internal table alias, never user input.
+ * checkout) never counts, and neither does a trashed order (M69 order trash,
+ * deleted_at). `alias` is an internal table alias, never user input.
  */
 export function countedOrderSql(alias: 'o' | 'p'): Prisma.Sql {
   const a = Prisma.raw(alias);
@@ -244,6 +245,7 @@ export function countedOrderSql(alias: 'o' | 'p'): Prisma.Sql {
     ...EXCLUDED_ORDER_STATUSES,
   ])})
     AND ${a}.is_test = false
+    AND ${a}.deleted_at IS NULL
     AND (
       ${a}.payment_status = 'paid'
       OR (${a}.payment_status IS NULL AND ${a}.paid_at IS NOT NULL)

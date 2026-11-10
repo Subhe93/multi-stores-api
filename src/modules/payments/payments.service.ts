@@ -1130,6 +1130,13 @@ export class PaymentsService implements OnModuleInit {
     if (order.customer.user_id !== userId) {
       throw new ForbiddenException('You can only pay for your own orders');
     }
+    // Order trash (M69): nothing is charged for a trashed order.
+    if (order.deleted_at) {
+      throw new ConflictException({
+        code: 'ORDER_DELETED',
+        message: 'This order was deleted. Restore it first.',
+      });
+    }
     // Already paid (a webhook / confirm won the race, or a reload after
     // paying): answer 200 so the checkout goes straight to confirmation.
     if (order.payment_status === 'paid') return { status: 'paid' };
@@ -2593,6 +2600,8 @@ export class PaymentsService implements OnModuleInit {
     piId: string | null,
     ctx?: WebhookContext,
   ) {
+    // deleted orders: webhook lookups by Stripe id must find a trashed order
+    // too (its money events still belong to it).
     let order = await this.prisma.order.findFirst({
       where: { stripe_charge_id: chargeId },
       select: ORDER_ROUTE_SELECT,
@@ -2643,6 +2652,7 @@ export class PaymentsService implements OnModuleInit {
       typeof dispute.payment_intent === 'string'
         ? dispute.payment_intent
         : (dispute.payment_intent?.id ?? null);
+    // deleted orders: dispute lookups by Stripe id include trashed orders.
     let order = chargeId
       ? await this.prisma.order.findFirst({
           where: { stripe_charge_id: chargeId },
@@ -2688,6 +2698,8 @@ export class PaymentsService implements OnModuleInit {
       typeof charge.payment_intent === 'string'
         ? charge.payment_intent
         : charge.payment_intent?.id;
+    // deleted orders: charge lookups by Stripe id include trashed orders (a
+    // late payment restores the order in markOrderPaid).
     let order = await this.prisma.order.findFirst({
       where: { stripe_charge_id: charge.id },
       select: {

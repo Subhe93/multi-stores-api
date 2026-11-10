@@ -251,7 +251,7 @@ export class B2bTaxExemptionService {
     let orderVat: string | null = null;
     if (input.order_id) {
       const order = await this.prisma.order.findFirst({
-        where: { id: input.order_id, store_id: storeId },
+        where: { id: input.order_id, store_id: storeId, deleted_at: null },
         select: { customer_id: true, vat_number: true },
       });
       if (!order) throw notFound();
@@ -271,7 +271,11 @@ export class B2bTaxExemptionService {
         customerId = own.id;
       } else {
         const order = await this.prisma.order.findFirst({
-          where: { customer_id: input.customer_id, store_id: storeId },
+          where: {
+            customer_id: input.customer_id,
+            store_id: storeId,
+            deleted_at: null,
+          },
           select: { customer_id: true },
         });
         if (!order) throw notFound();

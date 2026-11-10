@@ -220,7 +220,9 @@ describe('B2bTaxExemptionService CRUD', () => {
       note: ' VIES down ',
     });
     expect(prisma.order.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'o1', store_id: 's1' } }),
+      expect.objectContaining({
+        where: { id: 'o1', store_id: 's1', deleted_at: null },
+      }),
     );
     expect(view).toMatchObject({
       id: 'ex1',

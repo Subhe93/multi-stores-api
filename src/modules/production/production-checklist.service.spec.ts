@@ -27,6 +27,7 @@ function order(over: Partial<FakeOrder> = {}): FakeOrder {
     id: 'o1',
     store_id: STORE_ID,
     status: 'CONFIRMED',
+    deleted_at: null,
     items: [
       {
         id: 'i1',

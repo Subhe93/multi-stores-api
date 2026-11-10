@@ -297,3 +297,32 @@ export class QuoteOrderDto {
   @MaxLength(32)
   vat_number?: string;
 }
+
+// ── Order trash (M69) ────────────────────────────────────────────────────────
+
+/** Body of DELETE /orders/:id (optional reason, kept on the timeline). */
+export class DeleteOrderDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
+}
+
+/** Body of POST /orders/bulk/delete and /orders/bulk/restore. */
+export class BulkOrderIdsDto {
+  @IsArray()
+  @ArrayMaxSize(100)
+  @IsString({ each: true })
+  ids: string[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
+}
+
+/** Body of PUT /orders/:id/test-flag (ADMIN only). */
+export class SetOrderTestFlagDto {
+  @IsBoolean()
+  is_test: boolean;
+}

@@ -1324,6 +1324,8 @@ export class DesignerCartService {
    * order. Links are relative signed paths (1 h).
    */
   async orderDesigns(storeId: string, orderId: string) {
+    // deleted orders: lookup by id for the owner, who may open a trashed
+    // order from the Deleted tab.
     const order = isUuid(orderId)
       ? await this.prisma.order.findFirst({
           where: { id: orderId, store_id: storeId },

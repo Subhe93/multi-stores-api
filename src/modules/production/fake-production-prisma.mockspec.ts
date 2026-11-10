@@ -83,6 +83,8 @@ export interface FakeOrder {
   id: string;
   store_id: string;
   status: string;
+  // M69 order trash: a trashed order (non-null) is skipped by the queries.
+  deleted_at?: Date | null;
   created_at?: Date;
   items: FakeOrderItem[];
 }

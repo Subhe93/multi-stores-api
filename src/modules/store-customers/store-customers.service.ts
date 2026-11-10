@@ -575,10 +575,18 @@ export class StoreCustomersService {
              AND o.store_id = ${store.id}
              AND ${countedOrderSql('o')}`),
         this.prisma.order.count({
-          where: { customer_id: customer.id, store_id: store.id },
+          where: {
+            customer_id: customer.id,
+            store_id: store.id,
+            deleted_at: null,
+          },
         }),
         this.prisma.order.findMany({
-          where: { customer_id: customer.id, store_id: store.id },
+          where: {
+            customer_id: customer.id,
+            store_id: store.id,
+            deleted_at: null,
+          },
           orderBy: { created_at: 'desc' },
           take: RECENT_ORDERS_LIMIT,
           select: {

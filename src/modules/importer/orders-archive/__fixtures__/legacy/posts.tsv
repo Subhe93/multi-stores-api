@@ -1,0 +1,6 @@
+ID	post_author	post_date	post_date_gmt	post_content	post_title	post_excerpt	post_status	post_parent	post_type
+2001	1	2021-05-10 14:00:00	2021-05-10 12:00:00		Order &ndash; May 10, 2021	Ring före leverans	wc-completed	0	shop_order
+2002	1	2021-06-01 09:30:00	0000-00-00 00:00:00		Order		wc-on-hold	0	shop_order
+2003	1	2021-05-12 10:00:00	2021-05-12 08:00:00		Refund	Fel storlek	wc-completed	2001	shop_order_refund
+2004	1	2021-06-02 09:30:00	2021-06-02 07:30:00		Auto Draft		auto-draft	0	shop_order
+2005	1	2021-06-02 09:30:00	2021-06-02 07:30:00		Produkt		publish	0	product

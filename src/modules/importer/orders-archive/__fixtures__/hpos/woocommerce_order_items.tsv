@@ -1,0 +1,9 @@
+order_item_id	order_item_name	order_item_type	order_id
+11	Namnskylt trä - Röd	line_item	1001
+12	Presentkort	line_item	1001
+13	Standardfrakt	shipping	1001
+14	Dörrskylt	line_item	1002
+15	Expressavgift	fee	1002
+16	Standardfrakt	shipping	1002
+17	VAT	tax	1002
+18	Dörrskylt	line_item	1003

@@ -334,6 +334,8 @@ export class ProviderEarningsService {
   ): Prisma.OrderWhereInput {
     const where: Prisma.OrderWhereInput = {
       is_test: false,
+      // Order trash (M69): a trashed order is never earned on.
+      deleted_at: null,
       items: {
         some: {
           fulfiller_type: FulfillerType.PROVIDER,

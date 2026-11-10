@@ -334,6 +334,8 @@ export class InvoicesService {
       include: orderForInvoiceInclude,
     });
     if (!order) throw invoiceErrors.orderNotEligible('Order not found.');
+    // Order trash (M69): a trashed order is frozen; restore it first.
+    if (order.deleted_at) throw invoiceErrors.orderDeleted();
     if (!order.store_id) {
       throw invoiceErrors.orderNotEligible('The order has no store.');
     }
@@ -735,6 +737,8 @@ export class InvoicesService {
       store_id: storeId,
       // FIXES-1: test orders are never invoiced (see issueForOrder).
       is_test: false,
+      // M69: neither are trashed orders.
+      deleted_at: null,
       status: { notIn: NOT_INVOICEABLE_STATUS },
       invoices: { none: { kind: InvoiceKind.INVOICE } },
       OR: [

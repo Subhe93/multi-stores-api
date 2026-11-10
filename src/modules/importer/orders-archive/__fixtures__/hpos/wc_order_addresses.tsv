@@ -1,0 +1,4 @@
+id	order_id	address_type	first_name	last_name	company	address_1	address_2	city	state	postcode	country	email	phone
+1	1001	billing	Anna	Svensson	\N	Storgatan 1	\N	Stockholm	\N	11122	SE	anna.svensson@example.com	+46701234567
+2	1001	shipping	Anna	Svensson	\N	Storgatan 1	\N	Stockholm	\N	11122	SE	\N	\N
+3	1002	billing	Björn	Ek	Ek AB	Lillgatan 2		Göteborg	\N	41101	SE	bjorn@example.com	\N

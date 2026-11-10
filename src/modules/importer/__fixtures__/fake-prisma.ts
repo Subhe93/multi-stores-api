@@ -39,6 +39,7 @@ const UNIQUES: Record<string, string[][]> = {
   productFaqTranslation: [['faq_id', 'locale']],
   customFieldTranslation: [['field_id', 'locale']],
   storeRedirect: [['store_id', 'from_path']],
+  archivedOrder: [['store_id', 'source', 'external_id']],
   productCreatorCategory: [['product_id', 'creator_category_id']],
   store: [['slug'], ['creator_id']],
   creator: [['user_id']],
@@ -548,6 +549,14 @@ export class FakeModel {
           null,
         );
     }
+    if (args._min) {
+      out._min = {};
+      for (const k of Object.keys(args._min))
+        out._min[k] = rows.reduce<unknown>(
+          (m, r) => (m === null || cmp(r[k], m) < 0 ? r[k] : m),
+          null,
+        );
+    }
     return Promise.resolve(out);
   }
 }
@@ -573,6 +582,7 @@ const CASCADES: Record<string, { model: string; field: string }[]> = {
     { model: 'importRunItem', field: 'run_id' },
     { model: 'importRunLog', field: 'run_id' },
   ],
+  archivedOrder: [{ model: 'archivedOrderLine', field: 'archived_order_id' }],
   importSource: [{ model: 'importRun', field: 'source_id' }],
   shippingProfile: [{ model: 'shippingZone', field: 'profile_id' }],
   shippingZone: [{ model: 'shippingMethod', field: 'zone_id' }],

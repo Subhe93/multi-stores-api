@@ -395,6 +395,7 @@ export class OverviewService {
       where: {
         store_id: store.id,
         is_test: false,
+        deleted_at: null,
         created_at: { gte: w.from, lt: w.to },
       },
       _count: { _all: true },
@@ -602,7 +603,7 @@ export class OverviewService {
     store: StoreCtx,
   ): Promise<OverviewResponse['recent_orders']> {
     const orders = await this.prisma.order.findMany({
-      where: { store_id: store.id },
+      where: { store_id: store.id, deleted_at: null },
       orderBy: { created_at: 'desc' },
       take: RECENT_ORDERS_LIMIT,
       select: {
@@ -658,7 +659,8 @@ export class OverviewService {
                       ELSE make_interval(hours => ${AWAITING_CARD_HOURS}::int) END
             )::int AS pending
             FROM "Order" o
-           WHERE o.store_id = ${store.id}`,
+           WHERE o.store_id = ${store.id}
+             AND o.deleted_at IS NULL`,
         ),
         this.prisma.product.count({
           where: { creator_id: store.creatorId, status: 'DRAFT' },

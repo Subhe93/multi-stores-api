@@ -617,6 +617,8 @@ export class DesignerRetentionService implements OnModuleInit {
     cutoff: Date,
     grace: Date,
   ): Promise<Outcome> {
+    // deleted orders: retention purges by design id; a trashed order's
+    // files age out like any other (no deleted_at filter on purpose).
     const claimed = await this.prisma.$executeRaw`
       UPDATE "OrderItemDesign" d
       SET "originals_purged_at" = ${iso(now)}, "updated_at" = ${iso(now)}
@@ -864,6 +866,8 @@ export class DesignerRetentionService implements OnModuleInit {
     /** R5: retry the originals even when R3 already ran. */
     forceOriginals = false,
   ): Promise<Outcome> {
+    // deleted orders: same as purgeOriginals — a trashed order's print files
+    // are purged on the normal schedule.
     const claimed = await this.prisma.$executeRaw`
       UPDATE "OrderItemDesign" d
       SET "files_purged_at" = ${iso(now)},

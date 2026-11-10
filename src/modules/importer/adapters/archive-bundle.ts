@@ -33,6 +33,11 @@ export interface ArchiveLimits {
   maxEntries?: number;
   maxTotalBytes?: number;
   maxRatio?: number;
+  /**
+   * Which base names to keep (default: the WP bundle allowlist). The
+   * orders archive (M70) passes its own table allowlist.
+   */
+  keep?: (baseName: string) => boolean;
 }
 
 export interface ArchiveEntry {
@@ -70,6 +75,7 @@ function invalid(message: string): BundleReadError {
  */
 function classifyEntryName(
   raw: string,
+  keep: (baseName: string) => boolean = isAllowedBundleFile,
 ): { dir: true } | { dir: false; base: string; keep: boolean } {
   const name = (raw ?? '').replace(/\\/g, '/');
   if (!name || name.includes('\u0000'))
@@ -82,7 +88,7 @@ function classifyEntryName(
   if (name.endsWith('/')) return { dir: true };
   const base = path.posix.basename(name);
   if (!base || base === '.') return { dir: true };
-  return { dir: false, base, keep: isAllowedBundleFile(base) };
+  return { dir: false, base, keep: keep(base) };
 }
 
 /** Byte accounting shared by both formats. */
@@ -129,8 +135,17 @@ class EntryCollector {
   readonly ignored: string[] = [];
   private readonly seen = new Set<string>();
 
+  constructor(
+    readonly keep: (baseName: string) => boolean = isAllowedBundleFile,
+  ) {}
+
+  /** Entry name classification with this collector's allowlist. */
+  classify(name: string): ReturnType<typeof classifyEntryName> {
+    return classifyEntryName(name, this.keep);
+  }
+
   add(name: string, chunks: Uint8Array[]): void {
-    const c = classifyEntryName(name);
+    const c = this.classify(name);
     if (c.dir) return;
     if (!c.keep) {
       this.ignored.push(name);
@@ -145,7 +160,11 @@ class EntryCollector {
 
 // ── zip ───────────────────────────────────────────────────────────────────
 
-function extractZip(archive: Buffer, budget: ExtractionBudget): EntryCollector {
+function extractZip(
+  archive: Buffer,
+  budget: ExtractionBudget,
+  out: EntryCollector,
+): EntryCollector {
   // Local file header signature (an empty zip starts with the end record).
   if (
     !(
@@ -156,13 +175,12 @@ function extractZip(archive: Buffer, budget: ExtractionBudget): EntryCollector {
     )
   )
     throw invalid('Not a zip archive');
-  const out = new EntryCollector();
   const unzip = new Unzip();
   unzip.register(UnzipInflate);
   unzip.onfile = (file) => {
     budget.entry();
     // Names are validated up front so a bad entry is refused before inflating.
-    const c = classifyEntryName(file.name);
+    const c = out.classify(file.name);
     const chunks: Uint8Array[] = [];
     file.ondata = (err, data, final) => {
       if (err) throw err;
@@ -309,14 +327,14 @@ class TarStream {
       case '7': {
         this.budget.entry();
         this.entriesSeen++;
-        const c = classifyEntryName(name);
+        const c = this.out.classify(name);
         this.current = { name, chunks: [], keep: !c.dir && c.keep };
         break;
       }
       case '5':
         this.budget.entry();
         this.entriesSeen++;
-        classifyEntryName(name);
+        this.out.classify(name);
         // Directory: no data to keep (a size, if any, is skipped).
         this.current = { name: `${name}/`, chunks: [], keep: false };
         break;
@@ -357,10 +375,13 @@ class TarStream {
   }
 }
 
-function extractTgz(archive: Buffer, budget: ExtractionBudget): EntryCollector {
+function extractTgz(
+  archive: Buffer,
+  budget: ExtractionBudget,
+  out: EntryCollector,
+): EntryCollector {
   if (!(archive[0] === 0x1f && archive[1] === 0x8b))
     throw invalid('Not a gzip archive');
-  const out = new EntryCollector();
   const tar = new TarStream(budget, out);
   const gunzip = new Gunzip((data, final) => {
     budget.bytes(data.length);
@@ -396,12 +417,12 @@ export function extractArchive(
       : null;
   if (!kind) throw invalid(`Not a supported archive: ${fileName}`);
   const budget = new ExtractionBudget(archive.length, limits);
-  let out: EntryCollector;
+  let out = new EntryCollector(limits.keep);
   try {
     out =
       kind === 'zip'
-        ? extractZip(archive, budget)
-        : extractTgz(archive, budget);
+        ? extractZip(archive, budget, out)
+        : extractTgz(archive, budget, out);
   } catch (e) {
     if (e instanceof BundleReadError) throw e;
     const msg = e instanceof Error ? e.message : String(e);
@@ -410,7 +431,9 @@ export function extractArchive(
   if (!out.entries.length)
     throw new BundleReadError(
       'IMPORT_BUNDLE_MISSING_FILE',
-      'The archive holds no bundle files (posts.tsv, postmeta.tsv, …)',
+      limits.keep
+        ? 'The archive holds none of the expected files'
+        : 'The archive holds no bundle files (posts.tsv, postmeta.tsv, …)',
     );
   return {
     kind,

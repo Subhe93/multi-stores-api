@@ -155,6 +155,13 @@ describe('overview SQL fragments', () => {
     expect(text).toContain('p.is_test = false');
   });
 
+  it('counted orders never include trashed orders (M69 order trash)', () => {
+    for (const alias of ['o', 'p'] as const) {
+      const text = countedOrderSql(alias).sql.replace(/\s+/g, ' ');
+      expect(text).toContain(`${alias}.deleted_at IS NULL`);
+    }
+  });
+
   it('converts market-currency amounts with the order fx_rate_snapshot', () => {
     const sql = storeAmountSql(Prisma.sql`o.total`, 'SEK');
     const text = sql.sql.replace(/\s+/g, ' ');

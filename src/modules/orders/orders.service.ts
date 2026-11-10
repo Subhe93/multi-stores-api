@@ -37,6 +37,16 @@ import {
   UpdateOrderStatusDto,
   UpdateFulfillmentDto,
 } from './dto/order.dto';
+import { SecurityAuditService } from '../security/security-audit.service';
+import type { RequestMeta } from '../security/request-meta';
+import {
+  deletableReason,
+  orderHoldsStock,
+  trashActorLabel,
+  withoutDeletedBy,
+  type TrashActor,
+  type BulkTrashResult,
+} from './order-trash';
 import { PromotionsService } from '../promotions/promotions.service';
 import {
   ShippingService,
@@ -557,6 +567,35 @@ const SWEEP_ORDER_SELECT = {
   stripe_key_fingerprint: true,
 } as const;
 
+/** 409 of any status / fulfillment / payment move on a trashed order (M69). */
+function orderDeleted(): ConflictException {
+  return new ConflictException({
+    code: 'ORDER_DELETED',
+    message: 'This order was deleted. Restore it first.',
+  });
+}
+
+/** 409 of a delete the guard refuses, with the reason for the UI (M69). */
+function notDeletable(
+  reason: 'paid' | 'invoiced' | 'paid_out',
+): ConflictException {
+  return new ConflictException({
+    code: 'ORDER_NOT_DELETABLE',
+    message:
+      reason === 'invoiced'
+        ? 'An invoiced order cannot be deleted; credit it instead.'
+        : reason === 'paid_out'
+          ? 'An order with payouts cannot be deleted.'
+          : 'A paid order cannot be deleted; cancel or refund it instead.',
+    reason,
+  });
+}
+
+/** Ids a bulk trash call may name: deduplicated, blanks dropped. */
+function uniqueIds(ids: string[]): string[] {
+  return [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+}
+
 const ORDER_STATUS_RANK: Record<string, number> = {
   PENDING: 0,
   CONFIRMED: 1,
@@ -646,6 +685,10 @@ export class OrdersService {
     @Optional()
     @Inject(DESIGNER_TRIGGERS_PORT)
     private readonly designerTriggers?: DesignerTriggersPort,
+    // Order trash (M69): security trail of delete / restore / test flag.
+    // SecurityModule is global; optional so positional spec constructors
+    // stay valid (no audit row is written without it).
+    @Optional() private readonly audit?: SecurityAuditService,
   ) {}
 
   /**
@@ -895,10 +938,12 @@ export class OrdersService {
    */
   private forCustomer<T>(order: T): T {
     if (!order || typeof order !== 'object') return order;
-    const o = order as { vat_validation?: unknown };
-    if (!o.vat_validation) return order;
+    // Who trashed an order is never shown to customers (M69).
+    const stripped = withoutDeletedBy(order);
+    const o = stripped as { vat_validation?: unknown };
+    if (!o.vat_validation) return stripped;
     return {
-      ...order,
+      ...stripped,
       vat_validation: customerVatEvidence(o.vat_validation),
     } as T;
   }
@@ -3254,12 +3299,14 @@ export class OrdersService {
     // store (legacy orders without a store_id stay visible: they are the
     // customer's by customer_id).
     const storeId = customer.user?.store_id ?? null;
+    // A trashed order is gone from "My orders" (M69).
     const where: Prisma.OrderWhereInput = storeId
       ? {
           customer_id: customer.id,
+          deleted_at: null,
           OR: [{ store_id: storeId }, { store_id: null }],
         }
-      : { customer_id: customer.id };
+      : { customer_id: customer.id, deleted_at: null };
     const skip = (page - 1) * limit;
     const [data, total] = await Promise.all([
       this.prisma.order.findMany({
@@ -3287,6 +3334,9 @@ export class OrdersService {
     marketKey?: string,
     buyer?: string,
     production?: string,
+    // Order trash (M69): the Deleted tab. Creators only — a provider never
+    // sees trashed orders.
+    deleted = false,
   ) {
     if (role === UserRole.PROVIDER) {
       return this.findByProvider(userId, page, limit, status);
@@ -3300,6 +3350,7 @@ export class OrdersService {
         marketKey,
         buyer,
         production,
+        deleted,
       );
     }
     return { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
@@ -3322,6 +3373,7 @@ export class OrdersService {
     const skip = (page - 1) * limit;
     const where = {
       items: { some: { fulfiller_id: provider.id } },
+      deleted_at: null,
       ...(status ? { status } : {}),
     };
 
@@ -3342,7 +3394,7 @@ export class OrdersService {
     ]);
 
     return {
-      data: data.map((o) => this.withItemImages(o)),
+      data: data.map((o) => withoutDeletedBy(this.withItemImages(o))),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -3371,6 +3423,7 @@ export class OrdersService {
     marketKey?: string,
     buyer?: string,
     production?: string,
+    deleted = false,
   ) {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
@@ -3383,6 +3436,9 @@ export class OrdersService {
     const skip = (page - 1) * limit;
     const where: Prisma.OrderWhereInput = {
       store_id: creator.store.id,
+      // Order trash (M69): the Deleted tab lists only trashed orders, every
+      // other list only live ones.
+      deleted_at: deleted ? { not: null } : null,
       ...(status ? { status } : {}),
       // Markets app: orders placed in one market (`?market=`).
       ...(marketKey ? { market: { key: marketKey } } : {}),
@@ -3422,7 +3478,7 @@ export class OrdersService {
     ]);
 
     return {
-      data: data.map((o) => this.withItemImages(o)),
+      data: data.map((o) => withoutDeletedBy(this.withItemImages(o))),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -3449,7 +3505,10 @@ export class OrdersService {
     }
 
     const skip = (page - 1) * limit;
-    const where = { items: { some: { fulfiller_id: fulfillerId } } };
+    const where = {
+      items: { some: { fulfiller_id: fulfillerId } },
+      deleted_at: null,
+    };
 
     const [data, total] = await Promise.all([
       this.prisma.order.findMany({
@@ -3468,7 +3527,11 @@ export class OrdersService {
     ]);
 
     return {
-      data: data.map((o) => this.withItemImages(o)),
+      data: data.map((o) =>
+        role === UserRole.ADMIN
+          ? this.withItemImages(o)
+          : withoutDeletedBy(this.withItemImages(o)),
+      ),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -3492,6 +3555,10 @@ export class OrdersService {
           include: { user: { select: { email: true, status: true } } },
         },
         payouts: { orderBy: { created_at: 'asc' } },
+        // Order trash (M69): invoice / payout counts for the dashboard's
+        // deletable pre-check (the API guard is the authority). Creator and
+        // admin only; stripped for customers / providers below.
+        _count: { select: { invoices: true, payouts: true } },
         market: this.marketRef,
       },
     });
@@ -3508,7 +3575,15 @@ export class OrdersService {
     // Everyone else must be part of the order: the owning customer, a
     // provider fulfilling one of its items, or the creator of its store.
     // Foreign orders get a 404 (not 403) so order ids are not enumerable.
-    const canRead = await this.userCanReadOrder(order, userId, role);
+    // A trashed order (M69) is gone for customers and providers; only the
+    // owning creator (and admins above) may still open it, from the
+    // Deleted tab.
+    const canRead = order.deleted_at
+      ? role === UserRole.CREATOR &&
+        !!userId &&
+        (await this.ownStoreId(userId)) === order.store_id &&
+        !!order.store_id
+      : await this.userCanReadOrder(order, userId, role);
     if (!canRead) {
       throw new NotFoundException({
         code: 'ORDER_NOT_FOUND',
@@ -3516,9 +3591,10 @@ export class OrdersService {
       });
     }
 
-    // Everyone else: hide the customer's card/charge/receipt details and the
-    // creator's connected-account id, and scope payouts to the requesting
-    // fulfiller (a provider/creator sees only theirs).
+    // Everyone else: hide the customer's card/charge/receipt details, the
+    // creator's connected-account id and who trashed the order, and scope
+    // payouts to the requesting fulfiller (a provider/creator sees only
+    // theirs).
     const {
       stripe_charge_id: _c,
       stripe_payment_id: _p,
@@ -3526,6 +3602,7 @@ export class OrdersService {
       card_brand: _b,
       card_last4: _l,
       receipt_url: _r,
+      deleted_by: _db,
       payouts,
       ...safe
     } = order;
@@ -3535,6 +3612,7 @@ export class OrdersService {
     void _b;
     void _l;
     void _r;
+    void _db;
 
     let scopedPayouts: typeof payouts = [];
     let fulfillerId: string | null = null;
@@ -3552,8 +3630,10 @@ export class OrdersService {
         kustom_order_id: _ko,
         kustom_capture_id: _kc,
         kustom_captured_at: _kd,
+        _count: _cnt,
         ...customerSafe
       } = safe;
+      void _cnt;
       void _ko;
       void _kc;
       void _kd;
@@ -3607,9 +3687,13 @@ export class OrdersService {
     status?: OrderStatus,
     marketKey?: string,
     buyer?: string,
+    // Order trash (M69): `?deleted=1` = only trashed orders (admin Deleted
+    // tab); default = live orders only.
+    deleted = false,
   ) {
     const skip = (page - 1) * limit;
     const where: Prisma.OrderWhereInput = {
+      deleted_at: deleted ? { not: null } : null,
       ...(status ? { status } : {}),
       ...(marketKey ? { market: { key: marketKey } } : {}),
       ...this.buyerWhere(buyer),
@@ -3870,6 +3954,8 @@ export class OrdersService {
         code: 'ORDER_NOT_FOUND',
         message: 'Order not found',
       });
+    // Order trash (M69): a trashed order is frozen until it is restored.
+    if (order.deleted_at) throw orderDeleted();
 
     if (actorRole === UserRole.ADMIN) {
       await this.prisma.order.update({
@@ -4002,6 +4088,7 @@ export class OrdersService {
         fulfiller_id: true,
         fulfiller_type: true,
         fulfillment_status: true,
+        order: { select: { deleted_at: true } },
       },
     });
     if (!item)
@@ -4009,6 +4096,8 @@ export class OrdersService {
         code: 'ORDER_ITEM_NOT_FOUND',
         message: 'Order item not found',
       });
+    // Order trash (M69): no fulfillment moves on a trashed order.
+    if (item.order?.deleted_at) throw orderDeleted();
 
     if (actorRole !== UserRole.ADMIN) {
       const expectedType =
@@ -4098,28 +4187,68 @@ export class OrdersService {
     /** Timeline note instead of "Payment confirmed via <provider>". */
     opts: { note?: string } = {},
   ) {
-    const order = await this.prisma.order.findUnique({
+    const paidInclude = { customer: { select: { user_id: true } } } as const;
+    let order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: { customer: { select: { user_id: true } } },
+      include: paidInclude,
     });
     if (!order) return null;
-    if (order.payment_status === 'paid') return { order, changed: false };
+    const RESTORE_NOTE = 'Restored: payment arrived';
+    if (order.payment_status === 'paid') {
+      // Paid AND trashed cannot happen (the delete claim is optimistic on
+      // paid_at); should it ever, the paid order wins and comes back.
+      if (order.deleted_at) {
+        await this.untrashOrder(order.id, 'system', RESTORE_NOTE);
+      }
+      return { order, changed: false };
+    }
 
-    // Guard on payment_status so concurrent webhook deliveries can't both flip
-    // the order (and double-insert a timeline row): only the first wins.
-    const flip = await this.prisma.order.updateMany({
-      where: { id: orderId, payment_status: { not: 'paid' } },
-      data: {
-        payment_status: 'paid',
-        paid_at: new Date(),
-        // Move a freshly-placed order forward; never roll back a later status.
-        status:
-          order.status === OrderStatus.PENDING
-            ? OrderStatus.CONFIRMED
-            : order.status,
-        ...(stripePaymentId ? { stripe_payment_id: stripePaymentId } : {}),
-      },
-    });
+    // Order trash (M69): a late payment on a trashed order restores it first
+    // (the only automatic restore), then the payment lands as usual. The
+    // delete handed the stock / coupon back exactly like a failure does, so
+    // they are re-taken below.
+    let wasDeleted = false;
+    let flip = { count: 0 };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (order.deleted_at) {
+        wasDeleted = true;
+        await this.untrashOrder(order.id, 'system', RESTORE_NOTE);
+      }
+      // Guard on payment_status so concurrent webhook deliveries can't both
+      // flip the order (and double-insert a timeline row): only the first
+      // wins. deleted_at null: a delete that landed between the read and
+      // this flip is detected (0 rows) and undone below before retrying.
+      flip = await this.prisma.order.updateMany({
+        where: {
+          id: orderId,
+          payment_status: { not: 'paid' },
+          deleted_at: null,
+        },
+        data: {
+          payment_status: 'paid',
+          paid_at: new Date(),
+          // Move a freshly-placed order forward; never roll back a later
+          // status.
+          status:
+            order.status === OrderStatus.PENDING
+              ? OrderStatus.CONFIRMED
+              : order.status,
+          ...(stripePaymentId ? { stripe_payment_id: stripePaymentId } : {}),
+        },
+      });
+      if (flip.count > 0) break;
+      // 0 rows: paid by a concurrent delivery, or trashed meanwhile. Re-read
+      // once; only a now-trashed, still-unpaid order is retried (restored
+      // first), everything else is a no-op.
+      const fresh = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        include: paidInclude,
+      });
+      if (!fresh || fresh.payment_status === 'paid' || !fresh.deleted_at) {
+        return { order: fresh ?? order, changed: false };
+      }
+      order = fresh;
+    }
     if (flip.count === 0) return { order, changed: false };
 
     await this.prisma.orderTimeline.create({
@@ -4138,14 +4267,22 @@ export class OrdersService {
     // driven negative — the order stays paid, is flagged STOCK_SHORTFALL on
     // the timeline and the store owner is notified to resolve it.
     let stockShortfall = false;
-    if (order.payment_status === 'failed') {
+    // A trashed order returned its stock on delete while it still held it
+    // (orderHoldsStock is a function of status / payment_status, which a
+    // trashed order cannot change, so it answers the same now as then).
+    const stockReturned =
+      order.payment_status === 'failed' ||
+      (wasDeleted && orderHoldsStock(order));
+    if (stockReturned) {
       const short = await this.retakeOrderItemsStock(orderId);
       if (short.length) {
         stockShortfall = true;
         await this.flagStockShortfall(order, short);
       }
-      await this.retakeOrderCoupon(orderId);
     }
+    // The delete hands the coupon back whatever the stock did (also on a
+    // CANCELLED order), so a restored order re-takes it regardless.
+    if (stockReturned || wasDeleted) await this.retakeOrderCoupon(orderId);
     return { order, changed: true, stockShortfall };
   }
 
@@ -4243,7 +4380,11 @@ export class OrdersService {
         },
       });
     } catch (err) {
-      console.error('[OrderPaid] Failed to flag stock shortfall', order.id, err);
+      console.error(
+        '[OrderPaid] Failed to flag stock shortfall',
+        order.id,
+        err,
+      );
     }
   }
 
@@ -4577,14 +4718,20 @@ export class OrdersService {
       take: 1,
       select: { status: true },
     });
-    const restored = (before[0]?.status as OrderStatus) ?? OrderStatus.CONFIRMED;
+    const restored =
+      (before[0]?.status as OrderStatus) ?? OrderStatus.CONFIRMED;
     const flip = await this.prisma.order.updateMany({
       where: { id: orderId, payment_status: 'refunded' },
       data: { payment_status: 'paid', status: restored },
     });
     if (flip.count === 0) return { changed: false };
     await this.prisma.orderTimeline.create({
-      data: { order_id: orderId, status: 'REFUND_REVERTED', note, actor: 'system' },
+      data: {
+        order_id: orderId,
+        status: 'REFUND_REVERTED',
+        note,
+        actor: 'system',
+      },
     });
     await this.prisma.orderCommission.updateMany({
       where: { order_id: orderId },
@@ -4657,6 +4804,8 @@ export class OrdersService {
   private expiredAwaitingWhere(now: number): Prisma.OrderWhereInput {
     return {
       payment_status: 'awaiting_payment',
+      // Order trash (M69): a trashed order already returned its stock.
+      deleted_at: null,
       OR: [
         {
           payment_method: { not: PaymentMethod.KUSTOM },
@@ -4693,6 +4842,7 @@ export class OrdersService {
       const processing = await this.prisma.order.findMany({
         where: {
           payment_status: 'awaiting_payment',
+          deleted_at: null,
           payment_processing_at: { not: null },
           created_at: { lt: new Date(now - PROCESSING_PAYMENT_MAX_AGE_MS) },
           ...notKept,
@@ -4840,20 +4990,24 @@ export class OrdersService {
    * updateMany guards ensure untracked items are never written, so this is a
    * no-op for products/variants that don't track inventory.
    */
-  private async restoreOrderItemsStock(orderId: string) {
-    const items = await this.prisma.orderItem.findMany({
+  private async restoreOrderItemsStock(
+    orderId: string,
+    // Order trash (M69) runs it inside the delete transaction.
+    db: Prisma.TransactionClient | PrismaService = this.prisma,
+  ) {
+    const items = await db.orderItem.findMany({
       where: { order_id: orderId },
       select: { product_id: true, variant_id: true, quantity: true },
     });
     for (const it of items) {
       try {
         if (it.variant_id) {
-          await this.prisma.productVariant.updateMany({
+          await db.productVariant.updateMany({
             where: { id: it.variant_id, stock_quantity: { not: null } },
             data: { stock_quantity: { increment: it.quantity } },
           });
         } else if (it.product_id) {
-          await this.prisma.product.updateMany({
+          await db.product.updateMany({
             where: {
               id: it.product_id,
               track_inventory: true,
@@ -4900,6 +5054,343 @@ export class OrdersService {
         console.error('[StockRestore] order item re-decrement failed', it, err);
       }
     }
+  }
+
+  // ── Order trash (M69, plans/order-trash/SPEC.md) ─────────────────────────
+  // Soft delete by the store owner / an admin: the row stays (deleted_at /
+  // deleted_by), leaves every list / count / stat and can be restored from
+  // the Deleted tab. Paid real orders are never deleted (bookkeeping).
+
+  /** The store a CREATOR owns (null for other roles / no store). */
+  private async ownStoreId(userId: string): Promise<string | null> {
+    const creator = await this.prisma.creator.findUnique({
+      where: { user_id: userId },
+      select: { store: { select: { id: true } } },
+    });
+    return creator?.store?.id ?? null;
+  }
+
+  /**
+   * The order a trash action targets, with the counts the deletable guard
+   * needs. ADMIN: any order; CREATOR: only orders of their own store. A
+   * foreign / unknown id is a 404 (not 403) so ids are not enumerable.
+   */
+  private async loadTrashTarget(id: string, actor: TrashActor) {
+    const notFound = () =>
+      new NotFoundException({
+        code: 'ORDER_NOT_FOUND',
+        message: 'Order not found',
+      });
+    if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.CREATOR) {
+      throw notFound();
+    }
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      include: { _count: { select: { payouts: true, invoices: true } } },
+    });
+    if (!order) throw notFound();
+    if (actor.role === UserRole.CREATOR) {
+      const storeId = await this.ownStoreId(actor.id);
+      if (!storeId || order.store_id !== storeId) throw notFound();
+    }
+    return order;
+  }
+
+  /**
+   * DELETE /orders/:id. 409 ORDER_ALREADY_DELETED / ORDER_NOT_DELETABLE
+   * (with `reason`). Returns the trashed order (carries deleted_at).
+   */
+  async deleteOrder(
+    id: string,
+    actor: TrashActor,
+    reason?: string,
+    meta?: RequestMeta,
+  ) {
+    await this.trashOne(id, actor, reason, meta);
+    return this.findById(id, actor.id, actor.role);
+  }
+
+  /** POST /orders/:id/restore. 409 ORDER_NOT_DELETED. */
+  async restoreOrder(id: string, actor: TrashActor, meta?: RequestMeta) {
+    await this.restoreOne(id, actor, meta);
+    return this.findById(id, actor.id, actor.role);
+  }
+
+  /**
+   * POST /orders/bulk/delete: one transaction per order, so a non-deletable
+   * (or foreign) order never blocks the others; each failure is reported
+   * per id with its error code (and the not-deletable reason).
+   */
+  async bulkDeleteOrders(
+    ids: string[],
+    actor: TrashActor,
+    reason?: string,
+    meta?: RequestMeta,
+  ): Promise<BulkTrashResult> {
+    const deleted: string[] = [];
+    const skipped: BulkTrashResult['skipped'] = [];
+    for (const id of uniqueIds(ids)) {
+      try {
+        await this.trashOne(id, actor, reason, meta);
+        deleted.push(id);
+      } catch (err) {
+        skipped.push(this.bulkSkip(id, err));
+      }
+    }
+    return { deleted, skipped };
+  }
+
+  /** POST /orders/bulk/restore, same shape as the bulk delete. */
+  async bulkRestoreOrders(
+    ids: string[],
+    actor: TrashActor,
+    meta?: RequestMeta,
+  ): Promise<BulkTrashResult> {
+    const restored: string[] = [];
+    const skipped: BulkTrashResult['skipped'] = [];
+    for (const id of uniqueIds(ids)) {
+      try {
+        await this.restoreOne(id, actor, meta);
+        restored.push(id);
+      } catch (err) {
+        skipped.push(this.bulkSkip(id, err));
+      }
+    }
+    return { restored, skipped };
+  }
+
+  /** One skipped bulk entry from the per-order error (unknown → 500 code). */
+  private bulkSkip(id: string, err: unknown): BulkTrashResult['skipped'][0] {
+    if (err instanceof HttpException) {
+      const res = err.getResponse() as { code?: string; reason?: string };
+      const code =
+        typeof res === 'object' && res?.code ? res.code : 'ORDER_TRASH_FAILED';
+      const reason = typeof res === 'object' ? res?.reason : undefined;
+      return {
+        id,
+        code,
+        ...(reason
+          ? { reason: reason as 'paid' | 'invoiced' | 'paid_out' }
+          : {}),
+      };
+    }
+    this.logger.error(
+      `Order trash failed for ${id}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return { id, code: 'ORDER_TRASH_FAILED' };
+  }
+
+  /**
+   * Trash one order: the guard, then (one transaction) the deleted_at /
+   * deleted_by claim, the DELETED timeline row and the stock return when
+   * the order still holds its stock. After the commit the coupon redemption
+   * is handed back (idempotent on coupon_released_at) and the security
+   * trail written. No email is sent.
+   */
+  private async trashOne(
+    id: string,
+    actor: TrashActor,
+    reason?: string,
+    meta?: RequestMeta,
+  ): Promise<void> {
+    const order = await this.loadTrashTarget(id, actor);
+    if (order.deleted_at) {
+      throw new ConflictException({
+        code: 'ORDER_ALREADY_DELETED',
+        message: 'This order is already deleted.',
+      });
+    }
+    const blocked = deletableReason(order);
+    if (blocked) throw notDeletable(blocked);
+
+    const holdsStock = orderHoldsStock(order);
+    const note = [
+      reason?.trim() || null,
+      holdsStock ? 'Stock was returned' : null,
+    ]
+      .filter(Boolean)
+      .join(' — ');
+    const claimed = await this.prisma.$transaction(async (tx) => {
+      // The claim is the lock, optimistic on the guard columns: a concurrent
+      // delete finds deleted_at set, and a payment that landed between the
+      // guard and this write (paid_at / charge / capture / payment_status
+      // changed) makes it miss too — the re-read below tells which.
+      const flip = await tx.order.updateMany({
+        where: {
+          id: order.id,
+          deleted_at: null,
+          ...(order.is_test
+            ? {}
+            : {
+                paid_at: null,
+                stripe_charge_id: null,
+                kustom_capture_id: null,
+                payment_status: order.payment_status,
+              }),
+        },
+        data: { deleted_at: new Date(), deleted_by: actor.id },
+      });
+      if (flip.count === 0) return false;
+      await tx.orderTimeline.create({
+        data: {
+          order_id: order.id,
+          status: 'DELETED',
+          note: note || null,
+          actor: trashActorLabel(actor),
+        },
+      });
+      if (holdsStock) await this.restoreOrderItemsStock(order.id, tx);
+      return true;
+    });
+    if (!claimed) {
+      // Lost the race: either another delete won, or money arrived.
+      const fresh = await this.prisma.order.findUnique({
+        where: { id: order.id },
+        include: { _count: { select: { payouts: true, invoices: true } } },
+      });
+      if (!fresh || fresh.deleted_at) {
+        throw new ConflictException({
+          code: 'ORDER_ALREADY_DELETED',
+          message: 'This order is already deleted.',
+        });
+      }
+      throw notDeletable(deletableReason(fresh) ?? 'paid');
+    }
+    if (!order.coupon_released_at) {
+      await this.releaseFailedOrderCoupon(order.id);
+    }
+    await this.audit?.record({
+      actor: { id: actor.id, email: actor.email, role: actor.role },
+      action: 'order.deleted',
+      targetType: 'order',
+      targetId: order.id,
+      targetLabel: order.order_number,
+      fields: [
+        `order_number: ${order.order_number}`,
+        `total: ${Number(order.total)} ${order.currency}`,
+        `is_test: ${order.is_test}`,
+        `store_id: ${order.store_id ?? ''}`,
+      ],
+      meta,
+    });
+  }
+
+  /** Restore one trashed order for an actor (409 ORDER_NOT_DELETED). */
+  private async restoreOne(
+    id: string,
+    actor: TrashActor,
+    meta?: RequestMeta,
+  ): Promise<void> {
+    const order = await this.loadTrashTarget(id, actor);
+    if (!order.deleted_at) {
+      throw new ConflictException({
+        code: 'ORDER_NOT_DELETED',
+        message: 'This order is not deleted.',
+      });
+    }
+    // The delete returned the stock only while the order held it; the
+    // restore never re-takes it (the owner adjusts inventory by hand).
+    const note = orderHoldsStock(order)
+      ? 'Restored. Stock was returned on delete; adjust manually.'
+      : 'Restored.';
+    const restored = await this.untrashOrder(
+      order.id,
+      trashActorLabel(actor),
+      note,
+    );
+    if (!restored) {
+      throw new ConflictException({
+        code: 'ORDER_NOT_DELETED',
+        message: 'This order is not deleted.',
+      });
+    }
+    await this.audit?.record({
+      actor: { id: actor.id, email: actor.email, role: actor.role },
+      action: 'order.restored',
+      targetType: 'order',
+      targetId: order.id,
+      targetLabel: order.order_number,
+      fields: [`order_number: ${order.order_number}`],
+      meta,
+    });
+  }
+
+  /**
+   * Clears deleted_at / deleted_by and writes the RESTORED timeline row, in
+   * one transaction. False when the order was not deleted (a concurrent
+   * restore, or the late-payment restore racing a manual one).
+   */
+  private async untrashOrder(
+    orderId: string,
+    actor: string,
+    note: string,
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      const flip = await tx.order.updateMany({
+        where: { id: orderId, deleted_at: { not: null } },
+        data: { deleted_at: null, deleted_by: null },
+      });
+      if (flip.count === 0) return false;
+      await tx.orderTimeline.create({
+        data: { order_id: orderId, status: 'RESTORED', note, actor },
+      });
+      return true;
+    });
+  }
+
+  /**
+   * PUT /orders/:id/test-flag (ADMIN): flag the doctor's early manual test
+   * orders so they leave the statistics and become deletable, or undo it.
+   * 409 ORDER_DELETED on a trashed order, 409 ORDER_INVOICED when flagging
+   * an invoiced order as test (its invoice consumed a real number).
+   */
+  async setTestFlag(
+    id: string,
+    isTest: boolean,
+    actor: TrashActor,
+    meta?: RequestMeta,
+  ) {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      include: { _count: { select: { invoices: true } } },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        code: 'ORDER_NOT_FOUND',
+        message: 'Order not found',
+      });
+    }
+    if (order.deleted_at) throw orderDeleted();
+    if (isTest && order._count.invoices > 0) {
+      throw new ConflictException({
+        code: 'ORDER_INVOICED',
+        message: 'An invoiced order cannot be marked as test.',
+      });
+    }
+    if (order.is_test !== isTest) {
+      await this.prisma.order.update({
+        where: { id },
+        data: { is_test: isTest },
+      });
+      await this.prisma.orderTimeline.create({
+        data: {
+          order_id: id,
+          status: 'TEST_FLAG',
+          note: isTest ? 'Marked as test' : 'Test flag removed',
+          actor: trashActorLabel(actor),
+        },
+      });
+      await this.audit?.record({
+        actor: { id: actor.id, email: actor.email, role: actor.role },
+        action: 'order.test_flag',
+        targetType: 'order',
+        targetId: order.id,
+        targetLabel: order.order_number,
+        fields: [`is_test: ${order.is_test} → ${isTest}`],
+        meta,
+      });
+    }
+    return this.findById(id, actor.id, actor.role);
   }
 }
 

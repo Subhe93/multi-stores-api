@@ -815,7 +815,11 @@ export class StoresService {
     // itself refuses them).
     if (typeChanged) {
       const unpaid = await this.prisma.order.findMany({
-        where: { store_id: store.id, payment_status: { not: 'paid' } },
+        where: {
+          store_id: store.id,
+          payment_status: { not: 'paid' },
+          deleted_at: null,
+        },
         select: { id: true },
       });
       for (const order of unpaid) {

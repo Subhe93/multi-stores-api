@@ -765,6 +765,9 @@ export class CustomerUploadsService implements OnModuleInit {
         AND u."purged_at" IS NULL
         AND u."attached_at" IS NOT NULL
         AND u."attached_at" < (${cutoff.toISOString()}::timestamptz AT TIME ZONE 'UTC')
+        -- deleted orders: a trashed order still references its uploads; they
+        -- are kept until it is purged like any other order (no deleted_at
+        -- filter on purpose).
         AND NOT EXISTS (
           SELECT 1
           FROM "OrderCustomFieldValue" v
