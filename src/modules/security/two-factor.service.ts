@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { verifyWithRotation } from '../../common/security/jwt-secrets';
 import { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import * as QRCode from 'qrcode';
@@ -452,9 +453,7 @@ export class TwoFactorService {
       });
     let payload: { sub?: string; type?: string; iat?: number };
     try {
-      payload = await this.jwt.verifyAsync(challengeToken, {
-        secret: this.config.get<string>('JWT_SECRET')!,
-      });
+      payload = await verifyWithRotation(this.jwt, this.config, 'access', challengeToken);
     } catch {
       throw invalid();
     }

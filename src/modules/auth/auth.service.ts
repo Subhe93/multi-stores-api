@@ -9,6 +9,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
+import { verifyWithRotation } from '../../common/security/jwt-secrets';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -884,9 +885,11 @@ export class AuthService {
 
   async refreshToken(refreshToken: string) {
     try {
-      const payload = this.jwtService.verify<Partial<AuthTokenPayload>>(
+      const payload = await verifyWithRotation<Partial<AuthTokenPayload>>(
+        this.jwtService,
+        this.configService,
+        'refresh',
         refreshToken,
-        { secret: this.configService.get<string>('JWT_REFRESH_SECRET') },
       );
       // Purpose tokens (2FA challenge, password reset) carry `type`; they
       // must never be exchanged for a session, even if the secrets match.
@@ -1025,11 +1028,11 @@ export class AuthService {
 
   async resetPassword(token: string, newPassword: string) {
     try {
-      const payload = this.jwtService.verify<{ sub: string; type?: string }>(
+      const payload = await verifyWithRotation<{ sub: string; type?: string }>(
+        this.jwtService,
+        this.configService,
+        'access',
         token,
-        {
-          secret: this.configService.get<string>('JWT_SECRET')!,
-        },
       );
 
       if (payload.type !== 'password_reset') {

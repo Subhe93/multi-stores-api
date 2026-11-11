@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtModule, JwtService } from '@nestjs/jwt';
+import { verifyWithRotation } from '../../common/security/jwt-secrets';
 import { StoreStatus, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { PreLiveViewerCheck } from '../../common/stores/store-gate';
@@ -108,11 +109,11 @@ export class StorefrontGateService {
   /** The account of a valid session JWT, or null. Never throws. */
   private async sessionViewer(token: string): Promise<SessionViewer | null> {
     try {
-      const secret = this.config.get<string>('JWT_SECRET');
-      if (!secret) return null;
-      const payload = this.jwt.verify<
+      // Secret rotation aware (jwt-secrets.ts): an owner session signed with
+      // the previous secret still counts as a viewer during the grace window.
+      const payload = await verifyWithRotation<
         Partial<AuthTokenPayload> & { type?: string; iat?: number }
-      >(token, { secret });
+      >(this.jwt, this.config, 'access', token);
       if (!payload.sub || payload.type !== undefined) return null;
       const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },

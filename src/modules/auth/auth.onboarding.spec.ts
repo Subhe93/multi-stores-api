@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { UserRole, UserStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import type { JwtService } from '@nestjs/jwt';
+import { JwtService } from '@nestjs/jwt';
 import type { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { AccountLinksService } from './account-links.service';
@@ -98,6 +98,7 @@ function build(
   const jwt = {
     signAsync: jest.fn((p: { sub: string }) => Promise.resolve(`jwt-${p.sub}`)),
     verify: jest.fn(),
+    verifyAsync: jest.fn(),
   };
   const env: Record<string, string> = {
     STOREFRONT_URL: 'https://stores.example.com',
@@ -610,7 +611,7 @@ describe('JwtStrategy grace period', () => {
       user: { findUnique: jest.fn(() => Promise.resolve(user)) },
     } as unknown as PrismaService;
     const config = { get: () => 'secret' } as unknown as ConfigService;
-    return new JwtStrategy(config, prisma);
+    return new JwtStrategy(config, prisma, new JwtService({}));
   }
   const pending = {
     id: 'u1',

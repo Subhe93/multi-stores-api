@@ -88,6 +88,7 @@ function build(
   const jwt = {
     signAsync: jest.fn((p: { sub: string }) => Promise.resolve(`jwt-${p.sub}`)),
     verify: jest.fn(() => ({ sub: 'u1', type: 'password_reset' })),
+    verifyAsync: jest.fn(async () => ({ sub: 'u1', type: 'password_reset' })),
   };
   const env: Record<string, string> = {
     STOREFRONT_URL: 'https://stores.example.com',

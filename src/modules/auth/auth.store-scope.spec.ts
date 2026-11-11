@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import type { JwtService } from '@nestjs/jwt';
+import { JwtService } from '@nestjs/jwt';
 import type { ConfigService } from '@nestjs/config';
 import { AuthService, tokenStoreMatches } from './auth.service';
 import { AccountLinksService } from './account-links.service';
@@ -156,6 +156,7 @@ function build() {
       return Promise.resolve(`jwt-${String(p.sub)}`);
     }),
     verify: jest.fn(() => verifyResult),
+    verifyAsync: jest.fn(async () => verifyResult),
   };
   const env: Record<string, string> = {
     STOREFRONT_URL: 'https://stores.example.com',
@@ -190,6 +191,7 @@ function build() {
   const strategy = new JwtStrategy(
     config as unknown as ConfigService,
     prisma as unknown as PrismaService,
+    new JwtService({}),
   );
   const add = (r: Partial<Row> & { password: string }) => {
     rows.push({

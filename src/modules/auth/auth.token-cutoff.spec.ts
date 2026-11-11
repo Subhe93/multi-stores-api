@@ -111,6 +111,7 @@ function build(initial: Partial<Row> = {}) {
   const strategy = new JwtStrategy(
     config as unknown as ConfigService,
     prisma as unknown as PrismaService,
+    new JwtService({}),
   );
   const sign = (iatSec: number, secret = SECRET) =>
     jwt.sign(
@@ -246,7 +247,7 @@ describe('cutoff is moved on password changes and blocks', () => {
 
   it('reset-password sets the cutoff', async () => {
     const t = build();
-    t.jwt.verify = jest.fn(() => ({
+    t.jwt.verifyAsync = jest.fn(async () => ({
       sub: 'u1',
       type: 'password_reset',
     })) as never;

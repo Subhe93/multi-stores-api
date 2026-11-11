@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { verifyWithRotation } from '../../common/security/jwt-secrets';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SecurityAuditService } from './security-audit.service';
@@ -84,9 +85,7 @@ export class ReauthService {
       });
     let payload: { sub?: string; type?: string; iat?: number };
     try {
-      payload = await this.jwt.verifyAsync(token, {
-        secret: this.config.get<string>('JWT_SECRET')!,
-      });
+      payload = await verifyWithRotation(this.jwt, this.config, 'access', token);
     } catch {
       throw expired();
     }

@@ -135,11 +135,14 @@ function build(status: StoreStatus) {
   };
   // Session tokens are "<userId>" verified by a stub JwtService; "bad" and
   // every edit-hint token ("hint:...") fail its signature check.
+  const verifyStub = (token: string) => {
+    if (token === 'bad' || token.startsWith('hint:')) throw new Error('invalid');
+    return { sub: token, role: USERS[token]?.role, store_id: null, iat: 1 };
+  };
+  // The gate verifies through verifyWithRotation (verifyAsync).
   const jwt = {
-    verify: jest.fn((token: string) => {
-      if (token === 'bad' || token.startsWith('hint:')) throw new Error('invalid');
-      return { sub: token, role: USERS[token]?.role, store_id: null, iat: 1 };
-    }),
+    verify: jest.fn(verifyStub),
+    verifyAsync: jest.fn(async (token: string) => verifyStub(token)),
   };
   // Edit-hint tokens are "hint:<storeId>:<userId>"; anything else is
   // forged / expired (verify → null, as the real service answers).

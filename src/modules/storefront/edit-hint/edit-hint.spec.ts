@@ -107,7 +107,7 @@ describe('JwtStrategy (normal API guard) vs edit-hint tokens', () => {
       }),
     },
   } as unknown as PrismaService;
-  const strategy = new JwtStrategy(config, prisma);
+  const strategy = new JwtStrategy(config, prisma, new JwtService({}));
 
   /** Runs the passport strategy on a bearer token: 'success' | 'fail'. */
   function authenticate(token: string): Promise<'success' | 'fail'> {

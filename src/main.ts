@@ -9,6 +9,7 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { CorsOriginService } from './common/cors/cors-origin.service';
 import { securityHeadersMiddleware } from './common/security/security-headers.middleware';
+import { jwtSecretsProblem } from './common/security/jwt-secrets';
 import {
   matchesAllowedOrigin,
   parseAllowedOrigins,
@@ -38,12 +39,11 @@ async function bootstrap() {
   // could pass as a refresh token. Refuse to start rather than run unsafe.
   // Both must be set: without JWT_REFRESH_SECRET, @nestjs/jwt silently falls
   // back to JWT_SECRET and a 7-day refresh token would pass as access token.
-  const jwtSecret = process.env.JWT_SECRET;
-  const refreshSecret = process.env.JWT_REFRESH_SECRET;
-  if (!jwtSecret || !refreshSecret || jwtSecret === refreshSecret) {
-    throw new Error(
-      'JWT_SECRET and JWT_REFRESH_SECRET must both be set and must differ',
-    );
+  // A rotation keeps the previous value in *_PREVIOUS for a grace window;
+  // it must not equal the other kind's secret either (jwt-secrets.ts).
+  const jwtProblem = jwtSecretsProblem(process.env);
+  if (jwtProblem) {
+    throw new Error(jwtProblem);
   }
 
   // Reverse proxy (deploy): TRUST_PROXY makes req.ip the real client, which
