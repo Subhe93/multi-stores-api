@@ -18,6 +18,7 @@ import { Type } from 'class-transformer';
 import { OrderStatus, FulfillmentStatus, PaymentMethod } from '@prisma/client';
 import { CompanyDto, IsBuyerType } from '../../b2b/dto/b2b.dto';
 import type { BuyerType } from '../../b2b/b2b.types';
+import { TrackingContextDto } from '../../meta-capi/tracking-context';
 
 export class OrderCustomFieldValueDto {
   @IsString()
@@ -136,6 +137,15 @@ export class CreateOrderDto {
   @IsOptional()
   @IsBoolean()
   expect_reverse_charge?: boolean;
+
+  // Browser context for the server-side Meta Purchase event (Conversions
+  // API): { fbp?, fbc?, source_url? }. Optional; the storefront sends it only
+  // when the visitor allowed marketing tracking. Stored on the order together
+  // with the request IP and user agent.
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TrackingContextDto)
+  tracking?: TrackingContextDto;
 }
 
 export class UpdateOrderStatusDto {

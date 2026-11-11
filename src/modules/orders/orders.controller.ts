@@ -30,6 +30,7 @@ import {
   StorefrontGateService,
 } from '../storefront/storefront-gate.service';
 import { ReqMeta, type RequestMeta } from '../security/request-meta';
+import { buildTrackingContext } from '../meta-capi/tracking-context';
 
 /** `?deleted=1|true` of GET /orders (order trash, M69). */
 function parseDeletedFlag(raw: string | undefined): boolean {
@@ -54,14 +55,17 @@ export class OrdersController {
   create(
     @CurrentUser('id') userId: string,
     @Body() dto: CreateOrderDto,
+    @ReqMeta() meta: RequestMeta,
     @Headers(STOREFRONT_VIEWER_HEADER) viewerHeader?: string,
   ) {
     const preLiveViewer = this.gate.preLiveCheck(viewerHeader);
-    return this.ordersService.create(
-      userId,
-      dto,
-      preLiveViewer ? { preLiveViewer } : {},
-    );
+    // Optional `tracking` body field (Meta Conversions API): kept with the
+    // client IP / user agent; null when the storefront sent none.
+    const trackingContext = buildTrackingContext(dto.tracking, meta);
+    return this.ordersService.create(userId, dto, {
+      ...(preLiveViewer ? { preLiveViewer } : {}),
+      ...(trackingContext ? { trackingContext } : {}),
+    });
   }
 
   // Customer — طلباتي

@@ -9,6 +9,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { loadStorefrontHosts } from '../stores/storefront-hosts';
+import { publicStoreRow } from '../stores/store-secrets';
 import {
   traderDetailsComplete,
   validateTraderDetails,
@@ -244,7 +245,8 @@ export class ProvidersService {
             product: { provider_id: provider.id },
           },
         });
-        return { ...s, products_using_count: productsCount };
+        // A provider is not the store owner: no server-side tracking column.
+        return { ...publicStoreRow(s), products_using_count: productsCount };
       }),
     );
 
@@ -337,6 +339,10 @@ export class ProvidersService {
       { prisma: this.prisma, storeApps: this.storeApps },
       store,
     );
-    return { ...store, public_host, custom_products_using: customProducts };
+    return {
+      ...publicStoreRow(store),
+      public_host,
+      custom_products_using: customProducts,
+    };
   }
 }

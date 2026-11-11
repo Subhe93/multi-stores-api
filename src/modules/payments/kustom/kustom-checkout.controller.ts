@@ -21,6 +21,8 @@ import {
   CreateKustomCheckoutSessionDto,
   UpdateKustomCheckoutSessionDto,
 } from './dto/kustom-checkout.dto';
+import { requestMetaFrom } from '../../security/request-meta';
+import { buildTrackingContext } from '../../meta-capi/tracking-context';
 
 /**
  * Session-first Kustom checkout (API-CONTRACT-B.md). Two secrets per session:
@@ -46,7 +48,17 @@ export class KustomCheckoutController {
     @Req() req: Request & { user?: { id?: string } },
     @Body() dto: CreateKustomCheckoutSessionDto,
   ) {
-    return this.checkout.createSession(req.user?.id ?? null, dto);
+    // Optional `tracking` body field (Meta Conversions API): kept with the
+    // client IP / user agent; null when the storefront sent none.
+    const trackingContext = buildTrackingContext(
+      dto.tracking,
+      requestMetaFrom(req),
+    );
+    return this.checkout.createSession(
+      req.user?.id ?? null,
+      dto,
+      trackingContext,
+    );
   }
 
   @Put('session/:id')

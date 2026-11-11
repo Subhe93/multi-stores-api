@@ -14,6 +14,7 @@ import { PersonalizationModule } from '../personalization/personalization.module
 import { ProductionCoreModule } from '../production/production-core.module';
 import { DesignerCoreModule } from '../designer/designer-core.module';
 import { StorefrontGateModule } from '../storefront/storefront-gate.service';
+import { MetaCapiModule } from '../meta-capi/meta-capi.module';
 
 @Module({
   imports: [
@@ -37,6 +38,8 @@ import { StorefrontGateModule } from '../storefront/storefront-gate.service';
     // FIXES-1 item 4: X-Storefront-Viewer on quote / order creation
     // (imports JwtModule + EditHintTokenModule only, no cycle).
     StorefrontGateModule,
+    // Server-side Meta Purchase event (imports only globals, no cycle).
+    MetaCapiModule,
   ],
   controllers: [OrdersController, OrdersQuoteController],
   providers: [OrdersService],

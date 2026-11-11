@@ -61,6 +61,10 @@ import {
 } from './kustom.mapper';
 import { isKustomEnabledForStore } from './kustom.eligibility';
 import {
+  readTrackingContext,
+  type TrackingContext,
+} from '../../meta-capi/tracking-context';
+import {
   CreateKustomCheckoutSessionDto,
   UpdateKustomCheckoutSessionDto,
 } from './dto/kustom-checkout.dto';
@@ -899,6 +903,8 @@ export class KustomCheckoutService {
   async createSession(
     userId: string | null,
     dto: CreateKustomCheckoutSessionDto,
+    // Browser context of the request (Meta Conversions API), or null.
+    trackingContext: TrackingContext | null = null,
   ) {
     let ctx = await this.kustom.loadStoreContextBySlug(dto.store_slug);
     if (!ctx) {
@@ -1013,6 +1019,12 @@ export class KustomCheckoutService {
         region,
         postcode,
         ...(market ? { market_id: market.id, hostname: ctx.customDomain } : {}),
+        ...(trackingContext
+          ? {
+              tracking_context:
+                trackingContext as unknown as Prisma.InputJsonValue,
+            }
+          : {}),
         ...b2bColumns,
         ...(vatValidation
           ? {
@@ -1727,6 +1739,9 @@ export class KustomCheckoutService {
           verifiedDesignIds: verifiedDesignIds(session.items),
           ...(b2b.company ? { companySnapshot: b2b.company } : {}),
           exemptionInputs: exemption,
+          // Kustom calls this callback server to server, so the browser
+          // context is the one the session stored when it was created.
+          trackingContext: readTrackingContext(session.tracking_context),
         },
       );
       const order = created as { id: string; total: unknown; currency: string };

@@ -937,6 +937,10 @@ export class StorefrontService {
       meta_pixel_id,
       tiktok_pixel_id,
       consent_required,
+      // Server-side tracking (Meta Conversions API): the encrypted token and
+      // the test event code never travel to the storefront.
+      meta_capi_token: _metaCapiToken,
+      meta_test_event_code: _metaTestEventCode,
       ...storeRow
     } = store;
     const checkout = publicCheckoutSettings(rawCheckoutSettings);

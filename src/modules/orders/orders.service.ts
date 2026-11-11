@@ -54,6 +54,8 @@ import {
 } from '../shipping/shipping.service';
 import { MailService } from '../mail/mail.service';
 import { InvoiceTriggersService } from '../invoices/invoice-triggers.service';
+import { MetaConversionsService } from '../meta-capi/meta-conversions.service';
+import type { TrackingContext } from '../meta-capi/tracking-context';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import {
   currencyDecimals,
@@ -417,6 +419,12 @@ export interface CreateOrderOptions {
    * Stripe order on a store that is not LIVE (created with `is_test`).
    */
   preLiveViewer?: PreLiveViewerCheck;
+  /**
+   * Browser context of the checkout request (optional `tracking` body field
+   * plus client IP / user agent), stored on Order.tracking_context for the
+   * server-side Meta Purchase event. Absent = the storefront sent none.
+   */
+  trackingContext?: TrackingContext | null;
 }
 
 function deriveCommissionStatus(orderStatus: OrderStatus): CommissionStatus {
@@ -689,7 +697,25 @@ export class OrdersService {
     // SecurityModule is global; optional so positional spec constructors
     // stay valid (no audit row is written without it).
     @Optional() private readonly audit?: SecurityAuditService,
+    // Meta Conversions API: optional and trailing for the same reason.
+    // Absent = no server-side Purchase event is ever sent.
+    @Optional() private readonly metaConversions?: MetaConversionsService,
   ) {}
+
+  /**
+   * Server-side Meta Purchase event for an order that just became confirmed
+   * for the customer. Fire-and-forget, after the order's writes committed:
+   * it is never awaited and can never fail (or slow) the order / payment
+   * flow. The service itself decides whether anything is sent.
+   */
+  private reportPurchaseToMeta(orderId: string): void {
+    if (!this.metaConversions) return;
+    try {
+      void this.metaConversions.sendPurchase(orderId).catch(() => {});
+    } catch {
+      // Never surfaced.
+    }
+  }
 
   /**
    * Designer app (C29 step 2): per line, the validated designer line or
@@ -2997,6 +3023,12 @@ export class OrdersService {
             stripe_payment_id: dto.stripe_payment_intent_id,
             kustom_push_token: kustomPushToken,
             notes: dto.notes,
+            ...(opts.trackingContext
+              ? {
+                  tracking_context:
+                    opts.trackingContext as unknown as Prisma.InputJsonValue,
+                }
+              : {}),
             ...marketColumns,
             ...b2bColumns,
             ...exemptColumns,
@@ -3156,6 +3188,9 @@ export class OrdersService {
     // dispatches both events once the Stripe payment is confirmed) so we
     // don't spam the owner about orders that may end up failing.
     if (paymentMethod === PaymentMethod.COD) {
+      // A COD order is a confirmed purchase now (it is never "paid" online),
+      // so the server-side Meta Purchase event goes out here.
+      this.reportPurchaseToMeta(order.id);
       // Invoices app (cod_issue_on='created'): issue before the confirmation
       // so the email can attach the invoice.
       await this.invoices?.onCodOrderCreated({
@@ -4283,6 +4318,9 @@ export class OrdersService {
     // The delete hands the coupon back whatever the stock did (also on a
     // CANCELLED order), so a restored order re-takes it regardless.
     if (stockReturned || wasDeleted) await this.retakeOrderCoupon(orderId);
+    // The flip happened exactly once (guarded above): report the purchase to
+    // Meta from the server (Stripe and Kustom both pay through here).
+    this.reportPurchaseToMeta(orderId);
     return { order, changed: true, stockShortfall };
   }
 

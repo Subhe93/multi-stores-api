@@ -15,6 +15,7 @@ import {
 } from 'class-validator';
 import { CompanyDto, IsBuyerType } from '../../../b2b/dto/b2b.dto';
 import type { BuyerType } from '../../../b2b/b2b.types';
+import { TrackingContextDto } from '../../../meta-capi/tracking-context';
 
 // One purchase line, the same shape POST /cart/items accepts (CartLine).
 export class KustomCartLineDto {
@@ -115,6 +116,14 @@ export class CreateKustomCheckoutSessionDto {
   @ValidateNested()
   @Type(() => CompanyDto)
   company?: CompanyDto;
+
+  // Browser context for the server-side Meta Purchase event (Conversions
+  // API): { fbp?, fbc?, source_url? }. Optional; stored on the session with
+  // the request IP / user agent and copied onto the order at validation.
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TrackingContextDto)
+  tracking?: TrackingContextDto;
 }
 
 // Resync an open session: omitted fields are unchanged, null clears the

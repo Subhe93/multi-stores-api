@@ -880,6 +880,11 @@ model Order {
   // deleted_at IS NOT NULL).
   deleted_at              DateTime?
   deleted_by              String?
+  // Browser context the storefront sent at checkout, for the server-side
+  // Meta Purchase event: { fbp?, fbc?, source_url?, ip?, user_agent? }. Null
+  // when the storefront sent none. PrismaService omits it from every read by
+  // default (it holds the buyer's IP); select it explicitly where needed.
+  tracking_context        Json?
   created_at              DateTime            @default(now())
   updated_at              DateTime            @updatedAt
 
@@ -1290,6 +1295,11 @@ model Store {
   // When true (default) the storefront shows the cookie banner and loads the
   // trackers only after the visitor accepts; false loads them immediately.
   consent_required        Boolean        @default(true)
+  // Meta Conversions API: the ENCRYPTED access token (CryptoService), never
+  // returned by any endpoint (PrismaService omits it from every read by
+  // default), and the optional "test event code" sent with server events.
+  meta_capi_token         String?
+  meta_test_event_code    String?        @db.VarChar(40)
   created_at              DateTime       @default(now())
   updated_at              DateTime       @updatedAt
 
@@ -1379,6 +1389,9 @@ model KustomCheckoutSession {
   // b2b app M2.5: VatEvidence of company.vat_number; the Kustom callbacks
   // reuse it instead of calling VIES inside their time budget.
   vat_validation     Json?
+  // Browser context sent when the session was created (same shape as
+  // Order.tracking_context); copied onto the order created at validation.
+  tracking_context   Json?
   created_at         DateTime   @default(now())
   updated_at         DateTime   @updatedAt
   expires_at         DateTime

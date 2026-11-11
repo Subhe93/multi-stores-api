@@ -26,6 +26,12 @@ import {
   type SlugAvailability,
 } from './slug-availability';
 import { StoreLifecycleService } from './store-lifecycle.service';
+import { CryptoService } from '../../common/crypto/crypto.service';
+import {
+  WITH_CAPI_TOKEN,
+  ownerStorePayload,
+  publicStoreRow,
+} from './store-secrets';
 import { stripBrandFromThemeConfig } from './theme-config';
 import {
   loadStorefrontHosts,
@@ -80,7 +86,17 @@ export class StoresService {
     @Optional() private readonly corsOrigins?: CorsOriginService,
     // Store lifecycle (status, checklist); optional for the same reason.
     @Optional() private readonly lifecycle?: StoreLifecycleService,
+    // Encrypts the Meta Conversions API token. CryptoModule is global;
+    // optional and trailing so positional spec constructors stay valid.
+    @Optional() private readonly crypto?: CryptoService,
   ) {}
+
+  /** Encrypts a secret store setting for storage (never stored in clear). */
+  private readonly encryptSecret = (plain: string): string => {
+    const encrypted = this.crypto?.encrypt(plain);
+    if (!encrypted) throw new Error('CryptoService is not wired');
+    return encrypted;
+  };
 
   private lifecycleOrThrow(): StoreLifecycleService {
     if (!this.lifecycle) {
@@ -224,7 +240,7 @@ export class StoresService {
     // enabled), created from the language config + store currency.
     await this.markets.ensureDefaultMarket(store.id);
 
-    return store;
+    return ownerStorePayload(store);
   }
 
   /** Id of the signed-in creator's store (404 when they have none). */
@@ -260,6 +276,7 @@ export class StoresService {
           select: { display_name: true, avatar_url: true, bio: true },
         },
       },
+      omit: WITH_CAPI_TOKEN,
     });
     if (!store)
       throw new NotFoundException({
@@ -269,8 +286,9 @@ export class StoresService {
     const golive_checklist = this.lifecycle
       ? await this.lifecycle.checklist(store.id)
       : undefined;
+    // The token itself never leaves: the owner gets `meta_capi_token_set`.
     return {
-      ...store,
+      ...ownerStorePayload(store),
       ...(await this.storefrontHostsOf(store)),
       ...(golive_checklist ? { golive_checklist } : {}),
     };
@@ -315,7 +333,8 @@ export class StoresService {
         code: 'STORE_NOT_FOUND',
         message: 'Store not found',
       });
-    return store;
+    // Public endpoint: no server-side tracking column travels.
+    return publicStoreRow(store);
   }
 
   // Lightweight lookup used by the storefront proxy to resolve a custom CNAME
@@ -414,7 +433,10 @@ export class StoresService {
     }
 
     const { is_active: toggleActive, ...rest } = dto;
-    const data = normalizeStoreUpdate(rest as UpdateStoreDto);
+    const data = normalizeStoreUpdate(
+      rest as UpdateStoreDto,
+      this.encryptSecret,
+    );
 
     // "Store active" toggle: LIVE↔PAUSED through the lifecycle service only
     // (409 STORE_STATUS_TRANSITION otherwise); the column itself is derived.
@@ -499,6 +521,7 @@ export class StoresService {
           where: { creator_id: creator.id },
           data,
           include: { language_config: true },
+          omit: WITH_CAPI_TOKEN,
         }),
         own?.id ?? '',
         dropRow,
@@ -518,7 +541,7 @@ export class StoresService {
 
     await this.revalidation.revalidateStoreBySlug(store.slug);
 
-    return store;
+    return ownerStorePayload(store);
   }
 
   /**
@@ -690,13 +713,14 @@ export class StoresService {
         language_config: true,
         creator: { select: { display_name: true, avatar_url: true } },
       },
+      omit: WITH_CAPI_TOKEN,
     });
     if (!store)
       throw new NotFoundException({
         code: 'STORE_NOT_FOUND',
         message: 'Store not found',
       });
-    return store;
+    return ownerStorePayload(store);
   }
 
   // Admin variant: may also change store_type (creators pick it only at creation).
@@ -733,7 +757,10 @@ export class StoresService {
     }
 
     const { is_active: toggleActive, ...rest } = dto;
-    const data = normalizeStoreUpdate(rest as UpdateStoreDto);
+    const data = normalizeStoreUpdate(
+      rest as UpdateStoreDto,
+      this.encryptSecret,
+    );
     // Admin is_active: same LIVE↔PAUSED rule; other transitions go through
     // PUT /admin/stores/:id/status.
     if (toggleActive !== undefined) {
@@ -793,6 +820,7 @@ export class StoresService {
           where: { id: store.id },
           data,
           include: { language_config: true },
+          omit: WITH_CAPI_TOKEN,
         }),
         store.id,
         dropRow,
@@ -852,7 +880,7 @@ export class StoresService {
 
     await this.revalidation.revalidateStoreBySlug(updated.slug);
 
-    return updated;
+    return ownerStorePayload(updated);
   }
 
   async updateTheme(userId: string, dto: UpdateThemeDto) {
@@ -868,11 +896,12 @@ export class StoresService {
     const store = await this.prisma.store.update({
       where: { creator_id: creator.id },
       data: { theme_config: dto.theme_config },
+      omit: WITH_CAPI_TOKEN,
     });
 
     await this.revalidation.revalidateStoreBySlug(store.slug);
 
-    return store;
+    return ownerStorePayload(store);
   }
 
   async updateThemeSelection(userId: string, dto: UpdateThemeSelectionDto) {
@@ -908,11 +937,12 @@ export class StoresService {
     const store = await this.prisma.store.update({
       where: { creator_id: creator.id },
       data,
+      omit: WITH_CAPI_TOKEN,
     });
 
     await this.revalidation.revalidateStoreBySlug(store.slug);
 
-    return store;
+    return ownerStorePayload(store);
   }
 
   // Creator-triggered manual cache flush from the dashboard. Reuses the same
@@ -1050,7 +1080,10 @@ function normalizeHost(host: string | null | undefined): string | null {
   return host?.trim().toLowerCase().replace(/\.$/, '') || null;
 }
 
-function normalizeStoreUpdate(dto: UpdateStoreDto): StoreUpdateData {
+function normalizeStoreUpdate(
+  dto: UpdateStoreDto,
+  encryptSecret: (plain: string) => string,
+): StoreUpdateData {
   let out: StoreUpdateData = dto as StoreUpdateData;
   // "Field was sent" must be judged by value, not hasOwnProperty: the global
   // ValidationPipe (transform: true) materializes EVERY declared DTO property
@@ -1100,6 +1133,16 @@ function normalizeStoreUpdate(dto: UpdateStoreDto): StoreUpdateData {
   if (dto.tiktok_pixel_id !== undefined) {
     const raw = (dto.tiktok_pixel_id ?? '').trim().toUpperCase();
     out = { ...out, tiktok_pixel_id: raw || null };
+  }
+  // Meta Conversions API token: stored encrypted only. Empty / null clears
+  // it; undefined (not sent) keeps the stored one.
+  if (dto.meta_capi_token !== undefined) {
+    const raw = (dto.meta_capi_token ?? '').trim();
+    out = { ...out, meta_capi_token: raw ? encryptSecret(raw) : null };
+  }
+  if (dto.meta_test_event_code !== undefined) {
+    const raw = (dto.meta_test_event_code ?? '').trim();
+    out = { ...out, meta_test_event_code: raw || null };
   }
   return out;
 }

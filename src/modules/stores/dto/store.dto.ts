@@ -10,6 +10,7 @@ import {
   MinLength,
   MaxLength,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { StoreStatus, StoreType } from '@prisma/client';
 import { SUPPORTED_CURRENCIES } from '../../../common/money/currency.util';
 import { UploadUrl } from '../../../common/uploads/upload-url.transform';
@@ -37,6 +38,20 @@ export const META_PIXEL_ID_MESSAGE = 'meta_pixel_id must be digits only';
 export const TIKTOK_PIXEL_ID_REGEX = /^$|^[A-Z0-9]{8,64}$/i;
 export const TIKTOK_PIXEL_ID_MESSAGE =
   'tiktok_pixel_id must be letters and digits only';
+
+// Meta Conversions API (server-side Purchase). The access token is a secret:
+// write-only, stored encrypted, never returned (the owner payload carries
+// `meta_capi_token_set` instead). Empty string or null clears either field.
+export const META_CAPI_TOKEN_MAX_LENGTH = 600;
+export const META_CAPI_TOKEN_REGEX = /^$|^[A-Za-z0-9_\-|]+$/;
+export const META_CAPI_TOKEN_MESSAGE =
+  'meta_capi_token must be a Meta access token (letters, digits, "_", "-", "|")';
+export const META_TEST_EVENT_CODE_REGEX = /^$|^[A-Za-z0-9_-]{1,40}$/;
+export const META_TEST_EVENT_CODE_MESSAGE =
+  'meta_test_event_code must be letters, digits, "_" or "-" (max 40)';
+
+const trimString = ({ value }: { value: unknown }): unknown =>
+  typeof value === 'string' ? value.trim() : value;
 
 export class CreateStoreDto {
   @IsString()
@@ -268,6 +283,26 @@ export class UpdateStoreDto {
   @IsOptional()
   @IsBoolean()
   consent_required?: boolean;
+
+  // Meta Conversions API access token (write-only, see above). Omitted =
+  // the stored token is kept.
+  @IsOptional()
+  @Transform(trimString)
+  @IsString()
+  @MaxLength(META_CAPI_TOKEN_MAX_LENGTH)
+  @Matches(META_CAPI_TOKEN_REGEX, { message: META_CAPI_TOKEN_MESSAGE })
+  meta_capi_token?: string | null;
+
+  // Meta "test event code" (Events Manager > Test events). While set, it is
+  // sent with every server event.
+  @IsOptional()
+  @Transform(trimString)
+  @IsString()
+  @MaxLength(40)
+  @Matches(META_TEST_EVENT_CODE_REGEX, {
+    message: META_TEST_EVENT_CODE_MESSAGE,
+  })
+  meta_test_event_code?: string | null;
 }
 
 // Admin-only store update: also allows switching the store type. The creator

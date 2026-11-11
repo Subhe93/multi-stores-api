@@ -1132,3 +1132,71 @@ describe('KustomCheckoutService sessions with unavailable cart lines', () => {
     expect(updateCheckout).not.toHaveBeenCalled();
   });
 });
+
+// ── Meta Conversions API: browser context ──────────────────────────────────
+
+describe('KustomCheckoutService tracking context (Meta Conversions API)', () => {
+  const context = {
+    fbp: 'fb.1.1700000000000.123456789',
+    source_url: 'https://stores.example.com/store/namez/checkout',
+    ip: '203.0.113.7',
+    user_agent: 'Mozilla/5.0',
+  };
+  const body = {
+    order_id: 'k-1',
+    order_amount: 29900,
+    purchase_currency: 'SEK',
+    billing_address: kustomAddress,
+    shipping_address: kustomAddress,
+  };
+
+  it('createSession stores the context on the session', async () => {
+    const { service, prisma } = build(null);
+    await service.createSession(null, dto, context);
+    const created = prisma.kustomCheckoutSession.create.mock.calls[0][0].data;
+    expect(created.tracking_context).toEqual(context);
+  });
+
+  it('createSession without a context writes no tracking column', async () => {
+    const { service, prisma } = build(null);
+    await service.createSession(null, dto);
+    const created = prisma.kustomCheckoutSession.create.mock.calls[0][0].data;
+    expect(created).not.toHaveProperty('tracking_context');
+  });
+
+  it('the session response never carries the context', async () => {
+    const { service } = build(null);
+    const res = await service.createSession(null, dto, context);
+    const json = JSON.stringify(res);
+    expect(json).not.toContain('tracking_context');
+    expect(json).not.toContain('203.0.113.7');
+  });
+
+  it('validation copies the session context onto the order it creates', async () => {
+    const { service, orders } = build(null, {
+      session: sessionRow({ tracking_context: context }),
+      customer: loggedIn,
+    });
+    await service.handleValidation('sess-1', 'cb-token', body);
+    const [, , createOpts] = orders.create.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ];
+    expect(createOpts.trackingContext).toEqual(context);
+  });
+
+  it('a session without a context creates the order without one', async () => {
+    const { service, orders } = build(null, {
+      session: sessionRow(),
+      customer: loggedIn,
+    });
+    await service.handleValidation('sess-1', 'cb-token', body);
+    const [, , createOpts] = orders.create.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ];
+    expect(createOpts.trackingContext).toBeNull();
+  });
+});
