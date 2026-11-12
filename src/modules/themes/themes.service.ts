@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { keepOwnerCss } from './keep-owner-css';
 import { PageStatus, PageType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
@@ -90,7 +91,11 @@ export class ThemesService {
 
     const store = await this.prisma.store.findUnique({
       where: { id: storeId },
-      select: { theme_config: true, language_config: true },
+      select: {
+        theme_config: true,
+        language_config: true,
+        theme_customizations: true,
+      },
     });
     const primary = store?.language_config?.primary_locale || 'en';
     const secondary = store?.language_config?.secondary_locales || [];
@@ -114,6 +119,8 @@ export class ThemesService {
             theme_customizations: {
               ...preset.theme_customizations,
               preset_id: preset.id,
+              // Owner CSS is content, not a look token: a preset keeps it.
+              ...keepOwnerCss(store?.theme_customizations),
             } as Prisma.InputJsonValue,
             theme_config: themeConfig as Prisma.InputJsonValue,
           },

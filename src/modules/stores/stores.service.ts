@@ -6,6 +6,7 @@ import {
   BadRequestException,
   Optional,
 } from '@nestjs/common';
+import { keepOwnerCss } from '../themes/keep-owner-css';
 import { CorsOriginService } from '../../common/cors/cors-origin.service';
 import { Prisma, StoreStatus, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -68,6 +69,9 @@ function assertSlugNotReserved(slug: string, currentSlug?: string | null) {
       message: 'This store address is reserved by the platform',
     });
 }
+
+/** Same cap as the dashboard field and the storefront sanitizer. */
+const CUSTOM_CSS_MAX_LENGTH = 20000;
 
 @Injectable()
 export class StoresService {
@@ -920,17 +924,33 @@ export class StoresService {
       theme_config?: Record<string, any>;
     } = {};
     if (dto.theme_key !== undefined) data.theme_key = dto.theme_key;
-    if (dto.theme_customizations !== undefined)
+    if (dto.theme_customizations !== undefined) {
+      // Store-wide custom CSS rides in this object; the dashboard caps it at
+      // 20000 characters and the storefront sanitizes it, but a direct API
+      // call must not be able to store anything else or anything bigger.
+      const css = (dto.theme_customizations as { customCss?: unknown } | null)
+        ?.customCss;
+      if (
+        css !== undefined &&
+        (typeof css !== 'string' || css.length > CUSTOM_CSS_MAX_LENGTH)
+      ) {
+        throw new BadRequestException({
+          code: 'STORE_CUSTOM_CSS_INVALID',
+          message: `customCss must be a string of at most ${CUSTOM_CSS_MAX_LENGTH} characters`,
+        });
+      }
       data.theme_customizations = dto.theme_customizations;
+    }
 
     // Applying a theme as a fresh preset: drop token overrides and strip brand
     // fields from theme_config so the chosen theme's colours/fonts take effect,
     // while keeping non-brand config (socials, contact, SEO, translations, header).
     if (dto.reset_customizations) {
-      data.theme_customizations = {};
       const store = await this.prisma.store.findUnique({
         where: { creator_id: creator.id },
       });
+      // Token overrides go; the owner's custom CSS (content) stays.
+      data.theme_customizations = keepOwnerCss(store?.theme_customizations);
       data.theme_config = stripBrandFromThemeConfig(store?.theme_config);
     }
 
