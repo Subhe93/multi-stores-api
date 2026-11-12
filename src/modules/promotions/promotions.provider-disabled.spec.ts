@@ -18,7 +18,7 @@ describe('provider promotions disabled', () => {
         }),
       },
     };
-    const service = new PromotionsService(prisma as never);
+    const service = new PromotionsService(prisma as never, {} as never, {} as never);
     await expect(
       service.validateCoupon({ coupon_code: 'PROV10' } as never),
     ).rejects.toBeInstanceOf(BadRequestException);

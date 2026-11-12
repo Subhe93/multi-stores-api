@@ -10,12 +10,73 @@ import {
   ValidateCouponDto,
 } from './dto/promotion.dto';
 import { Prisma, UserRole } from '@prisma/client';
+import { MarketsContextService } from '../markets/markets-context.service';
+import { MarketPricingService } from '../markets/market-pricing.service';
 
 /** The coupon conditions JSON as validateCoupon reads it. */
 interface PromotionConditions {
   min_amount?: number;
   min_quantity?: number;
   product_ids?: string[];
+  /**
+   * COUPON only: how `value` is read. Absent = 'percentage' (every coupon
+   * created before the switch existed). A 'fixed' value is an amount in the
+   * store's base currency, converted per market like fixed promotions.
+   */
+  discount_kind?: CouponDiscountKind;
+}
+
+export type CouponDiscountKind = 'percentage' | 'fixed';
+
+/** How a promotion's `value` is applied: a percentage or a money amount. */
+export function discountKindOf(
+  type: string,
+  conditions: unknown,
+): CouponDiscountKind | null {
+  if (type === 'PERCENTAGE') return 'percentage';
+  if (type === 'FIXED_AMOUNT') return 'fixed';
+  if (type === 'COUPON') {
+    const kind =
+      conditions && typeof conditions === 'object'
+        ? (conditions as PromotionConditions).discount_kind
+        : undefined;
+    return kind === 'fixed' ? 'fixed' : 'percentage';
+  }
+  return null;
+}
+
+/**
+ * Rejects a percentage above 100 (a 150% coupon would pay the buyer) and
+ * normalises `conditions.discount_kind` to the two accepted values.
+ */
+function assertDiscountValue(
+  type: string,
+  value: number | undefined,
+  conditions: unknown,
+): void {
+  if (
+    conditions &&
+    typeof conditions === 'object' &&
+    'discount_kind' in conditions
+  ) {
+    const kind = (conditions as PromotionConditions).discount_kind;
+    if (kind !== 'percentage' && kind !== 'fixed') {
+      throw new BadRequestException({
+        code: 'PROMOTION_DISCOUNT_KIND_INVALID',
+        message: 'discount_kind must be percentage or fixed',
+      });
+    }
+  }
+  if (
+    value != null &&
+    Number(value) > 100 &&
+    discountKindOf(type, conditions) === 'percentage'
+  ) {
+    throw new BadRequestException({
+      code: 'PROMOTION_PERCENT_OVER_100',
+      message: 'A percentage discount cannot exceed 100',
+    });
+  }
 }
 
 /**
@@ -38,9 +99,14 @@ export function discountBase(
 
 @Injectable()
 export class PromotionsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private marketsContext: MarketsContextService,
+    private marketPricing: MarketPricingService,
+  ) {}
 
   async create(userId: string, userRole: UserRole, dto: CreatePromotionDto) {
+    assertDiscountValue(dto.type, dto.value, dto.conditions);
     const { translations, ...data } = dto;
 
     const promotionData: Prisma.PromotionUncheckedCreateInput = {
@@ -203,6 +269,12 @@ export class PromotionsService {
       }
     }
 
+    assertDiscountValue(
+      promo.type,
+      dto.value ?? Number(promo.value),
+      dto.conditions !== undefined ? dto.conditions : promo.conditions,
+    );
+
     const { translations, ...data } = dto;
 
     if (translations) {
@@ -351,25 +423,73 @@ export class PromotionsService {
     }
 
     // Calculate discount. A product-targeted coupon discounts only the
-    // targeted lines, never the rest of the cart.
+    // targeted lines, never the rest of the cart. A fixed amount never
+    // exceeds what it applies to.
     const base = discountBase(dto, conditions?.product_ids);
+    const kind = discountKindOf(promo.type, conditions);
     let discount = 0;
-    if (promo.type === 'PERCENTAGE' || promo.type === 'COUPON') {
+    if (kind === 'percentage') {
       discount = (base ?? 0) * (Number(promo.value) / 100);
-    } else if (promo.type === 'FIXED_AMOUNT') {
+    } else if (kind === 'fixed') {
       const value = Number(promo.value);
       discount = base == null ? value : Math.min(value, base);
-    } else if (promo.type === 'FREE_SHIPPING') {
-      discount = 0; // Handled separately in shipping calculation
     }
+    // FREE_SHIPPING: no line discount, handled in the shipping calculation.
 
     return {
       valid: true,
       promotion_id: promo.id,
       type: promo.type,
       value: Number(promo.value),
+      discount_kind: kind,
       discount_amount: Math.round(discount * 100) / 100,
       free_shipping: promo.type === 'FREE_SHIPPING',
+    };
+  }
+
+  /**
+   * Public cart preview. A market store's cart is priced in the market
+   * currency while coupon amounts and thresholds are stored in the base
+   * currency: bring the cart figures to base, evaluate exactly like the
+   * order does, and convert the discount back — so the preview shows the
+   * same discount the order will charge. Stores without a foreign-currency
+   * market go through unchanged.
+   */
+  async validateCouponForCart(dto: ValidateCouponDto) {
+    const { market: marketKey, preview, ...rest } = dto;
+    const market = marketKey
+      ? await this.marketsContext.resolve(rest.store_id, marketKey, {
+          preview: preview === true,
+        })
+      : null;
+    if (!market || market.currency === market.storeCurrency) {
+      return this.validateCoupon(rest);
+    }
+    const toBase = (amount: number) =>
+      this.marketPricing.toBaseMoney(market, amount);
+    const result = await this.validateCoupon({
+      ...rest,
+      ...(rest.subtotal != null ? { subtotal: toBase(rest.subtotal) } : {}),
+      ...(rest.line_totals
+        ? {
+            line_totals: rest.line_totals.map((l) => ({
+              ...l,
+              amount: toBase(l.amount),
+            })),
+          }
+        : {}),
+    });
+    return {
+      ...result,
+      // A fixed coupon's face value in the market currency, so the cart can
+      // label it ("-100 kr" on namez.se, "-9 €" on namez.shop).
+      ...(result.discount_kind === 'fixed'
+        ? { value: this.marketPricing.convertMoney(market, result.value) }
+        : {}),
+      discount_amount: this.marketPricing.convertMoney(
+        market,
+        result.discount_amount,
+      ),
     };
   }
 

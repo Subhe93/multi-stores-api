@@ -96,6 +96,6 @@ export class PromotionsController {
   @Post('validate-coupon')
   @Throttle({ default: { limit: 15, ttl: 60000 } })
   validateCoupon(@Body() dto: ValidateCouponDto) {
-    return this.promotionsService.validateCoupon(dto);
+    return this.promotionsService.validateCouponForCart(dto);
   }
 }

@@ -6,6 +6,7 @@ import {
   IsInt,
   IsArray,
   IsDateString,
+  IsBoolean,
   ValidateNested,
   Min,
 } from 'class-validator';
@@ -133,4 +134,14 @@ export class ValidateCouponDto {
   @ValidateNested({ each: true })
   @Type(() => CouponLineTotalDto)
   line_totals?: CouponLineTotalDto[];
+
+  /** Markets app: the cart's market key; its figures are in that currency. */
+  @IsOptional()
+  @IsString()
+  market?: string;
+
+  /** Markets app: a DRAFT market's preview host. */
+  @IsOptional()
+  @IsBoolean()
+  preview?: boolean;
 }
