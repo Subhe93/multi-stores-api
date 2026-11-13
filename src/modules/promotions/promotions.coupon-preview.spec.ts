@@ -41,13 +41,22 @@ const promo = (over: Record<string, unknown> = {}) => ({
 
 function serviceFor(
   row: Record<string, unknown> | null,
-  opts: { storeCreator?: string; market?: MarketContext | null } = {},
+  opts: {
+    storeCreator?: string;
+    market?: MarketContext | null;
+    storeType?: 'INDEPENDENT' | 'MARKETPLACE';
+  } = {},
 ) {
   const prisma = {
     promotion: { findUnique: () => Promise.resolve(row) },
     store: {
+      // An INDEPENDENT store (Namez) unless a test says otherwise; the
+      // marketplace provider-cost floor is covered in its own spec.
       findUnique: () =>
-        Promise.resolve({ creator_id: opts.storeCreator ?? 'c1' }),
+        Promise.resolve({
+          creator_id: opts.storeCreator ?? 'c1',
+          store_type: opts.storeType ?? 'INDEPENDENT',
+        }),
     },
   };
   const marketsContext = {
@@ -57,6 +66,7 @@ function serviceFor(
     prisma as never,
     marketsContext as never,
     new MarketPricingService({} as never),
+    {} as never,
   );
 }
 
@@ -92,6 +102,7 @@ describe('PromotionsService.previewCoupon', () => {
       min_quantity: null,
       min_met: true,
       discount_amount: 59.8,
+      below_cost: false,
     });
   });
 

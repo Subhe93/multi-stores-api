@@ -11,6 +11,7 @@ import {
   Min,
   Max,
   MaxLength,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PromotionType, PromotionLevel, PromotionStatus } from '@prisma/client';
@@ -105,6 +106,24 @@ export class CouponLineTotalDto {
   @Min(0)
   @Type(() => Number)
   amount: number;
+
+  /**
+   * Optional line quantity and variant, for the marketplace provider-cost
+   * floor (the provider base is per unit and per variant). Without the
+   * quantity (or without the variant of a product that has variants)
+   * validate-coupon skips the floor and the order path stays the guard.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100000)
+  @Type(() => Number)
+  quantity?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  variant_id?: string;
 }
 
 export class ValidateCouponDto {
@@ -146,6 +165,16 @@ export class ValidateCouponDto {
   @IsOptional()
   @IsBoolean()
   preview?: boolean;
+
+  /**
+   * The destination the cart quote uses (ISO2), so the marketplace
+   * provider-cost floor taxes the cart like /orders/quote does. Absent =
+   * the registration country (the order before its address is known).
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Za-z]{2}$/)
+  country_code?: string;
 }
 
 /**
@@ -187,6 +216,22 @@ export class CouponPreviewDto {
   @Type(() => Number)
   line_amount?: number;
 
+  /**
+   * Optional quantity behind line_amount and the selected variant, for the
+   * marketplace provider-cost floor. When absent the floor judges one unit.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100000)
+  @Type(() => Number)
+  quantity?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  variant_id?: string;
+
   /** Current cart subtotal, to report whether min_amount is met. */
   @IsOptional()
   @IsNumber()
@@ -202,4 +247,10 @@ export class CouponPreviewDto {
   @Max(100000)
   @Type(() => Number)
   item_count?: number;
+
+  /** The cart quote's destination (ISO2), for the provider-cost floor. */
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Za-z]{2}$/)
+  country_code?: string;
 }

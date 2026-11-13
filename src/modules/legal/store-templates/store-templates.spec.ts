@@ -7,7 +7,10 @@ import {
 } from './store-templates';
 import { STORE_LEGAL_TEMPLATES } from './templates.data';
 import { sanitizeCreatorHtml } from '../../../common/html/creator-html';
-import { platformSellerContext } from '../store-legal.service';
+import {
+  platformSellerContext,
+  trackingTemplateContext,
+} from '../store-legal.service';
 import {
   hasVisibleText,
   pickPageTitle,
@@ -274,6 +277,13 @@ describe('every shipped template fills and sanitizes cleanly', () => {
     'store.url': 'https://anna.se',
     'seller.is_independent': '1',
     'seller.is_platform': '',
+    // Every tracker configured, so every vendor paragraph (and link) renders.
+    'tracking.ga4': '1',
+    'tracking.meta': '1',
+    'tracking.tiktok': '1',
+    'tracking.clarity': '1',
+    'tracking.any': '1',
+    'tracking.gated': '1',
   };
   const minimal = { ...full, 'trader.vat_number': '', 'trader.phone': '' };
   const cases = STORE_LEGAL_SLUGS.flatMap((slug) =>
@@ -467,5 +477,147 @@ describe('seller conditionals', () => {
     });
     expect(out).toContain('Platform provider (processor)');
     expect(out).not.toContain('which is the seller and the controller');
+  });
+});
+
+/** Vendor names that must appear only when the store configured them. */
+const VENDORS = {
+  ga4: 'Google Analytics',
+  meta: 'Meta Pixel',
+  tiktok: 'TikTok Pixel',
+  clarity: 'Microsoft Clarity',
+} as const;
+
+describe('privacy cookie section: tracking vendors', () => {
+  const base = {
+    'trader.legal_name': 'Anna AB',
+    'trader.email': 'help@anna.se',
+    'store.name': 'Anna',
+    'store.url': 'https://anna.se',
+    'seller.is_independent': '1',
+    'seller.is_platform': '',
+  };
+  const locales = Object.keys(STORE_LEGAL_TEMPLATES.privacy);
+
+  it.each(locales)('%s: no tracker configured → no vendor, no US-transfer note', (locale) => {
+    const html = STORE_LEGAL_TEMPLATES.privacy[locale as 'en']!.html;
+    const out =
+      sanitizeCreatorHtml(
+        fillStoreTemplate(html, { ...base, ...trackingTemplateContext({}) }),
+      ) ?? '';
+    for (const name of Object.values(VENDORS)) expect(out).not.toContain(name);
+    expect(out).not.toContain('_clck');
+    expect(out).not.toContain('privacy.microsoft.com');
+    expect(out).not.toMatch(/<(p|li)>\s*<\/\1>/);
+  });
+
+  it.each(locales)('%s: only Clarity configured → only Clarity is named, with cookies, retention and the US transfer', (locale) => {
+    const html = STORE_LEGAL_TEMPLATES.privacy[locale as 'en']!.html;
+    const ctx = {
+      ...base,
+      ...trackingTemplateContext({ clarity_project_id: 'sxtuobatm6' }),
+    };
+    const out = sanitizeCreatorHtml(fillStoreTemplate(html, ctx)) ?? '';
+    expect(out).toContain(VENDORS.clarity);
+    expect(out).toContain('_clck');
+    expect(out).toContain('_clsk');
+    expect(out).toContain('MUID');
+    expect(out).toContain('30');
+    expect(out).toContain('href="https://privacy.microsoft.com/privacystatement"');
+    expect(out).toMatch(/Data Privacy Framework/);
+    for (const name of [VENDORS.ga4, VENDORS.meta, VENDORS.tiktok]) {
+      expect(out).not.toContain(name);
+    }
+    // The project id itself is never printed.
+    expect(out).not.toContain('sxtuobatm6');
+  });
+
+  it('GA4 + Meta configured (Namez today) → both named, Clarity and TikTok not', () => {
+    const out = fillStoreTemplate(STORE_LEGAL_TEMPLATES.privacy.sv!.html, {
+      ...base,
+      ...trackingTemplateContext({
+        ga4_measurement_id: 'G-0LQ8TWPC6V',
+        meta_pixel_id: '1064861581891343',
+        tiktok_pixel_id: null,
+        clarity_project_id: '  ',
+      }),
+    });
+    expect(out).toContain(VENDORS.ga4);
+    expect(out).toContain(VENDORS.meta);
+    expect(out).not.toContain(VENDORS.clarity);
+    expect(out).not.toContain(VENDORS.tiktok);
+  });
+
+  it('trackingTemplateContext flags', () => {
+    expect(trackingTemplateContext({})).toEqual({
+      'tracking.ga4': '',
+      'tracking.meta': '',
+      'tracking.tiktok': '',
+      'tracking.clarity': '',
+      'tracking.any': '',
+      'tracking.gated': '',
+      'tracking.ungated': '',
+    });
+    expect(
+      trackingTemplateContext({ clarity_project_id: 'sxtuobatm6' }),
+    ).toMatchObject({
+      'tracking.clarity': '1',
+      'tracking.any': '1',
+      'tracking.gated': '1',
+      'tracking.ungated': '',
+    });
+    // Clarity alone always waits for consent, even with consent_required off.
+    expect(
+      trackingTemplateContext({
+        clarity_project_id: 'sxtuobatm6',
+        consent_required: false,
+      }),
+    ).toMatchObject({ 'tracking.gated': '1', 'tracking.ungated': '' });
+    expect(
+      trackingTemplateContext({
+        ga4_measurement_id: 'G-1',
+        consent_required: false,
+      }),
+    ).toMatchObject({ 'tracking.gated': '', 'tracking.ungated': '1' });
+  });
+
+  // Sentence "loaded only after Accept all" per locale, and the marker of the
+  // ungated alternative ("load on visit").
+  const GATED: Record<string, string> = {
+    sv: 'De laddas först när du väljer',
+    en: 'They are loaded only after you choose',
+    de: 'Sie werden erst geladen',
+    fr: 'Ils ne sont chargés qu’après',
+    ar: 'ولا تُحمَّل إلا بعد اختيارك',
+    tr: 'Bu hizmetler yalnızca',
+  };
+  const UNGATED: Record<string, string> = {
+    sv: 'laddas när du besöker butiken',
+    en: 'are loaded when you visit the store',
+    de: 'beim Besuch des Shops geladen',
+    fr: 'sont chargés dès votre visite',
+    ar: 'عند زيارتك للمتجر',
+    tr: 'mağazayı ziyaret ettiğinizde yüklenir',
+  };
+
+  it.each(locales)('%s: consent_required off → no "only after Accept all" promise for GA/Meta/TikTok', (locale) => {
+    const html = STORE_LEGAL_TEMPLATES.privacy[locale as 'en']!.html;
+    const fill = (consent_required: boolean) =>
+      sanitizeCreatorHtml(
+        fillStoreTemplate(html, {
+          ...base,
+          ...trackingTemplateContext({
+            ga4_measurement_id: 'G-1',
+            clarity_project_id: 'sxtuobatm6',
+            consent_required,
+          }),
+        }),
+      ) ?? '';
+    const off = fill(false);
+    expect(off).not.toContain(GATED[locale]);
+    expect(off).toContain(UNGATED[locale]);
+    const on = fill(true);
+    expect(on).toContain(GATED[locale]);
+    expect(on).not.toContain(UNGATED[locale]);
   });
 });

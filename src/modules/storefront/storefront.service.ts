@@ -936,6 +936,7 @@ export class StorefrontService {
       ga4_measurement_id,
       meta_pixel_id,
       tiktok_pixel_id,
+      clarity_project_id,
       consent_required,
       // Server-side tracking (Meta Conversions API): the encrypted token and
       // the test event code never travel to the storefront.
@@ -999,6 +1000,9 @@ export class StorefrontService {
         ga4_measurement_id: ga4_measurement_id ?? null,
         meta_pixel_id: meta_pixel_id ?? null,
         tiktok_pixel_id: tiktok_pixel_id ?? null,
+        // Microsoft Clarity: the storefront loads it only after an explicit
+        // "accept", even when consent_required is false.
+        clarity_project_id: clarity_project_id ?? null,
         consent_required,
       },
       pages: mergedPages,
@@ -2498,6 +2502,40 @@ export class StorefrontService {
         })),
         faqs: own.faqs,
       };
+    }
+
+    // Marketplace (influencer) stores usually sell only custom products:
+    // fall back to the creator's most recently updated published one, in
+    // exactly the payload the product page serves (getProduct by its slug),
+    // so every product block of the template editor has real data.
+    // INDEPENDENT stores never serve custom products (getProduct 404s them).
+    if (store.store_type !== StoreType.INDEPENDENT) {
+      const custom = await this.prisma.customProduct.findFirst({
+        where: { creator_id: store.creator.id, status: 'PUBLISHED' },
+        select: {
+          id: true,
+          translations: { select: { slug: true } },
+        },
+        orderBy: { updated_at: 'desc' },
+      });
+      const slug = custom?.translations.find((t) => !!t.slug)?.slug;
+      if (custom && slug) {
+        try {
+          const payload = await this.getProduct(
+            storeSlug,
+            slug,
+            undefined,
+            undefined,
+            undefined,
+            viewer,
+          );
+          // An owner's DRAFT own product with the same slug would win the
+          // product-page lookup; only the custom product itself is a sample.
+          if (payload.id === custom.id) return { ...payload, slug };
+        } catch (err) {
+          if (!(err instanceof NotFoundException)) throw err;
+        }
+      }
     }
 
     // No published product in the store yet — return a placeholder so the

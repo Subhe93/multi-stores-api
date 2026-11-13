@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { UpdateStoreDto } from './store.dto';
+import { normalizeStoreUpdate } from '../stores.service';
 
 // Tracking ids on PUT /stores/my/store (Namez go-live 3.9): GA4 measurement
 // id, Meta pixel id (digits), TikTok pixel id, plus the consent toggle.
@@ -66,6 +67,40 @@ describe('UpdateStoreDto tracking ids (3.9)', () => {
         'tiktok_pixel_id',
       ]);
     }
+  });
+
+  it('accepts a Microsoft Clarity project id of 8-12 letters/digits (or empty to clear)', async () => {
+    for (const ok of ['sxtuobatm6', 'SXTUOBATM6', 'abcd1234', 'abcdef123456', '', null]) {
+      expect(await errorsFor({ clarity_project_id: ok })).toEqual([]);
+    }
+    for (const bad of [
+      'abc1234',
+      'abcdefghij123',
+      'sxtuo-atm6',
+      'sxtuo atm6',
+      '<script>x',
+      'https://www.clarity.ms/tag/sxtuobatm6',
+      1234567890,
+      true,
+    ]) {
+      expect(await errorsFor({ clarity_project_id: bad })).toEqual([
+        'clarity_project_id',
+      ]);
+    }
+  });
+
+  it('the service trims and lower-cases the Clarity id; empty / null clears it', () => {
+    const enc = (s: string) => s;
+    const norm = (v: string | null) =>
+      normalizeStoreUpdate({ clarity_project_id: v } as UpdateStoreDto, enc)
+        .clarity_project_id;
+    expect(norm(' SXTUOBATM6 ')).toBe('sxtuobatm6');
+    expect(norm('')).toBeNull();
+    expect(norm(null)).toBeNull();
+    // Not sent: the column is left untouched.
+    expect(
+      normalizeStoreUpdate({} as UpdateStoreDto, enc),
+    ).not.toHaveProperty('clarity_project_id');
   });
 
   it('accepts only a boolean for consent_required', async () => {

@@ -91,10 +91,11 @@ import {
   bundleUnitBelowFloor,
   loadPriceFloorSetup,
 } from '../custom-products/price-floor';
+import { computeMarketplaceCommission } from './marketplace-commission';
 import {
-  computeMarketplaceCommission,
-  couponBreaksProviderFloor,
-} from './marketplace-commission';
+  couponBelowProviderCost,
+  couponBelowProviderCostError,
+} from '../promotions/coupon-provider-floor';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
 import {
   isKustomEnabledForStore,
@@ -1908,23 +1909,18 @@ export class OrdersService {
     // revenue is compared net of VAT (net_items), like the split itself.
     // Only a coupon that actually lowers the revenue is judged (free
     // shipping / zero amount pass), against min(base, net without coupon).
+    // The rule is shared with validate-coupon and the coupon preview.
     if (
       couponValidation &&
-      !isIndependentStore &&
-      discountAmount > 0 &&
-      Math.round(tax.net_items * 100) < Math.round(providerBaseTotal * 100) &&
-      couponBreaksProviderFloor({
+      (await couponBelowProviderCost({
+        independent: isIndependentStore,
         discountAmount,
-        netItemsAfter: tax.net_items,
-        netItemsBefore: (await taxFor(shippingCost, 0)).net_items,
         providerBaseTotal,
-      })
+        netItemsAfter: tax.net_items,
+        netItemsBefore: async () => (await taxFor(shippingCost, 0)).net_items,
+      }))
     ) {
-      throw new BadRequestException({
-        code: 'ORDER_DISCOUNT_BELOW_PROVIDER_COST',
-        message:
-          'This coupon cannot be applied to the items in your cart. Please remove it and try again.',
-      });
+      throw couponBelowProviderCostError();
     }
 
     const total = roundMoney(tax.total);

@@ -38,6 +38,7 @@ function build(status: StoreStatus) {
     ga4_measurement_id: 'G-ABCD1234',
     meta_pixel_id: '123456789012345',
     tiktok_pixel_id: null,
+    clarity_project_id: 'sxtuobatm6',
     consent_required: true,
     // Worst case: the row carries the server-side columns.
     meta_capi_token: ENCRYPTED_TOKEN,
@@ -110,6 +111,7 @@ describe('storefront payload: Meta Conversions API columns never travel', () => 
       ga4_measurement_id: 'G-ABCD1234',
       meta_pixel_id: '123456789012345',
       tiktok_pixel_id: null,
+      clarity_project_id: 'sxtuobatm6',
       consent_required: true,
     });
     expectNoServerTracking(res);
@@ -118,7 +120,11 @@ describe('storefront payload: Meta Conversions API columns never travel', () => 
   it('closed store shell (coming soon / paused)', async () => {
     for (const status of [StoreStatus.DRAFT, StoreStatus.PAUSED]) {
       const { service } = build(status);
-      expectNoServerTracking(await service.getStore('namez'));
+      const res = await service.getStore('namez');
+      expectNoServerTracking(res);
+      // The closed shell loads no trackers at all, Clarity included.
+      expect(res).not.toHaveProperty('tracking');
+      expect(JSON.stringify(res)).not.toContain('sxtuobatm6');
     }
   });
 
@@ -129,7 +135,10 @@ describe('storefront payload: Meta Conversions API columns never travel', () => 
       { id: 'admin', role: UserRole.ADMIN },
     ]) {
       const res = await service.ownerPreview('namez', viewer);
-      expect(res).toMatchObject({ preview: true });
+      expect(res).toMatchObject({
+        preview: true,
+        tracking: { clarity_project_id: 'sxtuobatm6' },
+      });
       expectNoServerTracking(res);
     }
   });

@@ -38,6 +38,12 @@ export const META_PIXEL_ID_MESSAGE = 'meta_pixel_id must be digits only';
 export const TIKTOK_PIXEL_ID_REGEX = /^$|^[A-Z0-9]{8,64}$/i;
 export const TIKTOK_PIXEL_ID_MESSAGE =
   'tiktok_pixel_id must be letters and digits only';
+// Microsoft Clarity project ids are short lower-case alphanumeric strings
+// (10 characters today, e.g. "sxtuobatm6"); 8-12 leaves a little room. The
+// service stores them lower-cased, so any case is accepted here.
+export const CLARITY_PROJECT_ID_REGEX = /^$|^[a-z0-9]{8,12}$/i;
+export const CLARITY_PROJECT_ID_MESSAGE =
+  'clarity_project_id must be 8-12 letters and digits';
 
 // Meta Conversions API (server-side Purchase). The access token is a secret:
 // write-only, stored encrypted, never returned (the owner payload carries
@@ -277,6 +283,14 @@ export class UpdateStoreDto {
   @MaxLength(64)
   @Matches(TIKTOK_PIXEL_ID_REGEX, { message: TIKTOK_PIXEL_ID_MESSAGE })
   tiktok_pixel_id?: string | null;
+
+  // Microsoft Clarity project id. Unlike the other trackers it is always
+  // consent-gated on the storefront (consent_required=false does not apply).
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  @Matches(CLARITY_PROJECT_ID_REGEX, { message: CLARITY_PROJECT_ID_MESSAGE })
+  clarity_project_id?: string | null;
 
   // false = load the trackers without asking (the creator takes the legal
   // responsibility); true (default) = cookie banner first.

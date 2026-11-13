@@ -58,12 +58,29 @@ const STORE_SELECT = {
   store_type: true,
   trader_details: true,
   custom_domain: true,
+  // Public tracker ids: the privacy template names a vendor only when set.
+  ga4_measurement_id: true,
+  meta_pixel_id: true,
+  tiktok_pixel_id: true,
+  clarity_project_id: true,
+  // Whether GA4 / Meta / TikTok wait for consent (the privacy intro sentence).
+  consent_required: true,
   language_config: {
     select: { primary_locale: true, secondary_locales: true },
   },
 } as const;
 
-interface LegalStore {
+/** Tracker ids of a store (public ids, never secrets). */
+type LegalTrackingIds = {
+  ga4_measurement_id?: string | null;
+  meta_pixel_id?: string | null;
+  tiktok_pixel_id?: string | null;
+  clarity_project_id?: string | null;
+  /** false = GA4 / Meta / TikTok load without consent (Clarity never does). */
+  consent_required?: boolean | null;
+};
+
+interface LegalStore extends LegalTrackingIds {
   id: string;
   slug: string;
   name: string;
@@ -486,19 +503,24 @@ export class StoreLegalService {
     store: Pick<
       LegalStore,
       'id' | 'slug' | 'name' | 'store_type' | 'trader_details' | 'custom_domain'
-    >,
+    > &
+      LegalTrackingIds,
     locale: string,
   ): Promise<StoreTemplateContext> {
     const storeUrl = await this.storeUrl(store);
     if (store.store_type === StoreType.MARKETPLACE) {
-      return platformSellerContext(
-        { name: str(store.name), url: storeUrl },
-        await this.platformContactEmail(),
-        locale,
-      );
+      return {
+        ...platformSellerContext(
+          { name: str(store.name), url: storeUrl },
+          await this.platformContactEmail(),
+          locale,
+        ),
+        ...trackingTemplateContext(store),
+      };
     }
     const t = (store.trader_details ?? {}) as Record<string, unknown>;
     return {
+      ...trackingTemplateContext(store),
       'trader.legal_name': str(t.legal_name) || str(store.name),
       'trader.org_number': str(t.org_number),
       'trader.vat_number': str(t.vat_number),
@@ -546,6 +568,38 @@ export interface StorefrontLegalOptions {
   market?: string;
   preview?: boolean;
   viewer?: StorefrontViewer | null;
+}
+
+/**
+ * `tracking.*` flags of the privacy template: '1' for every tracker whose id
+ * the store has set, '' otherwise, so the cookie section names a vendor only
+ * when that store actually loads it (after consent).
+ */
+export function trackingTemplateContext(
+  store: LegalTrackingIds,
+): StoreTemplateContext {
+  const flag = (v: string | null | undefined) =>
+    typeof v === 'string' && v.trim() !== '' ? '1' : '';
+  const ctx = {
+    'tracking.ga4': flag(store.ga4_measurement_id),
+    'tracking.meta': flag(store.meta_pixel_id),
+    'tracking.tiktok': flag(store.tiktok_pixel_id),
+    'tracking.clarity': flag(store.clarity_project_id),
+  };
+  const any = Object.values(ctx).some(Boolean);
+  // consent_required=false loads GA4 / Meta / TikTok on visit (StoreTracking);
+  // Clarity always waits for "Accept all". The intro sentence must say so.
+  const ungated =
+    store.consent_required === false &&
+    Boolean(
+      ctx['tracking.ga4'] || ctx['tracking.meta'] || ctx['tracking.tiktok'],
+    );
+  return {
+    ...ctx,
+    'tracking.any': any ? '1' : '',
+    'tracking.gated': any && !ungated ? '1' : '',
+    'tracking.ungated': ungated ? '1' : '',
+  };
 }
 
 /**

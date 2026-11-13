@@ -38,6 +38,7 @@ function build(status: StoreStatus) {
     use_platform_tax_rates: true,
     shipping_tax_class_id: null,
     display_prices_incl_tax: true,
+    clarity_project_id: 'sxtuobatm6',
     consent_required: true,
     checkout_settings: null,
     language_config: {
@@ -119,6 +120,8 @@ describe('GET /storefront/:slug gate', () => {
       });
       expect(res).not.toHaveProperty('card_payments_enabled');
       expect(res).not.toHaveProperty('tax');
+      // No tracker (Clarity included) is loaded on the closed shell.
+      expect(res).not.toHaveProperty('tracking');
       // No catalog queries were made.
       expect(prisma.page.findMany).not.toHaveBeenCalled();
     }
@@ -146,6 +149,9 @@ describe('GET /storefront/:slug gate', () => {
     expect(res).toHaveProperty('card_payments_enabled');
     expect(res).toHaveProperty('tax');
     expect(res).not.toHaveProperty('coming_soon');
+    expect(res).toMatchObject({
+      tracking: { clarity_project_id: 'sxtuobatm6', consent_required: true },
+    });
   });
 
   it('owner preview: full payload for the owner or an admin, 403 for others', async () => {

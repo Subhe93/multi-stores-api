@@ -27,7 +27,12 @@ describe('coupon discount kind', () => {
   });
   const serviceFor = (row: Record<string, unknown>) =>
     new PromotionsService(
-      { promotion: { findUnique: async () => row } } as never,
+      {
+        promotion: { findUnique: async () => row },
+        // Platform coupons apply on MARKETPLACE stores only.
+        store: { findUnique: async () => ({ store_type: 'MARKETPLACE' }) },
+      } as never,
+      {} as never,
       {} as never,
       {} as never,
     );
@@ -54,6 +59,7 @@ describe('coupon discount kind', () => {
   it('rejects a percentage over 100 but allows a fixed amount over 100', async () => {
     const svc = new PromotionsService(
       { promotion: { create: async (a: unknown) => a } } as never,
+      {} as never,
       {} as never,
       {} as never,
     );

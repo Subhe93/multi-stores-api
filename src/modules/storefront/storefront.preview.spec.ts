@@ -58,6 +58,7 @@ function build(status: StoreStatus) {
     use_platform_tax_rates: true,
     shipping_tax_class_id: null,
     display_prices_incl_tax: true,
+    clarity_project_id: 'sxtuobatm6',
     consent_required: true,
     checkout_settings: null,
     language_config: { primary_locale: 'sv', secondary_locales: [], auto_translate: false, fallback_locale: 'en' },
@@ -286,10 +287,15 @@ describe('every public storefront read honours the owner preview', () => {
         const shell = r as { coming_soon: boolean; paused: boolean };
         expect(shell.coming_soon || shell.paused).toBe(true);
         expect(r).not.toHaveProperty('card_payments_enabled');
+        // The closed shell carries no tracker ids (Clarity included).
+        expect(r).not.toHaveProperty('tracking');
       },
       open: (r) => {
         expect(r).toHaveProperty('card_payments_enabled');
-        expect(r).toMatchObject({ preview: true });
+        expect(r).toMatchObject({
+          preview: true,
+          tracking: { clarity_project_id: 'sxtuobatm6' },
+        });
       },
     },
     {

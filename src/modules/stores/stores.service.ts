@@ -1100,7 +1100,8 @@ function normalizeHost(host: string | null | undefined): string | null {
   return host?.trim().toLowerCase().replace(/\.$/, '') || null;
 }
 
-function normalizeStoreUpdate(
+// Exported for unit tests only.
+export function normalizeStoreUpdate(
   dto: UpdateStoreDto,
   encryptSecret: (plain: string) => string,
 ): StoreUpdateData {
@@ -1153,6 +1154,11 @@ function normalizeStoreUpdate(
   if (dto.tiktok_pixel_id !== undefined) {
     const raw = (dto.tiktok_pixel_id ?? '').trim().toUpperCase();
     out = { ...out, tiktok_pixel_id: raw || null };
+  }
+  // Clarity project ids are lower-case in Clarity's own UI and tag URL.
+  if (dto.clarity_project_id !== undefined) {
+    const raw = (dto.clarity_project_id ?? '').trim().toLowerCase();
+    out = { ...out, clarity_project_id: raw || null };
   }
   // Meta Conversions API token: stored encrypted only. Empty / null clears
   // it; undefined (not sent) keeps the stored one.

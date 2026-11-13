@@ -10,10 +10,22 @@ import {
   ValidateCouponDto,
   CouponPreviewDto,
 } from './dto/promotion.dto';
-import { Prisma, UserRole } from '@prisma/client';
+import { PricingType, Prisma, StoreType, UserRole } from '@prisma/client';
 import { MarketsContextService } from '../markets/markets-context.service';
 import { MarketPricingService } from '../markets/market-pricing.service';
-import { roundMoney } from '../../common/money/currency.util';
+import {
+  resolveOrderCurrency,
+  roundMoney,
+} from '../../common/money/currency.util';
+import {
+  TaxService,
+  taxStoreSelect,
+  type TaxLineInput,
+} from '../taxes/tax.service';
+import {
+  couponBelowProviderCost,
+  couponBelowProviderCostError,
+} from './coupon-provider-floor';
 
 /** POST /promotions/coupon-preview response. Amounts in market currency. */
 export interface CouponPreview {
@@ -31,7 +43,49 @@ export interface CouponPreview {
   /** null when a minimum exists but the figure to check it was not sent. */
   min_met: boolean | null;
   discount_amount: number | null;
+  /**
+   * MARKETPLACE stores: true when the discount would take this line's net
+   * revenue below the provider cost, so the order would refuse it with
+   * ORDER_DISCOUNT_BELOW_PROVIDER_COST. Then `applies` is false and
+   * `discount_amount` is null (no price to show). Always false elsewhere.
+   */
+  below_cost: boolean;
 }
+
+/** One cart line as the provider-cost floor reads it (amounts in base). */
+interface FloorLineInput {
+  product_id: string;
+  /** Line total; absent = the catalogue unit price x quantity. */
+  amount?: number;
+  quantity?: number;
+  variant_id?: string;
+}
+
+/**
+ * How loadFloorCart treats lines it cannot price exactly.
+ * - 'cart' (validate-coupon): a line without an explicit quantity, or a
+ *   product with variants sent without its variant, makes the whole cart
+ *   unjudgeable (null): the line amount may carry add-ons or a variant
+ *   price, so any estimate could reject a coupon the order accepts. The
+ *   order path stays the guard.
+ * - 'preview' (product banner): quantity defaults to 1 and a missing variant
+ *   prices the product base, the lenient reading (never a stricter base
+ *   than the order's).
+ */
+type FloorMode = 'cart' | 'preview';
+
+/** A store's cart, priced and taxed like the order path for the floor. */
+interface FloorCart {
+  store: Prisma.StoreGetPayload<{ select: typeof floorStoreSelect }>;
+  taxLines: TaxLineInput[];
+  providerBaseTotal: number;
+}
+
+const floorStoreSelect = {
+  ...taxStoreSelect,
+  currency: true,
+  primary_locale: true,
+} as const;
 
 /** A threshold from the conditions JSON: a positive number, else none. */
 function positiveNumber(v: unknown): number | null {
@@ -130,6 +184,7 @@ export class PromotionsService {
     private prisma: PrismaService,
     private marketsContext: MarketsContextService,
     private marketPricing: MarketPricingService,
+    private taxService: TaxService,
   ) {}
 
   async create(userId: string, userRole: UserRole, dto: CreatePromotionDto) {
@@ -388,8 +443,8 @@ export class PromotionsService {
     // Scope the coupon to its owner. `coupon_code` is globally unique, so
     // without this any store's code would discount every other store's orders —
     // and on an independent store the creator would eat a discount they never
-    // issued. A promotion with no owner is a platform-wide campaign and stays
-    // valid everywhere.
+    // issued. A promotion with no owner is a platform-wide campaign, valid on
+    // MARKETPLACE stores only (never on an INDEPENDENT store).
     await this.assertCouponAppliesToStore(promo, dto);
 
     // Check if active
@@ -518,7 +573,29 @@ export class PromotionsService {
         })
       : null;
     if (!market || market.currency === market.storeCurrency) {
-      return this.validateCoupon(rest);
+      const result = await this.validateCoupon(rest);
+      // Marketplace provider-cost floor, the same rule the order applies
+      // (markets exist only on INDEPENDENT stores, where it never applies).
+      // Judged only when the cart sends its lines: without them the floor
+      // cannot be computed and the order path stays the guard.
+      if (rest.line_totals?.length && result.discount_amount > 0) {
+        const cart = await this.loadFloorCart(
+          rest.store_id,
+          rest.line_totals,
+          'cart',
+        );
+        if (
+          cart &&
+          (await this.breaksFloor(
+            cart,
+            result.discount_amount,
+            rest.country_code,
+          ))
+        ) {
+          throw couponBelowProviderCostError();
+        }
+      }
+      return result;
     }
     const toBase = (amount: number) =>
       this.marketPricing.toBaseMoney(market, amount);
@@ -551,7 +628,8 @@ export class PromotionsService {
   /**
    * Product-page coupon preview for a link banner. Every reason a code is
    * unusable (unknown, inactive, not started, expired, exhausted, provider
-   * owned, another store's) answers one uniform 400 PROMOTION_COUPON_INVALID
+   * owned, another store's, a platform coupon on an INDEPENDENT store)
+   * answers one uniform 400 PROMOTION_COUPON_INVALID
    * so the banner cannot be used to probe codes. Cart-dependent facts
    * (targeting, minimums) are reported as fields, not errors. Amounts in and
    * out are in the market currency; thresholds are compared in the base
@@ -633,25 +711,255 @@ export class PromotionsService {
       discountAmount = Math.min(roundMoney(convert(inBase)), dto.line_amount);
     }
 
+    // Marketplace provider-cost floor on this line alone (the order path's
+    // rule). Without line_amount the line is the catalogue price x quantity;
+    // without quantity it is one unit (never estimated from line_amount,
+    // which may include add-ons or a variant price).
+    // Markets exist only on INDEPENDENT stores, where the floor never applies.
+    let belowCost = false;
+    if (!foreign && applies && minMet !== false && kind) {
+      const cart = await this.loadFloorCart(
+        dto.store_id,
+        [
+          {
+            product_id: dto.product_id,
+            amount: isNum(dto.line_amount) ? dto.line_amount : undefined,
+            quantity: dto.quantity,
+            variant_id: dto.variant_id,
+          },
+        ],
+        'preview',
+      );
+      if (cart) {
+        const lineAmount = cart.taxLines[0]?.amount ?? 0;
+        const raw =
+          kind === 'percentage'
+            ? lineAmount * (value / 100)
+            : Math.min(value, lineAmount);
+        const discount = Math.min(Math.round(raw * 100) / 100, lineAmount);
+        belowCost = await this.breaksFloor(cart, discount, dto.country_code);
+      }
+    }
+
     return {
       code: promo.coupon_code ?? dto.coupon_code,
       discount_kind: kind,
       percent: kind === 'percentage' ? value : null,
       amount: kind === 'fixed' ? convert(value) : null,
       free_shipping: promo.type === 'FREE_SHIPPING',
-      applies,
+      applies: applies && !belowCost,
       min_amount: minAmountBase == null ? null : convert(minAmountBase),
       min_quantity: minQuantity,
       min_met: minMet,
-      discount_amount: discountAmount,
+      discount_amount: belowCost ? null : discountAmount,
+      below_cost: belowCost,
     };
+  }
+
+  /**
+   * The cart as the marketplace provider-cost floor needs it, priced like
+   * OrdersService.priceLine: per line its tax fields and its provider base
+   * (min(base, unit) x quantity, i.e. min(base x qty, line amount)). null
+   * when the floor cannot apply: unknown or INDEPENDENT store, or no line
+   * fulfilled by a provider. Amounts are in the store's base currency.
+   */
+  private async loadFloorCart(
+    storeId: string,
+    lines: readonly FloorLineInput[],
+    mode: FloorMode,
+  ): Promise<FloorCart | null> {
+    // A cart line without its quantity cannot be priced like the order.
+    if (mode === 'cart' && lines.some((l) => !(Number(l.quantity) >= 1))) {
+      return null;
+    }
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: floorStoreSelect,
+    });
+    if (!store || store.store_type === StoreType.INDEPENDENT) return null;
+
+    const ids = [...new Set(lines.map((l) => l.product_id).filter(Boolean))];
+    const variantIds = [
+      ...new Set(
+        lines.map((l) => l.variant_id).filter((v): v is string => !!v),
+      ),
+    ];
+    if (!ids.length) return null;
+    const [customs, products, variants] = await Promise.all([
+      this.prisma.customProduct.findMany({
+        where: { id: { in: ids } },
+        select: {
+          id: true,
+          pricing_type: true,
+          final_price: true,
+          margin_amount: true,
+          product: {
+            select: {
+              base_price: true,
+              provider_id: true,
+              tax_class_id: true,
+              tax_exempt: true,
+              // Whether a variant must be named (see FloorMode 'cart').
+              variants: { select: { id: true }, take: 1 },
+            },
+          },
+          selected_variants: {
+            select: { variant_id: true, custom_price: true },
+          },
+        },
+      }),
+      this.prisma.product.findMany({
+        where: { id: { in: ids } },
+        select: {
+          id: true,
+          base_price: true,
+          provider_id: true,
+          tax_class_id: true,
+          tax_exempt: true,
+          variants: { select: { id: true }, take: 1 },
+        },
+      }),
+      variantIds.length
+        ? this.prisma.productVariant.findMany({
+            where: { id: { in: variantIds } },
+            select: { id: true, price_adjustment: true },
+          })
+        : Promise.resolve(
+            [] as { id: string; price_adjustment: Prisma.Decimal }[],
+          ),
+    ]);
+    const customById = new Map(customs.map((c) => [c.id, c]));
+    const productById = new Map(products.map((p) => [p.id, p]));
+    const variantById = new Map(variants.map((v) => [v.id, v]));
+
+    let hasProvider = false;
+    let unjudgeable = false;
+    let providerBaseTotal = 0;
+    const taxLines: TaxLineInput[] = lines.map((line) => {
+      const cp = customById.get(line.product_id);
+      const own = cp ? undefined : productById.get(line.product_id);
+      const variant = line.variant_id
+        ? variantById.get(line.variant_id)
+        : undefined;
+      if (mode === 'cart') {
+        const hasVariants = (cp?.product ?? own)?.variants?.length ?? 0;
+        // The variant's price adjustment moves the provider base: without
+        // it (or with an unknown one) the base would be underestimated.
+        if (
+          (hasVariants > 0 && !line.variant_id) ||
+          (line.variant_id && !variant)
+        ) {
+          unjudgeable = true;
+        }
+      }
+      const adjustment = Number(variant?.price_adjustment ?? 0) || 0;
+
+      // Catalogue unit price and per-unit provider base (priceLine rules).
+      let unit = 0;
+      let baseUnit = 0;
+      if (cp) {
+        const productBase = Number(cp.product.base_price);
+        switch (cp.pricing_type) {
+          case PricingType.SINGLE:
+            unit = Number(cp.final_price);
+            break;
+          case PricingType.PER_VARIANT: {
+            const selected = variant
+              ? cp.selected_variants.find((s) => s.variant_id === variant.id)
+              : undefined;
+            unit = variant
+              ? selected?.custom_price
+                ? Number(selected.custom_price)
+                : productBase + adjustment
+              : Number(cp.final_price) || productBase;
+            break;
+          }
+          case PricingType.MARGIN:
+            unit = productBase + adjustment + Number(cp.margin_amount || 0);
+            break;
+        }
+        if (cp.product.provider_id) baseUnit = productBase + adjustment;
+      } else if (own) {
+        unit = Number(own.base_price) + adjustment;
+        if (own.provider_id) baseUnit = unit;
+      }
+
+      // 'cart' lines always carry their quantity (checked above); a preview
+      // without one is a single unit.
+      const quantity = line.quantity ?? 1;
+      const amount = roundMoney(line.amount ?? unit * quantity);
+      if (baseUnit > 0) {
+        hasProvider = true;
+        providerBaseTotal += Math.min(baseUnit * quantity, amount);
+      }
+      const product = cp?.product ?? own;
+      return {
+        amount,
+        tax_class_id: product?.tax_class_id ?? null,
+        tax_exempt: product?.tax_exempt ?? false,
+      };
+    });
+    if (!hasProvider || unjudgeable) return null;
+    return {
+      store,
+      taxLines,
+      providerBaseTotal: roundMoney(providerBaseTotal),
+    };
+  }
+
+  /**
+   * The shared floor rule (coupon-provider-floor.ts) on a FloorCart: net
+   * merchandise revenue with and without the discount, taxed for the
+   * destination the cart quote uses when the storefront sends it, else like
+   * the order before its address is known (registration country); shipping
+   * excluded (it never enters net_items).
+   */
+  private async breaksFloor(
+    cart: FloorCart,
+    discountAmount: number,
+    countryCode?: string | null,
+  ): Promise<boolean> {
+    if (!(discountAmount > 0)) return false;
+    const ctx = await this.taxService.contextFor(cart.store);
+    const data = await this.taxService.loadTaxData(ctx);
+    const platform = await this.prisma.platformConfig.findFirst({
+      select: { default_currency: true },
+    });
+    const currency = resolveOrderCurrency(
+      cart.store,
+      platform?.default_currency,
+    );
+    const country =
+      typeof countryCode === 'string' && /^[A-Za-z]{2}$/.test(countryCode)
+        ? countryCode.toUpperCase()
+        : null;
+    const destination = { country, region: null, postcode: null };
+    const netItems = (discount: number) =>
+      this.taxService.computeTaxes({
+        ctx,
+        data,
+        currency,
+        locale: cart.store.primary_locale,
+        lines: cart.taxLines,
+        shipping_cost: 0,
+        discount_amount: discount,
+        shipping: destination,
+        billing: destination,
+      }).net_items;
+    return couponBelowProviderCost({
+      independent: false,
+      discountAmount,
+      providerBaseTotal: cart.providerBaseTotal,
+      netItemsAfter: netItems(discountAmount),
+      netItemsBefore: () => netItems(0),
+    });
   }
 
   /**
    * A creator's coupon is valid only on that creator's own store. A provider's
    * coupon is valid only when the cart actually contains an item that provider
    * fulfils (providers have no storefront of their own). Ownerless promotions
-   * are platform campaigns and apply everywhere.
+   * are platform campaigns and apply on MARKETPLACE stores only.
    */
   private async assertCouponAppliesToStore(
     promo: { creator_id: string | null; provider_id: string | null },
@@ -693,7 +1001,19 @@ export class PromotionsService {
         }),
       ]);
       if (ownCount === 0 && customCount === 0) notApplicable();
+      return;
     }
+
+    // Platform campaign (no creator, no provider owner): MARKETPLACE stores
+    // only. On an INDEPENDENT store the discount would come out of the
+    // seller's own revenue for a campaign they never issued, so it answers
+    // like an unknown code. validate-coupon, the coupon preview and the order
+    // path (which calls validateCoupon) all pass through here and agree.
+    const store = await this.prisma.store.findUnique({
+      where: { id: dto.store_id },
+      select: { store_type: true },
+    });
+    if (store?.store_type === StoreType.INDEPENDENT) notApplicable();
   }
 
   /**
