@@ -6,7 +6,13 @@ import {
   depthUnder,
   dropHiddenSubtrees,
   isContainerSectionKey,
+  layoutBlocksCopyError,
+  layoutBlocksCreateError,
+  layoutBlocksReorderError,
   orderSectionsAsTree,
+  PRODUCT_LAYOUT_APP_KEY,
+  PRODUCT_LAYOUT_BLOCK_KEYS,
+  requiresProductLayoutApp,
   subtreeIds,
   validateSectionTree,
   validateTreeReorder,
@@ -310,5 +316,90 @@ describe('tree helpers', () => {
     expect(countLeafSections(rows)).toBe(3);
     expect(countLeafSections([{ section_key: 'layout-row' }])).toBe(0);
     expect(countLeafSections([null, 'x'])).toBe(2);
+  });
+});
+
+describe('product layout app gate', () => {
+  it('names the store app and the gated keys', () => {
+    expect(PRODUCT_LAYOUT_APP_KEY).toBe('product_layout');
+    expect(PRODUCT_LAYOUT_BLOCK_KEYS).toHaveLength(11);
+    for (const k of [...CONTAINER_SECTION_KEYS, ...PRODUCT_LAYOUT_BLOCK_KEYS])
+      expect(requiresProductLayoutApp(k)).toBe(true);
+    for (const k of [
+      'product-page',
+      'product-gallery',
+      'product-details',
+      'add-to-cart',
+      'product-tabs',
+      'rich-text',
+      '',
+      null,
+      undefined,
+    ])
+      expect(requiresProductLayoutApp(k)).toBe(false);
+  });
+
+  it('create: blocks gated keys and parents only while off', () => {
+    expect(
+      layoutBlocksCreateError({ section_key: 'product-buy' }, false)?.code,
+    ).toBe('PAGE_SECTION_LAYOUT_BLOCKS_DISABLED');
+    expect(
+      layoutBlocksCreateError(
+        { section_key: 'rich-text', parent_id: 'c1' },
+        false,
+      )?.code,
+    ).toBe('PAGE_SECTION_LAYOUT_BLOCKS_DISABLED');
+    expect(
+      layoutBlocksCreateError({ section_key: 'product-page' }, false),
+    ).toBeNull();
+    expect(
+      layoutBlocksCreateError(
+        { section_key: 'layout-row', parent_id: 'x' },
+        true,
+      ),
+    ).toBeNull();
+  });
+
+  it('copy: blocks a subtree holding gated keys only while off', () => {
+    const tree = [node('r', 'layout-row'), node('g', 'product-gallery', 'r')];
+    expect(layoutBlocksCopyError(tree, false)).toMatchObject({
+      code: 'PAGE_SECTION_LAYOUT_BLOCKS_DISABLED',
+      section_id: 'r',
+    });
+    expect(layoutBlocksCopyError(tree, true)).toBeNull();
+    expect(
+      layoutBlocksCopyError([node('t', 'product-tabs')], false),
+    ).toBeNull();
+  });
+
+  it('reorder: keeps saved parents, allows moving out, rejects new parents', () => {
+    const existing = [
+      node('r', 'layout-row'),
+      node('c', 'layout-column', 'r'),
+      node('g', 'product-gallery', 'c'),
+      node('t', 'product-tabs'),
+    ];
+    const same = [
+      { id: 'r', parent_id: null, sort_order: 1 },
+      { id: 'c', parent_id: 'r', sort_order: 0 },
+      { id: 'g', parent_id: 'c', sort_order: 0 },
+      { id: 't', parent_id: null, sort_order: 0 },
+    ];
+    expect(layoutBlocksReorderError(existing, same, false)).toBeNull();
+    const out = same.map((i) => (i.id === 'g' ? { ...i, parent_id: null } : i));
+    expect(layoutBlocksReorderError(existing, out, false)).toBeNull();
+    const into = same.map((i) => (i.id === 't' ? { ...i, parent_id: 'c' } : i));
+    expect(layoutBlocksReorderError(existing, into, false)).toMatchObject({
+      code: 'PAGE_SECTION_LAYOUT_BLOCKS_DISABLED',
+      section_id: 't',
+    });
+    // Re-parenting between saved containers is a new parent too.
+    const across = same.map((i) =>
+      i.id === 'g' ? { ...i, parent_id: 'r' } : i,
+    );
+    expect(layoutBlocksReorderError(existing, across, false)?.code).toBe(
+      'PAGE_SECTION_LAYOUT_BLOCKS_DISABLED',
+    );
+    expect(layoutBlocksReorderError(existing, into, true)).toBeNull();
   });
 });

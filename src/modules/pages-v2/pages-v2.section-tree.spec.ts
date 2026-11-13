@@ -3,6 +3,7 @@ import { PagesV2Service, buildPublishSnapshot } from './pages-v2.service';
 import { buildPageSnapshot, SnapshotSourcePage } from './page-snapshot';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { RevalidationService } from '../../common/revalidation/revalidation.service';
+import type { StoreAppsService } from '../store-apps/store-apps.service';
 
 // Section tree (layout containers) on the pages-v2 service: add into a
 // container, tree reorder validation, cascade delete, subtree duplicate,
@@ -188,16 +189,28 @@ function fakeDb(pageType = 'PRODUCT_TEMPLATE') {
   return { db, page, sections, translations, versions };
 }
 
-function makeService(pageType?: string) {
+/**
+ * `layoutApp`: the store's `product_layout` app state as StoreAppsService
+ * reports it (true = on, false = off, null = unreadable). Defaults to on so
+ * the tree tests exercise the containers.
+ */
+function makeService(pageType?: string, layoutApp: boolean | null = true) {
   const fake = fakeDb(pageType);
   const revalidation = {
     revalidateStoreById: jest.fn(() => Promise.resolve(undefined)),
   } as unknown as RevalidationService;
+  const storeApps = {
+    enabledOrUnknown: jest.fn((_storeId: string, key: string) =>
+      Promise.resolve(key === 'product_layout' ? layoutApp : false),
+    ),
+  } as unknown as StoreAppsService;
   const service = new PagesV2Service(
     fake.db as unknown as PrismaService,
     revalidation,
+    undefined,
+    storeApps,
   );
-  return { ...fake, service };
+  return { ...fake, service, storeApps };
 }
 
 async function codeOf(p: Promise<unknown>): Promise<string | undefined> {
@@ -550,5 +563,164 @@ describe('PagesV2Service section tree', () => {
       ['hero-banner', 0, null, false],
       ['rich-text', 1, null, false],
     ]);
+  });
+});
+
+describe('PagesV2Service product layout app gate', () => {
+  /** Seeds a tree with the app on, then switches the app to `state`. */
+  async function seededWithApp(state: boolean | null) {
+    const made = makeService();
+    const t = await seedTree(made.service);
+    (made.storeApps.enabledOrUnknown as jest.Mock).mockResolvedValue(state);
+    return { ...made, t };
+  }
+
+  it('is off by default when no StoreAppsService is injected', async () => {
+    const fake = fakeDb();
+    const service = new PagesV2Service(
+      fake.db as unknown as PrismaService,
+      {
+        revalidateStoreById: jest.fn(),
+      } as unknown as RevalidationService,
+    );
+    expect(
+      await codeOf(
+        service.addSection('u', 'p1', { section_key: 'layout-row' }),
+      ),
+    ).toBe('PAGE_SECTION_LAYOUT_BLOCKS_DISABLED');
+  });
+
+  it.each([
+    'layout-row',
+    'layout-column',
+    'layout-grid',
+    'product-breadcrumb',
+    'product-title',
+    'product-price',
+    'product-short-description',
+    'product-promotions',
+    'product-bundles',
+    'product-variants',
+    'product-personalization',
+    'product-buy',
+    'product-trust',
+    'product-shipping',
+  ])('rejects adding %s while the app is off', async (key) => {
+    const { service, sections } = makeService(undefined, false);
+    expect(
+      await codeOf(service.addSection('u', 'p1', { section_key: key })),
+    ).toBe('PAGE_SECTION_LAYOUT_BLOCKS_DISABLED');
+    expect(sections).toHaveLength(0);
+  });
+
+  it('fails closed when the app state cannot be read', async () => {
+    const { service } = makeService(undefined, null);
+    expect(
+      await codeOf(
+        service.addSection('u', 'p1', { section_key: 'product-title' }),
+      ),
+    ).toBe('PAGE_SECTION_LAYOUT_BLOCKS_DISABLED');
+  });
+
+  it('keeps the old product sections available while the app is off', async () => {
+    const { service } = makeService(undefined, false);
+    for (const key of [
+      'product-page',
+      'product-gallery',
+      'product-details',
+      'add-to-cart',
+      'product-tabs',
+      'rich-text',
+    ]) {
+      const s = await service.addSection('u', 'p1', { section_key: key });
+      expect(s).toMatchObject({ section_key: key, parent_id: null });
+    }
+  });
+
+  it('rejects adding into an existing container while the app is off', async () => {
+    const { service, t } = await seededWithApp(false);
+    expect(
+      await codeOf(
+        service.addSection('u', 'p1', {
+          section_key: 'rich-text',
+          parent_id: t.col1.id,
+        }),
+      ),
+    ).toBe('PAGE_SECTION_LAYOUT_BLOCKS_DISABLED');
+  });
+
+  it('allows containers and product blocks while the app is on', async () => {
+    const { service } = makeService(undefined, true);
+    const row = await service.addSection('u', 'p1', {
+      section_key: 'layout-row',
+    });
+    const buy = await service.addSection('u', 'p1', {
+      section_key: 'product-buy',
+      parent_id: row.id,
+    });
+    expect(buy).toMatchObject({ parent_id: row.id });
+  });
+
+  it('tree reorder keeps saved nesting but rejects new parents while off', async () => {
+    const { service, db, t } = await seededWithApp(false);
+    const base = [
+      { id: t.row.id, parent_id: null, sort_order: 0 },
+      { id: t.col1.id, parent_id: t.row.id, sort_order: 0 },
+      { id: t.col2.id, parent_id: t.row.id, sort_order: 1 },
+      { id: t.gallery.id, parent_id: t.col1.id, sort_order: 0 },
+      { id: t.title.id, parent_id: t.col2.id, sort_order: 0 },
+      { id: t.tabs.id, parent_id: null, sort_order: 1 },
+    ];
+    // Reordering siblings inside the saved tree and moving a child out to
+    // the root both keep working.
+    const swapped = base.map((i) =>
+      i.id === t.col1.id
+        ? { ...i, sort_order: 1 }
+        : i.id === t.col2.id
+          ? { ...i, sort_order: 0 }
+          : i,
+    );
+    await service.reorderSectionTree('u', 'p1', { items: swapped });
+    const out = base.map((i) =>
+      i.id === t.title.id ? { ...i, parent_id: null, sort_order: 2 } : i,
+    );
+    const list = await service.reorderSectionTree('u', 'p1', { items: out });
+    expect(list.find((s) => s.id === t.title.id)?.parent_id).toBeNull();
+
+    // Moving the tabs (root) into a column introduces a parent.
+    db.pageSection.update.mockClear();
+    const into = out.map((i) =>
+      i.id === t.tabs.id ? { ...i, parent_id: t.col1.id, sort_order: 1 } : i,
+    );
+    expect(
+      await codeOf(service.reorderSectionTree('u', 'p1', { items: into })),
+    ).toBe('PAGE_SECTION_LAYOUT_BLOCKS_DISABLED');
+    expect(db.pageSection.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects duplicating containers or nested sections while off', async () => {
+    const { service, sections, t } = await seededWithApp(false);
+    const before = sections.length;
+    expect(await codeOf(service.duplicateSection('u', t.row.id))).toBe(
+      'PAGE_SECTION_LAYOUT_BLOCKS_DISABLED',
+    );
+    expect(await codeOf(service.duplicateSection('u', t.gallery.id))).toBe(
+      'PAGE_SECTION_LAYOUT_BLOCKS_DISABLED',
+    );
+    expect(sections).toHaveLength(before);
+    // A plain root section still duplicates.
+    const list = await service.duplicateSection('u', t.tabs.id);
+    expect(list.filter((s) => s.section_key === 'product-tabs')).toHaveLength(
+      2,
+    );
+  });
+
+  it('still lists, edits and deletes saved nested content while off', async () => {
+    const { service, sections, t } = await seededWithApp(false);
+    const list = await service.listSections('u', 'p1');
+    expect(list).toHaveLength(6);
+    await service.updateSection('u', t.gallery.id, { is_hidden: true });
+    await service.deleteSection('u', t.row.id);
+    expect(sections.map((s) => s.id)).toEqual([t.tabs.id]);
   });
 });

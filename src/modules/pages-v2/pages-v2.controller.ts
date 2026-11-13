@@ -14,6 +14,10 @@ import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { PagesV2Service } from './pages-v2.service';
 import {
+  ConvertProductBlocksDto,
+  ProductBlocksConvertService,
+} from './product-blocks-convert';
+import {
   CreatePageDto,
   CreateSectionDto,
   PublishPageDto,
@@ -27,7 +31,10 @@ import {
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 @Roles(UserRole.CREATOR)
 export class PagesV2Controller {
-  constructor(private service: PagesV2Service) {}
+  constructor(
+    private service: PagesV2Service,
+    private productBlocks: ProductBlocksConvertService,
+  ) {}
 
   // ── Pages CRUD ───────────────────────────────────────
 
@@ -158,6 +165,18 @@ export class PagesV2Controller {
     @Param('sectionId') sectionId: string,
   ) {
     return this.service.duplicateSection(userId, sectionId);
+  }
+
+  // Product template: hide the monolith product-page section and build the
+  // Classic product block tree after it, in one transaction. Draft only (no
+  // publish); returns the page's full updated section list.
+  @Post(':id/convert-product-blocks')
+  convertProductBlocks(
+    @CurrentUser('id') userId: string,
+    @Param('id') pageId: string,
+    @Body() dto: ConvertProductBlocksDto,
+  ) {
+    return this.productBlocks.convert(userId, pageId, dto);
   }
 
   // ── Publish / versions ───────────────────────────────

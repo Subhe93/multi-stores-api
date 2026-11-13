@@ -15,6 +15,7 @@ export const STORE_APP_KEYS = [
   'designer',
   'feeds',
   'zoho_mail',
+  'product_layout',
 ] as const;
 
 export type StoreAppKey = (typeof STORE_APP_KEYS)[number];
@@ -144,6 +145,19 @@ export const STORE_APPS: Record<StoreAppKey, StoreAppDefinition> = {
     name_key: 'zoho_mail.name',
     description_key: 'zoho_mail.description',
     requires_independent: true,
+    depends_on: [],
+    expose_settings_to_storefront: false,
+  },
+  // Beta (plans/product-template-layout): build the product template from
+  // separate product blocks inside Row / Column / Grid containers. Off by
+  // default; the admin makes it available per store, then the owner enables
+  // it. Switching it off only stops new containers / product blocks in the
+  // builder; pages already saved with them keep rendering.
+  product_layout: {
+    key: 'product_layout',
+    name_key: 'product_layout.name',
+    description_key: 'product_layout.description',
+    requires_independent: false,
     depends_on: [],
     expose_settings_to_storefront: false,
   },

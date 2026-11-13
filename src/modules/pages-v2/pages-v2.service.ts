@@ -23,6 +23,7 @@ import {
 import { rootPagePath } from '../../common/slug/slug-moves';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { relinkPageMenuItems } from '../menus/page-menu-links';
+import { StoreAppsService } from '../store-apps/store-apps.service';
 import {
   CreatePageDto,
   CreateSectionDto,
@@ -37,7 +38,11 @@ import {
   containersAllowedOnPage,
   depthUnder,
   isContainerSectionKey,
+  layoutBlocksCopyError,
+  layoutBlocksCreateError,
+  layoutBlocksReorderError,
   MAX_SECTION_DEPTH,
+  PRODUCT_LAYOUT_APP_KEY,
   orderSectionsAsTree,
   SectionTreeError,
   subtreeIds,
@@ -133,6 +138,10 @@ export class PagesV2Service {
     private readonly revalidation: RevalidationService,
     // Old-slug 301s (WP `_wp_old_slug`); optional for positional tests.
     @Optional() private readonly redirects?: RedirectsService,
+    // Per-store `product_layout` app (layout containers + product blocks).
+    // Global module, always injected in the app; when absent (positional
+    // tests) the flag reads as off.
+    @Optional() private readonly storeApps?: StoreAppsService,
   ) {}
 
   // ── Helpers ─────────────────────────────────────────────
@@ -303,6 +312,20 @@ export class PagesV2Service {
     // sort_order order for a page without containers.
     if (page) page.sections = orderSectionsAsTree(page.sections);
     return page;
+  }
+
+  /**
+   * Whether the store's `product_layout` app is in effect. Fails closed: an
+   * unreadable app state (DB hiccup) or a missing StoreAppsService counts
+   * as off, which only blocks new containers / product blocks.
+   */
+  private async layoutBlocksEnabled(storeId: string): Promise<boolean> {
+    if (!this.storeApps) return false;
+    const on = await this.storeApps.enabledOrUnknown(
+      storeId,
+      PRODUCT_LAYOUT_APP_KEY,
+    );
+    return on === true;
   }
 
   /** 400 with the tree error's code (section-tree.ts). */
@@ -803,6 +826,11 @@ export class PagesV2Service {
 
     const parentId = dto.parent_id ?? null;
     const container = isContainerSectionKey(dto.section_key);
+    const gate = layoutBlocksCreateError(
+      { section_key: dto.section_key, parent_id: parentId },
+      await this.layoutBlocksEnabled(storeId),
+    );
+    if (gate) throw this.treeError(gate);
     if (container || parentId !== null) {
       const page = await this.prisma.page.findUnique({
         where: { id: pageId },
@@ -980,11 +1008,17 @@ export class PagesV2Service {
       }),
       this.prisma.pageSection.findMany({
         where: { page_id: pageId },
-        select: { id: true, section_key: true },
+        select: { id: true, section_key: true, parent_id: true },
       }),
     ]);
     const err = validateTreeReorder(existing, dto.items, page?.type);
     if (err) throw this.treeError(err);
+    const gate = layoutBlocksReorderError(
+      existing,
+      dto.items,
+      await this.layoutBlocksEnabled(storeId),
+    );
+    if (gate) throw this.treeError(gate);
 
     await this.prisma.$transaction(
       dto.items.map((it) =>
@@ -1009,6 +1043,7 @@ export class PagesV2Service {
       sectionId,
       storeId,
     );
+    const layoutOn = await this.layoutBlocksEnabled(storeId);
 
     await this.prisma.$transaction(async (tx) => {
       const rows = await tx.pageSection.findMany({
@@ -1025,6 +1060,20 @@ export class PagesV2Service {
         });
       }
       const parentId = original.parent_id ?? null;
+      // App off: the copy may neither hold containers / product blocks nor
+      // land inside a container (same rules as adding a section).
+      const gate =
+        layoutBlocksCopyError(
+          subtreeIds(rows, sectionId)
+            .map((id) => byId.get(id))
+            .filter((r): r is (typeof rows)[number] => !!r),
+          layoutOn,
+        ) ??
+        layoutBlocksCreateError(
+          { section_key: original.section_key, parent_id: parentId },
+          layoutOn,
+        );
+      if (gate) throw this.treeError(gate);
 
       // Copy the subtree in pre-order, so a parent exists before its children.
       const newIdOf = new Map<string, string>();

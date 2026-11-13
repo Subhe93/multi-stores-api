@@ -46,7 +46,8 @@ export type SectionTreeErrorCode =
   | 'PAGE_SECTION_PARENT_NOT_CONTAINER'
   | 'PAGE_SECTION_TREE_CYCLE'
   | 'PAGE_SECTION_TREE_TOO_DEEP'
-  | 'PAGE_SECTION_CONTAINER_NOT_ALLOWED';
+  | 'PAGE_SECTION_CONTAINER_NOT_ALLOWED'
+  | 'PAGE_SECTION_LAYOUT_BLOCKS_DISABLED';
 
 export interface SectionTreeError {
   code: SectionTreeErrorCode;
@@ -320,4 +321,115 @@ export function countLeafSections(sections: readonly unknown[]): number {
     n++;
   }
   return n;
+}
+
+// ── Per-store feature flag: product layout blocks ─────────────────────────
+
+/**
+ * Product block section keys added with the layout containers (product
+ * layout waves 2-3). The older product sections (product-page, product-gallery,
+ * product-details, add-to-cart, product-tabs) are deliberately not listed:
+ * they stay available on every store.
+ */
+export const PRODUCT_LAYOUT_BLOCK_KEYS: readonly string[] = [
+  'product-breadcrumb',
+  'product-title',
+  'product-price',
+  'product-short-description',
+  'product-promotions',
+  'product-bundles',
+  'product-variants',
+  'product-personalization',
+  'product-buy',
+  'product-trust',
+  'product-shipping',
+];
+
+/** Store app (shared registry key) that unlocks containers + product blocks. */
+export const PRODUCT_LAYOUT_APP_KEY = 'product_layout' as const;
+
+/** True for keys that need the `product_layout` app: containers + new blocks. */
+export function requiresProductLayoutApp(
+  key: string | null | undefined,
+): boolean {
+  return (
+    !!key &&
+    (isContainerSectionKey(key) || PRODUCT_LAYOUT_BLOCK_KEYS.includes(key))
+  );
+}
+
+function layoutBlocksDisabled(
+  message: string,
+  sectionId?: string,
+): SectionTreeError {
+  return {
+    code: 'PAGE_SECTION_LAYOUT_BLOCKS_DISABLED',
+    message,
+    ...(sectionId ? { section_id: sectionId } : {}),
+  };
+}
+
+/**
+ * Gate for creating one section while the store's `product_layout` app is
+ * off: no container, no new product block and no parent. Null = allowed
+ * (always null when the app is on).
+ */
+export function layoutBlocksCreateError(
+  input: { section_key: string; parent_id?: string | null },
+  appEnabled: boolean,
+): SectionTreeError | null {
+  if (appEnabled) return null;
+  if (requiresProductLayoutApp(input.section_key)) {
+    return layoutBlocksDisabled(
+      `"${input.section_key}" needs the product layout blocks app, which is off for this store`,
+    );
+  }
+  if ((input.parent_id ?? null) !== null) {
+    return layoutBlocksDisabled(
+      'Placing sections inside layout containers needs the product layout blocks app, which is off for this store',
+    );
+  }
+  return null;
+}
+
+/**
+ * Gate for copying sections (subtree duplicate) while the app is off: the
+ * copy would create containers / new product blocks. Null = allowed.
+ */
+export function layoutBlocksCopyError(
+  nodes: readonly { id: string; section_key: string }[],
+  appEnabled: boolean,
+): SectionTreeError | null {
+  if (appEnabled) return null;
+  const gated = nodes.find((n) => requiresProductLayoutApp(n.section_key));
+  return gated
+    ? layoutBlocksDisabled(
+        `"${gated.section_key}" needs the product layout blocks app, which is off for this store`,
+        gated.id,
+      )
+    : null;
+}
+
+/**
+ * Gate for a tree reorder while the app is off: a section may keep its
+ * current parent (already-saved nesting keeps working and can be reordered)
+ * or move to the root, but never gain a new parent. Null = allowed.
+ */
+export function layoutBlocksReorderError(
+  existing: readonly { id: string; parent_id?: string | null }[],
+  items: readonly TreeReorderItem[],
+  appEnabled: boolean,
+): SectionTreeError | null {
+  if (appEnabled) return null;
+  const parentOf = new Map(existing.map((s) => [s.id, s.parent_id ?? null]));
+  for (const it of items) {
+    const next = it.parent_id ?? null;
+    if (next === null) continue;
+    if (parentOf.get(it.id) === next) continue;
+    return layoutBlocksDisabled(
+      'Moving sections into layout containers needs the product layout blocks app, which is off for this store',
+      it.id,
+    );
+  }
+  return null;
 }
