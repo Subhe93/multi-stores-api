@@ -8,10 +8,37 @@ import {
   CreatePromotionDto,
   UpdatePromotionDto,
   ValidateCouponDto,
+  CouponPreviewDto,
 } from './dto/promotion.dto';
 import { Prisma, UserRole } from '@prisma/client';
 import { MarketsContextService } from '../markets/markets-context.service';
 import { MarketPricingService } from '../markets/market-pricing.service';
+import { roundMoney } from '../../common/money/currency.util';
+
+/** POST /promotions/coupon-preview response. Amounts in market currency. */
+export interface CouponPreview {
+  /** The code as stored (canonical spelling). */
+  code: string;
+  /** null only for a FREE_SHIPPING promotion (no line discount). */
+  discount_kind: CouponDiscountKind | null;
+  percent: number | null;
+  amount: number | null;
+  free_shipping: boolean;
+  /** false when the coupon targets other products than product_id. */
+  applies: boolean;
+  min_amount: number | null;
+  min_quantity: number | null;
+  /** null when a minimum exists but the figure to check it was not sent. */
+  min_met: boolean | null;
+  discount_amount: number | null;
+}
+
+/** A threshold from the conditions JSON: a positive number, else none. */
+function positiveNumber(v: unknown): number | null {
+  if (v == null || v === '' || typeof v === 'boolean') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 /** The coupon conditions JSON as validateCoupon reads it. */
 interface PromotionConditions {
@@ -329,7 +356,15 @@ export class PromotionsService {
     return this.prisma.promotion.delete({ where: { id } });
   }
 
-  async validateCoupon(dto: ValidateCouponDto) {
+  /**
+   * The rules that decide whether a code is usable at all on this store:
+   * lookup, provider rejection, store ownership, status, dates and usage
+   * limit. Shared by validateCoupon and previewCoupon so they cannot drift.
+   * Cart-dependent checks (minimums, product targeting) stay with callers.
+   */
+  private async loadUsableCoupon(
+    dto: Pick<ValidateCouponDto, 'coupon_code' | 'store_id' | 'product_ids'>,
+  ) {
     const promo = await this.prisma.promotion.findUnique({
       where: { coupon_code: dto.coupon_code },
     });
@@ -388,25 +423,36 @@ export class PromotionsService {
       });
     }
 
-    // Check conditions
+    return promo;
+  }
+
+  async validateCoupon(dto: ValidateCouponDto) {
+    const promo = await this.loadUsableCoupon(dto);
+
+    // Check conditions. The truthiness guards are kept as they were so the
+    // set of coupons that pass does not change; only the errors are coded,
+    // so the storefront can keep a link coupon pending until the cart
+    // qualifies. Thresholds are in the store's base currency.
     const conditions = promo.conditions as PromotionConditions | null;
     if (
       conditions?.min_amount &&
       dto.subtotal &&
       dto.subtotal < conditions.min_amount
     ) {
-      throw new BadRequestException(
-        `Minimum order amount is ${conditions.min_amount}`,
-      );
+      throw new BadRequestException({
+        code: 'PROMOTION_COUPON_MIN_AMOUNT',
+        message: `Minimum order amount is ${conditions.min_amount}`,
+      });
     }
     if (
       conditions?.min_quantity &&
       dto.item_count &&
       dto.item_count < conditions.min_quantity
     ) {
-      throw new BadRequestException(
-        `Minimum ${conditions.min_quantity} items required`,
-      );
+      throw new BadRequestException({
+        code: 'PROMOTION_COUPON_MIN_QUANTITY',
+        message: `Minimum ${conditions.min_quantity} items required`,
+      });
     }
 
     // Check product targeting
@@ -426,6 +472,11 @@ export class PromotionsService {
     // targeted lines, never the rest of the cart. A fixed amount never
     // exceeds what it applies to.
     const base = discountBase(dto, conditions?.product_ids);
+    const targetIds = Array.isArray(conditions?.product_ids)
+      ? conditions.product_ids.filter(
+          (id): id is string => typeof id === 'string' && id !== '',
+        )
+      : [];
     const kind = discountKindOf(promo.type, conditions);
     let discount = 0;
     if (kind === 'percentage') {
@@ -444,6 +495,10 @@ export class PromotionsService {
       discount_kind: kind,
       discount_amount: Math.round(discount * 100) / 100,
       free_shipping: promo.type === 'FREE_SHIPPING',
+      // Product targeting, so the cart can estimate the discount on the
+      // targeted lines only when lines change (before it re-validates).
+      targeted: targetIds.length > 0,
+      product_ids: targetIds,
     };
   }
 
@@ -494,6 +549,105 @@ export class PromotionsService {
   }
 
   /**
+   * Product-page coupon preview for a link banner. Every reason a code is
+   * unusable (unknown, inactive, not started, expired, exhausted, provider
+   * owned, another store's) answers one uniform 400 PROMOTION_COUPON_INVALID
+   * so the banner cannot be used to probe codes. Cart-dependent facts
+   * (targeting, minimums) are reported as fields, not errors. Amounts in and
+   * out are in the market currency; thresholds are compared in the base
+   * currency exactly like validateCouponForCart, and discount_amount is
+   * computed and rounded like the order path does.
+   */
+  async previewCoupon(dto: CouponPreviewDto): Promise<CouponPreview> {
+    const market = dto.market
+      ? await this.marketsContext.resolve(dto.store_id, dto.market, {
+          preview: dto.preview === true,
+        })
+      : null;
+    const foreign = !!market && market.currency !== market.storeCurrency;
+    const toBase = (amount: number) =>
+      foreign ? this.marketPricing.toBaseMoney(market, amount) : amount;
+    const convert = (amount: number) =>
+      foreign ? this.marketPricing.convertMoney(market, amount) : amount;
+
+    let promo: Awaited<ReturnType<PromotionsService['loadUsableCoupon']>>;
+    try {
+      promo = await this.loadUsableCoupon({
+        coupon_code: dto.coupon_code,
+        store_id: dto.store_id,
+        product_ids: [dto.product_id],
+      });
+    } catch (err) {
+      if (err instanceof BadRequestException) {
+        throw new BadRequestException({
+          code: 'PROMOTION_COUPON_INVALID',
+          message: 'Invalid coupon code',
+        });
+      }
+      throw err;
+    }
+
+    const conditions = (promo.conditions ?? null) as PromotionConditions | null;
+    const kind = discountKindOf(promo.type, conditions);
+    const value = Number(promo.value);
+    const targets = Array.isArray(conditions?.product_ids)
+      ? conditions.product_ids
+      : [];
+    const applies = targets.length === 0 || targets.includes(dto.product_id);
+
+    // Thresholds: a positive number (numeric strings included, as the
+    // order path's comparisons coerce them) or no threshold at all.
+    const minAmountBase = positiveNumber(conditions?.min_amount);
+    const minQuantity = positiveNumber(conditions?.min_quantity);
+    const isNum = (v: unknown): v is number =>
+      typeof v === 'number' && Number.isFinite(v);
+
+    // true/false per threshold, undefined = not checkable (figure not sent).
+    const amountMet =
+      minAmountBase == null
+        ? true
+        : isNum(dto.cart_subtotal)
+          ? toBase(dto.cart_subtotal) >= minAmountBase
+          : undefined;
+    const quantityMet =
+      minQuantity == null
+        ? true
+        : isNum(dto.item_count)
+          ? dto.item_count >= minQuantity
+          : undefined;
+    const minMet: boolean | null =
+      amountMet === false || quantityMet === false
+        ? false
+        : amountMet === undefined || quantityMet === undefined
+          ? null
+          : true;
+
+    let discountAmount: number | null = null;
+    if (applies && minMet === true && isNum(dto.line_amount) && kind) {
+      const base = toBase(dto.line_amount);
+      const raw =
+        kind === 'percentage' ? base * (value / 100) : Math.min(value, base);
+      // Same steps as validateCoupon + OrdersService: round in base, convert
+      // to the market, round, never more than the line itself.
+      const inBase = Math.round(raw * 100) / 100;
+      discountAmount = Math.min(roundMoney(convert(inBase)), dto.line_amount);
+    }
+
+    return {
+      code: promo.coupon_code ?? dto.coupon_code,
+      discount_kind: kind,
+      percent: kind === 'percentage' ? value : null,
+      amount: kind === 'fixed' ? convert(value) : null,
+      free_shipping: promo.type === 'FREE_SHIPPING',
+      applies,
+      min_amount: minAmountBase == null ? null : convert(minAmountBase),
+      min_quantity: minQuantity,
+      min_met: minMet,
+      discount_amount: discountAmount,
+    };
+  }
+
+  /**
    * A creator's coupon is valid only on that creator's own store. A provider's
    * coupon is valid only when the cart actually contains an item that provider
    * fulfils (providers have no storefront of their own). Ownerless promotions
@@ -501,12 +655,16 @@ export class PromotionsService {
    */
   private async assertCouponAppliesToStore(
     promo: { creator_id: string | null; provider_id: string | null },
-    dto: ValidateCouponDto,
+    dto: Pick<ValidateCouponDto, 'store_id' | 'product_ids'>,
   ): Promise<void> {
+    // Another owner's code answers exactly like an unknown one: it can never
+    // apply here (the storefront discards it instead of retrying it), and
+    // validate-coupon is not an oracle for other stores' codes.
+    // PROMOTION_COUPON_NOT_APPLICABLE is kept for product targeting only.
     const notApplicable = () => {
       throw new BadRequestException({
-        code: 'PROMOTION_COUPON_NOT_APPLICABLE',
-        message: 'This coupon does not apply to the products in your cart',
+        code: 'PROMOTION_COUPON_INVALID',
+        message: 'Invalid coupon code',
       });
     };
 

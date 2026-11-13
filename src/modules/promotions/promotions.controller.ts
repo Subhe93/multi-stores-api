@@ -16,6 +16,7 @@ import {
   CreatePromotionDto,
   UpdatePromotionDto,
   ValidateCouponDto,
+  CouponPreviewDto,
 } from './dto/promotion.dto';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -97,5 +98,17 @@ export class PromotionsController {
   @Throttle({ default: { limit: 15, ttl: 60000 } })
   validateCoupon(@Body() dto: ValidateCouponDto) {
     return this.promotionsService.validateCouponForCart(dto);
+  }
+
+  // Public — product-page coupon banner. Its own throttle bucket (the
+  // throttler keys per handler), so banner lookups never eat into the
+  // cart's validate-coupon budget. Every unusable code answers the same
+  // PROMOTION_COUPON_INVALID, so it reveals no more than validate-coupon.
+  // Kept at validate-coupon's 15/min: the two buckets together are the
+  // per-IP probing budget, and the banner debounces and caches its calls.
+  @Post('coupon-preview')
+  @Throttle({ default: { limit: 15, ttl: 60000 } })
+  previewCoupon(@Body() dto: CouponPreviewDto) {
+    return this.promotionsService.previewCoupon(dto);
   }
 }
