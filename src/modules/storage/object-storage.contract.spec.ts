@@ -3,7 +3,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { Readable } from 'stream';
 import { LocalObjectStorage } from './local-object-storage';
-import { InvalidObjectKeyError, type ObjectStorage } from './object-storage';
+import {
+  InvalidObjectKeyError,
+  RangeNotSatisfiableError,
+  type ByteRangeSpec,
+  type ObjectStorage,
+} from './object-storage';
 import {
   resetDeniedDeleteWarnings,
   S3ObjectStorage,
@@ -89,6 +94,61 @@ function contract(
       expect((await collect(got!.stream)).equals(Buffer.concat(chunks))).toBe(
         true,
       );
+    });
+
+    it('reads byte ranges (closed, open, suffix, clamped) and refuses one past the end', async () => {
+      const body = Buffer.from('0123456789');
+      await storage.put('uploads/products/v.mp4', body, {
+        contentType: 'video/mp4',
+      });
+      const read = async (range: ByteRangeSpec) => {
+        const got = await storage.get('uploads/products/v.mp4', { range });
+        return {
+          range: got!.range,
+          size: got!.size,
+          text: (await collect(got!.stream)).toString(),
+        };
+      };
+      expect(await read({ start: 2, end: 4 })).toEqual({
+        range: { start: 2, end: 4 },
+        size: 10,
+        text: '234',
+      });
+      expect(await read({ start: 7 })).toEqual({
+        range: { start: 7, end: 9 },
+        size: 10,
+        text: '789',
+      });
+      expect(await read({ suffix: 3 })).toEqual({
+        range: { start: 7, end: 9 },
+        size: 10,
+        text: '789',
+      });
+      expect(await read({ suffix: 50 })).toMatchObject({
+        range: { start: 0, end: 9 },
+        text: '0123456789',
+      });
+      expect(await read({ start: 8, end: 999 })).toMatchObject({
+        range: { start: 8, end: 9 },
+        text: '89',
+      });
+      for (const range of [{ start: 10 }, { suffix: 0 }] as ByteRangeSpec[]) {
+        const err = await storage.get('uploads/products/v.mp4', { range }).then(
+          () => null,
+          (e: unknown) => e,
+        );
+        expect(err).toBeInstanceOf(RangeNotSatisfiableError);
+        expect((err as RangeNotSatisfiableError).head.size).toBe(10);
+      }
+      expect(
+        await storage.get('uploads/products/missing.mp4', {
+          range: { start: 0 },
+        }),
+      ).toBeNull();
+      // Without a range nothing changes.
+      const whole = await storage.get('uploads/products/v.mp4');
+      expect(whole!.range).toBeUndefined();
+      expect((await collect(whole!.stream)).equals(body)).toBe(true);
     });
 
     it('overwrites in place', async () => {

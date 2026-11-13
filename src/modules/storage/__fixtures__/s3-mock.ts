@@ -63,6 +63,15 @@ class NotFound extends Error {
   }
 }
 
+class InvalidRange extends Error {
+  $metadata = { httpStatusCode: 416 };
+  Code = 'InvalidRange';
+  constructor() {
+    super('The requested range is not satisfiable');
+    this.name = 'InvalidRange';
+  }
+}
+
 export class AccessDenied extends Error {
   $metadata = { httpStatusCode: 403 };
   Code = 'AccessDenied';
@@ -194,10 +203,39 @@ export function mockS3(
     });
   stub
     .on(GetObjectCommand)
-    .callsFake((input: { Bucket: string; Key: string }) => {
+    .callsFake((input: { Bucket: string; Key: string; Range?: string }) => {
       guard('GetObject');
       const o = objects.get(k(input.Bucket, input.Key));
       if (!o) throw new NotFound('NoSuchKey');
+      if (input.Range) {
+        // Single-range semantics of real S3: end clamped, suffix longer
+        // than the object = whole object, start past the end = 416.
+        const m = /^bytes=(\d*)-(\d*)$/.exec(input.Range);
+        const size = o.body.length;
+        if (m && (m[1] !== '' || m[2] !== '')) {
+          let start: number;
+          let end: number;
+          if (m[1] === '') {
+            start = Math.max(0, size - Number(m[2]));
+            end = size - 1;
+          } else {
+            start = Number(m[1]);
+            end = m[2] === '' ? size - 1 : Math.min(Number(m[2]), size - 1);
+          }
+          if (start >= size || end < start) throw new InvalidRange();
+          const slice = o.body.subarray(start, end + 1);
+          return {
+            Body: Readable.from([slice]) as never,
+            ContentLength: slice.length,
+            ContentRange: `bytes ${start}-${end}/${size}`,
+            ContentType: o.contentType,
+            ETag: o.etag,
+            LastModified: o.lastModified,
+            Metadata: o.metadata,
+            ServerSideEncryption: o.sse,
+          };
+        }
+      }
       return {
         Body: Readable.from([o.body]) as never,
         ContentLength: o.body.length,

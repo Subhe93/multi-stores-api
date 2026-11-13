@@ -20,7 +20,8 @@
  * - probe: HeadBucket, and when that is refused (403) a `ListObjectsV2
  *   MaxKeys=1` on the role prefix; never GetBucketLocation. The client is
  *   built with the configured region only.
- * - get streams the body (never buffered); a missing key answers null.
+ * - get streams the body (never buffered); a missing key answers null; an
+ *   optional byte range is passed to S3 as `Range` (206 Content-Range).
  * - the client retries 3 times and times out a request after 30 s.
  */
 import {
@@ -31,6 +32,7 @@ import {
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
+  type GetObjectCommandOutput,
   type PutObjectCommandInput,
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
@@ -40,11 +42,15 @@ import { createHash } from 'crypto';
 import { PassThrough, Readable } from 'stream';
 import {
   assertValidObjectKey,
+  formatRangeHeader,
   InvalidObjectKeyError,
   isValidObjectPrefix,
   normalizeKeyPrefix,
+  RangeNotSatisfiableError,
   type BucketRole,
   type DeleteObjectResult,
+  type GetObjectOptions,
+  type ResolvedByteRange,
   type ListObjectsOptions,
   type ListObjectsResult,
   type ObjectBody,
@@ -142,6 +148,44 @@ export function isAccessDenied(e: unknown): boolean {
     err?.name === 'Forbidden' ||
     err?.$metadata?.httpStatusCode === 403
   );
+}
+
+/** 416 / InvalidRange (the requested range starts past the end). */
+export function isInvalidRange(e: unknown): boolean {
+  const err = e as {
+    name?: string;
+    Code?: string;
+    $metadata?: { httpStatusCode?: number };
+  };
+  return (
+    err?.name === 'InvalidRange' ||
+    err?.Code === 'InvalidRange' ||
+    err?.$metadata?.httpStatusCode === 416
+  );
+}
+
+/** `bytes a-b/total` → offsets + total size; null for anything else. */
+export function parseContentRange(
+  value: string,
+): { start: number; end: number; size: number } | null {
+  const m = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(value.trim());
+  if (!m) return null;
+  const [start, end, size] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (![start, end, size].every(Number.isSafeInteger)) return null;
+  if (start > end || end >= size) return null;
+  return { start, end, size };
+}
+
+/** The SDK body (Node stream, web stream or async iterable) as a Readable. */
+function toReadable(body: unknown): Readable {
+  if (body instanceof Readable) return body;
+  const web = body as {
+    transformToWebStream?: () => import('stream/web').ReadableStream;
+  };
+  if (typeof web.transformToWebStream === 'function') {
+    return Readable.fromWeb(web.transformToWebStream());
+  }
+  return Readable.from(body as AsyncIterable<Uint8Array>);
 }
 
 /** Bucket/prefix pairs whose refused delete was already logged (one line per process). */
@@ -315,39 +359,64 @@ export class S3ObjectStorage implements ObjectStorage {
     }
   }
 
-  async get(key: string): Promise<ObjectBody | null> {
+  /**
+   * With `opts.range` one ranged GetObject (`Range: bytes=...`): S3 clamps
+   * the end, answers `Content-Range: bytes a-b/total`, and refuses a range
+   * past the end with 416 InvalidRange, which becomes
+   * `RangeNotSatisfiableError` (after a HeadObject for the size).
+   */
+  async get(key: string, opts?: GetObjectOptions): Promise<ObjectBody | null> {
     const Key = this.objectKey(key);
+    const range = opts?.range;
+    // `bytes=-0` is never satisfiable; do not leave its meaning to S3.
+    if (range && 'suffix' in range && range.suffix <= 0) {
+      return this.rangeNotSatisfiable(key);
+    }
+    let out: GetObjectCommandOutput;
     try {
-      const out = await this.client.send(
-        new GetObjectCommand({ Bucket: this.bucket, Key }),
+      out = await this.client.send(
+        new GetObjectCommand({
+          Bucket: this.bucket,
+          Key,
+          ...(range ? { Range: formatRangeHeader(range) } : {}),
+        }),
       );
-      const body = out.Body;
-      if (!body) return null;
-      const stream =
-        body instanceof Readable
-          ? body
-          : typeof (body as { transformToWebStream?: unknown })
-                .transformToWebStream === 'function'
-            ? Readable.fromWeb(
-                (
-                  body as {
-                    transformToWebStream: () => import('stream/web').ReadableStream;
-                  }
-                ).transformToWebStream(),
-              )
-            : Readable.from(body as AsyncIterable<Uint8Array>);
-      return {
-        stream,
-        size: out.ContentLength ?? 0,
-        etag: out.ETag ?? null,
-        lastModified: out.LastModified ?? null,
-        contentType: out.ContentType ?? null,
-        metadata: out.Metadata ?? {},
-      };
     } catch (e) {
       if (isNotFound(e)) return null;
+      if (range && isInvalidRange(e)) return this.rangeNotSatisfiable(key);
       throw e;
     }
+    const body = out.Body;
+    if (!body) return null;
+    const stream = toReadable(body);
+    let size = out.ContentLength ?? 0;
+    let resolved: ResolvedByteRange | undefined;
+    // S3 omits Content-Range when it sends the whole object; then the body
+    // is served as a full (200) response.
+    if (range && out.ContentRange) {
+      const parsed = parseContentRange(out.ContentRange);
+      if (!parsed) {
+        stream.destroy();
+        throw new Error(`Unexpected Content-Range: ${out.ContentRange}`);
+      }
+      size = parsed.size;
+      resolved = { start: parsed.start, end: parsed.end };
+    }
+    return {
+      stream,
+      size,
+      etag: out.ETag ?? null,
+      lastModified: out.LastModified ?? null,
+      contentType: out.ContentType ?? null,
+      metadata: out.Metadata ?? {},
+      ...(resolved ? { range: resolved } : {}),
+    };
+  }
+
+  private async rangeNotSatisfiable(key: string): Promise<null> {
+    const head = await this.head(key);
+    if (!head) return null;
+    throw new RangeNotSatisfiableError(head);
   }
 
   /**

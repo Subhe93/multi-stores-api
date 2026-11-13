@@ -16,6 +16,7 @@ import type { Readable } from 'stream';
 import { contentTypeFor, LocalObjectStorage } from './local-object-storage';
 import type {
   DeleteObjectResult,
+  GetObjectOptions,
   ObjectBody,
   ObjectHead,
   ObjectStorage,
@@ -266,10 +267,22 @@ export class PublicStorage {
     return readAll(obj.stream, maxBytes);
   }
 
-  /** Serving path (s3 mode): the object of an already validated key, or null. */
-  async getForServing(key: string): Promise<PublicObject | null> {
+  /**
+   * Serving path (s3 mode): the object of an already validated key, or null.
+   * `opts.range` reads one byte range (throws `RangeNotSatisfiableError`).
+   */
+  async getForServing(
+    key: string,
+    opts?: GetObjectOptions,
+  ): Promise<PublicObject | null> {
     if (!isPublicMediaKey(key)) return null;
-    return this.store.get(key);
+    return opts ? this.store.get(key, opts) : this.store.get(key);
+  }
+
+  /** Serving path for `HEAD`: the headers of an already validated key, or null. */
+  async headForServing(key: string): Promise<ObjectHead | null> {
+    if (!isPublicMediaKey(key)) return null;
+    return this.store.head(key);
   }
 
   /** Absolute URL for emails/feeds when a base is configured, else the relative one. */

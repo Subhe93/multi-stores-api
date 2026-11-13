@@ -6,6 +6,7 @@
  */
 import type {
   DeleteObjectResult,
+  GetObjectOptions,
   ListObjectsOptions,
   ListObjectsResult,
   ObjectBody,
@@ -36,8 +37,9 @@ export class DualReadObjectStorage implements ObjectStorage {
     return this.primary.put(key, body, opts);
   }
 
-  async get(key: string): Promise<ObjectBody | null> {
-    return (await this.primary.get(key)) ?? this.fallback.get(key);
+  /** A range the primary cannot satisfy throws there (the object exists in S3). */
+  async get(key: string, opts?: GetObjectOptions): Promise<ObjectBody | null> {
+    return (await this.primary.get(key, opts)) ?? this.fallback.get(key, opts);
   }
 
   async head(key: string): Promise<ObjectHead | null> {

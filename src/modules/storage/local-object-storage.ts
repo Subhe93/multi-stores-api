@@ -19,7 +19,10 @@ import {
   assertValidObjectKey,
   InvalidObjectKeyError,
   isValidObjectPrefix,
+  RangeNotSatisfiableError,
+  resolveByteRange,
   type DeleteObjectResult,
+  type GetObjectOptions,
   type ListObjectsOptions,
   type ListObjectsResult,
   type ListedObject,
@@ -181,10 +184,22 @@ export class LocalObjectStorage implements ObjectStorage {
     }
   }
 
-  async get(key: string): Promise<ObjectBody | null> {
+  async get(key: string, opts?: GetObjectOptions): Promise<ObjectBody | null> {
     const head = await this.head(key);
     if (!head) return null;
-    return { ...head, stream: createReadStream(this.resolve(key)) };
+    if (!opts?.range) {
+      return { ...head, stream: createReadStream(this.resolve(key)) };
+    }
+    const range = resolveByteRange(opts.range, head.size);
+    if (!range) throw new RangeNotSatisfiableError(head);
+    return {
+      ...head,
+      range,
+      stream: createReadStream(this.resolve(key), {
+        start: range.start,
+        end: range.end,
+      }),
+    };
   }
 
   async delete(key: string): Promise<DeleteObjectResult> {

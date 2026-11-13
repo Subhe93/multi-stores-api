@@ -45,6 +45,64 @@ export interface ObjectHead {
 
 export interface ObjectBody extends ObjectHead {
   stream: Readable;
+  /**
+   * Set when `stream` is a byte range of the object (inclusive offsets);
+   * `size` stays the full object size. Absent = the whole object.
+   */
+  range?: ResolvedByteRange;
+}
+
+/**
+ * One requested byte range (RFC 9110 §14.1.2): `bytes=a-b` / `bytes=a-`
+ * (`end` omitted) or `bytes=-n` (the last `n` bytes).
+ */
+export type ByteRangeSpec =
+  | { start: number; end?: number }
+  | { suffix: number };
+
+/** A range resolved against the object size: inclusive, `start <= end < size`. */
+export interface ResolvedByteRange {
+  start: number;
+  end: number;
+}
+
+export interface GetObjectOptions {
+  /** Read only this byte range (the driver clamps `end` to the object size). */
+  range?: ByteRangeSpec;
+}
+
+/**
+ * The requested range does not overlap the object (`bytes=a-` with
+ * `a >= size`, `bytes=-0`, any range of an empty object). Carries the
+ * object's headers so the caller can answer 416 with the object size.
+ */
+export class RangeNotSatisfiableError extends Error {
+  constructor(readonly head: ObjectHead) {
+    super('Requested range not satisfiable');
+    this.name = 'RangeNotSatisfiableError';
+  }
+}
+
+/** Resolves a range against an object size; null when unsatisfiable. */
+export function resolveByteRange(
+  spec: ByteRangeSpec,
+  size: number,
+): ResolvedByteRange | null {
+  if (size <= 0) return null;
+  if ('suffix' in spec) {
+    if (spec.suffix <= 0) return null;
+    return { start: Math.max(0, size - spec.suffix), end: size - 1 };
+  }
+  if (spec.start >= size) return null;
+  const end = spec.end === undefined ? size - 1 : Math.min(spec.end, size - 1);
+  if (end < spec.start) return null;
+  return { start: spec.start, end };
+}
+
+/** `Range` request header value of a spec (`bytes=a-b`, `bytes=a-`, `bytes=-n`). */
+export function formatRangeHeader(spec: ByteRangeSpec): string {
+  if ('suffix' in spec) return `bytes=-${spec.suffix}`;
+  return `bytes=${spec.start}-${spec.end === undefined ? '' : spec.end}`;
 }
 
 export interface ListObjectsOptions {
@@ -86,8 +144,12 @@ export interface ObjectStorage {
     body: Buffer | Readable,
     opts: PutObjectOptions,
   ): Promise<PutObjectResult>;
-  /** The object as a stream with its headers, or null when it does not exist. */
-  get(key: string): Promise<ObjectBody | null>;
+  /**
+   * The object as a stream with its headers, or null when it does not exist.
+   * With `opts.range` the stream is that byte range (`ObjectBody.range`
+   * set); an unsatisfiable range throws `RangeNotSatisfiableError`.
+   */
+  get(key: string, opts?: GetObjectOptions): Promise<ObjectBody | null>;
   head(key: string): Promise<ObjectHead | null>;
   /** `{ deleted: true }`, or `{ deleted: false, reason }` (never throws for a refused permission). */
   delete(key: string): Promise<DeleteObjectResult>;
