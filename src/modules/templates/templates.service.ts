@@ -4,8 +4,9 @@ import { productSlugContext } from '../../common/slug/product-slugs';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PageType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { writeRestorePoint } from '../pages-v2/page-snapshot';
 import { findKit, listKitSummaries } from './kits';
-import type { Kit, KitPage } from './kits/types';
+import type { Kit, KitPage, KitSection } from './kits/types';
 import { substituteAssets } from './kits/asset-substitution';
 import { materialiseKitAssets } from './kit-assets';
 import { PublicStorage } from '../storage/public-storage';
@@ -129,27 +130,39 @@ export class TemplatesService {
         );
         await tx.pageSection.deleteMany({ where: { page_id: page.id } });
 
-        let order = 0;
-        for (const section of kitPage.sections) {
-          const settings = substituteAssets(section.settings ?? {}, assetMap);
-          const translations = locales.map((locale) => ({
-            locale,
-            content: substituteAssets(
-              this.resolveContent(kit, section.content, locale),
-              assetMap,
-            ) as Prisma.InputJsonValue,
-          }));
-          await tx.pageSection.create({
-            data: {
-              page_id: page.id,
-              section_key: section.section_key,
-              sort_order: order++,
-              settings: settings as Prisma.InputJsonValue,
-              translations: { create: translations },
-            },
-          });
-          result.sectionsCreated++;
-        }
+        // Sections in kit order; a container's `children` are created inside
+        // it (sort_order is scoped to siblings).
+        const createSections = async (
+          sections: KitSection[],
+          parentId: string | null,
+        ) => {
+          let order = 0;
+          for (const section of sections) {
+            const settings = substituteAssets(section.settings ?? {}, assetMap);
+            const translations = locales.map((locale) => ({
+              locale,
+              content: substituteAssets(
+                this.resolveContent(kit, section.content, locale),
+                assetMap,
+              ) as Prisma.InputJsonValue,
+            }));
+            const created = await tx.pageSection.create({
+              data: {
+                page_id: page.id,
+                parent_id: parentId,
+                section_key: section.section_key,
+                sort_order: order++,
+                settings: settings as Prisma.InputJsonValue,
+                translations: { create: translations },
+              },
+              select: { id: true },
+            });
+            result.sectionsCreated++;
+            if (section.children?.length)
+              await createSections(section.children, created.id);
+          }
+        };
+        await createSections(kitPage.sections, null);
         result.pagesApplied++;
       }
 
@@ -332,52 +345,14 @@ export class TemplatesService {
 
   /** Capture the page's current sections + content + seo/translations as a
    *  PageVersion restore point (not published). No-op for empty pages. Shape
-   *  mirrors PagesV2Service.publish so restoreVersion can rebuild from it. */
+   *  mirrors PagesV2Service.publish (shared builder, incl. parent_id) so
+   *  restoreVersion can rebuild from it. */
   private async snapshotPage(
     tx: Prisma.TransactionClient,
     pageId: string,
     label: string,
   ) {
-    const page = await tx.page.findUnique({
-      where: { id: pageId },
-      include: {
-        translations: true,
-        sections: {
-          include: { translations: true },
-          orderBy: { sort_order: 'asc' },
-        },
-      },
-    });
-    if (!page || page.sections.length === 0) return;
-
-    const snapshot = {
-      page: {
-        type: page.type,
-        static_kind: page.static_kind,
-        slug: page.slug,
-        seo: page.seo,
-        translations: page.translations,
-      },
-      sections: page.sections.map((s) => ({
-        id: s.id,
-        section_key: s.section_key,
-        settings: s.settings,
-        sort_order: s.sort_order,
-        translations: s.translations.map((t) => ({
-          locale: t.locale,
-          content: t.content,
-        })),
-      })),
-    };
-
-    await tx.pageVersion.create({
-      data: {
-        page_id: pageId,
-        label,
-        snapshot: snapshot as Prisma.InputJsonValue,
-        published_at: null,
-      },
-    });
+    await writeRestorePoint(tx, pageId, label);
   }
 
   /** Create the page if absent (by the pre-resolved id) and upsert its

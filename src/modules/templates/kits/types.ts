@@ -18,6 +18,10 @@ export interface KitSection {
   // each store locale is seeded with content[locale] ?? content[fallbackLocale].
   // May also contain "@asset/<key>" placeholders (e.g. inside slide/item arrays).
   content?: Record<string, Record<string, unknown>>;
+  // Child sections, only on layout containers (layout-row / layout-column /
+  // layout-grid) and only on page types that allow containers (see
+  // pages-v2/section-tree.ts). Optional; existing kits are flat.
+  children?: KitSection[];
 }
 
 export interface KitPageTranslation {

@@ -4,6 +4,7 @@ import { PageStatus, PageType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { PagesV2Service } from '../pages-v2/pages-v2.service';
+import { writeRestorePoint } from '../pages-v2/page-snapshot';
 import { stripBrandFromThemeConfig } from '../stores/theme-config';
 import { findPreset, listPresetSummaries, toSummary } from './presets';
 import type {
@@ -342,55 +343,16 @@ export class ThemesService {
   /**
    * Capture the page's sections + content + seo/translations as a
    * PageVersion restore point (not published). Shape mirrors
-   * PagesV2Service.publish so restoreVersion can rebuild from it. Returns
-   * whether a version was written (false for a page without sections).
+   * PagesV2Service.publish (shared builder, incl. parent_id) so
+   * restoreVersion can rebuild from it. Returns whether a version was
+   * written (false for a page without sections).
    */
   private async snapshotPage(
     tx: Prisma.TransactionClient,
     pageId: string,
     label: string,
   ): Promise<boolean> {
-    const page = await tx.page.findUnique({
-      where: { id: pageId },
-      include: {
-        translations: true,
-        sections: {
-          include: { translations: true },
-          orderBy: { sort_order: 'asc' },
-        },
-      },
-    });
-    if (!page || page.sections.length === 0) return false;
-
-    const snapshot = {
-      page: {
-        type: page.type,
-        static_kind: page.static_kind,
-        slug: page.slug,
-        seo: page.seo,
-        translations: page.translations,
-      },
-      sections: page.sections.map((s) => ({
-        id: s.id,
-        section_key: s.section_key,
-        settings: s.settings,
-        sort_order: s.sort_order,
-        translations: s.translations.map((t) => ({
-          locale: t.locale,
-          content: t.content,
-        })),
-      })),
-    };
-
-    await tx.pageVersion.create({
-      data: {
-        page_id: pageId,
-        label,
-        snapshot: snapshot as Prisma.InputJsonValue,
-        published_at: null,
-      },
-    });
-    return true;
+    return writeRestorePoint(tx, pageId, label);
   }
 
   private async resolveCreatorStoreId(userId: string): Promise<string> {

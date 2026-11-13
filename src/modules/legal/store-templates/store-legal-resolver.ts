@@ -4,6 +4,7 @@ import {
   STORE_LEGAL_SLUGS,
   type StoreLegalSlug,
 } from './store-templates';
+import { CONTAINER_SECTION_KEYS } from '../../pages-v2/section-tree';
 
 /** Prisma surface the loader needs (service client or a transaction). */
 export interface StoreLegalDb {
@@ -14,7 +15,8 @@ export interface StoreLegalDb {
 
 /**
  * What the resolver needs from a published snapshot (see pages-v2
- * buildPublishSnapshot): the number of (visible) sections and the page
+ * buildPublishSnapshot): the number of (visible) content sections (layout
+ * containers not counted) and the page
  * titles per locale. Read with a JSON path query, never the whole snapshot.
  */
 export interface PublishedVersionMeta {
@@ -81,7 +83,10 @@ async function loadPublishedMeta(
   const rows = await db.$queryRaw<VersionMetaRow[]>`
     SELECT v.id,
       (CASE WHEN jsonb_typeof(v.snapshot->'sections') = 'array'
-        THEN jsonb_array_length(v.snapshot->'sections') ELSE 0
+        THEN (
+          SELECT count(*) FROM jsonb_array_elements(v.snapshot->'sections') AS s
+          WHERE NOT COALESCE(s->>'section_key' IN (${Prisma.join([...CONTAINER_SECTION_KEYS])}), false)
+        ) ELSE 0
       END)::int AS section_count,
       COALESCE((
         SELECT jsonb_agg(jsonb_build_object('locale', t->>'locale', 'title', t->>'title'))

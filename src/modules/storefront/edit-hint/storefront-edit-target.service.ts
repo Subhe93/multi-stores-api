@@ -5,6 +5,7 @@ import { StoreType, UserRole, UserStatus } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorefrontService } from '../storefront.service';
 import { EditHintTokenService } from './edit-hint-token.service';
+import { countLeafSections } from '../../pages-v2/section-tree';
 import {
   dashboardUrl,
   parseStorefrontPath,
@@ -171,7 +172,8 @@ export class StorefrontEditTargetService {
         ]);
         const sections = (v2?.snapshot as { sections?: unknown[] } | null)
           ?.sections;
-        if (v2 && Array.isArray(sections) && sections.length > 0) {
+        // Content sections only: an empty layout container is no content.
+        if (v2 && Array.isArray(sections) && countLeafSections(sections) > 0) {
           return { path: `/builder/${v2.id}`, kind: 'page' };
         }
         if (legacy)

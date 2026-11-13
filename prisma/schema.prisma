@@ -2001,6 +2001,9 @@ model PageSection {
   id          String   @id @default(uuid())
   page_id     String
   section_key String // key from the theme registry (e.g. 'hero-banner')
+  // Layout container this section sits in (layout-row / layout-column /
+  // layout-grid). NULL = root. sort_order is scoped to siblings.
+  parent_id   String?
   settings    Json     @default("{}")
   sort_order  Int      @default(0)
   is_hidden   Boolean  @default(false)
@@ -2008,9 +2011,12 @@ model PageSection {
   updated_at  DateTime @updatedAt
 
   page         Page                     @relation(fields: [page_id], references: [id], onDelete: Cascade)
+  parent       PageSection?             @relation("PageSectionTree", fields: [parent_id], references: [id], onDelete: Cascade)
+  children     PageSection[]            @relation("PageSectionTree")
   translations PageSectionTranslation[]
 
   @@index([page_id, sort_order])
+  @@index([page_id, parent_id, sort_order])
 }
 
 model PageSectionTranslation {

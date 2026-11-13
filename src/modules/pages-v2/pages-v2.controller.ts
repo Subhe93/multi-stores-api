@@ -18,6 +18,7 @@ import {
   CreateSectionDto,
   PublishPageDto,
   ReorderSectionsDto,
+  ReorderSectionTreeDto,
   UpdatePageDto,
   UpdateSectionDto,
 } from './dto/pages.dto';
@@ -136,6 +137,27 @@ export class PagesV2Controller {
     @Body() dto: ReorderSectionsDto,
   ) {
     return this.service.reorderSections(userId, pageId, dto);
+  }
+
+  // Full-tree reorder: every section of the page with its parent_id and
+  // sibling sort_order, validated and written in one transaction.
+  @Put(':id/sections/tree')
+  reorderSectionTree(
+    @CurrentUser('id') userId: string,
+    @Param('id') pageId: string,
+    @Body() dto: ReorderSectionTreeDto,
+  ) {
+    return this.service.reorderSectionTree(userId, pageId, dto);
+  }
+
+  // Copy a section with its subtree right after the original; returns the
+  // page's full updated section list.
+  @Post('sections/:sectionId/duplicate')
+  duplicateSection(
+    @CurrentUser('id') userId: string,
+    @Param('sectionId') sectionId: string,
+  ) {
+    return this.service.duplicateSection(userId, sectionId);
   }
 
   // ── Publish / versions ───────────────────────────────

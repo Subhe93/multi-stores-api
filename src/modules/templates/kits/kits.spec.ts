@@ -1,5 +1,7 @@
 import { KITS } from './index';
 import { substituteAssets } from './asset-substitution';
+import type { KitSection } from './types';
+import { validateSectionTree } from '../../pages-v2/section-tree';
 
 // Section keys registered in the storefront theme registry
 // (multi-stores-web/src/themes/minimal/theme.ts). Kits may only reference
@@ -48,7 +50,16 @@ const VALID_SECTION_KEYS = new Set([
   'announcement-bar',
   'mega-menu',
   'mobile-bottom-nav',
+  // Layout containers (pages-v2/section-tree.ts CONTAINER_SECTION_KEYS).
+  'layout-row',
+  'layout-column',
+  'layout-grid',
 ]);
+
+// Every section of a page including container children (pre-order).
+function allSections(sections: KitSection[]): KitSection[] {
+  return sections.flatMap((s) => [s, ...allSections(s.children ?? [])]);
+}
 
 const ASSET_PREFIX = '@asset/';
 
@@ -85,9 +96,29 @@ describe('template kit catalog integrity', () => {
 
     it('only references section keys registered in the theme', () => {
       for (const page of kit.pages) {
-        for (const section of page.sections) {
+        for (const section of allSections(page.sections)) {
           expect(VALID_SECTION_KEYS.has(section.section_key)).toBe(true);
         }
+      }
+    });
+
+    it('nests children only in containers, within the depth limit', () => {
+      for (const page of kit.pages) {
+        const nodes: {
+          id: string;
+          parent_id: string | null;
+          section_key: string;
+        }[] = [];
+        let n = 0;
+        const walk = (list: KitSection[], parent: string | null) => {
+          for (const s of list) {
+            const id = `s${n++}`;
+            nodes.push({ id, parent_id: parent, section_key: s.section_key });
+            walk(s.children ?? [], id);
+          }
+        };
+        walk(page.sections, null);
+        expect(validateSectionTree(nodes, page.type)).toBeNull();
       }
     });
 
@@ -96,7 +127,7 @@ describe('template kit catalog integrity', () => {
       const refs = new Set<string>();
       collectAssetRefs(kit.previewImage, refs);
       for (const page of kit.pages) {
-        for (const section of page.sections) {
+        for (const section of allSections(page.sections)) {
           collectAssetRefs(section.settings, refs);
           collectAssetRefs(section.content, refs);
         }
@@ -111,7 +142,7 @@ describe('template kit catalog integrity', () => {
       // If a section ships `content`, it must at least cover the fallback locale
       // so every store locale resolves to something.
       for (const page of kit.pages) {
-        for (const section of page.sections) {
+        for (const section of allSections(page.sections)) {
           if (section.content && Object.keys(section.content).length > 0) {
             expect(section.content[kit.fallbackLocale]).toBeDefined();
           }

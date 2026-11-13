@@ -28,9 +28,21 @@ import {
   CreateSectionDto,
   PublishPageDto,
   ReorderSectionsDto,
+  ReorderSectionTreeDto,
   UpdatePageDto,
   UpdateSectionDto,
 } from './dto/pages.dto';
+import { buildPageSnapshot, SnapshotSourcePage } from './page-snapshot';
+import {
+  containersAllowedOnPage,
+  depthUnder,
+  isContainerSectionKey,
+  MAX_SECTION_DEPTH,
+  orderSectionsAsTree,
+  SectionTreeError,
+  subtreeIds,
+  validateTreeReorder,
+} from './section-tree';
 
 /**
  * Default settings of the `product-listing` magic section. Used to seed both
@@ -79,42 +91,17 @@ export function assertSlugNotReserved(slug: string): void {
 }
 
 /** A page with the rows a publish snapshot is built from. */
-export type PublishablePage = Prisma.PageGetPayload<{
-  include: {
-    translations: true;
-    sections: { include: { translations: true } };
-  };
-}>;
+export type PublishablePage = SnapshotSourcePage;
 
 /**
  * The published snapshot of a page: its SEO/translations and the visible
- * sections in order. Hidden sections are left out so the storefront never
+ * sections in tree order, each with its `parent_id`. Hidden sections (and
+ * everything inside a hidden container) are left out so the storefront never
  * renders them. Shared by `publish()` and the occasion conversion, which
  * publishes inside its own transaction.
  */
 export function buildPublishSnapshot(page: PublishablePage) {
-  return {
-    page: {
-      type: page.type,
-      static_kind: page.static_kind,
-      slug: page.slug,
-      seo: page.seo,
-      translations: page.translations,
-    },
-    sections: page.sections
-      .filter((s) => !s.is_hidden)
-      .sort((a, b) => a.sort_order - b.sort_order)
-      .map((s) => ({
-        id: s.id,
-        section_key: s.section_key,
-        settings: s.settings,
-        sort_order: s.sort_order,
-        translations: s.translations.map((t) => ({
-          locale: t.locale,
-          content: t.content,
-        })),
-      })),
-  };
+  return buildPageSnapshot(page, 'publish');
 }
 
 /** Writes the version row and points the page at it (status PUBLISHED). */
@@ -128,7 +115,7 @@ export async function publishPageTx(
     data: {
       page_id: pageId,
       label: label ?? null,
-      snapshot: snapshot as Prisma.InputJsonValue,
+      snapshot: snapshot as unknown as Prisma.InputJsonValue,
       published_at: new Date(),
     },
   });
@@ -302,7 +289,7 @@ export class PagesV2Service {
   async getById(userId: string, pageId: string) {
     const storeId = await this.resolveCreatorStoreId(userId);
     await this.assertPageBelongsToStore(pageId, storeId);
-    return this.prisma.page.findUnique({
+    const page = await this.prisma.page.findUnique({
       where: { id: pageId },
       include: {
         translations: true,
@@ -311,6 +298,19 @@ export class PagesV2Service {
           orderBy: { sort_order: 'asc' },
         },
       },
+    });
+    // Depth-first tree order (each section carries parent_id); identical to
+    // sort_order order for a page without containers.
+    if (page) page.sections = orderSectionsAsTree(page.sections);
+    return page;
+  }
+
+  /** 400 with the tree error's code (section-tree.ts). */
+  private treeError(err: SectionTreeError): BadRequestException {
+    return new BadRequestException({
+      code: err.code,
+      message: err.message,
+      ...(err.section_id ? { section_id: err.section_id } : {}),
     });
   }
 
@@ -784,25 +784,77 @@ export class PagesV2Service {
   async listSections(userId: string, pageId: string) {
     const storeId = await this.resolveCreatorStoreId(userId);
     await this.assertPageBelongsToStore(pageId, storeId);
-    return this.prisma.pageSection.findMany({
+    return this.loadSectionList(pageId);
+  }
+
+  /** The page's sections with translations, in depth-first tree order. */
+  private async loadSectionList(pageId: string) {
+    const rows = await this.prisma.pageSection.findMany({
       where: { page_id: pageId },
       include: { translations: true },
       orderBy: { sort_order: 'asc' },
     });
+    return orderSectionsAsTree(rows);
   }
 
   async addSection(userId: string, pageId: string, dto: CreateSectionDto) {
     const storeId = await this.resolveCreatorStoreId(userId);
     await this.assertPageBelongsToStore(pageId, storeId);
 
+    const parentId = dto.parent_id ?? null;
+    const container = isContainerSectionKey(dto.section_key);
+    if (container || parentId !== null) {
+      const page = await this.prisma.page.findUnique({
+        where: { id: pageId },
+        select: { type: true },
+      });
+      if (!containersAllowedOnPage(page?.type)) {
+        throw this.treeError({
+          code: 'PAGE_SECTION_CONTAINER_NOT_ALLOWED',
+          message: `Layout containers are not available on ${page?.type ?? 'this'} pages`,
+        });
+      }
+    }
+    if (parentId !== null) {
+      const nodes = await this.prisma.pageSection.findMany({
+        where: { page_id: pageId },
+        select: { id: true, parent_id: true, section_key: true },
+      });
+      const parent = nodes.find((n) => n.id === parentId);
+      if (!parent) {
+        throw this.treeError({
+          code: 'PAGE_SECTION_PARENT_INVALID',
+          message: `Parent ${parentId} is not on this page`,
+        });
+      }
+      if (!isContainerSectionKey(parent.section_key)) {
+        throw this.treeError({
+          code: 'PAGE_SECTION_PARENT_NOT_CONTAINER',
+          message: `Section ${parent.id} (${parent.section_key}) cannot hold sections`,
+        });
+      }
+      const depth = depthUnder(nodes, parentId);
+      const limit = container ? MAX_SECTION_DEPTH - 1 : MAX_SECTION_DEPTH;
+      if (depth === null || depth > limit) {
+        throw this.treeError({
+          code: 'PAGE_SECTION_TREE_TOO_DEEP',
+          message: `Sections can be nested at most ${MAX_SECTION_DEPTH} levels deep`,
+        });
+      }
+    }
+
+    // Appended after its siblings by default (sort_order is sibling-scoped).
     const sortOrder =
       dto.sort_order ??
-      (await this.prisma.pageSection.count({ where: { page_id: pageId } })) ??
+      (await this.prisma.pageSection.count({
+        where: { page_id: pageId, parent_id: parentId },
+      })) ??
       0;
 
     return this.prisma.pageSection.create({
       data: {
         page_id: pageId,
+        parent_id: parentId,
         section_key: dto.section_key,
         settings: (dto.settings as Prisma.InputJsonValue) ?? {},
         sort_order: sortOrder,
@@ -857,12 +909,19 @@ export class PagesV2Service {
     });
   }
 
+  /** Deletes the section; the DB cascade removes everything inside it. */
   async deleteSection(userId: string, sectionId: string) {
     const storeId = await this.resolveCreatorStoreId(userId);
     await this.assertSectionBelongsToStore(sectionId, storeId);
     return this.prisma.pageSection.delete({ where: { id: sectionId } });
   }
 
+  /**
+   * Legacy flat reorder: `section_ids` in display order. sort_order is
+   * renumbered per sibling group (same parent_id) in the order given, which
+   * for a page without containers is the plain index as before. Parents are
+   * not changed here; reorderSectionTree moves sections between containers.
+   */
   async reorderSections(
     userId: string,
     pageId: string,
@@ -875,7 +934,7 @@ export class PagesV2Service {
     // can't shuffle sections across pages.
     const owned = await this.prisma.pageSection.findMany({
       where: { id: { in: dto.section_ids }, page_id: pageId },
-      select: { id: true },
+      select: { id: true, parent_id: true },
     });
     if (owned.length !== dto.section_ids.length) {
       throw new BadRequestException({
@@ -884,15 +943,138 @@ export class PagesV2Service {
       });
     }
 
+    const parentOf = new Map(owned.map((o) => [o.id, o.parent_id ?? null]));
+    const nextIndex = new Map<string | null, number>();
     await this.prisma.$transaction(
-      dto.section_ids.map((id, idx) =>
-        this.prisma.pageSection.update({
+      dto.section_ids.map((id) => {
+        const parent = parentOf.get(id) ?? null;
+        const idx = nextIndex.get(parent) ?? 0;
+        nextIndex.set(parent, idx + 1);
+        return this.prisma.pageSection.update({
           where: { id },
           data: { sort_order: idx },
+        });
+      }),
+    );
+    return this.listSections(userId, pageId);
+  }
+
+  /**
+   * Tree reorder: `items` is the page's full section list with the new
+   * parent_id + sort_order of each section. Validated as a whole (every id
+   * of this page exactly once, parents are containers on a page that allows
+   * them, depth, no cycles) and written in one transaction.
+   */
+  async reorderSectionTree(
+    userId: string,
+    pageId: string,
+    dto: ReorderSectionTreeDto,
+  ) {
+    const storeId = await this.resolveCreatorStoreId(userId);
+    await this.assertPageBelongsToStore(pageId, storeId);
+
+    const [page, existing] = await Promise.all([
+      this.prisma.page.findUnique({
+        where: { id: pageId },
+        select: { type: true },
+      }),
+      this.prisma.pageSection.findMany({
+        where: { page_id: pageId },
+        select: { id: true, section_key: true },
+      }),
+    ]);
+    const err = validateTreeReorder(existing, dto.items, page?.type);
+    if (err) throw this.treeError(err);
+
+    await this.prisma.$transaction(
+      dto.items.map((it) =>
+        this.prisma.pageSection.update({
+          where: { id: it.id },
+          data: { parent_id: it.parent_id ?? null, sort_order: it.sort_order },
         }),
       ),
     );
-    return this.listSections(userId, pageId);
+    return this.loadSectionList(pageId);
+  }
+
+  /**
+   * Duplicates a section with its whole subtree (settings, hidden flag and
+   * per-locale content). The copy lands right after the original among its
+   * siblings, whose sort_orders are renumbered 0..n. Returns the page's
+   * full, updated section list.
+   */
+  async duplicateSection(userId: string, sectionId: string) {
+    const storeId = await this.resolveCreatorStoreId(userId);
+    const { pageId } = await this.assertSectionBelongsToStore(
+      sectionId,
+      storeId,
+    );
+
+    await this.prisma.$transaction(async (tx) => {
+      const rows = await tx.pageSection.findMany({
+        where: { page_id: pageId },
+        include: { translations: true },
+        orderBy: { sort_order: 'asc' },
+      });
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      const original = byId.get(sectionId);
+      if (!original) {
+        throw new NotFoundException({
+          code: 'PAGE_SECTION_NOT_FOUND',
+          message: 'Section not found',
+        });
+      }
+      const parentId = original.parent_id ?? null;
+
+      // Copy the subtree in pre-order, so a parent exists before its children.
+      const newIdOf = new Map<string, string>();
+      for (const id of subtreeIds(rows, sectionId)) {
+        const src = byId.get(id);
+        if (!src) continue;
+        const copyParent =
+          id === sectionId
+            ? parentId
+            : (newIdOf.get(src.parent_id ?? '') ?? null);
+        const created = await tx.pageSection.create({
+          data: {
+            page_id: pageId,
+            parent_id: copyParent,
+            section_key: src.section_key,
+            settings: (src.settings ?? {}) as Prisma.InputJsonValue,
+            sort_order: src.sort_order,
+            is_hidden: src.is_hidden,
+            translations: {
+              create: src.translations.map((t) => ({
+                locale: t.locale,
+                content: (t.content ?? {}) as Prisma.InputJsonValue,
+              })),
+            },
+          },
+          select: { id: true },
+        });
+        newIdOf.set(id, created.id);
+      }
+
+      // Place the copy right after the original and renumber the siblings.
+      const siblings = rows
+        .filter((r) => (r.parent_id ?? null) === parentId)
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((r) => r.id);
+      siblings.splice(
+        siblings.indexOf(sectionId) + 1,
+        0,
+        newIdOf.get(sectionId) as string,
+      );
+      for (let i = 0; i < siblings.length; i++) {
+        const id = siblings[i];
+        if (byId.get(id)?.sort_order === i) continue;
+        await tx.pageSection.update({
+          where: { id },
+          data: { sort_order: i },
+        });
+      }
+    });
+    return this.loadSectionList(pageId);
   }
 
   // ── Publish / versions ─────────────────────────────────
@@ -909,8 +1091,9 @@ export class PagesV2Service {
       where: { id: pageId },
       include: {
         translations: true,
+        // All sections: the snapshot builder drops hidden ones together
+        // with everything inside a hidden container.
         sections: {
-          where: { is_hidden: false },
           include: { translations: true },
           orderBy: { sort_order: 'asc' },
         },
@@ -1010,9 +1193,13 @@ export class PagesV2Service {
         }>;
       };
       sections?: Array<{
+        id?: string;
+        parent_id?: string | null;
         section_key: string;
         settings: Record<string, unknown>;
         sort_order: number;
+        // Present on restore points (drafts) only.
+        is_hidden?: boolean;
         translations: Array<{
           locale: string;
           content: Record<string, unknown>;
@@ -1021,16 +1208,28 @@ export class PagesV2Service {
     };
 
     await this.prisma.$transaction(async (tx) => {
-      // Wipe current sections — cascades remove their translations.
+      // Wipe current sections — cascades remove their translations and the
+      // sections inside containers.
       await tx.pageSection.deleteMany({ where: { page_id: pageId } });
 
       // Recreate sections from the snapshot. Use fresh ids so the snapshot
-      // itself remains immutable as a history record.
+      // itself remains immutable as a history record. Tree order creates
+      // every parent before its children so parent ids can be remapped;
+      // snapshots from before containers have no parent_id (all root).
       if (snapshot.sections?.length) {
-        for (const s of snapshot.sections) {
-          await tx.pageSection.create({
+        const newIdOf = new Map<string, string>();
+        for (const s of orderSectionsAsTree(snapshot.sections)) {
+          const oldParent = s.parent_id ?? null;
+          const parentId =
+            oldParent !== null ? (newIdOf.get(oldParent) ?? null) : null;
+          // A child whose parent was not recreated is skipped instead of
+          // surfacing at the root.
+          if (oldParent !== null && parentId === null) continue;
+          const created = await tx.pageSection.create({
             data: {
               page_id: pageId,
+              parent_id: parentId,
+              ...(s.is_hidden === true ? { is_hidden: true } : {}),
               section_key: s.section_key,
               settings: (s.settings as Prisma.InputJsonValue) ?? {},
               sort_order: s.sort_order,
@@ -1041,7 +1240,9 @@ export class PagesV2Service {
                 })),
               },
             },
+            select: { id: true },
           });
+          if (s.id) newIdOf.set(s.id, created.id);
         }
       }
 

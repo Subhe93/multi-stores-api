@@ -1,4 +1,5 @@
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsEnum,
@@ -129,6 +130,13 @@ export class CreateSectionDto {
   @Type(() => Number)
   sort_order?: number;
 
+  // Layout container (layout-row / -column / -grid) to add the section
+  // into; absent or null = root.
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  parent_id?: string | null;
+
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
@@ -163,6 +171,33 @@ export class ReorderSectionsDto {
   @IsArray()
   @IsString({ each: true })
   section_ids: string[];
+}
+
+export class SectionTreeItemDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(64)
+  id: string;
+
+  // Absent or null = root.
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  parent_id?: string | null;
+
+  @IsInt()
+  @Min(0)
+  @Type(() => Number)
+  sort_order: number;
+}
+
+/** Full section list of a page with each section's parent + sibling order. */
+export class ReorderSectionTreeDto {
+  @IsArray()
+  @ArrayMaxSize(1000)
+  @ValidateNested({ each: true })
+  @Type(() => SectionTreeItemDto)
+  items: SectionTreeItemDto[];
 }
 
 // ── Publish / versions ──────────────────────────────────
