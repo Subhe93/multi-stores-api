@@ -6,7 +6,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { StaticPageType, StoreStatus, StoreType } from '@prisma/client';
+import { Prisma, StaticPageType, StoreStatus, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { sanitizeCreatorHtml } from '../../common/html/creator-html';
@@ -68,7 +68,7 @@ const STORE_SELECT = {
   language_config: {
     select: { primary_locale: true, secondary_locales: true },
   },
-} as const;
+} as const satisfies Prisma.StoreSelect;
 
 /** Tracker ids of a store (public ids, never secrets). */
 type LegalTrackingIds = {

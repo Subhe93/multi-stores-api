@@ -574,7 +574,7 @@ const SWEEP_ORDER_SELECT = {
   stripe_account_id: true,
   stripe_payment_id: true,
   stripe_key_fingerprint: true,
-} as const;
+} as const satisfies Prisma.OrderSelect;
 
 /** 409 of any status / fulfillment / payment move on a trashed order (M69). */
 function orderDeleted(): ConflictException {
