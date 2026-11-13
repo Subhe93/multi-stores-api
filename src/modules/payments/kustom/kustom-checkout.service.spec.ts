@@ -343,6 +343,23 @@ describe('KustomCheckoutService.createSession with a market', () => {
       /^https:\/\/api\.example\.com\/api\/payments\/kustom\/checkout\/push\?/,
     );
     expect(res.totals?.currency).toBe('EUR');
+    // The quote ran without a priced destination: 0 shipping is unknown.
+    expect(res.totals?.shipping_quoted).toBe(false);
+  });
+
+  it('totals.shipping_quoted is true when a destination was priced (0 = free shipping)', () => {
+    const { service } = build(null);
+    const quote = {
+      ...quoteFor('SEK'),
+      shipping: { available: true, cost: 0, estimated_days: null, method: null, methods: [] },
+    };
+    const res = (
+      service as unknown as {
+        sessionResponse: (s: unknown, c: unknown, q: unknown) => { totals: { shipping_quoted: boolean; shipping_cost: number } };
+      }
+    ).sessionResponse({ id: 's1', token: 't1', kustom_order_id: 'k1' }, { order_id: 'k1', html_snippet: '', status: 'checkout_incomplete' }, quote);
+    expect(res.totals.shipping_cost).toBe(0);
+    expect(res.totals.shipping_quoted).toBe(true);
   });
 
   it('a foreign host is replaced by the market primary; dto.locale wins over the market default', async () => {

@@ -857,6 +857,10 @@ export class KustomCheckoutService {
         ? {
             subtotal: quote.subtotal,
             shipping_cost: quote.shipping_cost,
+            // True when a destination was priced (shipping_cost is real, so 0
+            // means free shipping). False when the quote ran without a country
+            // and shipping is still unknown.
+            shipping_quoted: quote.shipping?.available === true,
             discount_amount: quote.discount_amount,
             tax_lines: quote.tax_lines,
             tax_total: quote.tax_total,
