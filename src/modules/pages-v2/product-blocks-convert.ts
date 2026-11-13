@@ -8,8 +8,9 @@
  *   layout-row (two columns from 768px, stacks on mobile)
  *     layout-column (sticky from 768px)  -> product-gallery
  *     layout-column                      -> title, price, short description,
- *                                           promotions, bundles,
- *                                           variants, personalization, buy,
+ *                                           promotions, bundles, divider,
+ *                                           variants, personalization,
+ *                                           divider, buy,
  *                                           trust, shipping (if shown)
  *   product-tabs (if shown)
  *
@@ -83,6 +84,20 @@ const ROW_GAP_PX = 56;
 const ROW_GAP_TABLET_PX = 32;
 /** The monolith's spacing between the info blocks (gap-5). */
 const INFO_COLUMN_GAP_PX = 20;
+
+/**
+ * The monolith's thin info-column divider (`border-t border-gray-100`: a 1px
+ * box whose top border is the line) as a `spacer` section: 1px tall with its
+ * 1px rule centred, so it takes the same room and draws the same line at the
+ * same spot. #f3f4f6 = Tailwind v4 gray-100. The column's gap puts 20px on
+ * either side, like gap-5. Same settings as the dashboard's Classic preset.
+ */
+export const CLASSIC_DIVIDER_SETTINGS = {
+  height_px: 1,
+  show_divider: true,
+  divider_style: 'solid',
+  divider_color: '#f3f4f6',
+};
 
 /**
  * Vertical spacing of the monolith as section padding (desktop >= 1024px,
@@ -413,6 +428,9 @@ export function planClassicProductTree(
   add('short-description', 'info-col', 'product-short-description', {});
   add('promotions', 'info-col', 'product-promotions', { show_end_date: true });
   add('bundles', 'info-col', 'product-bundles', {});
+  // The monolith's first divider: always shown, after promotions / bundles
+  // (which render nothing when a product has none).
+  add('divider-variants', 'info-col', 'spacer', { ...CLASSIC_DIVIDER_SETTINGS });
   // The personalization app's before-variants fields sit above the picker,
   // as in the monolith; the block renders nothing when a product has none.
   add('personalization-before', 'info-col', 'product-personalization', {
@@ -428,6 +446,8 @@ export function planClassicProductTree(
     show_heading: true,
     button_style: buttonStyle,
   });
+  // The monolith's second divider: always shown, above quantity + add to cart.
+  add('divider-buy', 'info-col', 'spacer', { ...CLASSIC_DIVIDER_SETTINGS });
   add('buy', 'info-col', 'product-buy', {
     button_style: buttonStyle,
     show_quantity: true,

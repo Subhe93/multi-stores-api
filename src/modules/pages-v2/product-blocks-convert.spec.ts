@@ -3,6 +3,7 @@ import type { PrismaService } from '../../prisma/prisma.service';
 import type { StoreAppsService } from '../store-apps/store-apps.service';
 import {
   CLASSIC_BREADCRUMB_PADDING,
+  CLASSIC_DIVIDER_SETTINGS,
   CLASSIC_ROW_PADDING,
   CLASSIC_TABS_PADDING,
   CONVERTED_FROM_KEY,
@@ -215,7 +216,7 @@ describe('ProductBlocksConvertService.convert', () => {
       'hero-banner',
       'product-page',
       'product-breadcrumb',
-      'layout-row(layout-column(product-gallery),layout-column(product-title,product-price,product-short-description,product-promotions,product-bundles,product-personalization,product-variants,product-personalization,product-buy,product-trust,product-shipping))',
+      'layout-row(layout-column(product-gallery),layout-column(product-title,product-price,product-short-description,product-promotions,product-bundles,spacer,product-personalization,product-variants,product-personalization,spacer,product-buy,product-trust,product-shipping))',
       'product-tabs',
       'faq-list',
     ]);
@@ -233,9 +234,11 @@ describe('ProductBlocksConvertService.convert', () => {
       'product-short-description',
       'product-promotions',
       'product-bundles',
+      'spacer',
       'product-personalization',
       'product-variants',
       'product-personalization',
+      'spacer',
       'product-buy',
       'product-trust',
       'product-shipping',
@@ -594,6 +597,29 @@ describe('planClassicProductTree', () => {
     // Each plan gets its own copies of the padding objects.
     (byRef('tabs').settings._style as { padding: { desktop: { top: number } } }).padding.desktop.top = 1;
     expect(CLASSIC_TABS_PADDING.desktop.top).toBe(24);
+  });
+
+  it("reproduces the monolith's two info-column dividers (after bundles, above buy)", () => {
+    const plan = planClassicProductTree({ id: 'm', settings: {}, translations: [] }, ['en']);
+    const info = plan.filter((p) => p.parentRef === 'info-col').map((p) => p.section_key);
+    // Divider 1: after promotions / bundles, before the before-variants fields.
+    // Divider 2: after the personalization block, right above quantity + cart.
+    expect(info.slice(info.indexOf('product-bundles'), info.indexOf('product-buy') + 1)).toEqual([
+      'product-bundles',
+      'spacer',
+      'product-personalization',
+      'product-variants',
+      'product-personalization',
+      'spacer',
+      'product-buy',
+    ]);
+    // `border-t border-gray-100`: a 1px box holding a 1px gray-100 line.
+    const dividers = plan.filter((p) => p.section_key === 'spacer');
+    expect(dividers).toHaveLength(2);
+    for (const d of dividers) {
+      expect(d.settings).toEqual({ height_px: 1, show_divider: true, divider_style: 'solid', divider_color: '#f3f4f6' });
+      expect(d.settings).not.toBe(CLASSIC_DIVIDER_SETTINGS);
+    }
   });
 
   it("adds the owner's bottom padding to the page bottom when there are no tabs", () => {
