@@ -50,6 +50,11 @@ describe('column inventory', () => {
     expect(new Set(labels).size).toBe(labels.length);
     expect(SKIPPED_COLUMNS).toContain('order.hostname');
     expect(SKIPPED_COLUMNS).toContain('store.custom_domain');
+    // Product video URLs are media / external watch URLs, never rewritten here.
+    expect(labels).not.toContain('productVideo.url');
+    expect(SKIPPED_COLUMNS.some((c) => c.startsWith('productVideo.url'))).toBe(
+      true,
+    );
   });
 });
 

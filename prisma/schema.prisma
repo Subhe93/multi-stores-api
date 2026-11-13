@@ -525,6 +525,7 @@ model Product {
   shipping_profile         ShippingProfile?         @relation(fields: [shipping_profile_id], references: [id], onDelete: SetNull)
   translations             ProductTranslation[]
   images                   ProductImage[]
+  videos                   ProductVideo[]
   attributes               ProductAttribute[]
   variants                 ProductVariant[]
   tags                     ProductTag[]
@@ -613,6 +614,39 @@ model ProductImage {
 
   product Product         @relation(fields: [product_id], references: [id], onDelete: Cascade)
   variant ProductVariant? @relation(fields: [variant_id], references: [id])
+}
+
+enum ProductVideoKind {
+  FILE
+  YOUTUBE
+  VIMEO
+}
+
+/// Product gallery video (own products and provider base products).
+/// CustomProduct inherits its base product's rows (decision D5).
+model ProductVideo {
+  id         String           @id @default(uuid())
+  product_id String
+  kind       ProductVideoKind
+  /// FILE: `/uploads/products/<uuid>.mp4`. YOUTUBE/VIMEO: canonical watch URL.
+  url        String
+  /// Our own image URL (`/uploads/products/<uuid>.webp`) or null.
+  poster_url String?
+  alt_text   String?
+  duration_s Int?
+  width      Int?
+  height     Int?
+  /// Number of product-level images shown before this video; always >= 1 (D6).
+  position   Int              @default(1)
+  /// Tie-break among videos at the same position (index in the saved array).
+  sort_order Int              @default(0)
+  created_at DateTime         @default(now())
+  updated_at DateTime         @updatedAt
+
+  product Product @relation(fields: [product_id], references: [id], onDelete: Cascade)
+
+  @@index([product_id, position])
+  @@index([url])
 }
 
 model ProductAttribute {

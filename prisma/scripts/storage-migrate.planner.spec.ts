@@ -67,6 +67,7 @@ describe('keys and folders', () => {
 describe('object metadata', () => {
   it('matches the API serving rules', () => {
     expect(contentTypeFor('uploads/products/a.webp')).toBe('image/webp');
+    expect(contentTypeFor('uploads/products/v.mp4')).toBe('video/mp4');
     expect(contentTypeFor('uploads/logos/L.SVG')).toBe('image/svg+xml');
     expect(contentTypeFor('x/no-ext')).toBe('application/octet-stream');
     expect(cacheControlFor('media', 'uploads/products/a.webp')).toBe(

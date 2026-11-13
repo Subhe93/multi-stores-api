@@ -9,6 +9,8 @@
  * the public key shape, so a crafted URL can never reach another object.
  */
 import { Inject, Injectable, Optional } from '@nestjs/common';
+import { randomBytes } from 'crypto';
+import { createReadStream, promises as fs } from 'fs';
 import * as path from 'path';
 import type { Readable } from 'stream';
 import { contentTypeFor, LocalObjectStorage } from './local-object-storage';
@@ -166,6 +168,61 @@ export class PublicStorage {
       putOpts.contentDisposition = headers.contentDisposition;
     }
     const out = await this.store.put(key, body, putOpts);
+    return { url: this.urlFor(key), key, size: out.size };
+  }
+
+  /**
+   * Moves a finished temp file into `uploads/<folder>/<file>` without
+   * loading it into memory (product videos). Local disk: `rename` (atomic),
+   * falling back to copy + rename + unlink across file systems (`EXDEV`).
+   * S3: a streamed multipart upload with one part in flight. The temp file
+   * is gone after a local move; on S3 the caller still removes it.
+   */
+  async putFile(
+    folder: string,
+    file: string,
+    tempPath: string,
+    contentType: string,
+  ): Promise<PublicPutResult> {
+    const key = this.keyFor(folder, file);
+    if (this.store instanceof LocalObjectStorage) {
+      const target = this.store.resolve(key);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      try {
+        await fs.rename(tempPath, target);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e;
+        // Different file system: copy next to the target, then rename so a
+        // reader never sees a half-written file.
+        const staging = path.join(
+          path.dirname(target),
+          `.${path.basename(target)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`,
+        );
+        try {
+          await fs.copyFile(tempPath, staging);
+          await fs.rename(staging, target);
+        } catch (err) {
+          await fs.unlink(staging).catch(() => undefined);
+          throw err;
+        }
+        await fs.unlink(tempPath).catch(() => undefined);
+      }
+      const st = await fs.stat(target);
+      return { url: this.urlFor(key), key, size: st.size };
+    }
+    const headers = publicObjectHeaders(key);
+    const size = (await fs.stat(tempPath)).size;
+    const putOpts: PutObjectOptions = {
+      contentType,
+      cacheControl: headers.cacheControl,
+      sse: 's3',
+      contentLength: size,
+      multipartQueueSize: 1,
+    };
+    if (headers.contentDisposition) {
+      putOpts.contentDisposition = headers.contentDisposition;
+    }
+    const out = await this.store.put(key, createReadStream(tempPath), putOpts);
     return { url: this.urlFor(key), key, size: out.size };
   }
 

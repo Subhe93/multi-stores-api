@@ -13,7 +13,18 @@ import {
   ProductVariantSyncDto,
   ProductImageSyncDto,
   ProductTranslationDto,
+  ProductVideoInputDto,
 } from './dto/product.dto';
+import { parseExternalVideoUrl } from './product-video-url';
+import {
+  VIDEO_CONTENT_TYPE,
+  VIDEO_POSTER_FOLDER,
+  videoUploadConfig,
+} from '../uploads/video-upload.config';
+import {
+  PRODUCT_VIDEOS_INCLUDE,
+  toProductVideosOut,
+} from './product-video.mapper';
 import {
   UserRole,
   ProductStatus,
@@ -72,6 +83,107 @@ import {
 } from '../creator-categories/primary-collection';
 import { nextCollectionSortOrders } from '../creator-categories/product-order';
 
+/** Business limit of videos per product (files and links together, D2). */
+export const PRODUCT_VIDEO_MAX_PER_PRODUCT = 3;
+
+/** An uploaded product video file as stored (relative, uuid name, MP4). */
+const PRODUCT_VIDEO_FILE_URL = /^\/uploads\/products\/[0-9a-f-]{36}\.mp4$/;
+
+/** A poster: one of our own uploaded images. */
+const PRODUCT_VIDEO_POSTER_URL =
+  /^\/uploads\/[a-z0-9_-]+\/[A-Za-z0-9_-][A-Za-z0-9._-]*\.(webp|png|jpg|jpeg)$/i;
+
+/** A validated, normalised video of a product save (see prepareVideos). */
+export interface PreparedProductVideo {
+  id?: string;
+  kind: 'FILE' | 'YOUTUBE' | 'VIMEO';
+  url: string;
+  poster_url: string | null;
+  alt_text: string | null;
+  duration_s: number | null;
+  width: number | null;
+  height: number | null;
+  position: number;
+  sort_order: number;
+}
+
+function videoError(code: string, message: string, extra = {}): never {
+  throw new BadRequestException({ code, message, ...extra });
+}
+
+/**
+ * Stateless checks of a `videos` save payload (contract 3.2 steps 1, 3, 4):
+ * the per-product limit, the YouTube/Vimeo whitelist (stored as the
+ * canonical watch URL) and the poster shape. File URLs are shape-checked
+ * here; their ownership needs the database (prepareVideos).
+ */
+export function normalizeVideoInputs(
+  videos: ProductVideoInputDto[],
+): PreparedProductVideo[] {
+  if (videos.length > PRODUCT_VIDEO_MAX_PER_PRODUCT) {
+    videoError(
+      'VIDEO_LIMIT_EXCEEDED',
+      `A product can have at most ${PRODUCT_VIDEO_MAX_PER_PRODUCT} videos.`,
+      { max: PRODUCT_VIDEO_MAX_PER_PRODUCT },
+    );
+  }
+  return videos.map((v, i) => {
+    let kind: PreparedProductVideo['kind'];
+    let url = String(v.url ?? '').trim();
+    if (v.kind === 'file') {
+      kind = 'FILE';
+      if (!PRODUCT_VIDEO_FILE_URL.test(url)) {
+        videoError(
+          'VIDEO_FILE_INVALID',
+          'The video file is not a valid upload.',
+        );
+      }
+    } else {
+      const parsed = parseExternalVideoUrl(url);
+      if (!parsed || parsed.kind !== v.kind) {
+        videoError(
+          'VIDEO_URL_NOT_ALLOWED',
+          'Only YouTube and Vimeo video links are allowed.',
+        );
+      }
+      kind = parsed.kind === 'youtube' ? 'YOUTUBE' : 'VIMEO';
+      url = parsed.canonicalUrl;
+    }
+    const poster = typeof v.poster_url === 'string' ? v.poster_url.trim() : '';
+    if (
+      poster &&
+      (!PRODUCT_VIDEO_POSTER_URL.test(poster) || poster.includes('..'))
+    ) {
+      videoError(
+        'VIDEO_POSTER_INVALID',
+        'The video poster is not a valid image.',
+      );
+    }
+    const alt = typeof v.alt === 'string' ? v.alt.trim() : '';
+    // An uploaded file was probed at upload time (<= max seconds); the
+    // client-sent duration reaches the duration chip and JSON-LD, so it is
+    // capped at the limit (+1 s for rounding).
+    const duration =
+      v.duration_s == null
+        ? null
+        : kind === 'FILE'
+          ? Math.min(v.duration_s, videoUploadConfig().maxSeconds + 1)
+          : v.duration_s;
+    return {
+      ...(v.id ? { id: v.id } : {}),
+      kind,
+      url,
+      poster_url: poster || null,
+      alt_text: alt || null,
+      duration_s: duration,
+      width: v.width ?? null,
+      height: v.height ?? null,
+      position: v.position,
+      sort_order: i,
+    };
+  });
+}
+
 /**
  * `description` / `short_description` are rendered on the storefront as
  * HTML, so they are sanitized on every write (the importer has its own
@@ -108,7 +220,10 @@ export const PUBLIC_PRODUCT_LIST_SELECT = {
   created_at: true,
   updated_at: true,
   translations: true,
-  images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
+  images: {
+    take: 1,
+    orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }],
+  },
   category: { include: { translations: true } },
   variants: {
     select: {
@@ -344,12 +459,27 @@ export class ProductsService {
       });
   }
 
-  // Refresh the creator's storefront cache after a product mutation. Provider
-  // products can appear across many stores, so those rely on the time-based
-  // revalidate fallback instead.
+  // Refresh the creator's storefront cache after a product mutation.
   private async revalidateForCreator(creatorId?: string | null): Promise<void> {
     if (creatorId) {
       await this.revalidation.revalidateStoreByCreatorId(creatorId);
+    }
+  }
+
+  /**
+   * Refresh the stores that show a product: the creator's own store, or, for
+   * a provider product, every store reselling it (CustomProduct base), so a
+   * provider's video / image change (decision D5) reaches them at once.
+   */
+  private async revalidateForProduct(product: {
+    id: string;
+    creator_id: string | null;
+    provider_id: string | null;
+  }): Promise<void> {
+    if (product.creator_id) {
+      await this.revalidateForCreator(product.creator_id);
+    } else if (product.provider_id) {
+      await this.revalidation.revalidateStoresByBaseProductId(product.id);
     }
   }
 
@@ -392,6 +522,7 @@ export class ProductsService {
   private readonly productIncludes = {
     translations: true,
     images: { orderBy: { sort_order: 'asc' as const } },
+    videos: PRODUCT_VIDEOS_INCLUDE,
     attributes: {
       include: { template: { include: { translations: true } } },
     },
@@ -574,13 +705,18 @@ export class ProductsService {
    *
    * Image rows are rebuilt: product-level rows from `images` (sort_order =
    * array index), variant rows from each variant's `image_url`.
+   *
+   * Videos (already validated by prepareVideos) are synced last in the same
+   * transaction, and only when the payload carried `videos`.
    */
   private async syncVariantsAndImages(
     productId: string,
     variants?: ProductVariantSyncDto[],
     images?: ProductImageSyncDto[],
+    videos?: PreparedProductVideo[],
   ) {
-    if (variants === undefined && images === undefined) return;
+    if (variants === undefined && images === undefined && videos === undefined)
+      return;
 
     await this.prisma.$transaction(async (tx) => {
       // Final DB id per variant payload entry — needed to link variant images.
@@ -662,7 +798,254 @@ export class ProductsService {
           await tx.productImage.createMany({ data: variantImageRows });
         }
       }
+
+      if (videos !== undefined) {
+        await this.syncVideos(tx, productId, videos);
+      } else if (images !== undefined && images.length === 0) {
+        // An images-only save (older dashboard tab, importer) that removes
+        // every product-level image must not strand stored videos (D6).
+        await this.assertVideosKeepAnImage(tx, productId, 0);
+      }
     });
+  }
+
+  /**
+   * Throws VIDEO_REQUIRES_IMAGE when the product has videos and would be
+   * left with no product-level image: `imagesAfter` when known, otherwise
+   * the stored count minus `removing`.
+   */
+  private async assertVideosKeepAnImage(
+    db: Prisma.TransactionClient | PrismaService,
+    productId: string,
+    removing: number,
+    imagesAfter?: number,
+  ): Promise<void> {
+    const videoCount = await db.productVideo.count({
+      where: { product_id: productId },
+    });
+    if (videoCount === 0) return;
+    const remaining =
+      imagesAfter ??
+      (await db.productImage.count({
+        where: { product_id: productId, variant_id: null },
+      })) - removing;
+    if (remaining <= 0) {
+      videoError(
+        'VIDEO_REQUIRES_IMAGE',
+        'A product with videos needs at least one product image. Remove the videos first.',
+      );
+    }
+  }
+
+  /**
+   * Validates a `videos` save payload before anything is written (contract
+   * 3.2). `undefined` = untouched. Throws the coded 400s:
+   * VIDEO_LIMIT_EXCEEDED, VIDEO_FILE_INVALID (a file that is neither on this
+   * product, nor uploaded by the actor / the product's store, unless ADMIN),
+   * VIDEO_UPLOAD_EXPIRED (the upload row is gone: swept after 24 h unsaved),
+   * VIDEO_URL_NOT_ALLOWED, VIDEO_POSTER_INVALID (bad shape, or an image that
+   * is not the actor's / the store's, unless ADMIN) and VIDEO_REQUIRES_IMAGE
+   * (videos on a product that will have no product-level image).
+   * `productImageCount` = the product-level image count after this save.
+   */
+  private async prepareVideos(
+    product: { id: string | null; creator_id: string | null },
+    videos: ProductVideoInputDto[] | undefined,
+    actor: { userId: string; role: UserRole },
+    productImageCount: () => Promise<number> | number,
+  ): Promise<PreparedProductVideo[] | undefined> {
+    if (videos === undefined) return undefined;
+    const prepared = normalizeVideoInputs(videos);
+    if (!prepared.length) return prepared;
+
+    const files = prepared.filter((v) => v.kind === 'FILE').map((v) => v.url);
+    const posters = [
+      ...new Set(
+        prepared.map((v) => v.poster_url).filter((u): u is string => !!u),
+      ),
+    ];
+    const onProduct = product.id
+      ? await this.prisma.productVideo.findMany({
+          where: { product_id: product.id },
+          select: { url: true, poster_url: true },
+        })
+      : [];
+    const knownFiles = new Set(onProduct.map((r) => r.url));
+    const knownPosters = new Set(
+      onProduct.map((r) => r.poster_url).filter((u): u is string => !!u),
+    );
+    const newFiles = files.filter((u) => !knownFiles.has(u));
+    const newPosters = posters.filter((u) => !knownPosters.has(u));
+    const isAdmin = actor.role === UserRole.ADMIN;
+
+    if (newFiles.length || (newPosters.length && !isAdmin)) {
+      const storeId = product.creator_id
+        ? (
+            await this.prisma.store.findUnique({
+              where: { creator_id: product.creator_id },
+              select: { id: true },
+            })
+          )?.id
+        : undefined;
+      const rows = await this.prisma.uploadedFile.findMany({
+        where: { key: { in: [...newFiles, ...newPosters] } },
+        select: {
+          key: true,
+          user_id: true,
+          store_id: true,
+          content_type: true,
+        },
+      });
+      const byKey = new Map(rows.map((r) => [r.key, r]));
+      const ownedBy = (r: {
+        user_id: string | null;
+        store_id: string | null;
+      }) =>
+        isAdmin ||
+        r.user_id === actor.userId ||
+        (!!storeId && r.store_id === storeId);
+
+      for (const url of newFiles) {
+        const row = byKey.get(url);
+        if (!row) {
+          // The upload row is gone: the orphan sweep removed a file that
+          // stayed unsaved in an open editor for more than 24 h.
+          videoError(
+            'VIDEO_UPLOAD_EXPIRED',
+            'This video upload has expired. Remove it and upload it again.',
+          );
+        }
+        if (row.content_type !== VIDEO_CONTENT_TYPE || !ownedBy(row)) {
+          videoError(
+            'VIDEO_FILE_INVALID',
+            'The video file was not uploaded by you.',
+          );
+        }
+      }
+
+      // A poster is one of the actor's / the product store's own uploads
+      // (or already on this product, or one of its images); another
+      // store's image would become undeletable for its owner.
+      if (newPosters.length && !isAdmin) {
+        const productImages = product.id
+          ? await this.prisma.productImage.findMany({
+              where: { product_id: product.id, url: { in: newPosters } },
+              select: { url: true },
+            })
+          : [];
+        const ownImages = new Set(productImages.map((r) => r.url));
+        for (const url of newPosters) {
+          if (ownImages.has(url)) continue;
+          const row = byKey.get(url);
+          if (!row && url.startsWith(`/uploads/${VIDEO_POSTER_FOLDER}/`)) {
+            videoError(
+              'VIDEO_UPLOAD_EXPIRED',
+              'This video cover image has expired. Choose a new cover image.',
+            );
+          }
+          if (!row || !ownedBy(row)) {
+            videoError(
+              'VIDEO_POSTER_INVALID',
+              'The video poster is not one of your images.',
+            );
+          }
+        }
+      }
+    }
+
+    if ((await productImageCount()) === 0) {
+      videoError(
+        'VIDEO_REQUIRES_IMAGE',
+        'Add at least one product image before adding a video.',
+      );
+    }
+    return prepared;
+  }
+
+  /**
+   * Writes the prepared videos of a product inside the save transaction:
+   * rows not in the payload are deleted, rows whose id belongs to this
+   * product are updated (id and created_at survive), the rest are created.
+   * Files are never deleted here; the upload sweep removes orphans.
+   */
+  private async syncVideos(
+    tx: Prisma.TransactionClient,
+    productId: string,
+    videos: PreparedProductVideo[],
+  ) {
+    if (videos.length) {
+      // Re-checked after the image sync of the same transaction (D6).
+      const images = await tx.productImage.count({
+        where: { product_id: productId, variant_id: null },
+      });
+      if (images === 0) {
+        videoError(
+          'VIDEO_REQUIRES_IMAGE',
+          'Add at least one product image before adding a video.',
+        );
+      }
+    }
+    const existing = await tx.productVideo.findMany({
+      where: { product_id: productId },
+      select: { id: true, url: true, poster_url: true },
+    });
+    const existingIds = new Set(existing.map((r) => r.id));
+
+    // Lock the upload rows of every referenced file and poster until the
+    // commit: the orphan sweep claims rows FOR UPDATE SKIP LOCKED, so it
+    // skips them now, and a row it already deleted shows up as missing here.
+    const keys = [
+      ...new Set(
+        videos
+          .flatMap((v) => [v.kind === 'FILE' ? v.url : null, v.poster_url])
+          .filter((k): k is string => !!k),
+      ),
+    ];
+    if (keys.length) {
+      const locked = await tx.$queryRaw<{ key: string }[]>`
+        SELECT uf."key" AS key FROM "UploadedFile" uf
+        WHERE uf."key" IN (${Prisma.join(keys)})
+        FOR SHARE`;
+      const present = new Set(locked.map((r) => r.key));
+      const known = new Set(
+        existing
+          .flatMap((r) => [r.url, r.poster_url])
+          .filter((k): k is string => !!k),
+      );
+      const gone = keys.filter(
+        (k) =>
+          !present.has(k) &&
+          !known.has(k) &&
+          (videos.some((v) => v.kind === 'FILE' && v.url === k) ||
+            k.startsWith(`/uploads/${VIDEO_POSTER_FOLDER}/`)),
+      );
+      if (gone.length) {
+        videoError(
+          'VIDEO_UPLOAD_EXPIRED',
+          'This video upload has expired. Remove it and upload it again.',
+        );
+      }
+    }
+    const keep = new Set(
+      videos
+        .map((v) => v.id)
+        .filter((id): id is string => !!id && existingIds.has(id)),
+    );
+    await tx.productVideo.deleteMany({
+      where: { product_id: productId, id: { notIn: [...keep] } },
+    });
+    const updated = new Set<string>();
+    for (const v of videos) {
+      const { id, ...data } = v;
+      if (id && keep.has(id) && !updated.has(id)) {
+        updated.add(id);
+        await tx.productVideo.update({ where: { id }, data });
+      } else {
+        await tx.productVideo.create({
+          data: { ...data, product_id: productId },
+        });
+      }
+    }
   }
 
   async create(userId: string, userRole: UserRole, dto: CreateProductDto) {
@@ -676,6 +1059,7 @@ export class ProductsService {
       primary_creator_category_id,
       variants,
       images,
+      videos,
       ...data
     } = dto;
     void _legacyTags;
@@ -756,6 +1140,15 @@ export class ProductsService {
       );
     }
 
+    // Videos are validated before the product row exists, so a rejected
+    // video never leaves a half-created product behind.
+    const preparedVideos = await this.prepareVideos(
+      { id: null, creator_id: productData.creator_id ?? null },
+      videos,
+      { userId, role: userRole },
+      () => (images ?? []).length,
+    );
+
     // Create the product
     const product = await this.prisma.product.create({
       data: productData,
@@ -818,7 +1211,12 @@ export class ProductsService {
       });
     }
 
-    await this.syncVariantsAndImages(product.id, variants, images);
+    await this.syncVariantsAndImages(
+      product.id,
+      variants,
+      images,
+      preparedVideos,
+    );
 
     await releaseLiveProductPaths(this.prisma, this.redirects, {
       productId: product.id,
@@ -946,7 +1344,10 @@ export class ProductsService {
         where,
         include: {
           translations: true,
-          images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
+          images: {
+            take: 1,
+            orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }],
+          },
           category: { include: { translations: true } },
           variants: true,
           provider: { select: { id: true, company_name: true } },
@@ -1107,7 +1508,10 @@ export class ProductsService {
       take,
       include: {
         translations: true,
-        images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
+        images: {
+          take: 1,
+          orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }],
+        },
         category: { include: { translations: true } },
         variants: true,
         provider: { select: { id: true, company_name: true } },
@@ -1132,16 +1536,19 @@ export class ProductsService {
   }
 
   async findById(id: string, userId?: string, userRole?: UserRole) {
-    const product = await this.prisma.product.findUnique({
+    const row = await this.prisma.product.findUnique({
       where: { id },
       include: this.productIncludes,
     });
 
-    if (!product)
+    if (!row)
       throw new NotFoundException({
         code: 'PRODUCT_NOT_FOUND',
         message: 'Product not found',
       });
+    // The editor GET always carries `videos` (possibly []), so the dashboard
+    // can tell a video-aware API from an older one.
+    const product = { ...row, videos: toProductVideosOut(row.videos) };
 
     // cost_price is the provider's confidential margin input — a creator
     // browsing the catalogue to import must never see it.
@@ -1202,9 +1609,28 @@ export class ProductsService {
       primary_creator_category_id,
       variants,
       images,
+      videos,
       ...data
     } = dto;
     void _legacyTags;
+
+    // Videos are validated before any write (coded 400s, nothing half-saved).
+    const preparedVideos = await this.prepareVideos(
+      product,
+      videos,
+      { userId, role: userRole },
+      () =>
+        images !== undefined
+          ? images.length
+          : this.prisma.productImage.count({
+              where: { product_id: id, variant_id: null },
+            }),
+    );
+    // An images-only save that clears the gallery must not strand stored
+    // videos; checked before any write (re-checked in the transaction).
+    if (videos === undefined && images !== undefined && images.length === 0) {
+      await this.assertVideosKeepAnImage(this.prisma, id, 0, 0);
+    }
 
     // Feed fields: absent keys are not in `data`, so the stored values are
     // kept (X19 carry-over); '' / null clears them.
@@ -1226,7 +1652,7 @@ export class ProductsService {
       data,
     });
 
-    await this.syncVariantsAndImages(id, variants, images);
+    await this.syncVariantsAndImages(id, variants, images, preparedVideos);
 
     // Replace creator-collection attachments (creator-owned products only);
     // kept links keep their sort_order. The primary is re-resolved whenever
@@ -1359,7 +1785,7 @@ export class ProductsService {
     await releaseLiveProductPaths(this.prisma, this.redirects, {
       productId: id,
     });
-    await this.revalidateForCreator(product.creator_id);
+    await this.revalidateForProduct({ ...product, id });
 
     return this.findById(id);
   }
@@ -1374,9 +1800,16 @@ export class ProductsService {
 
     await this.checkOwnership(product, userId, userRole);
 
+    // Reselling stores of a provider product, read while their rows exist.
+    const resellerSlugs =
+      !product.creator_id && product.provider_id
+        ? await this.revalidation.storeSlugsByBaseProductId(id)
+        : [];
+
     const deleted = await this.prisma.product.delete({ where: { id } });
 
     await this.revalidateForCreator(product.creator_id);
+    await this.revalidation.revalidateStoreSlugs(resellerSlugs);
 
     return deleted;
   }
@@ -1429,6 +1862,7 @@ export class ProductsService {
       include: {
         translations: true,
         images: true,
+        videos: true,
         attributes: true,
         variants: true,
         creator_categories: {
@@ -1582,6 +2016,25 @@ export class ProductsService {
             alt_text: img.alt_text,
             sort_order: img.sort_order,
             is_featured: img.is_featured,
+          })),
+        });
+      }
+
+      // Videos: new rows pointing at the same files (the upload sweep
+      // counts references, so a shared file is never removed).
+      if (source.videos?.length) {
+        await tx.productVideo.createMany({
+          data: source.videos.map((v) => ({
+            product_id: created.id,
+            kind: v.kind,
+            url: v.url,
+            poster_url: v.poster_url,
+            alt_text: v.alt_text,
+            duration_s: v.duration_s,
+            width: v.width,
+            height: v.height,
+            position: v.position,
+            sort_order: v.sort_order,
           })),
         });
       }
@@ -1748,7 +2201,7 @@ export class ProductsService {
   async deleteImage(imageId: string, userId: string, userRole: UserRole) {
     const image = await this.prisma.productImage.findUnique({
       where: { id: imageId },
-      select: { product_id: true },
+      select: { product_id: true, variant_id: true },
     });
     if (!image)
       throw new NotFoundException({
@@ -1756,6 +2209,11 @@ export class ProductsService {
         message: 'Image not found',
       });
     await this.assertOwnsProductById(image.product_id, userId, userRole);
+    // Decision D6: a product with videos keeps at least one product-level
+    // image (the storefront drops videos with no image to sit after).
+    if (image.variant_id === null) {
+      await this.assertVideosKeepAnImage(this.prisma, image.product_id, 1);
+    }
     return this.prisma.productImage.delete({ where: { id: imageId } });
   }
 
@@ -1831,6 +2289,8 @@ export class ProductsService {
         category: { include: { translations: true } },
         provider: { select: { id: true, company_name: true } },
         shipping_profile: { include: { zones: true } },
+        // Decision D5: reselling stores show these; the creator sees them.
+        videos: PRODUCT_VIDEOS_INCLUDE,
       },
     });
 
@@ -1862,13 +2322,17 @@ export class ProductsService {
       if (defaultProfile) {
         return redactProductForNonOwner({
           ...product,
+          videos: toProductVideosOut(product.videos),
           shipping_profile: defaultProfile,
         });
       }
     }
 
     // The importing creator is not the owner: no cost price or importer refs.
-    return redactProductForNonOwner(product);
+    return redactProductForNonOwner({
+      ...product,
+      videos: toProductVideosOut(product.videos),
+    });
   }
 
   private async checkOwnership(

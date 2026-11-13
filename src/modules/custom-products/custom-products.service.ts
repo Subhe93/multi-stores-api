@@ -53,6 +53,7 @@ import {
   type PriceFloorSetup,
   type PriceFloorVariant,
 } from './price-floor';
+import { PRODUCT_VIDEOS_INCLUDE } from '../products/product-video.mapper';
 
 type Money = Prisma.Decimal | number;
 
@@ -365,6 +366,8 @@ export class CustomProductsService {
       include: {
         translations: true,
         images: { orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
+        // Decision D5: the provider's videos this store shows (read-only in the editor).
+        videos: PRODUCT_VIDEOS_INCLUDE,
         variants: { where: { is_active: true } },
         custom_fields: {
           include: { translations: true },

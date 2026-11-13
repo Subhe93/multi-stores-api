@@ -35,6 +35,45 @@ export class RevalidationService {
     }
   }
 
+  /**
+   * Slugs of every store that sells a provider product (its CustomProduct
+   * rows). Read this BEFORE a delete, when the rows still exist.
+   */
+  async storeSlugsByBaseProductId(productId: string): Promise<string[]> {
+    const rows = await this.prisma.customProduct.findMany({
+      where: { product_id: productId },
+      select: { creator_id: true },
+      distinct: ['creator_id'],
+    });
+    if (!rows.length) return [];
+    const stores = await this.prisma.store.findMany({
+      where: { creator_id: { in: rows.map((r) => r.creator_id) } },
+      select: { slug: true },
+    });
+    return stores.map((s) => s.slug).filter((s): s is string => !!s);
+  }
+
+  /**
+   * A provider changed a base product (images, videos, texts): refresh every
+   * reselling store, so a removed video does not stay on them for the
+   * time-based fallback window.
+   */
+  async revalidateStoresByBaseProductId(productId: string): Promise<void> {
+    await this.revalidateStoreSlugs(
+      await this.storeSlugsByBaseProductId(productId),
+    );
+  }
+
+  /** Revalidate several stores, a few requests at a time. */
+  async revalidateStoreSlugs(slugs: string[]): Promise<void> {
+    const unique = [...new Set(slugs)];
+    for (let i = 0; i < unique.length; i += 10) {
+      await Promise.all(
+        unique.slice(i, i + 10).map((slug) => this.revalidateStoreBySlug(slug)),
+      );
+    }
+  }
+
   /** POST the store slug to the storefront's /api/revalidate endpoint. */
   async revalidateStoreBySlug(slug: string): Promise<void> {
     await this.post({ slug }, `store "${slug}"`);

@@ -25,6 +25,8 @@ describe('column inventory', () => {
     for (const expected of [
       'productImage.url',
       'customProductImage.url',
+      'productVideo.url',
+      'productVideo.poster_url',
       'provider.logo_url',
       'creator.avatar_url',
       'creator.cover_url',
@@ -78,6 +80,41 @@ describe('planRow (url columns)', () => {
       rows_to_change: 1,
       occurrences: 1,
     });
+  });
+
+  it('product videos: relativises an absolute file URL, never touches YouTube/Vimeo URLs', () => {
+    const c = col('productVideo', 'url');
+    const stats = newColumnStats(c);
+    expect(
+      planRow(
+        c,
+        'v1',
+        'https://ms-api.shopsdoor.com/uploads/products/v.mp4',
+        HOSTS,
+        stats,
+      ),
+    ).toMatchObject({ next: '/uploads/products/v.mp4' });
+    expect(
+      planRow(
+        c,
+        'v2',
+        'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        HOSTS,
+        stats,
+      ),
+    ).toBeNull();
+    expect(
+      planRow(c, 'v3', 'https://vimeo.com/76979871', HOSTS, stats),
+    ).toBeNull();
+    expect(
+      referencedMediaKeys(
+        col('productVideo', 'poster_url'),
+        '/uploads/products/p.webp',
+      ),
+    ).toEqual(['uploads/products/p.webp']);
+    expect(
+      referencedMediaKeys(c, 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'),
+    ).toEqual([]);
   });
 
   it('leaves relative values, nulls, free text and foreign hosts alone', () => {

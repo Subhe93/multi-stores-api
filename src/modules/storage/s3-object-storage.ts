@@ -288,7 +288,7 @@ export class S3ObjectStorage implements ObjectStorage {
       client: this.client,
       params: { ...input, Body: body.pipe(counter) },
       partSize: PART_SIZE,
-      queueSize: 4,
+      queueSize: Math.max(1, opts.multipartQueueSize ?? 4),
       leavePartsOnError: false,
     });
     body.on('error', (err) => counter.destroy(err));

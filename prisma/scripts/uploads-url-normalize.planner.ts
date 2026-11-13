@@ -32,6 +32,10 @@ export interface UploadRefColumn {
 export const UPLOAD_REF_COLUMNS: readonly UploadRefColumn[] = [
   { model: 'productImage', column: 'url', kind: 'url' },
   { model: 'customProductImage', column: 'url', kind: 'url' },
+  // Product videos: FILE url and poster; external watch URLs are foreign
+  // hosts and never match, so they are left untouched.
+  { model: 'productVideo', column: 'url', kind: 'url' },
+  { model: 'productVideo', column: 'poster_url', kind: 'url' },
   { model: 'provider', column: 'logo_url', kind: 'url' },
   { model: 'creator', column: 'avatar_url', kind: 'url' },
   { model: 'creator', column: 'cover_url', kind: 'url' },

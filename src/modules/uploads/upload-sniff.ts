@@ -27,6 +27,8 @@ const SNIFFERS: Record<string, (buf: Buffer) => boolean> = {
   '.pdf': isPdf,
   '.ai': (b) => isPdf(b) || head(b).startsWith('%!PS-Adobe'),
   '.svg': isSvg,
+  // ISO-BMFF: the first box is `ftyp` (brand checks live in mp4-probe.ts).
+  '.mp4': (b) => b.length >= 12 && b.toString('latin1', 4, 8) === 'ftyp',
 };
 
 function head(b: Buffer, n = 1024): string {

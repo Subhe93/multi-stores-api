@@ -13,6 +13,9 @@ import {
   Min,
   MaxLength,
   IsIn,
+  IsUUID,
+  Max,
+  ArrayMaxSize,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import {
@@ -120,6 +123,63 @@ export class ProductImageSyncDto {
   @IsOptional()
   @IsBoolean()
   is_featured?: boolean;
+}
+
+/**
+ * One gallery video of a product save (product-video contract 3.1). The
+ * business limits (3 per product, allowed hosts, own files) are checked by
+ * ProductsService.syncVideos with coded errors; the DTO only guards shape.
+ */
+export class ProductVideoInputDto {
+  /** Existing row id: the row is kept (created_at survives). */
+  @IsOptional()
+  @IsUUID()
+  id?: string;
+
+  @IsIn(['file', 'youtube', 'vimeo'])
+  kind!: 'file' | 'youtube' | 'vimeo';
+
+  // @UploadUrl only rewrites URLs on our own hosts; YouTube/Vimeo URLs pass
+  // through unchanged.
+  @IsString()
+  @MaxLength(2048)
+  @UploadUrl()
+  url!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  @UploadUrl()
+  poster_url?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  alt?: string | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(3600)
+  duration_s?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(8192)
+  width?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(8192)
+  height?: number | null;
+
+  /** Product-level images shown before this video; >= 1 (D6). */
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  position!: number;
 }
 
 export class CreateProductDto {
@@ -280,6 +340,15 @@ export class CreateProductDto {
   @ValidateNested({ each: true })
   @Type(() => ProductImageSyncDto)
   images?: ProductImageSyncDto[];
+
+  // Absent = stored videos untouched (older dashboards, importer); [] clears.
+  // ArrayMaxSize is an abuse cap; the limit of 3 is VIDEO_LIMIT_EXCEEDED.
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => ProductVideoInputDto)
+  videos?: ProductVideoInputDto[];
 }
 
 export class UpdateProductDto {
@@ -445,4 +514,13 @@ export class UpdateProductDto {
   @ValidateNested({ each: true })
   @Type(() => ProductImageSyncDto)
   images?: ProductImageSyncDto[];
+
+  // Absent = stored videos untouched (older dashboards, importer); [] clears.
+  // ArrayMaxSize is an abuse cap; the limit of 3 is VIDEO_LIMIT_EXCEEDED.
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => ProductVideoInputDto)
+  videos?: ProductVideoInputDto[];
 }

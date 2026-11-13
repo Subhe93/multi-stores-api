@@ -193,3 +193,93 @@ describe('buildObjectStorages', () => {
     s3.stub.restore();
   });
 });
+
+describe('PublicStorage.putFile (product videos)', () => {
+  let root: string;
+  let tmp: string;
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'putfile-root-'));
+    tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'putfile-tmp-'));
+  });
+  afterEach(async () => {
+    jest.restoreAllMocks();
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  it('local: moves the temp file into uploads/<folder>/ (no copy left behind)', async () => {
+    const src = path.join(tmp, 'a.upload');
+    await fs.writeFile(src, Buffer.from('video-bytes'));
+    const pub = PublicStorage.local(root);
+    const out = await pub.putFile('products', 'v.mp4', src, 'video/mp4');
+    expect(out).toEqual({
+      url: '/uploads/products/v.mp4',
+      key: 'uploads/products/v.mp4',
+      size: 11,
+    });
+    expect(
+      await fs.readFile(path.join(root, 'products', 'v.mp4'), 'utf8'),
+    ).toBe('video-bytes');
+    await expect(fs.access(src)).rejects.toThrow();
+  });
+
+  it('local: falls back to copy + rename + unlink across file systems (EXDEV)', async () => {
+    const src = path.join(tmp, 'b.upload');
+    await fs.writeFile(src, Buffer.from('xyz'));
+    const realRename = fs.rename.bind(fs) as (
+      a: string,
+      b: string,
+    ) => Promise<void>;
+    let first = true;
+    jest.spyOn(fs, 'rename').mockImplementation((a, b): Promise<void> => {
+      if (first) {
+        first = false;
+        return Promise.reject(
+          Object.assign(new Error('cross-device'), { code: 'EXDEV' }),
+        );
+      }
+      return realRename(String(a), String(b));
+    });
+    const pub = PublicStorage.local(root);
+    const out = await pub.putFile('products', 'w.mp4', src, 'video/mp4');
+    expect(out.size).toBe(3);
+    expect(await fs.readdir(path.join(root, 'products'))).toEqual(['w.mp4']);
+    await expect(fs.access(src)).rejects.toThrow();
+  });
+
+  it('s3: streams the file with one multipart part in flight and the media headers', async () => {
+    const src = path.join(tmp, 'c.upload');
+    await fs.writeFile(src, Buffer.from('abcd'));
+    const put = jest.fn(async (_key: string, body: NodeJS.ReadableStream) => {
+      let size = 0;
+      for await (const c of body) size += (c as Buffer).length;
+      return { etag: null, size };
+    });
+    const store = {
+      driver: 's3',
+      location: 'bucket',
+      put,
+    } as unknown as ConstructorParameters<typeof PublicStorage>[0];
+    const out = await new PublicStorage(store).putFile(
+      'products',
+      'x.mp4',
+      src,
+      'video/mp4',
+    );
+    expect(out).toEqual({
+      url: '/uploads/products/x.mp4',
+      key: 'uploads/products/x.mp4',
+      size: 4,
+    });
+    expect(put).toHaveBeenCalledWith(
+      'uploads/products/x.mp4',
+      expect.anything(),
+      expect.objectContaining({
+        contentType: 'video/mp4',
+        cacheControl: 'public, max-age=31536000, immutable',
+        contentLength: 4,
+        multipartQueueSize: 1,
+      }),
+    );
+  });
+});

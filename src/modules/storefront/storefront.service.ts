@@ -74,6 +74,10 @@ import {
   loadStoreLegalRows,
   resolveLegalPage,
 } from '../legal/store-templates/store-legal-resolver';
+import {
+  PRODUCT_VIDEOS_INCLUDE,
+  storefrontVideosField,
+} from '../products/product-video.mapper';
 
 /** The legacy freeform Store.theme_config JSON as getStore() reads it. */
 interface LegacyThemeConfig {
@@ -1547,6 +1551,8 @@ export class StorefrontService {
             where: { variant_id: null },
             orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }],
           },
+          // Gallery videos; served only when there is at least one.
+          videos: PRODUCT_VIDEOS_INCLUDE,
           attributes: {
             include: { template: { include: { translations: true } } },
           },
@@ -1651,9 +1657,12 @@ export class StorefrontService {
 
       // cost_price is a merchant-only margin input; never serve it publicly.
       // Legacy ProductTag rows (`tags`) are retired: not read, not served.
+      // The raw `videos` relation is replaced by the wire shape below, and
+      // left out entirely when empty (no-video payloads stay byte-identical).
       const {
         cost_price: _costPrice,
         external_ref: _externalRef,
+        videos: videoRows,
         ...ownerProduct
       } = product;
       const publicProduct = withoutFeedFields(ownerProduct);
@@ -1707,6 +1716,7 @@ export class StorefrontService {
             }
           : {}),
         ...(designer ? { designer } : {}),
+        ...storefrontVideosField(videoRows),
       };
       if (market) {
         // Market prices; a product hidden in this market is a 404 here.
@@ -1764,6 +1774,9 @@ export class StorefrontService {
               where: { variant_id: null },
               orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }],
             },
+            // Custom products show the base product's videos (D5), also when
+            // mockups replace the images.
+            videos: PRODUCT_VIDEOS_INCLUDE,
             attributes: {
               include: { template: { include: { translations: true } } },
             },
@@ -1869,6 +1882,7 @@ export class StorefrontService {
               sort_order: img.sort_order,
             }))
           : baseProduct.images,
+      ...storefrontVideosField(baseProduct.videos),
       attributes: baseProduct.attributes,
       variants,
       category: baseProduct.category,
@@ -2461,6 +2475,7 @@ export class StorefrontService {
           select: { locale: true, title: true, description: true, slug: true },
         },
         images: { orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
+        videos: PRODUCT_VIDEOS_INCLUDE,
         variants: { where: { is_active: true }, include: { images: true } },
         faqs: {
           include: { translations: true },
@@ -2485,6 +2500,7 @@ export class StorefrontService {
           alt_text: img.alt_text,
           sort_order: img.sort_order,
         })),
+        ...storefrontVideosField(own.videos),
         // Mirror the live product payload: the preview renders the real
         // ProductDetailClient, which needs options/images per variant and the
         // option config (styles, color/image maps) to not fall over.

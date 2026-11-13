@@ -23,6 +23,11 @@ export interface PutObjectOptions {
   sse?: 'kms' | 's3';
   /** Byte length of a stream body when known (lets the driver skip buffering). */
   contentLength?: number;
+  /**
+   * Parallel multipart parts for a stream body on S3 (default 4). Large
+   * uploads (product videos) pass 1 so one request buffers one part only.
+   */
+  multipartQueueSize?: number;
 }
 
 export interface PutObjectResult {

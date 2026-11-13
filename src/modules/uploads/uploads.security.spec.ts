@@ -99,9 +99,10 @@ describe('per-role folder allowlist', () => {
     const uploadFile = jest
       .fn()
       .mockResolvedValue({ url: '/uploads/products/x.webp' });
-    const controller = new UploadsController({
-      uploadFile,
-    } as unknown as UploadsService);
+    const controller = new UploadsController(
+      { uploadFile } as unknown as UploadsService,
+      {} as never,
+    );
     const file = {
       originalname: 'a.png',
       buffer: Buffer.alloc(1),

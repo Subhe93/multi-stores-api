@@ -7,6 +7,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
+import { promises as fs } from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import sharp from 'sharp';
@@ -18,7 +19,25 @@ import {
   publicMediaKeyFromUrl,
   sanitizeFolder,
 } from '../storage/public-storage';
+import type { DeleteObjectResult } from '../storage/object-storage';
 import { sniffUploadType } from './upload-sniff';
+import { Mp4ProbeError, probeMp4, type Mp4ProbeResult } from './mp4-probe';
+import {
+  assertVideoDiskSpace,
+  BITRATE_CHECK_MIN_BYTES,
+  MULTIPART_OVERHEAD_BYTES,
+  PRODUCT_VIDEO_MAX_PER_PRODUCT,
+  type StatfsFn,
+  VIDEO_CONTENT_TYPE,
+  VIDEO_POSTER_FOLDER,
+  videoFolderAllowedForRole,
+  videoFolderForbidden,
+  videoQuotaExceeded,
+  videoTooLarge,
+  videoTypeError,
+  videoUploadConfig,
+  videoUploadsDisabled,
+} from './video-upload.config';
 
 // Raster formats we re-encode to WebP. Vector/document types are stored as-is.
 const RASTER_EXTS = ['.png', '.jpg', '.jpeg', '.webp'];
@@ -61,8 +80,9 @@ export const UPLOAD_FOLDERS_BY_ROLE: Readonly<
     'creator-categories',
     'custom-fields',
     'general',
+    VIDEO_POSTER_FOLDER,
   ],
-  [UserRole.PROVIDER]: ['products', 'logos', 'avatars'],
+  [UserRole.PROVIDER]: ['products', 'logos', 'avatars', VIDEO_POSTER_FOLDER],
   [UserRole.CUSTOMER]: [],
 };
 
@@ -83,7 +103,80 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.svg': 'image/svg+xml',
   '.pdf': 'application/pdf',
   '.ai': 'application/postscript',
+  '.mp4': 'video/mp4',
 };
+
+/** Response of `POST /uploads/video` (CONTRACT §4.3). */
+export interface VideoUploadResult {
+  url: string;
+  content_type: 'video/mp4';
+  size_bytes: number;
+  duration_s: number;
+  width: number | null;
+  height: number | null;
+  faststart_fixed: boolean;
+}
+
+/** Response of `GET /uploads/video/config` (CONTRACT §4.2). */
+export interface VideoUploadConfigResponse {
+  uploads_enabled: boolean;
+  max_bytes: number;
+  max_duration_s: number;
+  max_kbps: number;
+  max_videos_per_product: number;
+  accept: string[];
+  quota_bytes: number | null;
+  used_bytes: number;
+}
+
+/** Whose videos share one quota: a creator's store, or a provider/user. */
+type VideoQuotaScope = { store_id: string } | { user_id: string } | null;
+
+function videoScopeKey(scope: VideoQuotaScope): string | null {
+  if (!scope) return null;
+  return 'store_id' in scope ? `s:${scope.store_id}` : `u:${scope.user_id}`;
+}
+
+/**
+ * Bytes of video uploads in progress in this process (critic: parallel
+ * uploads must not all pass a nearly full quota or disk). Each upload
+ * reserves its size per quota scope and globally once its file is on disk
+ * and releases it when it ends; the guards add the others' reservations.
+ * Per process: several API instances each count their own uploads.
+ */
+export class VideoInflight {
+  private total = 0;
+  private readonly byScope = new Map<string, number>();
+
+  reserve(scopeKey: string | null, bytes: number): () => void {
+    const n = Math.max(0, bytes);
+    this.total += n;
+    if (scopeKey)
+      this.byScope.set(scopeKey, (this.byScope.get(scopeKey) ?? 0) + n);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.total -= n;
+      if (scopeKey) {
+        const left = (this.byScope.get(scopeKey) ?? 0) - n;
+        if (left > 0) this.byScope.set(scopeKey, left);
+        else this.byScope.delete(scopeKey);
+      }
+    };
+  }
+
+  /** Reserved bytes, globally or for one scope. */
+  bytes(scopeKey?: string | null): number {
+    if (scopeKey === undefined) return this.total;
+    return scopeKey ? (this.byScope.get(scopeKey) ?? 0) : 0;
+  }
+}
+
+/** Minimal raw-query client (PrismaService or a transaction client). */
+export interface RawQueryClient {
+  $queryRaw: PrismaService['$queryRaw'];
+}
 
 export interface StoreBufferOptions {
   id?: string;
@@ -216,11 +309,324 @@ export class UploadsService {
     };
   }
 
+  // ── Product videos (plans/product-video/CONTRACT.md §4) ──────────────────
+
+  /** Free-disk reader; tests replace it (default: `fs.promises.statfs`). */
+  videoStatfs?: StatfsFn;
+
+  /** In-progress video uploads of this process (shared by every instance of the service). */
+  static readonly videoInflight = new VideoInflight();
+
+  /** Directories whose disk must keep the free-space reserve. */
+  private videoDiskDirs(folder: string): string[] {
+    const cfg = videoUploadConfig();
+    const dirs = [cfg.tmpDir];
+    const local = this.localDir(folder);
+    if (local) dirs.push(local);
+    return dirs;
+  }
+
+  /** Quota scope of `user`: the creator's store, the provider/user, or null (ADMIN). */
+  private async videoQuotaScope(user: OwnerUser): Promise<VideoQuotaScope> {
+    if (user.role === UserRole.ADMIN) return null;
+    if (user.role === UserRole.CREATOR && this.prisma) {
+      const creator = await this.prisma.creator.findUnique({
+        where: { user_id: user.id },
+        select: { store: { select: { id: true } } },
+      });
+      if (creator?.store?.id) return { store_id: creator.store.id };
+    }
+    return { user_id: user.id };
+  }
+
+  /**
+   * Bytes of video counted against `scope`: files a product still uses, plus
+   * files younger than 24 h (an upload not saved yet). An unreferenced older
+   * file no longer counts, so replacing a video frees its space before the
+   * orphan sweep removes the file. `"ProductVideo"` is read through raw SQL
+   * only (no dependency on the generated client).
+   */
+  private async videoUsedBytes(scope: VideoQuotaScope): Promise<number> {
+    const prisma = this.prisma;
+    if (!prisma || !scope) return 0;
+    const rows =
+      'store_id' in scope
+        ? await prisma.$queryRaw<{ used: bigint | number | null }[]>`
+            SELECT COALESCE(SUM(uf."size"), 0)::bigint AS used
+            FROM "UploadedFile" uf
+            WHERE uf."content_type" = ${VIDEO_CONTENT_TYPE}
+              AND uf."store_id" = ${scope.store_id}
+              AND (EXISTS (SELECT 1 FROM "ProductVideo" pv WHERE pv."url" = uf."key")
+                   OR uf."created_at" > now() - interval '24 hours')`
+        : await prisma.$queryRaw<{ used: bigint | number | null }[]>`
+            SELECT COALESCE(SUM(uf."size"), 0)::bigint AS used
+            FROM "UploadedFile" uf
+            WHERE uf."content_type" = ${VIDEO_CONTENT_TYPE}
+              AND uf."user_id" = ${scope.user_id}
+              AND (EXISTS (SELECT 1 FROM "ProductVideo" pv WHERE pv."url" = uf."key")
+                   OR uf."created_at" > now() - interval '24 hours')`;
+    return Number(rows[0]?.used ?? 0);
+  }
+
+  /**
+   * 403 `UPLOAD_VIDEO_QUOTA_EXCEEDED` when `incomingBytes` would exceed the
+   * quota. Uploads of the same scope still in progress count as used
+   * (`ownReserved`: the caller's own reservation, not counted twice).
+   */
+  async assertVideoQuota(
+    user: OwnerUser,
+    incomingBytes: number,
+    ownReserved = 0,
+  ): Promise<void> {
+    const scope = await this.videoQuotaScope(user);
+    if (!scope) return;
+    const quota = videoUploadConfig().storeQuotaBytes;
+    const inflight = Math.max(
+      0,
+      UploadsService.videoInflight.bytes(videoScopeKey(scope)) - ownReserved,
+    );
+    const used = (await this.videoUsedBytes(scope)) + inflight;
+    if (used + Math.max(0, incomingBytes) > quota) {
+      throw videoQuotaExceeded(quota, used);
+    }
+  }
+
+  /**
+   * 507 `UPLOAD_VIDEO_DISK_LOW` when the temp or uploads disk runs low.
+   * Other uploads in progress count as incoming too (`ownReserved` excluded).
+   */
+  async assertVideoDisk(
+    folder: string,
+    incomingBytes: number,
+    ownReserved = 0,
+  ): Promise<void> {
+    const others = Math.max(
+      0,
+      UploadsService.videoInflight.bytes() - ownReserved,
+    );
+    await assertVideoDiskSpace(
+      this.videoDiskDirs(folder),
+      Math.max(0, incomingBytes) + others,
+      videoUploadConfig().minFreeBytes,
+      this.videoStatfs,
+    );
+  }
+
+  /**
+   * Checks that run before the request body is read (CONTRACT §4.3 steps
+   * 1–3): feature flag, role/folder, declared size, free disk, quota.
+   * `contentLength` is the request's Content-Length (null when chunked).
+   */
+  async assertVideoPrecheck(
+    user: OwnerUser | undefined,
+    folder: string,
+    contentLength: number | null,
+  ): Promise<void> {
+    const cfg = videoUploadConfig();
+    if (!cfg.uploadsEnabled) throw videoUploadsDisabled();
+    if (!user || !videoFolderAllowedForRole(user.role, folder)) {
+      throw videoFolderForbidden(folder);
+    }
+    const incoming = contentLength ?? 0;
+    if (incoming > cfg.maxBytes + MULTIPART_OVERHEAD_BYTES) {
+      throw videoTooLarge(cfg.maxBytes);
+    }
+    await this.assertVideoDisk(folder, incoming);
+    await this.assertVideoQuota(user, incoming);
+  }
+
+  /** `GET /uploads/video/config`. */
+  async videoConfig(user: OwnerUser): Promise<VideoUploadConfigResponse> {
+    const cfg = videoUploadConfig();
+    const scope = await this.videoQuotaScope(user);
+    let used = 0;
+    try {
+      used = await this.videoUsedBytes(scope);
+    } catch (e) {
+      this.logger.warn(`Video quota lookup failed: ${(e as Error).message}`);
+    }
+    return {
+      uploads_enabled: cfg.uploadsEnabled,
+      max_bytes: cfg.maxBytes,
+      max_duration_s: cfg.maxSeconds,
+      max_kbps: cfg.maxKbps,
+      max_videos_per_product: PRODUCT_VIDEO_MAX_PER_PRODUCT,
+      accept: [VIDEO_CONTENT_TYPE],
+      quota_bytes: scope ? cfg.storeQuotaBytes : null,
+      used_bytes: used,
+    };
+  }
+
+  /**
+   * `POST /uploads/video`: the multipart file is already on disk in the
+   * video temp dir (diskStorage). Validates it (extension, size, magic
+   * bytes, MP4 probe), re-checks quota and disk with the real size, moves it
+   * to `uploads/<folder>/<uuid>.mp4`, records the uploader, and always
+   * removes the temp file(s).
+   */
+  async uploadVideo(
+    file: Express.Multer.File | undefined,
+    folder: string,
+    uploader: OwnerUser,
+  ): Promise<VideoUploadResult> {
+    const tempPaths: string[] = [];
+    if (file?.path) tempPaths.push(file.path);
+    let release: () => void = () => undefined;
+    try {
+      const cfg = videoUploadConfig();
+      if (!cfg.uploadsEnabled) throw videoUploadsDisabled();
+      const safeFolder = sanitizeFolder(folder);
+      if (!videoFolderAllowedForRole(uploader.role, safeFolder)) {
+        throw videoFolderForbidden(safeFolder);
+      }
+      if (!file || !file.path) {
+        throw new BadRequestException({
+          code: 'UPLOAD_NO_FILE',
+          message: 'No file provided',
+        });
+      }
+      if (path.extname(file.originalname || '').toLowerCase() !== '.mp4') {
+        throw videoTypeError('extension');
+      }
+      const size = (await fs.stat(file.path)).size;
+      if (size > cfg.maxBytes) throw videoTooLarge(cfg.maxBytes);
+
+      // Reserve this upload's bytes until it ends, so parallel uploads see
+      // each other in the quota and disk guards.
+      const scopeKey = videoScopeKey(await this.videoQuotaScope(uploader));
+      release = UploadsService.videoInflight.reserve(scopeKey, size);
+      // The probe may write a full faststart copy, and the move may copy
+      // once more: room for two copies before anything is written.
+      await this.assertVideoDisk(safeFolder, 2 * size, size);
+      await this.assertVideoQuota(uploader, size, size);
+
+      const fh = await fs.open(file.path, 'r');
+      const head = Buffer.alloc(12);
+      try {
+        await fh.read(head, 0, 12, 0);
+      } finally {
+        await fh.close();
+      }
+      if (!sniffUploadType(head, '.mp4')) throw videoTypeError('not_mp4');
+
+      const relocated = `${file.path}.faststart`;
+      tempPaths.push(relocated);
+      let probe: Mp4ProbeResult;
+      try {
+        probe = await probeMp4(file.path, {
+          maxSeconds: cfg.maxSeconds,
+          maxKbps: cfg.maxKbps,
+          bitrateMinBytes: BITRATE_CHECK_MIN_BYTES,
+          relocatedPath: relocated,
+        });
+      } catch (e) {
+        if (e instanceof Mp4ProbeError) {
+          throw new BadRequestException({
+            code: e.code,
+            message: e.message,
+            ...e.details,
+          });
+        }
+        throw new BadRequestException({
+          code: 'UPLOAD_VIDEO_UNREADABLE',
+          message: 'The video file could not be read',
+        });
+      }
+
+      const finalSize = (await fs.stat(probe.outputPath)).size;
+      await this.assertVideoDisk(safeFolder, finalSize, size);
+      await this.assertVideoQuota(uploader, finalSize, size);
+
+      const stored = await this.storage.putFile(
+        safeFolder,
+        `${randomUUID()}.mp4`,
+        probe.outputPath,
+        VIDEO_CONTENT_TYPE,
+      );
+      try {
+        await this.recordUpload(
+          `/${stored.key}`,
+          safeFolder,
+          stored.size,
+          '.mp4',
+          uploader,
+          { strict: true },
+        );
+      } catch (e) {
+        // A video without its row escapes the quota and the orphan sweep:
+        // remove it and fail instead.
+        await this.storage.delete(stored.url).catch(() => undefined);
+        throw e;
+      }
+
+      return {
+        url: stored.url,
+        content_type: VIDEO_CONTENT_TYPE,
+        size_bytes: stored.size,
+        duration_s: probe.durationS,
+        width: probe.width,
+        height: probe.height,
+        faststart_fixed: probe.faststartFixed,
+      };
+    } finally {
+      release();
+      for (const p of tempPaths) {
+        await fs.unlink(p).catch(() => undefined);
+      }
+    }
+  }
+
+  /**
+   * Deletes a stored object by key/URL for the orphan sweep (no ownership
+   * check; the caller proved the file is unreferenced).
+   */
+  async deleteStoredObject(url: string): Promise<DeleteObjectResult> {
+    return this.storage.delete(url);
+  }
+
+  /**
+   * True when ANY record references `rel`: product videos (url / poster),
+   * every source `isReferencedByOthers` checks, and page versions. Used by
+   * the video orphan sweep; absolute URLs match by suffix, text and JSON by
+   * substring.
+   */
+  async isReferencedAnywhere(
+    rel: string,
+    client?: RawQueryClient,
+  ): Promise<boolean> {
+    const db = client ?? this.prisma;
+    if (!db) return true;
+    const esc = rel.replace(/[%_\\]/g, (c) => `\\${c}`);
+    const suffix = `%${esc}`;
+    const inside = `%${esc}%`;
+    const rows = await db.$queryRaw<{ found: number }[]>`
+      SELECT 1 AS found WHERE
+        EXISTS (SELECT 1 FROM "ProductVideo" v WHERE v."url" LIKE ${suffix} OR v."poster_url" LIKE ${suffix})
+        OR EXISTS (SELECT 1 FROM "User" u WHERE u."avatar_url" LIKE ${suffix})
+        OR EXISTS (SELECT 1 FROM "Creator" c WHERE c."avatar_url" LIKE ${suffix} OR c."cover_url" LIKE ${suffix})
+        OR EXISTS (SELECT 1 FROM "Provider" p WHERE p."logo_url" LIKE ${suffix} OR p."description" LIKE ${inside})
+        OR EXISTS (SELECT 1 FROM "Store" s WHERE s."logo_url" LIKE ${suffix} OR s."favicon_url" LIKE ${suffix} OR s."description" LIKE ${inside})
+        OR EXISTS (SELECT 1 FROM "ProductImage" i WHERE i."url" LIKE ${suffix})
+        OR EXISTS (SELECT 1 FROM "ProductTranslation" t WHERE t."description" LIKE ${inside} OR t."short_description" LIKE ${inside})
+        OR EXISTS (SELECT 1 FROM "CustomProductImage" i WHERE i."url" LIKE ${suffix})
+        OR EXISTS (SELECT 1 FROM "CustomProductTranslation" t WHERE t."description" LIKE ${inside})
+        OR EXISTS (SELECT 1 FROM "CreatorCategory" cc WHERE cc."thumbnail_url" LIKE ${suffix})
+        OR EXISTS (SELECT 1 FROM "StoreLegalProfile" l WHERE l."logo_url" LIKE ${suffix})
+        OR EXISTS (SELECT 1 FROM "ImportMedia" m WHERE m."public_url" LIKE ${suffix})
+        OR EXISTS (SELECT 1 FROM "Page" pg WHERE pg."seo"::text LIKE ${inside})
+        OR EXISTS (SELECT 1 FROM "PageSection" ps WHERE ps."settings"::text LIKE ${inside})
+        OR EXISTS (SELECT 1 FROM "PageSectionTranslation" pt WHERE pt."content"::text LIKE ${inside})
+        OR EXISTS (SELECT 1 FROM "PageVersion" pv WHERE pv."snapshot"::text LIKE ${inside})
+      LIMIT 1`;
+    return rows.length > 0;
+  }
+
   /**
    * Upserts the `UploadedFile` row of a freshly stored key. A failure is
    * logged and swallowed: the file is already stored, and a key without a row
    * falls back to the reference-based delete check (never more permissive
-   * than before this table existed).
+   * than before this table existed). `strict` (videos) rethrows instead: a
+   * video must have its row for the quota and the orphan sweep.
    */
   private async recordUpload(
     key: string,
@@ -228,6 +634,7 @@ export class UploadsService {
     size: number,
     ext: string,
     uploader: OwnerUser,
+    opts: { strict?: boolean } = {},
   ): Promise<void> {
     const prisma = this.prisma;
     if (!prisma) return;
@@ -256,6 +663,7 @@ export class UploadsService {
       this.logger.warn(
         `Could not record uploader of ${key}: ${(e as Error).message}`,
       );
+      if (opts.strict) throw e;
     }
   }
 
@@ -414,7 +822,8 @@ export class UploadsService {
         where: { url: ends, product: { provider_id: provider.id } },
         select: { id: true },
       });
-      return image !== null;
+      if (image !== null) return true;
+      return this.referencedByOwnVideo(rel, { providerId: provider.id });
     }
 
     if (user.role !== UserRole.CREATOR) return false;
@@ -472,10 +881,40 @@ export class UploadsService {
         async () => this.referencedInPageJson(rel, store.id),
       );
     }
+    checks.push(() =>
+      this.referencedByOwnVideo(rel, { creatorId: creator.id }),
+    );
     for (const check of checks) {
       if (await check()) return true;
     }
     return false;
+  }
+
+  /**
+   * True when a product video (file or poster) of the caller's products
+   * references `rel`. Raw SQL so this module does not depend on the
+   * generated `ProductVideo` client.
+   */
+  private async referencedByOwnVideo(
+    rel: string,
+    owner: { creatorId: string } | { providerId: string },
+  ): Promise<boolean> {
+    const prisma = this.prisma;
+    if (!prisma) return false;
+    const suffix = `%${rel.replace(/[%_\\]/g, (c) => `\\${c}`)}`;
+    const rows =
+      'creatorId' in owner
+        ? await prisma.$queryRaw<{ found: number }[]>`
+            SELECT 1 AS found FROM "ProductVideo" v JOIN "Product" pr ON pr."id" = v."product_id"
+            WHERE (v."url" LIKE ${suffix} OR v."poster_url" LIKE ${suffix})
+              AND pr."creator_id" = ${owner.creatorId}
+            LIMIT 1`
+        : await prisma.$queryRaw<{ found: number }[]>`
+            SELECT 1 AS found FROM "ProductVideo" v JOIN "Product" pr ON pr."id" = v."product_id"
+            WHERE (v."url" LIKE ${suffix} OR v."poster_url" LIKE ${suffix})
+              AND pr."provider_id" = ${owner.providerId}
+            LIMIT 1`;
+    return rows.length > 0;
   }
 
   /**
@@ -515,6 +954,10 @@ export class UploadsService {
                    AND (s."logo_url" LIKE ${suffix} OR s."favicon_url" LIKE ${suffix} OR s."description" LIKE ${inside}))
         OR EXISTS (SELECT 1 FROM "ProductImage" i JOIN "Product" pr ON pr."id" = i."product_id"
                    WHERE i."url" LIKE ${suffix}
+                     AND pr."creator_id" IS DISTINCT FROM ${creatorId}
+                     AND pr."provider_id" IS DISTINCT FROM ${providerId})
+        OR EXISTS (SELECT 1 FROM "ProductVideo" v JOIN "Product" pr ON pr."id" = v."product_id"
+                   WHERE (v."url" LIKE ${suffix} OR v."poster_url" LIKE ${suffix})
                      AND pr."creator_id" IS DISTINCT FROM ${creatorId}
                      AND pr."provider_id" IS DISTINCT FROM ${providerId})
         OR EXISTS (SELECT 1 FROM "ProductTranslation" t JOIN "Product" pr ON pr."id" = t."product_id"
