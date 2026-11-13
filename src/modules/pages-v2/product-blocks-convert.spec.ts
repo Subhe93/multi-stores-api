@@ -2,8 +2,12 @@ import { HttpException } from '@nestjs/common';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { StoreAppsService } from '../store-apps/store-apps.service';
 import {
+  CLASSIC_BREADCRUMB_PADDING,
+  CLASSIC_ROW_PADDING,
+  CLASSIC_TABS_PADDING,
   CONVERTED_FROM_KEY,
   planClassicProductTree,
+  unsupportedMonolithStyleKeys,
   ProductBlocksConvertService,
 } from './product-blocks-convert';
 import { validateSectionTree } from './section-tree';
@@ -172,7 +176,7 @@ const MONOLITH_SETTINGS = {
   show_tabs: true,
   button_style: 'outline',
   gallery_aspect: 'portrait',
-  _style: { padding: { top: 'lg' }, width: 'container', hide_on: ['mobile'] },
+  _style: { padding: { desktop: { top: 'lg' } }, width: 'container', hide_on: ['mobile'] },
 };
 const TRUST_EN = [{ icon: 'truck', label: 'Fast delivery' }];
 const TRUST_AR = [{ icon: 'truck', label: 'توصيل سريع' }];
@@ -210,7 +214,8 @@ describe('ProductBlocksConvertService.convert', () => {
     expect(shape(f.sections)).toEqual([
       'hero-banner',
       'product-page',
-      'layout-row(layout-column(product-gallery),layout-column(product-breadcrumb,product-title,product-price,product-short-description,product-promotions,product-bundles,product-personalization,product-variants,product-personalization,product-buy,product-trust,product-shipping))',
+      'product-breadcrumb',
+      'layout-row(layout-column(product-gallery),layout-column(product-title,product-price,product-short-description,product-promotions,product-bundles,product-personalization,product-variants,product-personalization,product-buy,product-trust,product-shipping))',
       'product-tabs',
       'faq-list',
     ]);
@@ -218,11 +223,11 @@ describe('ProductBlocksConvertService.convert', () => {
     expect(list.map((s) => s.section_key)).toEqual([
       'hero-banner',
       'product-page',
+      'product-breadcrumb',
       'layout-row',
       'layout-column',
       'product-gallery',
       'layout-column',
-      'product-breadcrumb',
       'product-title',
       'product-price',
       'product-short-description',
@@ -257,9 +262,14 @@ describe('ProductBlocksConvertService.convert', () => {
 
     const [row] = byKey('layout-row');
     expect(row.settings).toMatchObject({
-      stack_on: 'tablet',
+      stack_on: 'mobile',
       [CONVERTED_FROM_KEY]: 'mono',
-      _style: MONOLITH_SETTINGS._style,
+    });
+    // The row keeps the monolith's width / hide-on-device and closes the page.
+    expect(row.settings._style).toEqual({
+      width: 'container',
+      hide_on: ['mobile'],
+      padding: CLASSIC_ROW_PADDING,
     });
     const [galleryCol, infoCol] = byKey('layout-column').sort((a, b) => a.sort_order - b.sort_order);
     expect(galleryCol.settings).toMatchObject({ sticky_desktop: true, _layout: { span: { desktop: 1 } } });
@@ -284,11 +294,23 @@ describe('ProductBlocksConvertService.convert', () => {
     for (const s of f.sections.filter((x) => !['banner', 'mono', 'faq'].includes(x.id))) {
       expect(Object.keys(trOf(s.id)).sort()).toEqual(['ar', 'en']);
     }
-    // Tabs keep only width / hide-on-device of the monolith style.
+    // Breadcrumb and tabs keep width / hide-on-device of the monolith style
+    // plus the Classic spacing; the owner's top padding (lg = 64px from
+    // desktop down) lands above the breadcrumb, added to the Classic top.
+    // Every root carries the conversion marker.
     expect(byKey('product-tabs')[0].settings._style).toEqual({
       width: 'container',
       hide_on: ['mobile'],
+      padding: CLASSIC_TABS_PADDING,
     });
+    expect(byKey('product-breadcrumb')[0].settings._style).toEqual({
+      width: 'container',
+      hide_on: ['mobile'],
+      padding: { desktop: { top: 104, bottom: 32 }, tablet: { top: 96, bottom: 24 } },
+    });
+    for (const key of ['product-breadcrumb', 'layout-row', 'product-tabs']) {
+      expect(byKey(key)[0].settings[CONVERTED_FROM_KEY]).toBe('mono');
+    }
   });
 
   it('leaves out shipping and tabs when the monolith hid them', async () => {
@@ -302,8 +324,11 @@ describe('ProductBlocksConvertService.convert', () => {
     // Defaults when the monolith carries no style / options.
     const gallery = f.sections.find((s) => s.section_key === 'product-gallery');
     expect(gallery?.settings.aspect).toBe('square');
+    // The row closes the page with the monolith's bottom padding.
     const row = f.sections.find((s) => s.section_key === 'layout-row');
-    expect(row?.settings._style).toBeUndefined();
+    expect(row?.settings._style).toEqual({ padding: CLASSIC_ROW_PADDING });
+    const crumb = f.sections.find((s) => s.section_key === 'product-breadcrumb');
+    expect(crumb?.settings._style).toEqual({ padding: CLASSIC_BREADCRUMB_PADDING });
   });
 
   it("uses the store's primary locale when the monolith has no translations", async () => {
@@ -363,6 +388,50 @@ describe('ProductBlocksConvertService.convert', () => {
     f.sections.find((s) => s.id === 'mono')!.is_hidden = false;
     await f.service.convert('u1', 'p1', {});
     expect(f.sections.filter((s) => s.section_key === 'layout-row')).toHaveLength(1);
+  });
+
+  it('refuses converting again while a root of the converted tree is left (no second breadcrumb)', async () => {
+    const f = fakeDb();
+    seedTemplate(f);
+    await f.service.convert('u1', 'p1', {});
+    // The owner deleted only the row (and its subtree): breadcrumb and tabs stay.
+    const row = f.sections.find((s) => s.section_key === 'layout-row')!;
+    const doomed = new Set([row.id]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const s of f.sections) {
+        if (s.parent_id && doomed.has(s.parent_id) && !doomed.has(s.id)) {
+          doomed.add(s.id);
+          grew = true;
+        }
+      }
+    }
+    f.sections.splice(0, f.sections.length, ...f.sections.filter((s) => !doomed.has(s.id)));
+    f.sections.find((s) => s.id === 'mono')!.is_hidden = false;
+    expect(await errorOf(f.service.convert('u1', 'p1', {}))).toEqual({
+      status: 409,
+      code: 'PRODUCT_BLOCKS_ALREADY_CONVERTED',
+    });
+    expect(f.sections.filter((s) => s.section_key === 'product-breadcrumb')).toHaveLength(1);
+  });
+
+  it.each([
+    ['radius', { radius: 'md' }],
+    ['background', { background: 'image', background_image: '/uploads/x.jpg' }],
+    ['animate', { animate: 'fade-up' }],
+    ['shadow', { shadow: 'lg' }],
+  ])('refuses a monolith style the roots cannot reproduce (%s), without writing', async (key, extra) => {
+    const f = fakeDb();
+    seedTemplate(f, { ...MONOLITH_SETTINGS, _style: { ...MONOLITH_SETTINGS._style, ...extra } });
+    const err = await f.service.convert('u1', 'p1', {}).catch((e: HttpException) => e);
+    expect(err).toBeInstanceOf(HttpException);
+    expect((err as HttpException).getStatus()).toBe(400);
+    expect((err as HttpException).getResponse()).toMatchObject({
+      code: 'PRODUCT_BLOCKS_STYLE_UNSUPPORTED',
+      keys: [key],
+    });
+    expect(f.db.pageSection.create).not.toHaveBeenCalled();
+    expect(f.sections.find((s) => s.id === 'mono')?.is_hidden).toBe(false);
   });
 
   it('refuses when there is no visible product page section', async () => {
@@ -477,6 +546,151 @@ describe('planClassicProductTree', () => {
       if (p.parentRef) expect(seen.has(p.parentRef)).toBe(true);
       seen.add(p.ref);
     }
+  });
+
+  it('reproduces the monolith geometry (two columns from 768px, spacing, sticky gallery)', () => {
+    const plan = planClassicProductTree({ id: 'm', settings: {}, translations: [] }, ['en']);
+    const byRef = (ref: string) => plan.find((p) => p.ref === ref)!;
+    // Roots in order: breadcrumb above both columns, the row, the tabs.
+    expect(plan.filter((p) => !p.parentRef).map((p) => p.section_key)).toEqual([
+      'product-breadcrumb',
+      'layout-row',
+      'product-tabs',
+    ]);
+    // md:grid-cols-2 gap-8 lg:gap-14: stacked below 768px, 32px below 1024px.
+    expect(byRef('row').settings).toMatchObject({
+      stack_on: 'mobile',
+      gap_px: 56,
+      gap_tablet_px: 32,
+      align: 'stretch',
+      child_width: 'fill',
+      wrap: false,
+    });
+    expect(byRef('row').settings).not.toHaveProperty('gap_mobile_px');
+    // py-8 lg:py-10 bottom on the row, so it stays when empty tabs are hidden.
+    expect(byRef('row').settings._style).toEqual({
+      padding: { desktop: { bottom: 40 }, tablet: { bottom: 32 } },
+    });
+    // Equal columns; md:sticky md:top-24 on the gallery.
+    expect(byRef('gallery-col').settings).toMatchObject({
+      sticky_desktop: true,
+      sticky_top_px: 96,
+      sticky_from: 'tablet',
+      _layout: { span: { desktop: 1 } },
+    });
+    expect(byRef('info-col').settings).toMatchObject({
+      gap_px: 20,
+      sticky_desktop: false,
+      _layout: { span: { desktop: 1 } },
+    });
+    // py-8 lg:py-10 + breadcrumb mb-6 lg:mb-8; tabs mt-12 lg:mt-16 (row
+    // bottom 40/32 + tabs top 24/16 = 64/48), then the page bottom.
+    expect(byRef('breadcrumb').settings._style).toEqual({
+      padding: { desktop: { top: 40, bottom: 32 }, tablet: { top: 32, bottom: 24 } },
+    });
+    expect(byRef('tabs').settings._style).toEqual({
+      padding: { desktop: { top: 24, bottom: 40 }, tablet: { top: 16, bottom: 32 } },
+    });
+    // Each plan gets its own copies of the padding objects.
+    (byRef('tabs').settings._style as { padding: { desktop: { top: number } } }).padding.desktop.top = 1;
+    expect(CLASSIC_TABS_PADDING.desktop.top).toBe(24);
+  });
+
+  it("adds the owner's bottom padding to the page bottom when there are no tabs", () => {
+    const plan = planClassicProductTree(
+      { id: 'm', settings: { show_tabs: false, _style: { padding: { desktop: { bottom: 8 } } } }, translations: [] },
+      ['en'],
+    );
+    // Desktop-only 8px cascades to tablet/mobile: 40 + 8, 32 + 8.
+    expect(plan.find((p) => p.ref === 'row')?.settings._style).toEqual({
+      padding: { desktop: { bottom: 48 }, tablet: { bottom: 40 } },
+    });
+  });
+
+  it("splits the owner's padding per side: left/right on every root, top above, bottom below", () => {
+    const plan = planClassicProductTree(
+      {
+        id: 'm',
+        settings: {
+          _style: {
+            padding: { desktop: { left: 16, right: 16, top: 'sm', bottom: 8 }, mobile: { left: 0 } },
+            margin: { desktop: { top: 12, bottom: 4 } },
+          },
+        },
+        translations: [],
+      },
+      ['en'],
+    );
+    const styleOf = (ref: string) => plan.find((p) => p.ref === ref)?.settings._style;
+    expect(styleOf('breadcrumb')).toEqual({
+      padding: {
+        desktop: { top: 56, right: 16, bottom: 32, left: 16 },
+        tablet: { top: 48, bottom: 24 },
+        mobile: { left: 0 },
+      },
+      margin: { desktop: { top: 12 } },
+    });
+    expect(styleOf('row')).toEqual({
+      padding: {
+        desktop: { right: 16, bottom: 40, left: 16 },
+        tablet: { bottom: 32 },
+        mobile: { left: 0 },
+      },
+    });
+    expect(styleOf('tabs')).toEqual({
+      padding: {
+        desktop: { top: 24, right: 16, bottom: 48, left: 16 },
+        tablet: { top: 16, bottom: 40 },
+        mobile: { left: 0 },
+      },
+      margin: { desktop: { bottom: 4 } },
+    });
+  });
+
+  it("copies the owner's background and text colour to every root and reads legacy spacing tokens", () => {
+    const plan = planClassicProductTree(
+      {
+        id: 'm',
+        settings: {
+          show_tabs: false,
+          _style: {
+            background: 'custom',
+            background_color: '#fafafa',
+            text_color: { desktop: '#111111' },
+            padding_top: { desktop: 'md', tablet: 'none' },
+            radius: 'none',
+            animate: 'none',
+          },
+        },
+        translations: [],
+      },
+      ['en'],
+    );
+    const styleOf = (ref: string) => plan.find((p) => p.ref === ref)?.settings._style;
+    const copied = { background: 'custom', background_color: '#fafafa', text_color: { desktop: '#111111' } };
+    expect(styleOf('breadcrumb')).toEqual({
+      ...copied,
+      padding: { desktop: { top: 72, bottom: 32 }, tablet: { top: 32, bottom: 24 } },
+    });
+    expect(styleOf('row')).toEqual({ ...copied, padding: CLASSIC_ROW_PADDING });
+  });
+
+  it('lists the style keys a split cannot reproduce', () => {
+    expect(unsupportedMonolithStyleKeys({})).toEqual([]);
+    expect(
+      unsupportedMonolithStyleKeys({
+        width: 'container',
+        hide_on: ['mobile'],
+        padding: { desktop: { top: 8 } },
+        background: { desktop: 'surface' },
+        background_image: '',
+        radius: { desktop: 'none' },
+        animate: 'none',
+      }),
+    ).toEqual([]);
+    expect(
+      unsupportedMonolithStyleKeys({ radius: { mobile: 'sm' }, background: { tablet: 'image' }, animate: 'fade-in' }),
+    ).toEqual(['radius', 'background', 'animate']);
   });
 
   it('ignores invalid option values', () => {

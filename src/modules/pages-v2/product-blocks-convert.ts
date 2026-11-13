@@ -4,21 +4,35 @@
  * Replaces the monolith `product-page` section with the Classic block tree
  * that looks like today's page:
  *
- *   layout-row (stacks on tablet)
- *     layout-column (sticky on desktop)  -> product-gallery
- *     layout-column                      -> breadcrumb, title, price, short
- *                                           description, promotions, bundles,
+ *   product-breadcrumb (full width, above both columns)
+ *   layout-row (two columns from 768px, stacks on mobile)
+ *     layout-column (sticky from 768px)  -> product-gallery
+ *     layout-column                      -> title, price, short description,
+ *                                           promotions, bundles,
  *                                           variants, personalization, buy,
  *                                           trust, shipping (if shown)
  *   product-tabs (if shown)
+ *
+ * Geometry = the monolith's (ProductPageMagic + ProductDetailClient): page
+ * padding py-8 lg:py-10, breadcrumb mb-6 lg:mb-8, grid md:grid-cols-2 with
+ * gap-8 lg:gap-14, gallery md:sticky md:top-24, info gap-5, tabs
+ * mt-12 lg:mt-16. Section `_style` padding carries the vertical spacing
+ * (its tablet breakpoint is < 1024px = below Tailwind's lg); the page
+ * bottom sits on the row, so it stays when the storefront hides tabs that
+ * render nothing. The monolith's own `_style` is split over the roots.
  *
  * Safety rules:
  * - The monolith is only HIDDEN, never deleted, so the owner can go back.
  * - Nothing is published: the owner previews the draft, then publishes.
  * - Refused when a converted tree of that monolith already exists (marker
- *   `settings._converted_from` on the row), so a double click or a re-run can
- *   never stack two buy forms on one page. Deleting the converted row lets the
- *   owner convert again. Overlapping requests (two tabs, a retry after a
+ *   `settings._converted_from` on every root: breadcrumb, row, tabs), so a
+ *   double click or a re-run can never stack two buy forms on one page.
+ *   Deleting all of those roots lets the owner convert again (trees from
+ *   before 2026-11-13 carry the marker on the row only and hold the
+ *   breadcrumb inside it: delete the row and the root tabs that follow it).
+ * - Refused when the monolith's `_style` holds something three separate
+ *   roots cannot reproduce (radius, background image, animation).
+ *   Overlapping requests (two tabs, a retry after a
  *   timeout) are serialised by a guarded hide of the monolith: only the
  *   request that actually hides it builds the tree, the other gets a 409.
  * - Refused when the page already holds a visible add-to-cart composite or
@@ -65,8 +79,188 @@ export const CONVERT_CONFLICT_KEYS: readonly string[] = [
 const GALLERY_STICKY_TOP_PX = 96;
 /** The monolith's column gap on desktop (lg:gap-14). */
 const ROW_GAP_PX = 56;
+/** The monolith's gap below 1024px (gap-8): between columns, and once stacked. */
+const ROW_GAP_TABLET_PX = 32;
 /** The monolith's spacing between the info blocks (gap-5). */
 const INFO_COLUMN_GAP_PX = 20;
+
+/**
+ * Vertical spacing of the monolith as section padding (desktop >= 1024px,
+ * tablet = below 1024px, mobile inherits tablet). Same values as the
+ * dashboard's Classic preset (multi-stores-dashboard/src/lib/productBlocksPreset.ts).
+ */
+// Page top (py-8 lg:py-10) + breadcrumb bottom margin (mb-6 lg:mb-8).
+export const CLASSIC_BREADCRUMB_PADDING = {
+  desktop: { top: 40, bottom: 32 },
+  tablet: { top: 32, bottom: 24 },
+};
+// Page bottom (py-8 lg:py-10), always on the row: the storefront hides a root
+// product block that renders nothing (tabs of a product without description,
+// specifications or FAQs), and the page must then still end like the
+// monolith's.
+export const CLASSIC_ROW_PADDING = {
+  desktop: { bottom: 40 },
+  tablet: { bottom: 32 },
+};
+// Tabs top margin (mt-12 lg:mt-16) minus the row's page bottom above it, then
+// the page bottom again: 40 + 24 = 64 and 32 + 16 = 48 between the columns and
+// the tabs, like the monolith.
+export const CLASSIC_TABS_PADDING = {
+  desktop: { top: 24, bottom: 40 },
+  tablet: { top: 16, bottom: 32 },
+};
+
+// ── Monolith `_style` ────────────────────────────────────────────────────
+//
+// The monolith's `_style` wraps the whole page (breadcrumb, columns, tabs),
+// with py-8 lg:py-10 inside it. The Classic tree has three roots instead, so
+// the style is split the way it rendered: top spacing on the breadcrumb,
+// bottom spacing on the last root, left/right spacing and the copyable
+// properties on every root. Spacing is added to the Classic padding per side
+// and breakpoint (same cascade as the storefront's sectionStyle.ts).
+
+type StyleBp = 'desktop' | 'tablet' | 'mobile';
+type StyleSide = 'top' | 'right' | 'bottom' | 'left';
+type SidesPx = Partial<Record<StyleSide, number>>;
+type ResponsiveSidesPx = Partial<Record<StyleBp, SidesPx>>;
+
+const STYLE_BPS: readonly StyleBp[] = ['desktop', 'tablet', 'mobile'];
+const STYLE_SIDES: readonly StyleSide[] = ['top', 'right', 'bottom', 'left'];
+/** Same token table as the storefront (sectionStyle.ts SPACE_PX). */
+const SPACE_PX: Record<string, number> = { none: 0, xs: 8, sm: 16, md: 32, lg: 64, xl: 96 };
+
+/** Properties copied unchanged to every root (they read the same on each). */
+const COPIED_STYLE_KEYS = ['width', 'hide_on', 'text_color', 'background', 'background_color'] as const;
+/** Spacing properties, split per side (see above). */
+const SPACING_STYLE_KEYS = new Set([
+  'padding',
+  'margin',
+  'padding_top',
+  'padding_bottom',
+  'margin_top',
+  'margin_bottom',
+]);
+/** Background-image fields: inert unless `background` is 'image' (refused). */
+const INERT_STYLE_KEYS = new Set([
+  'background_image',
+  'background_overlay_color',
+  'background_overlay_opacity',
+]);
+
+/** One breakpoint's value of a responsive style value (bare = desktop), as the storefront reads it. */
+function styleAt(value: unknown, bp: StyleBp): unknown {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'object' && !Array.isArray(value)) return (value as Record<string, unknown>)[bp];
+  return bp === 'desktop' ? value : undefined;
+}
+
+function responsiveValues(value: unknown): unknown[] {
+  if (value === undefined || value === null) return [];
+  if (typeof value === 'object' && !Array.isArray(value)) return Object.values(value as Record<string, unknown>);
+  return [value];
+}
+
+/**
+ * `_style` keys of a monolith that the split cannot reproduce on three
+ * separate roots: a corner radius or a background image would show three
+ * times, an entrance animation would run three times, and unknown keys are
+ * not guessed at. Empty = the style converts faithfully.
+ */
+export function unsupportedMonolithStyleKeys(style: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  for (const [key, value] of Object.entries(style)) {
+    if (value === undefined || value === null) continue;
+    if (SPACING_STYLE_KEYS.has(key) || INERT_STYLE_KEYS.has(key)) continue;
+    if (key === 'background') {
+      if (responsiveValues(value).includes('image')) out.push(key);
+      continue;
+    }
+    if ((COPIED_STYLE_KEYS as readonly string[]).includes(key)) continue;
+    if (key === 'radius' && responsiveValues(value).every((v) => v === 'none' || v === undefined || v === null)) continue;
+    if (key === 'animate' && (value === 'none' || value === '')) continue;
+    out.push(key);
+  }
+  return out;
+}
+
+/** Pixel value of one side at one breakpoint as written (undefined = no rule). */
+function ownSidePx(style: Record<string, unknown>, prop: 'padding' | 'margin', side: StyleSide, bp: StyleBp): number | undefined {
+  const sides = styleAt(style[prop], bp);
+  const v = sides && typeof sides === 'object' ? (sides as Record<string, unknown>)[side] : undefined;
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') return SPACE_PX[v] ?? 0;
+  if (v !== undefined && v !== null) return undefined;
+  // Legacy top/bottom tokens, read only when the new side is absent; a
+  // desktop 'none' emits no rule (the storefront skips it).
+  if (side !== 'top' && side !== 'bottom') return undefined;
+  const token = styleAt(style[`${prop}_${side}`], bp);
+  if (typeof token !== 'string') return undefined;
+  if (bp === 'desktop' && token === 'none') return undefined;
+  return SPACE_PX[token] ?? 0;
+}
+
+/** Effective pixels per breakpoint after the mobile -> tablet -> desktop cascade. */
+function cascadePx(own: (bp: StyleBp) => number | undefined): Record<StyleBp, number | undefined> {
+  const desktop = own('desktop');
+  const tablet = own('tablet') ?? desktop;
+  const mobile = own('mobile') ?? tablet;
+  return { desktop, tablet, mobile };
+}
+
+/**
+ * Responsive sides written back in the new `{ desktop, tablet, mobile }`
+ * shape, emitting a breakpoint's side only where it differs from the wider
+ * one (the cascade fills in the rest). Undefined when nothing is set.
+ */
+function sumSpacing(
+  parts: Array<(side: StyleSide, bp: StyleBp) => number | undefined>,
+): ResponsiveSidesPx | undefined {
+  const out: ResponsiveSidesPx = {};
+  for (const side of STYLE_SIDES) {
+    const eff = parts.map((part) => cascadePx((bp) => part(side, bp)));
+    let wider: number | undefined;
+    for (const bp of STYLE_BPS) {
+      const values = eff.map((e) => e[bp]).filter((v): v is number => v !== undefined);
+      const total = values.length ? values.reduce((a, b) => a + b, 0) : undefined;
+      if (total !== undefined && total !== wider) (out[bp] ??= {})[side] = total;
+      wider = total;
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Reader for a fixed Classic padding constant. */
+function classicPart(padding: ResponsiveSidesPx) {
+  return (side: StyleSide, bp: StyleBp) => padding[bp]?.[side];
+}
+
+/** Reader for the owner's spacing, limited to the given sides. */
+function ownerPart(style: Record<string, unknown>, prop: 'padding' | 'margin', sides: readonly StyleSide[]) {
+  return (side: StyleSide, bp: StyleBp) => (sides.includes(side) ? ownSidePx(style, prop, side, bp) : undefined);
+}
+
+/**
+ * `_style` of each Classic root for a monolith style: `classic` padding plus
+ * the owner's spacing on `sides`, and the copyable properties.
+ */
+function rootStyle(
+  owner: Record<string, unknown>,
+  classic: ResponsiveSidesPx | null,
+  sides: readonly StyleSide[],
+): Record<string, unknown> | undefined {
+  const out: Record<string, unknown> = {};
+  for (const key of COPIED_STYLE_KEYS) {
+    if (owner[key] !== undefined && owner[key] !== null) out[key] = JSON.parse(JSON.stringify(owner[key])) as unknown;
+  }
+  const padding = sumSpacing([
+    ...(classic ? [classicPart(classic)] : []),
+    ownerPart(owner, 'padding', sides),
+  ]);
+  if (padding) out.padding = padding;
+  const margin = sumSpacing([ownerPart(owner, 'margin', sides)]);
+  if (margin) out.margin = margin;
+  return Object.keys(out).length ? out : undefined;
+}
 
 export class ConvertProductBlocksDto {
   // The product-page section to convert. Optional: absent = the first
@@ -115,8 +309,11 @@ function pick<T extends string>(
  * children; siblings in display order). Settings map the monolith's options:
  * gallery_aspect -> gallery aspect, button_style -> buy + designer button,
  * trust_badges (per locale) -> product-trust, show_shipping / show_tabs ->
- * whether those blocks exist. The monolith's `_style` moves to the row; the
- * tabs keep its width and hide-on-device choices.
+ * whether those blocks exist. Each root gets the monolith's vertical spacing
+ * as padding, and the monolith's own `_style` is split over the roots (see
+ * rootStyle; the caller refuses styles unsupportedMonolithStyleKeys reports).
+ * Owner bottom spacing sits on the tabs when they exist: a product whose
+ * tabs render nothing then ends with the Classic page bottom only.
  *
  * `locales` are the locales the new sections get a translation row in: the
  * monolith's own locales (or the store's primary locale when it has none).
@@ -135,13 +332,24 @@ export function planClassicProductTree(
   const showShipping = settings.show_shipping !== false;
   const showTabs = settings.show_tabs !== false;
   const style = asRecord(settings._style);
-  const hasStyle = Object.keys(style).length > 0;
 
   const contentByLocale = new Map<string, Record<string, unknown>>();
   for (const t of monolith.translations) {
     contentByLocale.set(t.locale, asRecord(t.content));
   }
   const emptyTranslations = () => locales.map((locale) => ({ locale, content: {} }));
+
+  // The monolith's own style, split over the three roots (see rootStyle):
+  // its top spacing above the breadcrumb, its bottom spacing below the last
+  // root, its left/right spacing and copyable properties on all of them.
+  const lastIsTabs = showTabs;
+  const breadcrumbStyle = rootStyle(style, CLASSIC_BREADCRUMB_PADDING, ['top', 'left', 'right']);
+  const rowStyle = rootStyle(
+    style,
+    CLASSIC_ROW_PADDING,
+    lastIsTabs ? ['left', 'right'] : ['bottom', 'left', 'right'],
+  );
+  const tabsStyle = rootStyle(style, CLASSIC_TABS_PADDING, ['bottom', 'left', 'right']);
 
   const out: PlannedSection[] = [];
   const add = (
@@ -152,15 +360,25 @@ export function planClassicProductTree(
     translations = emptyTranslations(),
   ) => out.push({ ref, parentRef, section_key, settings: s, translations });
 
+  // Full width above both columns, like the monolith's breadcrumb.
+  // Every root carries the marker, so a re-run is refused until all of them
+  // are gone, and a cleanup can find each root of one conversion.
+  add('breadcrumb', null, 'product-breadcrumb', {
+    show_current: true,
+    ...(breadcrumbStyle ? { _style: breadcrumbStyle } : {}),
+    [CONVERTED_FROM_KEY]: monolith.id,
+  });
   add('row', null, 'layout-row', {
     gap_px: ROW_GAP_PX,
+    gap_tablet_px: ROW_GAP_TABLET_PX,
     align: 'stretch',
     child_width: 'fill',
     justify: 'start',
     wrap: false,
-    stack_on: 'tablet',
+    // md:grid-cols-2: side by side from 768px, stacked below.
+    stack_on: 'mobile',
     reverse_on_mobile: false,
-    ...(hasStyle ? { _style: style } : {}),
+    ...(rowStyle ? { _style: rowStyle } : {}),
     [CONVERTED_FROM_KEY]: monolith.id,
   });
   add('gallery-col', 'row', 'layout-column', {
@@ -168,6 +386,8 @@ export function planClassicProductTree(
     align: 'stretch',
     sticky_desktop: true,
     sticky_top_px: GALLERY_STICKY_TOP_PX,
+    // md:sticky: sticks wherever the columns sit side by side.
+    sticky_from: 'tablet',
     _layout: { span: { desktop: 1 } },
   });
   add('gallery', 'gallery-col', 'product-gallery', {
@@ -180,9 +400,9 @@ export function planClassicProductTree(
     align: 'stretch',
     sticky_desktop: false,
     sticky_top_px: 24,
+    sticky_from: 'desktop',
     _layout: { span: { desktop: 1 } },
   });
-  add('breadcrumb', 'info-col', 'product-breadcrumb', { show_current: true });
   add('title', 'info-col', 'product-title', { show_collection: true, show_vendor: true });
   add('price', 'info-col', 'product-price', {
     show_compare_at: true,
@@ -230,16 +450,14 @@ export function planClassicProductTree(
     add('shipping', 'info-col', 'product-shipping', { show_heading: true });
   }
   if (showTabs) {
-    const tabStyle: Record<string, unknown> = {};
-    if (style.width !== undefined) tabStyle.width = style.width;
-    if (style.hide_on !== undefined) tabStyle.hide_on = style.hide_on;
     add('tabs', null, 'product-tabs', {
       show_description: true,
       show_specifications: true,
       show_faqs: true,
       show_shipping: false,
       show_returns: false,
-      ...(Object.keys(tabStyle).length > 0 ? { _style: tabStyle } : {}),
+      ...(tabsStyle ? { _style: tabsStyle } : {}),
+      [CONVERTED_FROM_KEY]: monolith.id,
     });
   }
   return out;
@@ -353,7 +571,8 @@ export class ProductBlocksConvertService {
       if (hasConvertedTree(monolith.id))
         throw new ConflictException({
           code: 'PRODUCT_BLOCKS_ALREADY_CONVERTED',
-          message: 'This product page was already converted to blocks',
+          message:
+            'This product page was already converted to blocks. Delete the converted sections (breadcrumb, row, tabs) to convert again',
         });
       if (monolith.is_hidden)
         throw new BadRequestException({
@@ -364,6 +583,15 @@ export class ProductBlocksConvertService {
         throw new BadRequestException({
           code: 'PRODUCT_PAGE_SECTION_NESTED',
           message: 'Move the product page section to the top level first',
+        });
+      const unsupportedStyle = unsupportedMonolithStyleKeys(
+        asRecord(asRecord(monolith.settings)._style),
+      );
+      if (unsupportedStyle.length > 0)
+        throw new BadRequestException({
+          code: 'PRODUCT_BLOCKS_STYLE_UNSUPPORTED',
+          message: `The product page section's style cannot be split over blocks: ${unsupportedStyle.join(', ')}. Clear these style settings first`,
+          keys: unsupportedStyle,
         });
       const visibleIds = new Set(
         ordered.filter((r) => !r.is_hidden).map((r) => r.id),
