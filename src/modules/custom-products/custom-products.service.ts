@@ -84,7 +84,7 @@ const floorProductSelect = {
     where: { is_active: true },
     select: { id: true, price_adjustment: true },
   },
-} as const;
+} as const satisfies Prisma.ProductSelect;
 
 /**
  * The description and FAQ answers are rendered as HTML (storefront product

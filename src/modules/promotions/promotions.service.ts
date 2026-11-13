@@ -81,11 +81,15 @@ interface FloorCart {
   providerBaseTotal: number;
 }
 
-const floorStoreSelect = {
+// `satisfies` makes tsc reject a field the Store model does not have (a
+// spread const object skips excess-property checks at the call site, which
+// let an unknown `primary_locale` through to a runtime Prisma error). The
+// locale lives on StoreLanguageConfig, as in OrdersService.
+export const floorStoreSelect = {
   ...taxStoreSelect,
   currency: true,
-  primary_locale: true,
-} as const;
+  language_config: { select: { primary_locale: true } },
+} as const satisfies Prisma.StoreSelect;
 
 /** A threshold from the conditions JSON: a positive number, else none. */
 function positiveNumber(v: unknown): number | null {
@@ -939,7 +943,7 @@ export class PromotionsService {
         ctx,
         data,
         currency,
-        locale: cart.store.primary_locale,
+        locale: cart.store.language_config?.primary_locale ?? undefined,
         lines: cart.taxLines,
         shipping_cost: 0,
         discount_amount: discount,
