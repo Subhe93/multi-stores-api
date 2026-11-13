@@ -53,6 +53,7 @@ import { Prisma } from '@prisma/client';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
+import { SECTION_READ_ORDER } from './page-snapshot';
 import {
   containersAllowedOnPage,
   orderSectionsAsTree,
@@ -567,10 +568,12 @@ export class ProductBlocksConvertService {
       });
 
     await this.prisma.$transaction(async (tx) => {
+      // Same read order as the builder list and the publish snapshot, so
+      // `ordered` is the order the owner sees (ties included).
       const rows = (await tx.pageSection.findMany({
         where: { page_id: pageId },
         include: { translations: true },
-        orderBy: { sort_order: 'asc' },
+        orderBy: SECTION_READ_ORDER,
       })) as unknown as SectionRow[];
       const ordered = orderSectionsAsTree(rows);
 
@@ -692,10 +695,13 @@ export class ProductBlocksConvertService {
         if (!p.parentRef) newRootIds.push(created.id);
       }
 
-      // 3. Root order: the new roots right after the (hidden) monolith.
-      const roots = rows
+      // 3. Root order: the new roots right after the (hidden) monolith, in
+      //    the roots' display order (`ordered`: canonical read order + tree
+      //    walk, exactly as getById and the snapshot order them). Every root
+      //    is renumbered 0..n-1, so tied or gapped orders from before cannot
+      //    move a new root past an older one afterwards.
+      const roots = ordered
         .filter((r) => (r.parent_id ?? null) === null)
-        .sort((a, b) => a.sort_order - b.sort_order)
         .map((r) => r.id);
       roots.splice(roots.indexOf(monolith.id) + 1, 0, ...newRootIds);
       const oldOrder = new Map(rows.map((r) => [r.id, r.sort_order]));
@@ -711,7 +717,7 @@ export class ProductBlocksConvertService {
     const after = await this.prisma.pageSection.findMany({
       where: { page_id: pageId },
       include: { translations: true },
-      orderBy: { sort_order: 'asc' },
+      orderBy: SECTION_READ_ORDER,
     });
     return orderSectionsAsTree(after);
   }

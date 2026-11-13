@@ -98,6 +98,14 @@ function fakeDb(pageType = 'PRODUCT_TEMPLATE') {
     count: jest.fn(({ where }: { where: Where }) =>
       Promise.resolve(sections.filter((s) => matches(s, where)).length),
     ),
+    aggregate: jest.fn(({ where }: { where: Where }) => {
+      const orders = sections
+        .filter((s) => matches(s, where))
+        .map((s) => s.sort_order);
+      return Promise.resolve({
+        _max: { sort_order: orders.length ? Math.max(...orders) : null },
+      });
+    }),
     create: jest.fn(({ data }: { data: CreateData }) => {
       const s: Sec = {
         id: nextId('sec'),
@@ -272,6 +280,49 @@ describe('PagesV2Service section tree', () => {
     const b = await service.addSection('u', 'p1', { section_key: 'rich-text' });
     expect([a.sort_order, b.sort_order]).toEqual([0, 1]);
     expect(a.parent_id).toBeNull();
+  });
+
+  it('appends one past the highest sibling order, so a gap left by a delete cannot create a tie', async () => {
+    const { service, sections } = makeService('HOME');
+    const a = await service.addSection('u', 'p1', { section_key: 'hero-banner' });
+    const b = await service.addSection('u', 'p1', { section_key: 'rich-text' });
+    const c = await service.addSection('u', 'p1', { section_key: 'faq-list' });
+    await service.deleteSection('u', b.id);
+    // Roots now 0 and 2: the sibling count (2) would tie with `c`.
+    const d = await service.addSection('u', 'p1', { section_key: 'embed-code' });
+    expect(d.sort_order).toBe(3);
+    expect(sections.map((s) => [s.id, s.sort_order])).toEqual([
+      [a.id, 0],
+      [c.id, 2],
+      [d.id, 3],
+    ]);
+    // An explicit sort_order is still taken as given.
+    const e = await service.addSection('u', 'p1', { section_key: 'rich-text', sort_order: 1 });
+    expect(e.sort_order).toBe(1);
+  });
+
+  it('tree reorder stores 0..n-1 per sibling group in payload order (ties, gaps)', async () => {
+    const { service } = makeService();
+    const t = await seedTree(service);
+    const list = await service.reorderSectionTree('u', 'p1', {
+      items: [
+        // Tied roots: payload order decides (tabs first).
+        { id: t.tabs.id, parent_id: null, sort_order: 4 },
+        { id: t.row.id, parent_id: null, sort_order: 4 },
+        { id: t.col1.id, parent_id: t.row.id, sort_order: 7 },
+        { id: t.col2.id, parent_id: t.row.id, sort_order: 3 },
+        { id: t.gallery.id, parent_id: t.col1.id, sort_order: 5 },
+        { id: t.title.id, parent_id: t.col2.id, sort_order: 0 },
+      ],
+    });
+    const by = new Map(list.map((s) => [s.id, s.sort_order]));
+    expect(by.get(t.tabs.id)).toBe(0);
+    expect(by.get(t.row.id)).toBe(1);
+    expect(by.get(t.col2.id)).toBe(0);
+    expect(by.get(t.col1.id)).toBe(1);
+    expect(by.get(t.gallery.id)).toBe(0);
+    expect(by.get(t.title.id)).toBe(0);
+    expect(list.filter((s) => s.parent_id === null).map((s) => s.id)).toEqual([t.tabs.id, t.row.id]);
   });
 
   it('rejects containers on pages that do not allow them', async () => {
@@ -605,6 +656,10 @@ describe('PagesV2Service product layout app gate', () => {
     'product-buy',
     'product-trust',
     'product-shipping',
+    'product-description',
+    'product-specifications',
+    'product-faq',
+    'product-shipping-returns',
   ])('rejects adding %s while the app is off', async (key) => {
     const { service, sections } = makeService(undefined, false);
     expect(

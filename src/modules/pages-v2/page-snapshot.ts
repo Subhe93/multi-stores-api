@@ -1,6 +1,21 @@
 import { Prisma } from '@prisma/client';
 import { dropHiddenSubtrees, orderSectionsAsTree } from './section-tree';
 
+/**
+ * Canonical read order of a page's sections, used by every query whose
+ * result is turned into the builder list, a snapshot or a placement
+ * (getById, listSections, publish, restore points, duplicate, convert).
+ * `sort_order` alone leaves ties in whatever order Postgres returns them,
+ * which can change after an unrelated update of a tied row; created_at then
+ * id make the order of tied siblings stable and identical everywhere.
+ * orderSectionsAsTree keeps this order for ties (stable sort).
+ */
+export const SECTION_READ_ORDER: Prisma.PageSectionOrderByWithRelationInput[] = [
+  { sort_order: 'asc' },
+  { created_at: 'asc' },
+  { id: 'asc' },
+];
+
 /** A page with the rows a snapshot is built from. */
 export type SnapshotSourcePage = Prisma.PageGetPayload<{
   include: {
@@ -80,7 +95,7 @@ export async function writeRestorePoint(
       translations: true,
       sections: {
         include: { translations: true },
-        orderBy: { sort_order: 'asc' },
+        orderBy: SECTION_READ_ORDER,
       },
     },
   });

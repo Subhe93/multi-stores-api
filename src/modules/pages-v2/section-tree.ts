@@ -191,6 +191,31 @@ export function validateTreeReorder(
 }
 
 /**
+ * Sibling orders a tree-reorder payload is stored with: per parent, 0..n-1
+ * in the payload's order (sort_order, then position in `items` for equal
+ * values). The builder already sends 0..n-1 per sibling group, so this only
+ * changes payloads with gaps or ties, which would otherwise leave the order
+ * of tied siblings to the database. Returns id -> sort_order.
+ */
+export function normalizeTreeReorder(
+  items: readonly TreeReorderItem[],
+): Map<string, number> {
+  const groups = new Map<string | null, { id: string; order: number; pos: number }[]>();
+  items.forEach((it, pos) => {
+    const parent = it.parent_id ?? null;
+    const list = groups.get(parent) ?? [];
+    list.push({ id: it.id, order: it.sort_order, pos });
+    groups.set(parent, list);
+  });
+  const out = new Map<string, number>();
+  for (const list of groups.values()) {
+    list.sort((a, b) => a.order - b.order || a.pos - b.pos);
+    list.forEach((e, i) => out.set(e.id, i));
+  }
+  return out;
+}
+
+/**
  * Depth of a would-be child of `parentId` (root = 1), or null when the parent
  * chain is broken / cyclic.
  */
@@ -343,6 +368,11 @@ export const PRODUCT_LAYOUT_BLOCK_KEYS: readonly string[] = [
   'product-buy',
   'product-trust',
   'product-shipping',
+  // Standalone pieces of product-tabs (web registryB3.ts).
+  'product-description',
+  'product-specifications',
+  'product-faq',
+  'product-shipping-returns',
 ];
 
 /** Store app (shared registry key) that unlocks containers + product blocks. */

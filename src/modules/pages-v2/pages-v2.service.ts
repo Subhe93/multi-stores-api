@@ -33,7 +33,11 @@ import {
   UpdatePageDto,
   UpdateSectionDto,
 } from './dto/pages.dto';
-import { buildPageSnapshot, SnapshotSourcePage } from './page-snapshot';
+import {
+  buildPageSnapshot,
+  SECTION_READ_ORDER,
+  SnapshotSourcePage,
+} from './page-snapshot';
 import {
   containersAllowedOnPage,
   depthUnder,
@@ -42,6 +46,7 @@ import {
   layoutBlocksCreateError,
   layoutBlocksReorderError,
   MAX_SECTION_DEPTH,
+  normalizeTreeReorder,
   PRODUCT_LAYOUT_APP_KEY,
   orderSectionsAsTree,
   SectionTreeError,
@@ -304,7 +309,7 @@ export class PagesV2Service {
         translations: true,
         sections: {
           include: { translations: true },
-          orderBy: { sort_order: 'asc' },
+          orderBy: SECTION_READ_ORDER,
         },
       },
     });
@@ -815,7 +820,7 @@ export class PagesV2Service {
     const rows = await this.prisma.pageSection.findMany({
       where: { page_id: pageId },
       include: { translations: true },
-      orderBy: { sort_order: 'asc' },
+      orderBy: SECTION_READ_ORDER,
     });
     return orderSectionsAsTree(rows);
   }
@@ -871,13 +876,20 @@ export class PagesV2Service {
       }
     }
 
-    // Appended after its siblings by default (sort_order is sibling-scoped).
-    const sortOrder =
-      dto.sort_order ??
-      (await this.prisma.pageSection.count({
+    // Appended after its siblings by default (sort_order is sibling-scoped):
+    // one past the highest sibling order. Equal to the sibling count for
+    // the usual 0..n-1 numbering; after a delete left a gap (0, 2, 3) the
+    // count (3) would tie with the last sibling and leave the order to the
+    // tie-break.
+    let sortOrder = dto.sort_order;
+    if (sortOrder === undefined) {
+      const agg = await this.prisma.pageSection.aggregate({
         where: { page_id: pageId, parent_id: parentId },
-      })) ??
-      0;
+        _max: { sort_order: true },
+      });
+      const max = agg._max.sort_order;
+      sortOrder = max === null || max === undefined ? 0 : max + 1;
+    }
 
     return this.prisma.pageSection.create({
       data: {
@@ -1020,11 +1032,15 @@ export class PagesV2Service {
     );
     if (gate) throw this.treeError(gate);
 
+    const sortOrderOf = normalizeTreeReorder(dto.items);
     await this.prisma.$transaction(
       dto.items.map((it) =>
         this.prisma.pageSection.update({
           where: { id: it.id },
-          data: { parent_id: it.parent_id ?? null, sort_order: it.sort_order },
+          data: {
+            parent_id: it.parent_id ?? null,
+            sort_order: sortOrderOf.get(it.id) ?? it.sort_order,
+          },
         }),
       ),
     );
@@ -1049,7 +1065,7 @@ export class PagesV2Service {
       const rows = await tx.pageSection.findMany({
         where: { page_id: pageId },
         include: { translations: true },
-        orderBy: { sort_order: 'asc' },
+        orderBy: SECTION_READ_ORDER,
       });
       const byId = new Map(rows.map((r) => [r.id, r]));
       const original = byId.get(sectionId);
@@ -1144,7 +1160,7 @@ export class PagesV2Service {
         // with everything inside a hidden container.
         sections: {
           include: { translations: true },
-          orderBy: { sort_order: 'asc' },
+          orderBy: SECTION_READ_ORDER,
         },
       },
     });

@@ -4,7 +4,7 @@ import { PageStatus, PageType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { PagesV2Service } from '../pages-v2/pages-v2.service';
-import { writeRestorePoint } from '../pages-v2/page-snapshot';
+import { SECTION_READ_ORDER, writeRestorePoint } from '../pages-v2/page-snapshot';
 import { stripBrandFromThemeConfig } from '../stores/theme-config';
 import { findPreset, listPresetSummaries, toSummary } from './presets';
 import type {
@@ -221,7 +221,8 @@ export class ThemesService {
             sort_order: true,
             is_hidden: true,
           },
-          orderBy: { sort_order: 'asc' },
+          // Same order as the builder list and the published snapshot.
+          orderBy: SECTION_READ_ORDER,
         },
       },
     });

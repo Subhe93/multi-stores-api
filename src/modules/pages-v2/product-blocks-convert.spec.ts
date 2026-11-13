@@ -11,6 +11,7 @@ import {
   unsupportedMonolithStyleKeys,
   ProductBlocksConvertService,
 } from './product-blocks-convert';
+import { buildPageSnapshot, SECTION_READ_ORDER, SnapshotSourcePage } from './page-snapshot';
 import { validateSectionTree } from './section-tree';
 
 // "Convert to blocks" on a product template: hides the monolith, builds the
@@ -30,6 +31,7 @@ interface Sec {
   settings: Record<string, unknown>;
   sort_order: number;
   is_hidden: boolean;
+  created_at: Date;
 }
 type Where = Record<string, unknown>;
 
@@ -50,14 +52,35 @@ function fakeDb(opts: { pageType?: string; storeId?: string } = {}) {
   const failOnCreateKey = { key: null as string | null };
 
   const pageSection = {
-    findMany: jest.fn(({ where }: { where?: Where } = {}) =>
-      Promise.resolve(
+    // Honours `orderBy` like Postgres: listed keys first; rows that tie on
+    // every key keep the array order, which stands in for the database's
+    // arbitrary order of ties.
+    findMany: jest.fn(({ where, orderBy }: { where?: Where; orderBy?: unknown } = {}) => {
+      const keys = (Array.isArray(orderBy) ? orderBy : orderBy ? [orderBy] : []) as Record<
+        string,
+        'asc' | 'desc'
+      >[];
+      const val = (s: Sec, k: string) => {
+        const v = s[k as keyof Sec] as unknown;
+        return v instanceof Date ? v.getTime() : (v as number | string);
+      };
+      const cmp = (a: Sec, b: Sec) => {
+        for (const o of keys) {
+          const [k, dir] = Object.entries(o)[0];
+          const av = val(a, k);
+          const bv = val(b, k);
+          const d = av < bv ? -1 : av > bv ? 1 : 0;
+          if (d) return dir === 'desc' ? -d : d;
+        }
+        return 0;
+      };
+      return Promise.resolve(
         sections
           .filter((s) => !where?.page_id || s.page_id === where.page_id)
-          .sort((a, b) => a.sort_order - b.sort_order)
+          .sort(cmp)
           .map(withTr),
-      ),
-    ),
+      );
+    }),
     create: jest.fn(
       ({
         data,
@@ -76,6 +99,7 @@ function fakeDb(opts: { pageType?: string; storeId?: string } = {}) {
           settings: data.settings ?? {},
           sort_order: data.sort_order ?? 0,
           is_hidden: false,
+          created_at: new Date(1_000_000 + seq),
         };
         sections.push(s);
         for (const t of data.translations?.create ?? [])
@@ -140,6 +164,7 @@ function fakeDb(opts: { pageType?: string; storeId?: string } = {}) {
       settings: {},
       sort_order: 0,
       is_hidden: false,
+      created_at: new Date(0),
       ...s,
     });
     for (const t of trs) translations.push({ section_id: s.id, ...t });
@@ -251,6 +276,127 @@ describe('ProductBlocksConvertService.convert', () => {
     expect(f.db.pageVersion.create).not.toHaveBeenCalled();
     expect(f.db.page.update).not.toHaveBeenCalled();
     expect(f.page.published_version_id).toBe('v-live');
+  });
+
+  describe('root placement with tied sort_orders', () => {
+    /** Visible root keys of a publish snapshot built from the fake's rows. */
+    async function publishedRoots(f: ReturnType<typeof fakeDb>) {
+      const rows = (await f.db.pageSection.findMany({
+        where: { page_id: 'p1' },
+        orderBy: SECTION_READ_ORDER,
+      })) as unknown as SnapshotSourcePage['sections'];
+      const snap = buildPageSnapshot(
+        {
+          type: 'PRODUCT_TEMPLATE',
+          static_kind: null,
+          slug: null,
+          seo: {},
+          translations: [],
+          sections: rows,
+        } as unknown as SnapshotSourcePage,
+        'publish',
+      );
+      return snap.sections.filter((s) => s.parent_id === null).map((s) => s.section_key);
+    }
+    const rootOrders = (f: ReturnType<typeof fakeDb>) =>
+      f.sections
+        .filter((s) => s.parent_id === null)
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((s) => [s.id.startsWith('sec') ? s.section_key : s.id, s.sort_order]);
+    const at = (n: number) => new Date(n * 1000);
+
+    it('places the new roots where the monolith rendered, not where the database returns ties', async () => {
+      const f = fakeDb();
+      // Every root on sort_order 0, stored in an order that differs from the
+      // order the builder and the snapshot show (created_at breaks the tie).
+      f.seed({ id: 'rich', section_key: 'rich-text', created_at: at(3) });
+      f.seed({ id: 'slider', section_key: 'product-slider', created_at: at(5) });
+      f.seed({ id: 'mono', section_key: 'product-page', created_at: at(1), settings: { show_tabs: true } });
+      f.seed({ id: 'embedHidden', section_key: 'embed-code', created_at: at(2), is_hidden: true });
+      f.seed({ id: 'embed', section_key: 'embed-code', created_at: at(4) });
+      expect(await publishedRoots(f)).toEqual(['product-page', 'rich-text', 'embed-code', 'product-slider']);
+
+      const list = await f.service.convert('u1', 'p1', {});
+
+      // Read with the shared order, inside the transaction and after it.
+      for (const call of f.db.pageSection.findMany.mock.calls)
+        expect((call[0] as { orderBy?: unknown }).orderBy).toEqual(SECTION_READ_ORDER);
+      // Every root renumbered 0..n-1: monolith, the three new roots, then
+      // the rest in their previous display order (hidden one included).
+      expect(rootOrders(f)).toEqual([
+        ['mono', 0],
+        ['product-breadcrumb', 1],
+        ['layout-row', 2],
+        ['product-tabs', 3],
+        ['embedHidden', 4],
+        ['rich', 5],
+        ['embed', 6],
+        ['slider', 7],
+      ]);
+      expect(await publishedRoots(f)).toEqual([
+        'product-breadcrumb',
+        'layout-row',
+        'product-tabs',
+        'rich-text',
+        'embed-code',
+        'product-slider',
+      ]);
+      // The builder list (returned) shows the same root order as the snapshot.
+      expect(list.filter((s) => s.parent_id === null && !s.is_hidden).map((s) => s.section_key)).toEqual(
+        await publishedRoots(f),
+      );
+    });
+
+    it('keeps a hidden root that sorted before the monolith there and breaks partial ties by created_at', async () => {
+      const f = fakeDb();
+      f.seed({ id: 'mono', section_key: 'product-page', sort_order: 0, created_at: at(2) });
+      f.seed({ id: 'embedHidden', section_key: 'embed-code', sort_order: 0, created_at: at(1), is_hidden: true });
+      f.seed({ id: 'rich', section_key: 'rich-text', sort_order: 1, created_at: at(5) });
+      f.seed({ id: 'embed', section_key: 'embed-code', sort_order: 1, created_at: at(3) });
+      f.seed({ id: 'slider', section_key: 'product-slider', sort_order: 2, created_at: at(6) });
+      expect(await publishedRoots(f)).toEqual(['product-page', 'embed-code', 'rich-text', 'product-slider']);
+
+      await f.service.convert('u1', 'p1', {});
+
+      expect(rootOrders(f)).toEqual([
+        ['embedHidden', 0],
+        ['mono', 1],
+        ['product-breadcrumb', 2],
+        ['layout-row', 3],
+        ['product-tabs', 4],
+        ['embed', 5],
+        ['rich', 6],
+        ['slider', 7],
+      ]);
+      expect(await publishedRoots(f)).toEqual([
+        'product-breadcrumb',
+        'layout-row',
+        'product-tabs',
+        'embed-code',
+        'rich-text',
+        'product-slider',
+      ]);
+    });
+
+    it('closes gaps in root orders and leaves rows already on their index untouched', async () => {
+      const f = fakeDb();
+      f.seed({ id: 'banner', section_key: 'hero-banner', sort_order: 0 });
+      f.seed({ id: 'mono', section_key: 'product-page', sort_order: 5 });
+      f.seed({ id: 'faq', section_key: 'faq-list', sort_order: 9 });
+      await f.service.convert('u1', 'p1', {});
+      expect(rootOrders(f)).toEqual([
+        ['banner', 0],
+        ['mono', 1],
+        ['product-breadcrumb', 2],
+        ['layout-row', 3],
+        ['product-tabs', 4],
+        ['faq', 5],
+      ]);
+      const updatedIds = f.db.pageSection.update.mock.calls.map(
+        (c) => (c[0] as { where: { id: string } }).where.id,
+      );
+      expect(updatedIds).not.toContain('banner');
+    });
   });
 
   it('maps the monolith settings and per-locale trust badges', async () => {
