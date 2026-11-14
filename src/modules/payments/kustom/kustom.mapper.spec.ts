@@ -4,6 +4,9 @@ import {
   buildKustomOrderLines,
   buildKustomSessionPayload,
   buildKustomShippingOptions,
+  formatEstimatedDays,
+  nameStatesDeliveryTime,
+  shippingOptionDescription,
   resolveKustomLocale,
   resolveStoreBase,
   splitFullName,
@@ -430,7 +433,7 @@ describe('buildKustomShippingOptions', () => {
       {
         id: 'standard',
         name: 'Standardfrakt',
-        description: '2–5 days',
+        description: '2–5 business days',
         price: 4900,
         tax_rate: 2500,
         tax_amount: 980,
@@ -480,7 +483,7 @@ describe('buildKustomShippingOptions', () => {
       {
         id: 'm-delivery',
         name: 'Standard shipping',
-        description: '3 days',
+        description: '3 business days',
         price: 5900,
         tax_rate: 2500,
         tax_amount: 1180,
@@ -524,6 +527,163 @@ describe('buildKustomShippingOptions', () => {
       tax_rate: 2500,
       tax_amount: 1000,
     });
+  });
+});
+
+// QA 2026-11-14: the Kustom iframe showed "Standardfrakt (Skickas inom 2–4
+// arbetsdagar)" with a second line "3–7 days" (English, another range).
+describe('shipping option delivery time', () => {
+  it('formats the estimated days in the session locale', () => {
+    expect(formatEstimatedDays({ min: 3, max: 7 }, 'sv')).toBe(
+      '3–7 arbetsdagar',
+    );
+    expect(formatEstimatedDays({ min: 3, max: 7 }, 'sv-SE')).toBe(
+      '3–7 arbetsdagar',
+    );
+    expect(formatEstimatedDays({ min: 1, max: 1 }, 'sv')).toBe('1 arbetsdag');
+    expect(formatEstimatedDays({ min: 2, max: 4 }, 'de')).toBe('2–4 Werktage');
+    expect(formatEstimatedDays({ min: 2, max: 4 }, 'fr')).toBe(
+      '2–4 jours ouvrables',
+    );
+    expect(formatEstimatedDays({ min: 2, max: 4 }, 'tr')).toBe('2–4 iş günü');
+    expect(formatEstimatedDays({ min: 2, max: 4 }, 'ar')).toBe('2–4 أيام عمل');
+    expect(formatEstimatedDays({ min: 2, max: 4 }, 'en')).toBe(
+      '2–4 business days',
+    );
+    expect(formatEstimatedDays({ min: 2, max: 4 }, 'xx')).toBe(
+      '2–4 business days',
+    );
+    expect(formatEstimatedDays({ min: 2, max: 4 }, null)).toBe(
+      '2–4 business days',
+    );
+    expect(formatEstimatedDays(null, 'sv')).toBeUndefined();
+  });
+
+  it('detects a delivery time already stated in the method name', () => {
+    for (const name of [
+      'Standardfrakt (Skickas inom 2–4 arbetsdagar)',
+      'Express 1-2 dagar',
+      'Standard shipping (3–5 business days)',
+      'Delivery in 2 days',
+      'Versand 2 bis 4 Werktage',
+      'Livraison 2 à 4 jours',
+      'Standart kargo 2-4 iş günü',
+      'شحن عادي ٣ أيام',
+    ]) {
+      expect(nameStatesDeliveryTime(name)).toBe(true);
+    }
+    for (const name of [
+      'Standardfrakt',
+      'PostNord MyPack 2.0',
+      'DHL Express',
+      '',
+      null,
+    ]) {
+      expect(nameStatesDeliveryTime(name)).toBe(false);
+    }
+  });
+
+  it('adds no second delivery time when the name has one, else a localized one', () => {
+    const days = { min: 3, max: 7 };
+    expect(
+      shippingOptionDescription(
+        {
+          name: 'Standardfrakt (Skickas inom 2–4 arbetsdagar)',
+          estimated_days: days,
+        },
+        'sv',
+      ),
+    ).toBeUndefined();
+    expect(
+      shippingOptionDescription(
+        { name: 'Standardfrakt', estimated_days: days },
+        'sv',
+      ),
+    ).toBe('3–7 arbetsdagar');
+    // An explicit description (pickup text) always wins.
+    expect(
+      shippingOptionDescription(
+        {
+          name: 'Hämta 1 dag',
+          description: 'Hämta i butik',
+          estimated_days: days,
+        },
+        'sv',
+      ),
+    ).toBe('Hämta i butik');
+  });
+
+  it('builds the Kustom options in the given locale', () => {
+    const [named, plain] = buildKustomShippingOptions(
+      [
+        {
+          id: 'a',
+          name: 'Standardfrakt (Skickas inom 2–4 arbetsdagar)',
+          type: 'delivery',
+          cost: 49,
+          estimated_days: { min: 3, max: 7 },
+        },
+        {
+          id: 'b',
+          name: 'Express',
+          type: 'delivery',
+          cost: 99,
+          estimated_days: { min: 1, max: 2 },
+        },
+      ],
+      'SEK',
+      2500,
+      'a',
+      'INCLUSIVE',
+      'sv',
+    );
+    expect('description' in named).toBe(false);
+    expect(plain.description).toBe('1–2 arbetsdagar');
+  });
+
+  it('session payload follows the session locale, else the store primary locale', () => {
+    const base = {
+      currency: 'SEK',
+      shipping_cost: 49,
+      discount_amount: 0,
+      total: 299,
+      items: order().items.map((item) => ({
+        ...item,
+        tax_rate_bp: 2500,
+        tax_amount: 50,
+      })),
+      tax_pricing_mode: 'INCLUSIVE' as const,
+      shipping_tax_rate_bp: 2500,
+      shipping_tax_amount: 9.8,
+      purchaseCountry: 'se',
+      reference: 'sess-1',
+      shippingOptions: [
+        {
+          id: 's',
+          name: 'Standardfrakt',
+          type: 'delivery' as const,
+          cost: 49,
+          estimated_days: { min: 3, max: 7 },
+        },
+      ],
+      selectedShippingId: 's',
+    };
+    const ctx = {
+      storeSlug: 'my-shop',
+      primaryLocale: 'sv',
+      storefrontBase: 'https://shop.example.com/',
+      apiBase: 'https://api.example.com/',
+      sessionId: 'sess-1',
+      token: 'tok',
+      callbackToken: 'cb',
+    };
+    expect(
+      buildKustomSessionPayload(base, ctx).shipping_options?.[0].description,
+    ).toBe('3–7 arbetsdagar');
+    expect(
+      buildKustomSessionPayload({ ...base, locale: 'en' }, ctx)
+        .shipping_options?.[0].description,
+    ).toBe('3–7 business days');
   });
 });
 

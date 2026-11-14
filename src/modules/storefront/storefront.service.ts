@@ -57,6 +57,11 @@ import {
 import type { PFieldDef } from '@multi-stores/core/personalization/types';
 import { DesignerTemplatesService } from '../designer/designer-templates.service';
 import { countPublishedInCollections } from './collection-counts';
+import {
+  cookiePageSelect,
+  cookiePageWhere,
+  resolveCookiePageSlug,
+} from './cookie-page';
 import { publicCheckoutSettings } from '../stores/checkout-settings';
 import { sanitizeAuthPagesConfig } from '../stores/theme-config';
 import {
@@ -937,6 +942,17 @@ export class StorefrontService {
       ...store.static_pages.filter((p) => !v2Slugs.has(p.slug)),
     ];
 
+    // Consent v2 cookie page: any live visitor-facing builder page (a LANDING
+    // page is not in `pages`) or a published legacy page under a known slug.
+    const v2CookiePages = await this.prisma.page.findMany({
+      where: cookiePageWhere(store.id),
+      select: cookiePageSelect,
+    });
+    const cookiePageSlug = resolveCookiePageSlug(
+      v2CookiePages.map((p) => p.slug),
+      store.static_pages.map((p) => p.slug),
+    );
+
     // Checkout behaviour (M5.1): the raw column never travels; the public
     // `checkout` key is added below only when the store overrides a default.
     const {
@@ -1014,6 +1030,8 @@ export class StorefrontService {
         consent_required,
       },
       pages: mergedPages,
+      // Slug of the store's published cookie page, or null (consent v2).
+      cookie_page_slug: cookiePageSlug,
       // New theme system: storefront resolves the registry by theme_key and
       // merges theme_customizations on top.
       theme_key: store.theme_key || 'minimal',

@@ -34,9 +34,51 @@ const seMarket: MarketContext = {
   hostnames: ['namez.se'],
 };
 
+/** A builder (v2) page row the fake `page.findMany` filters. */
+type PageRow = {
+  type: string;
+  slug: string | null;
+  published_version_id: string | null;
+  sort_order?: number;
+};
+
+/** Minimal evaluator for the `where` shapes fullStore sends to page.findMany. */
+function pageFindMany(rows: PageRow[]) {
+  return jest.fn(
+    (args: {
+      where: {
+        type?: string | { in: string[] };
+        slug?: { in?: string[]; not?: null };
+        published_version_id?: { not: null };
+      };
+      select: Record<string, unknown>;
+    }) => {
+      const w = args.where;
+      const hit = rows.filter((r) => {
+        if (typeof w.type === 'string' && r.type !== w.type) return false;
+        if (w.type && typeof w.type === 'object' && !w.type.in.includes(r.type))
+          return false;
+        if (w.slug?.in && !(r.slug && w.slug.in.includes(r.slug))) return false;
+        if (w.slug && 'not' in w.slug && r.slug === null) return false;
+        if (w.published_version_id && r.published_version_id === null)
+          return false;
+        return true;
+      });
+      return Promise.resolve(
+        hit.map((r) => ({
+          slug: r.slug,
+          sort_order: r.sort_order ?? 0,
+          translations: [],
+        })),
+      );
+    },
+  );
+}
+
 function build(
   market: MarketContext | null,
   storeOver: Record<string, unknown> = {},
+  pages: { v2?: PageRow[]; legacySlugs?: string[] } = {},
 ) {
   const store = {
     ...storeOver,
@@ -66,7 +108,11 @@ function build(
       auto_translate: false,
       fallback_locale: 'en',
     },
-    static_pages: [],
+    static_pages: (pages.legacySlugs ?? []).map((slug, i) => ({
+      slug,
+      sort_order: i,
+      translations: [],
+    })),
     creator: {
       display_name: 'N',
       avatar_url: null,
@@ -93,7 +139,7 @@ function build(
         }),
       ),
     },
-    page: { findMany: jest.fn(() => Promise.resolve([])) },
+    page: { findMany: pageFindMany(pages.v2 ?? []) },
   };
   const storeApps = {
     storefrontApps: jest.fn(() =>
@@ -151,6 +197,8 @@ describe('StorefrontService.getStore payload', () => {
     });
     expect(payload.apps).toEqual({});
     expect(payload.kustom_enabled).toBe(true);
+    expect(payload.pages).toEqual([]);
+    expect(payload.cookie_page_slug).toBeNull();
   });
 
   it('preview: the market is resolved with { preview: true } only when asked', async () => {
@@ -198,6 +246,67 @@ describe('StorefrontService.getStore payload', () => {
     expect(payload.markets).toHaveLength(1);
     // Kustom availability is judged against the market currency.
     expect(payload.kustom_enabled).toBe(true);
+  });
+});
+
+// Consent v2: the banner links to the store's cookie page. Namez publishes
+// /om-cookies as a LANDING page, which is not part of `pages`, so the payload
+// names the cookie page slug itself.
+describe('StorefrontService.getStore cookie_page_slug', () => {
+  it('a published LANDING page is found, and `pages` stays STATIC-only', async () => {
+    const { service } = build(null, {}, {
+      v2: [{ type: 'LANDING', slug: 'om-cookies', published_version_id: 'v1' }],
+    });
+    const payload = await live(service.getStore('namez'));
+    expect(payload.cookie_page_slug).toBe('om-cookies');
+    expect(payload.pages).toEqual([]);
+  });
+
+  it('a published STATIC page is found too', async () => {
+    const { service } = build(null, {}, {
+      v2: [{ type: 'STATIC', slug: 'cookies', published_version_id: 'v1' }],
+    });
+    const payload = await live(service.getStore('namez'));
+    expect(payload.cookie_page_slug).toBe('cookies');
+  });
+
+  it('an unpublished v2 page or a non-visitor type is ignored', async () => {
+    const { service } = build(null, {}, {
+      v2: [
+        { type: 'LANDING', slug: 'om-cookies', published_version_id: null },
+        { type: 'STATIC', slug: 'cookies', published_version_id: null },
+        { type: 'PRODUCT_TEMPLATE', slug: 'cookie-policy', published_version_id: 'v1' },
+      ],
+    });
+    const payload = await live(service.getStore('namez'));
+    expect(payload.cookie_page_slug).toBeNull();
+  });
+
+  it('falls back to a published legacy static page', async () => {
+    const { service } = build(null, {}, {
+      v2: [{ type: 'LANDING', slug: 'om-cookies', published_version_id: null }],
+      legacySlugs: ['om-oss', 'cookie-policy'],
+    });
+    const payload = await live(service.getStore('namez'));
+    expect(payload.cookie_page_slug).toBe('cookie-policy');
+  });
+
+  it('prefers the list order across both sources', async () => {
+    const { service } = build(null, {}, {
+      v2: [{ type: 'LANDING', slug: 'cookiepolicy', published_version_id: 'v1' }],
+      legacySlugs: ['cookies'],
+    });
+    const payload = await live(service.getStore('namez'));
+    expect(payload.cookie_page_slug).toBe('cookies');
+  });
+
+  it('null when no page uses a cookie slug', async () => {
+    const { service } = build(null, {}, {
+      v2: [{ type: 'LANDING', slug: 'kampanj', published_version_id: 'v1' }],
+      legacySlugs: ['om-oss'],
+    });
+    const payload = await live(service.getStore('namez'));
+    expect(payload.cookie_page_slug).toBeNull();
   });
 });
 

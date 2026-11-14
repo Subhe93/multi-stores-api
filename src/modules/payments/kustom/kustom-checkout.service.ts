@@ -576,6 +576,7 @@ export class KustomCheckoutService {
       address: opts.prefill?.address ?? null,
       shippingOptions,
       selectedShippingId: selected?.id ?? null,
+      locale: this.sessionLocale(session, ctx),
       ...(opts.buyerType === 'COMPANY'
         ? { buyerType: 'COMPANY', company: opts.company ?? null }
         : {}),

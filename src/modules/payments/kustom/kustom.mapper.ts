@@ -446,13 +446,61 @@ export interface ShippingQuoteOption {
   estimated_days?: { min: number; max: number } | null;
 }
 
+// "business days" per store content locale, singular and plural; the
+// storefront shows the same words (web checkout.businessDays).
+const BUSINESS_DAYS: Record<string, { one: string; other: string }> = {
+  en: { one: 'business day', other: 'business days' },
+  sv: { one: 'arbetsdag', other: 'arbetsdagar' },
+  de: { one: 'Werktag', other: 'Werktage' },
+  fr: { one: 'jour ouvrable', other: 'jours ouvrables' },
+  tr: { one: 'iş günü', other: 'iş günü' },
+  ar: { one: 'يوم عمل', other: 'أيام عمل' },
+};
+
+function baseLanguage(locale: string | null | undefined): string {
+  return (locale ?? 'en').toLowerCase().split(/[-_]/)[0];
+}
+
+/** "3–7 arbetsdagar" / "3 business days" in the given locale (English fallback). */
 export function formatEstimatedDays(
   days: { min: number; max: number } | null | undefined,
+  locale: string | null = 'en',
 ): string | undefined {
   if (!days) return undefined;
-  return days.min === days.max
-    ? `${days.min} days`
-    : `${days.min}–${days.max} days`;
+  const words = BUSINESS_DAYS[baseLanguage(locale)] ?? BUSINESS_DAYS.en;
+  if (days.min === days.max) {
+    return `${days.min} ${days.min === 1 ? words.one : words.other}`;
+  }
+  return `${days.min}–${days.max} ${words.other}`;
+}
+
+// A number (or range) followed by a day word in any storefront language:
+// "2–4 arbetsdagar", "1-3 days", "3 Werktage", "2 à 4 jours", "2-4 iş günü",
+// "٣ أيام". Matching is deliberately loose: a false positive only drops the
+// extra estimate line, a false negative shows a second delivery time.
+const DELIVERY_TIME_IN_NAME =
+  /[0-9\u0660-\u0669]+\s*(?:(?:[–—-]|to|till|bis|à|ile)\s*[0-9\u0660-\u0669]+\s*)?(?:business\s+|working\s+|iş\s+)?(?:days?|dag(?:ar)?|arbetsdag(?:ar)?|vardag(?:ar)?|werktag(?:e|en)?|tag(?:e|en)?|jours?|gün|يوم|أيام)/i;
+
+/** True when a shipping method's own name already states a delivery time. */
+export function nameStatesDeliveryTime(
+  name: string | null | undefined,
+): boolean {
+  return Boolean(name) && DELIVERY_TIME_IN_NAME.test(name as string);
+}
+
+/**
+ * Second line of a Kustom shipping option: an explicit description (pickup
+ * text) wins; otherwise the estimated days in the session locale, unless the
+ * method name already carries a delivery time ("Standardfrakt (Skickas inom
+ * 2–4 arbetsdagar)") — a second, differently worded range would contradict it.
+ */
+export function shippingOptionDescription(
+  q: Pick<ShippingQuoteOption, 'name' | 'description' | 'estimated_days'>,
+  locale: string | null = 'en',
+): string | undefined {
+  if (q.description) return q.description;
+  if (nameStatesDeliveryTime(q.name)) return undefined;
+  return formatEstimatedDays(q.estimated_days, locale);
 }
 
 /**
@@ -470,6 +518,7 @@ export function buildKustomShippingOptions(
   taxRateBp: number,
   selectedId?: string | null,
   pricingMode: KustomTaxPricingMode = 'INCLUSIVE',
+  locale: string | null = 'en',
 ): KustomShippingOption[] {
   const preselectedId = quotes.some((q) => q.id === selectedId)
     ? selectedId
@@ -491,7 +540,7 @@ export function buildKustomShippingOptions(
       preselected: q.id === preselectedId,
       shipping_method: q.type === 'pickup' ? 'PickUpStore' : 'Home',
     };
-    const description = q.description ?? formatEstimatedDays(q.estimated_days);
+    const description = shippingOptionDescription(q, locale);
     if (description) option.description = description.slice(0, 255);
     return option;
   });
@@ -652,6 +701,9 @@ export interface KustomSessionInput extends KustomLinesInput {
   /** Options to offer for the current destination; empty until known. */
   shippingOptions: ShippingQuoteOption[];
   selectedShippingId?: string | null;
+  /** Session content locale (shopper's language); the shipping option
+   *  texts follow it. Absent = the store primary locale. */
+  locale?: string | null;
   /** b2b app: the buyer type the session runs as (absent = person). */
   buyerType?: BuyerType | null;
   /** b2b app: the company prefill of a COMPANY session, if any was given. */
@@ -705,6 +757,7 @@ export function buildKustomSessionAmounts(
     clampRateBp(input.shipping_tax_rate_bp ?? 0),
     input.selectedShippingId,
     pricingModeOf(input),
+    input.locale ?? ctx.primaryLocale ?? 'en',
   );
   const selected = shippingOptions.find((o) => o.preselected);
   const lines = buildKustomOrderLines(input, contentLocale, {

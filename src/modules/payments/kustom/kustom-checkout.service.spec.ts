@@ -351,13 +351,27 @@ describe('KustomCheckoutService.createSession with a market', () => {
     const { service } = build(null);
     const quote = {
       ...quoteFor('SEK'),
-      shipping: { available: true, cost: 0, estimated_days: null, method: null, methods: [] },
+      shipping: {
+        available: true,
+        cost: 0,
+        estimated_days: null,
+        method: null,
+        methods: [],
+      },
     };
     const res = (
       service as unknown as {
-        sessionResponse: (s: unknown, c: unknown, q: unknown) => { totals: { shipping_quoted: boolean; shipping_cost: number } };
+        sessionResponse: (
+          s: unknown,
+          c: unknown,
+          q: unknown,
+        ) => { totals: { shipping_quoted: boolean; shipping_cost: number } };
       }
-    ).sessionResponse({ id: 's1', token: 't1', kustom_order_id: 'k1' }, { order_id: 'k1', html_snippet: '', status: 'checkout_incomplete' }, quote);
+    ).sessionResponse(
+      { id: 's1', token: 't1', kustom_order_id: 'k1' },
+      { order_id: 'k1', html_snippet: '', status: 'checkout_incomplete' },
+      quote,
+    );
     expect(res.totals.shipping_cost).toBe(0);
     expect(res.totals.shipping_quoted).toBe(true);
   });
@@ -397,6 +411,71 @@ describe('KustomCheckoutService.createSession with a market', () => {
       response: { code: 'ORDER_KUSTOM_UNAVAILABLE' },
     });
     expect(prisma.kustomCheckoutSession.create).not.toHaveBeenCalled();
+  });
+});
+
+// QA 2026-11-14: the shipping option's second line followed neither the
+// shopper's language nor the method's own delivery text.
+describe('KustomCheckoutService shipping option texts', () => {
+  function quoteWithMethods() {
+    const methods = [
+      {
+        id: 'named',
+        name: 'Standardfrakt (Skickas inom 2–4 arbetsdagar)',
+        type: 'STANDARD',
+        cost: 49,
+        estimated_days: { min: 3, max: 7 },
+      },
+      {
+        id: 'plain',
+        name: 'Express',
+        type: 'EXPRESS',
+        cost: 99,
+        estimated_days: { min: 1, max: 2 },
+      },
+    ];
+    return {
+      ...quoteFor('SEK'),
+      shipping_cost: 49,
+      total: 348,
+      shipping: {
+        available: true,
+        cost: 49,
+        estimated_days: { min: 3, max: 7 },
+        method: methods[0],
+        methods,
+      },
+    };
+  }
+
+  it('formats the estimated days in the session locale and skips a name that states one', async () => {
+    const { service, orders, createCheckout } = build(null);
+    orders.quoteLines.mockImplementationOnce(
+      () => Promise.resolve(quoteWithMethods()) as never,
+    );
+    await service.createSession(null, dto);
+    const payload = createCheckout.mock.calls[0][0] as {
+      shipping_options: { id: string; description?: string }[];
+    };
+    const byId = Object.fromEntries(
+      payload.shipping_options.map((o) => [o.id, o]),
+    );
+    expect(byId.named.description).toBeUndefined();
+    expect(byId.plain.description).toBe('1–2 arbetsdagar');
+  });
+
+  it('an English session gets English days', async () => {
+    const { service, orders, createCheckout } = build(null);
+    orders.quoteLines.mockImplementationOnce(
+      () => Promise.resolve(quoteWithMethods()) as never,
+    );
+    await service.createSession(null, { ...dto, locale: 'en' });
+    const payload = createCheckout.mock.calls[0][0] as {
+      shipping_options: { id: string; description?: string }[];
+    };
+    expect(
+      payload.shipping_options.find((o) => o.id === 'plain')?.description,
+    ).toBe('1–2 business days');
   });
 });
 
@@ -1119,8 +1198,7 @@ describe('KustomCheckoutService.handleValidation account credentials', () => {
 // FIXES-1 item 5: a deleted / unavailable cart line surfaces as the quote's
 // 409 CART_ITEMS_UNAVAILABLE (not a 404 / 500), and no Kustom call is made.
 describe('KustomCheckoutService sessions with unavailable cart lines', () => {
-  const unavailable = () =>
-    cartItemsUnavailable([{ product_id: 'p-gone' }]);
+  const unavailable = () => cartItemsUnavailable([{ product_id: 'p-gone' }]);
 
   it('createSession: 409 CART_ITEMS_UNAVAILABLE, session row dropped', async () => {
     const { service, prisma, orders, createCheckout } = build(null);

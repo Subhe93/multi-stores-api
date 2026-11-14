@@ -13,7 +13,10 @@
  *
  * Options:
  *   --backup-dir=<dir>         where the JSON backup goes (default
- *                              /root/backups/multi-stores; created if missing)
+ *                              $MS_OPS_BACKUP_DIR, else /var/lib/multistores/backups,
+ *                              writable by the API user `multistores`; created if
+ *                              missing). The dry run already stops when it cannot
+ *                              be written (scripts/ops/backup-dir.js).
  *   --publish-draft-changes    allow --apply when the working draft already
  *                              differs from the published version (those
  *                              unpublished builder edits go live as well)
@@ -50,10 +53,10 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { resolveBackupDir, checkBackupDir } = require('./backup-dir');
 
 const STORE_SLUG = 'namez-se';
 const VERSION_LABEL = 'Namez product template tidy 2026-11 (tabs under row, dividers)';
-const DEFAULT_BACKUP_DIR = '/root/backups/multi-stores';
 const EXPECTED_ROOTS_BEFORE = [
   'product-breadcrumb',
   'layout-row',
@@ -65,15 +68,11 @@ const EXPECTED_ROOTS_BEFORE = [
 
 // ── Arguments ───────────────────────────────────────────────────
 
-function parseArgs(argv) {
-  const arg = (name) => {
-    const hit = argv.find((a) => a.startsWith(`--${name}=`));
-    return hit ? hit.slice(name.length + 3).trim() : undefined;
-  };
+function parseArgs(argv, env = process.env) {
   return {
     apply: argv.includes('--apply'),
     publishDraftChanges: argv.includes('--publish-draft-changes'),
-    backupDir: arg('backup-dir') || DEFAULT_BACKUP_DIR,
+    backupDir: resolveBackupDir({ argv, env }),
   };
 }
 
@@ -387,7 +386,15 @@ async function revalidate(slug, env) {
  * Returns an exit code.
  */
 async function run({ prisma, mods, argv = process.argv, env = process.env }) {
-  const opts = parseArgs(argv);
+  const opts = parseArgs(argv, env);
+  // Dry run included: a backup that cannot be written stops the run here.
+  const backupCheck = checkBackupDir(opts.backupDir);
+  if (!backupCheck.ok) {
+    console.error(`ERROR: ${backupCheck.error}`);
+    return 1;
+  }
+  if (backupCheck.warning) console.warn(`WARNING: ${backupCheck.warning}`);
+  console.log(`Backup dir: ${opts.backupDir} (writable)`);
   const { buildPublishSnapshot, publishPageTx, SECTION_READ_ORDER, CLASSIC_DIVIDER_SETTINGS } = mods;
   const include = pageInclude(SECTION_READ_ORDER);
 
@@ -444,7 +451,6 @@ async function run({ prisma, mods, argv = process.argv, env = process.env }) {
 
   // Backup of the affected rows (page, translations, every section with its
   // translations, the published version) before anything is written.
-  fs.mkdirSync(opts.backupDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '');
   const backupFile = path.join(opts.backupDir, `namez-product-template-tidy-${stamp}.json`);
   fs.writeFileSync(backupFile, JSON.stringify({ label: VERSION_LABEL, store, page }, null, 2), { mode: 0o600 });
