@@ -104,10 +104,13 @@ export class PromotionsController {
   // throttler keys per handler), so banner lookups never eat into the
   // cart's validate-coupon budget. Every unusable code answers the same
   // PROMOTION_COUPON_INVALID, so it reveals no more than validate-coupon.
-  // Kept at validate-coupon's 15/min: the two buckets together are the
-  // per-IP probing budget, and the banner debounces and caches its calls.
+  // 60/min (validate-coupon stays at 15): one product view can cost two or
+  // three previews (cart load, variant, quantity, personalization), so 15
+  // was reached by a shopper browsing a few products, and the banner then
+  // vanished. It is read-only, every unusable code answers the same error,
+  // and the banner still debounces and caches its calls.
   @Post('coupon-preview')
-  @Throttle({ default: { limit: 15, ttl: 60000 } })
+  @Throttle({ default: { limit: 60, ttl: 60000 } })
   previewCoupon(@Body() dto: CouponPreviewDto) {
     return this.promotionsService.previewCoupon(dto);
   }
