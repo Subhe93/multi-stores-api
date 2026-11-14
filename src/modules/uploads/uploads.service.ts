@@ -343,8 +343,9 @@ export class UploadsService {
    * Bytes of video counted against `scope`: files a product still uses, plus
    * files younger than 24 h (an upload not saved yet). An unreferenced older
    * file no longer counts, so replacing a video frees its space before the
-   * orphan sweep removes the file. `"ProductVideo"` is read through raw SQL
-   * only (no dependency on the generated client).
+   * orphan sweep removes the file. Gallery videos and customer-story videos
+   * share the quota. `"ProductVideo"` / `"ProductStory"` are read through raw
+   * SQL only (no dependency on the generated client).
    */
   private async videoUsedBytes(scope: VideoQuotaScope): Promise<number> {
     const prisma = this.prisma;
@@ -357,6 +358,7 @@ export class UploadsService {
             WHERE uf."content_type" = ${VIDEO_CONTENT_TYPE}
               AND uf."store_id" = ${scope.store_id}
               AND (EXISTS (SELECT 1 FROM "ProductVideo" pv WHERE pv."url" = uf."key")
+                   OR EXISTS (SELECT 1 FROM "ProductStory" ps WHERE ps."url" = uf."key")
                    OR uf."created_at" > now() - interval '24 hours')`
         : await prisma.$queryRaw<{ used: bigint | number | null }[]>`
             SELECT COALESCE(SUM(uf."size"), 0)::bigint AS used
@@ -364,6 +366,7 @@ export class UploadsService {
             WHERE uf."content_type" = ${VIDEO_CONTENT_TYPE}
               AND uf."user_id" = ${scope.user_id}
               AND (EXISTS (SELECT 1 FROM "ProductVideo" pv WHERE pv."url" = uf."key")
+                   OR EXISTS (SELECT 1 FROM "ProductStory" ps WHERE ps."url" = uf."key")
                    OR uf."created_at" > now() - interval '24 hours')`;
     return Number(rows[0]?.used ?? 0);
   }
@@ -585,8 +588,8 @@ export class UploadsService {
   }
 
   /**
-   * True when ANY record references `rel`: product videos (url / poster),
-   * every source `isReferencedByOthers` checks, and page versions. Used by
+   * True when ANY record references `rel`: product videos and customer
+   * stories (url / poster), every source `isReferencedByOthers` checks, and page versions. Used by
    * the video orphan sweep; absolute URLs match by suffix, text and JSON by
    * substring.
    */
@@ -602,6 +605,7 @@ export class UploadsService {
     const rows = await db.$queryRaw<{ found: number }[]>`
       SELECT 1 AS found WHERE
         EXISTS (SELECT 1 FROM "ProductVideo" v WHERE v."url" LIKE ${suffix} OR v."poster_url" LIKE ${suffix})
+        OR EXISTS (SELECT 1 FROM "ProductStory" st WHERE st."url" LIKE ${suffix} OR st."poster_url" LIKE ${suffix})
         OR EXISTS (SELECT 1 FROM "User" u WHERE u."avatar_url" LIKE ${suffix})
         OR EXISTS (SELECT 1 FROM "Creator" c WHERE c."avatar_url" LIKE ${suffix} OR c."cover_url" LIKE ${suffix})
         OR EXISTS (SELECT 1 FROM "Provider" p WHERE p."logo_url" LIKE ${suffix} OR p."description" LIKE ${inside})
@@ -891,9 +895,9 @@ export class UploadsService {
   }
 
   /**
-   * True when a product video (file or poster) of the caller's products
-   * references `rel`. Raw SQL so this module does not depend on the
-   * generated `ProductVideo` client.
+   * True when a product video or a customer story (media or poster) of the
+   * caller's products references `rel`. Raw SQL so this module does not
+   * depend on the generated `ProductVideo` / `ProductStory` client.
    */
   private async referencedByOwnVideo(
     rel: string,
@@ -905,15 +909,21 @@ export class UploadsService {
     const rows =
       'creatorId' in owner
         ? await prisma.$queryRaw<{ found: number }[]>`
-            SELECT 1 AS found FROM "ProductVideo" v JOIN "Product" pr ON pr."id" = v."product_id"
-            WHERE (v."url" LIKE ${suffix} OR v."poster_url" LIKE ${suffix})
-              AND pr."creator_id" = ${owner.creatorId}
-            LIMIT 1`
+            SELECT 1 AS found WHERE
+              EXISTS (SELECT 1 FROM "ProductVideo" v JOIN "Product" pr ON pr."id" = v."product_id"
+                      WHERE (v."url" LIKE ${suffix} OR v."poster_url" LIKE ${suffix})
+                        AND pr."creator_id" = ${owner.creatorId})
+              OR EXISTS (SELECT 1 FROM "ProductStory" st JOIN "Product" pr ON pr."id" = st."product_id"
+                         WHERE (st."url" LIKE ${suffix} OR st."poster_url" LIKE ${suffix})
+                           AND pr."creator_id" = ${owner.creatorId})`
         : await prisma.$queryRaw<{ found: number }[]>`
-            SELECT 1 AS found FROM "ProductVideo" v JOIN "Product" pr ON pr."id" = v."product_id"
-            WHERE (v."url" LIKE ${suffix} OR v."poster_url" LIKE ${suffix})
-              AND pr."provider_id" = ${owner.providerId}
-            LIMIT 1`;
+            SELECT 1 AS found WHERE
+              EXISTS (SELECT 1 FROM "ProductVideo" v JOIN "Product" pr ON pr."id" = v."product_id"
+                      WHERE (v."url" LIKE ${suffix} OR v."poster_url" LIKE ${suffix})
+                        AND pr."provider_id" = ${owner.providerId})
+              OR EXISTS (SELECT 1 FROM "ProductStory" st JOIN "Product" pr ON pr."id" = st."product_id"
+                         WHERE (st."url" LIKE ${suffix} OR st."poster_url" LIKE ${suffix})
+                           AND pr."provider_id" = ${owner.providerId})`;
     return rows.length > 0;
   }
 
@@ -958,6 +968,10 @@ export class UploadsService {
                      AND pr."provider_id" IS DISTINCT FROM ${providerId})
         OR EXISTS (SELECT 1 FROM "ProductVideo" v JOIN "Product" pr ON pr."id" = v."product_id"
                    WHERE (v."url" LIKE ${suffix} OR v."poster_url" LIKE ${suffix})
+                     AND pr."creator_id" IS DISTINCT FROM ${creatorId}
+                     AND pr."provider_id" IS DISTINCT FROM ${providerId})
+        OR EXISTS (SELECT 1 FROM "ProductStory" st JOIN "Product" pr ON pr."id" = st."product_id"
+                   WHERE (st."url" LIKE ${suffix} OR st."poster_url" LIKE ${suffix})
                      AND pr."creator_id" IS DISTINCT FROM ${creatorId}
                      AND pr."provider_id" IS DISTINCT FROM ${providerId})
         OR EXISTS (SELECT 1 FROM "ProductTranslation" t JOIN "Product" pr ON pr."id" = t."product_id"

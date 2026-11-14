@@ -78,6 +78,10 @@ import {
   PRODUCT_VIDEOS_INCLUDE,
   storefrontVideosField,
 } from '../products/product-video.mapper';
+import {
+  PRODUCT_STORIES_INCLUDE,
+  storefrontStoriesField,
+} from '../products/product-story.mapper';
 
 /** The legacy freeform Store.theme_config JSON as getStore() reads it. */
 interface LegacyThemeConfig {
@@ -1553,6 +1557,8 @@ export class StorefrontService {
           },
           // Gallery videos; served only when there is at least one.
           videos: PRODUCT_VIDEOS_INCLUDE,
+          // Customer stories; served only when there is at least one.
+          stories: PRODUCT_STORIES_INCLUDE,
           attributes: {
             include: { template: { include: { translations: true } } },
           },
@@ -1657,12 +1663,14 @@ export class StorefrontService {
 
       // cost_price is a merchant-only margin input; never serve it publicly.
       // Legacy ProductTag rows (`tags`) are retired: not read, not served.
-      // The raw `videos` relation is replaced by the wire shape below, and
-      // left out entirely when empty (no-video payloads stay byte-identical).
+      // The raw `videos` / `stories` relations are replaced by the wire shape
+      // below, and left out entirely when empty (payloads without them stay
+      // byte-identical).
       const {
         cost_price: _costPrice,
         external_ref: _externalRef,
         videos: videoRows,
+        stories: storyRows,
         ...ownerProduct
       } = product;
       const publicProduct = withoutFeedFields(ownerProduct);
@@ -1717,6 +1725,7 @@ export class StorefrontService {
           : {}),
         ...(designer ? { designer } : {}),
         ...storefrontVideosField(videoRows),
+        ...storefrontStoriesField(storyRows),
       };
       if (market) {
         // Market prices; a product hidden in this market is a 404 here.
@@ -1777,6 +1786,8 @@ export class StorefrontService {
             // Custom products show the base product's videos (D5), also when
             // mockups replace the images.
             videos: PRODUCT_VIDEOS_INCLUDE,
+            // And the base product's customer stories (customer-stories S7).
+            stories: PRODUCT_STORIES_INCLUDE,
             attributes: {
               include: { template: { include: { translations: true } } },
             },
@@ -1883,6 +1894,7 @@ export class StorefrontService {
             }))
           : baseProduct.images,
       ...storefrontVideosField(baseProduct.videos),
+      ...storefrontStoriesField(baseProduct.stories),
       attributes: baseProduct.attributes,
       variants,
       category: baseProduct.category,
@@ -2476,6 +2488,7 @@ export class StorefrontService {
         },
         images: { orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
         videos: PRODUCT_VIDEOS_INCLUDE,
+        stories: PRODUCT_STORIES_INCLUDE,
         variants: { where: { is_active: true }, include: { images: true } },
         faqs: {
           include: { translations: true },
@@ -2501,6 +2514,7 @@ export class StorefrontService {
           sort_order: img.sort_order,
         })),
         ...storefrontVideosField(own.videos),
+        ...storefrontStoriesField(own.stories),
         // Mirror the live product payload: the preview renders the real
         // ProductDetailClient, which needs options/images per variant and the
         // option config (styles, color/image maps) to not fall over.

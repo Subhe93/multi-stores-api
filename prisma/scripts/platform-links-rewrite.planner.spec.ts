@@ -55,6 +55,15 @@ describe('column inventory', () => {
     expect(SKIPPED_COLUMNS.some((c) => c.startsWith('productVideo.url'))).toBe(
       true,
     );
+    // Customer-story media and texts are not rewritten here either.
+    expect(labels.some((l) => l.startsWith('productStory'))).toBe(false);
+    for (const prefix of [
+      'productStory.url',
+      'productStory.poster_url',
+      'productStoryTranslation.*',
+    ]) {
+      expect(SKIPPED_COLUMNS.some((c) => c.startsWith(prefix))).toBe(true);
+    }
   });
 });
 

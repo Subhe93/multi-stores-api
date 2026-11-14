@@ -51,6 +51,8 @@ describe('VideoOrphanSweepService', () => {
   function setup(
     opts: {
       videoUrls?: string[];
+      /** Keys a ProductStory uses (url or poster_url). */
+      storyUrls?: string[];
       lockedKeys?: string[];
       backupRunning?: boolean | (() => boolean);
     } = {},
@@ -93,6 +95,7 @@ describe('VideoOrphanSweepService', () => {
       },
     ];
     const videoUrls = opts.videoUrls ?? [];
+    const storyUrls = opts.storyUrls ?? [];
     const locked = new Set(opts.lockedKeys ?? []);
     const sqls: string[] = [];
     const backup = () =>
@@ -119,7 +122,13 @@ describe('VideoOrphanSweepService', () => {
                 (r) =>
                   (r.content_type === type || r.folder === folder) &&
                   r.created_at < cutoff &&
-                  !videoUrls.includes(r.key),
+                  !videoUrls.includes(r.key) &&
+                  // Mirrors the story NOT EXISTS only when the SQL has it.
+                  !(
+                    sql.includes(
+                      'NOT EXISTS (SELECT 1 FROM "ProductStory" ps',
+                    ) && storyUrls.includes(r.key)
+                  ),
               )
               .map((r) => ({ key: r.key })),
           );
@@ -243,6 +252,49 @@ describe('VideoOrphanSweepService', () => {
     await expect(
       new VideoOrphanSweepService(prisma, uploads).sweepOrphans(now),
     ).resolves.toMatchObject({ deleted: 0, failed: 3 });
+  });
+
+  it('keeps a video and a poster used only by a customer story; deletes a true orphan', async () => {
+    const { now, rows, prisma, uploads, sqls } = setup({
+      storyUrls: [OLD_REFERENCED, OLD_POSTER],
+    });
+    const out = await new VideoOrphanSweepService(prisma, uploads).sweepOrphans(
+      now,
+    );
+    expect(out).toMatchObject({ scanned: 1, deleted: 1 });
+    expect(await storage.exists(OLD_REFERENCED)).toBe(true);
+    expect(await storage.exists(OLD_POSTER)).toBe(true);
+    expect(await storage.exists(OLD_ORPHAN)).toBe(false);
+    expect(rows.map((r) => r.key)).toEqual(
+      expect.arrayContaining([OLD_REFERENCED, OLD_POSTER]),
+    );
+    const candidateSql = sqls.find((q) =>
+      q.includes('ORDER BY uf."created_at"'),
+    );
+    expect(candidateSql).toContain(
+      'ps."url" = uf."key" OR ps."poster_url" = uf."key"',
+    );
+  });
+
+  it('the per-candidate re-check also sees customer stories', async () => {
+    const { now, prisma, uploads, tx } = setup();
+    const base = tx.$queryRaw.getMockImplementation()!;
+    tx.$queryRaw.mockImplementation(((
+      strings: TemplateStringsArray,
+      ...values: unknown[]
+    ) => {
+      const sql = strings.join('?');
+      if (sql.includes('FROM "ProductStory" st WHERE')) {
+        const found = (values[0] as string).endsWith(path.basename(OLD_ORPHAN));
+        return Promise.resolve(found ? [{ found: 1 }] : []);
+      }
+      return base(strings, ...values);
+    }) as never);
+    const out = await new VideoOrphanSweepService(prisma, uploads).sweepOrphans(
+      now,
+    );
+    expect(out).toMatchObject({ kept: 1 });
+    expect(await storage.exists(OLD_ORPHAN)).toBe(true);
   });
 
   it('temp sweep removes files older than 1 h only', async () => {

@@ -295,6 +295,11 @@ describe('product video uploads', () => {
     expect(sql).toContain(
       'EXISTS (SELECT 1 FROM "ProductVideo" pv WHERE pv."url" = uf."key")',
     );
+    // Customer-story videos share the quota with gallery videos, also when
+    // they are older than 24 h (referenced).
+    expect(sql).toContain(
+      'OR EXISTS (SELECT 1 FROM "ProductStory" ps WHERE ps."url" = uf."key")',
+    );
     expect(sql).toContain(`uf."created_at" > now() - interval '24 hours'`);
     expect(call.slice(1)).toEqual(['video/mp4', 's1']);
   });

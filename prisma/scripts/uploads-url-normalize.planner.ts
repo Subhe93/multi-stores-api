@@ -36,6 +36,10 @@ export const UPLOAD_REF_COLUMNS: readonly UploadRefColumn[] = [
   // hosts and never match, so they are left untouched.
   { model: 'productVideo', column: 'url', kind: 'url' },
   { model: 'productVideo', column: 'poster_url', kind: 'url' },
+  // Customer stories: image / FILE url and poster; external watch URLs are
+  // foreign hosts and never match.
+  { model: 'productStory', column: 'url', kind: 'url' },
+  { model: 'productStory', column: 'poster_url', kind: 'url' },
   { model: 'provider', column: 'logo_url', kind: 'url' },
   { model: 'creator', column: 'avatar_url', kind: 'url' },
   { model: 'creator', column: 'cover_url', kind: 'url' },

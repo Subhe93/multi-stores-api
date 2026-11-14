@@ -136,8 +136,8 @@ export class VideoOrphanSweepService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Deletes unreferenced video and video-poster uploads older than 24 h (at
-   * most `VIDEO_SWEEP_BATCH` per run). Rows whose key a `ProductVideo` uses
-   * are excluded in SQL; every remaining candidate is claimed and checked
+   * most `VIDEO_SWEEP_BATCH` per run). Rows whose key a `ProductVideo` or a
+   * `ProductStory` uses are excluded in SQL; every remaining candidate is claimed and checked
    * against all reference sources in its own short transaction before its
    * file and row are deleted. A refused storage delete keeps the row so the
    * next run retries.
@@ -165,6 +165,8 @@ export class VideoOrphanSweepService implements OnModuleInit, OnModuleDestroy {
           AND uf."created_at" < ${cutoff}
           AND NOT EXISTS (SELECT 1 FROM "ProductVideo" pv
                           WHERE pv."url" = uf."key" OR pv."poster_url" = uf."key")
+          AND NOT EXISTS (SELECT 1 FROM "ProductStory" ps
+                          WHERE ps."url" = uf."key" OR ps."poster_url" = uf."key")
         ORDER BY uf."created_at" ASC
         LIMIT ${VIDEO_SWEEP_BATCH}`;
       for (const { key } of candidates) {

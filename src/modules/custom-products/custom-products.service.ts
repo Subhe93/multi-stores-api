@@ -54,6 +54,35 @@ import {
   type PriceFloorVariant,
 } from './price-floor';
 import { PRODUCT_VIDEOS_INCLUDE } from '../products/product-video.mapper';
+import {
+  PRODUCT_STORIES_INCLUDE,
+  toProductStoriesOut,
+  type ProductStoryOut,
+} from '../products/product-story.mapper';
+
+/**
+ * Replaces the raw base-product `stories` rows with the wire shape
+ * (customer-stories contract 2); read-only for the creator (S7).
+ */
+function withBaseStoriesOut<
+  T extends { product: { stories: Parameters<typeof toProductStoriesOut>[0] } },
+>(
+  cp: T,
+): Omit<T, 'product'> & {
+  product: Omit<T['product'], 'stories'> & { stories: ProductStoryOut[] };
+} {
+  // `product` is a required relation; tolerate a partial row anyway.
+  if (!cp.product) return cp as never;
+  return {
+    ...cp,
+    product: {
+      ...cp.product,
+      stories: toProductStoriesOut(cp.product.stories),
+    },
+  } as Omit<T, 'product'> & {
+    product: Omit<T['product'], 'stories'> & { stories: ProductStoryOut[] };
+  };
+}
 
 type Money = Prisma.Decimal | number;
 
@@ -368,6 +397,7 @@ export class CustomProductsService {
         images: { orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
         // Decision D5: the provider's videos this store shows (read-only in the editor).
         videos: PRODUCT_VIDEOS_INCLUDE,
+        // Customer stories are detail-only: see `detailIncludes` (loadById).
         variants: { where: { is_active: true } },
         custom_fields: {
           include: { translations: true },
@@ -399,6 +429,22 @@ export class CustomProductsService {
     },
     creator_categories: {
       include: { creator_category: { include: { translations: true } } },
+    },
+  };
+
+  /**
+   * Single-record (editor/detail) include: `includes` plus the base product's
+   * customer stories (S7, read-only for the creator). Kept out of the shared
+   * include so list and status-change responses stay light and never return
+   * raw story rows; loadById maps them to the wire shape.
+   */
+  private readonly detailIncludes = {
+    ...this.includes,
+    product: {
+      include: {
+        ...this.includes.product.include,
+        stories: PRODUCT_STORIES_INCLUDE,
+      },
     },
   };
 
@@ -923,6 +969,7 @@ export class CustomProductsService {
     ]);
     // below_minimum flags existing products priced under base + VAT.
     const setup = rows.length ? await this.loadFloorSetup(creator.id) : null;
+    // Stories are detail-only (detailIncludes); the list stays light.
     const data = rows.map((cp) => this.withPriceFloor(cp, setup));
 
     return {
@@ -984,14 +1031,14 @@ export class CustomProductsService {
   private async loadById(id: string) {
     const cp = await this.prisma.customProduct.findUnique({
       where: { id },
-      include: this.includes,
+      include: this.detailIncludes,
     });
     if (!cp)
       throw new NotFoundException({
         code: 'CUSTOM_PRODUCT_NOT_FOUND',
         message: 'Custom product not found',
       });
-    return cp;
+    return withBaseStoriesOut(cp);
   }
 
   async update(id: string, dto: UpdateCustomProductDto, userId?: string) {

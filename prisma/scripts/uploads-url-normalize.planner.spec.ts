@@ -27,6 +27,8 @@ describe('column inventory', () => {
       'customProductImage.url',
       'productVideo.url',
       'productVideo.poster_url',
+      'productStory.url',
+      'productStory.poster_url',
       'provider.logo_url',
       'creator.avatar_url',
       'creator.cover_url',
@@ -115,6 +117,29 @@ describe('planRow (url columns)', () => {
     expect(
       referencedMediaKeys(c, 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'),
     ).toEqual([]);
+  });
+
+  it('customer stories: relativises image / file / poster URLs, never touches YouTube/Vimeo URLs', () => {
+    const c = col('productStory', 'url');
+    const stats = newColumnStats(c);
+    expect(
+      planRow(
+        c,
+        's1',
+        'https://ms-api.shopsdoor.com/uploads/products/s.webp',
+        HOSTS,
+        stats,
+      ),
+    ).toMatchObject({ next: '/uploads/products/s.webp' });
+    expect(
+      planRow(c, 's2', 'https://youtu.be/dQw4w9WgXcQ', HOSTS, stats),
+    ).toBeNull();
+    expect(
+      referencedMediaKeys(
+        col('productStory', 'poster_url'),
+        '/uploads/video-posters/p.webp',
+      ),
+    ).toEqual(['uploads/video-posters/p.webp']);
   });
 
   it('leaves relative values, nulls, free text and foreign hosts alone', () => {

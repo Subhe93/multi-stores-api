@@ -121,6 +121,34 @@ describe('video ownership and reference counting', () => {
     expect(await none.isOwnedBy(VIDEO, user(UserRole.CREATOR))).toBe(false);
   });
 
+  it('a customer-story video of another store is protected', async () => {
+    const prisma = prismaWith(
+      (sql) =>
+        sql.includes('FROM "ProductStory" st JOIN "Product" pr') &&
+        sql.includes('IS DISTINCT FROM'),
+    );
+    const svc = new UploadsService(storage, prisma);
+    await expect(
+      svc.deleteOwnedFile(VIDEO, user(UserRole.CREATOR)),
+    ).rejects.toMatchObject({ response: { code: 'UPLOAD_NOT_OWNED' } });
+    expect(await storage.exists(VIDEO)).toBe(true);
+    const sql = sqlOf(prisma);
+    expect(sql).toContain(
+      'FROM "ProductStory" st JOIN "Product" pr ON pr."id" = st."product_id"',
+    );
+    expect(sql).toContain('st."poster_url" LIKE');
+  });
+
+  it("isOwnedBy: story media on the caller's own product counts as owned", async () => {
+    const prisma = prismaWith(
+      (sql) =>
+        sql.includes('FROM "ProductStory" st JOIN "Product" pr') &&
+        sql.includes('pr."creator_id" = ?'),
+    );
+    const svc = new UploadsService(storage, prisma);
+    expect(await svc.isOwnedBy(VIDEO, user(UserRole.CREATOR))).toBe(true);
+  });
+
   it('isReferencedAnywhere covers product videos, images, descriptions and page JSON', async () => {
     const prisma = prismaWith(() => true);
     const svc = new UploadsService(storage, prisma);
@@ -128,6 +156,7 @@ describe('video ownership and reference counting', () => {
     const sql = sqlOf(prisma);
     for (const t of [
       '"ProductVideo"',
+      '"ProductStory"',
       '"ProductImage"',
       '"CustomProductImage"',
       '"ProductTranslation"',

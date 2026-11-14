@@ -373,6 +373,8 @@ export const PRODUCT_LAYOUT_BLOCK_KEYS: readonly string[] = [
   'product-specifications',
   'product-faq',
   'product-shipping-returns',
+  // Customer stories (plans/customer-stories, web block lands later).
+  'product-stories',
 ];
 
 /** Store app (shared registry key) that unlocks containers + product blocks. */

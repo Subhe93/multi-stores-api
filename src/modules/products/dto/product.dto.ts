@@ -16,6 +16,7 @@ import {
   IsUUID,
   Max,
   ArrayMaxSize,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import {
@@ -180,6 +181,93 @@ export class ProductVideoInputDto {
   @Min(1)
   @Max(1000)
   position!: number;
+}
+
+/** One locale of a customer story (customer-stories contract 3.1). */
+export class ProductStoryTranslationInputDto {
+  @IsString()
+  @Matches(/^[a-z]{2}(-[A-Z]{2})?$/)
+  locale!: string;
+
+  /** Plain text, never HTML (the storefront renders it as text). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  quote?: string | null;
+
+  /** Role / company / city. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  subtitle?: string | null;
+}
+
+/**
+ * One customer story of a product save (customer-stories contract 3.1). The
+ * business rules (30 per product, allowed hosts, own uploads) are checked by
+ * ProductsService.prepareStories with coded errors; the DTO only guards shape.
+ */
+export class ProductStoryInputDto {
+  /** Existing row id: the row is kept. */
+  @IsOptional()
+  @IsUUID()
+  id?: string;
+
+  @IsIn(['image', 'file', 'youtube', 'vimeo'])
+  kind!: 'image' | 'file' | 'youtube' | 'vimeo';
+
+  // @UploadUrl only rewrites URLs on our own hosts; YouTube/Vimeo URLs pass
+  // through unchanged.
+  @IsString()
+  @MaxLength(2048)
+  @UploadUrl()
+  url!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  @UploadUrl()
+  poster_url?: string | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(3600)
+  duration_s?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(8192)
+  width?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(8192)
+  height?: number | null;
+
+  @IsString()
+  @MaxLength(80)
+  name!: string;
+
+  /** 1..5, or null for no rating (the DB has the same CHECK). */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  rating?: number | null;
+
+  /** Owner-asserted "verified buyer" flag (EU Omnibus: real buyers only). */
+  @IsOptional()
+  @IsBoolean()
+  verified?: boolean;
+
+  @IsArray()
+  @ArrayMaxSize(12)
+  @ValidateNested({ each: true })
+  @Type(() => ProductStoryTranslationInputDto)
+  translations!: ProductStoryTranslationInputDto[];
 }
 
 export class CreateProductDto {
@@ -349,6 +437,15 @@ export class CreateProductDto {
   @ValidateNested({ each: true })
   @Type(() => ProductVideoInputDto)
   videos?: ProductVideoInputDto[];
+
+  // Absent = stored stories untouched (older dashboards, importer); [] clears.
+  // ArrayMaxSize is an abuse cap; the limit of 30 is STORY_LIMIT_EXCEEDED.
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(60)
+  @ValidateNested({ each: true })
+  @Type(() => ProductStoryInputDto)
+  stories?: ProductStoryInputDto[];
 }
 
 export class UpdateProductDto {
@@ -523,4 +620,13 @@ export class UpdateProductDto {
   @ValidateNested({ each: true })
   @Type(() => ProductVideoInputDto)
   videos?: ProductVideoInputDto[];
+
+  // Absent = stored stories untouched (older dashboards, importer); [] clears.
+  // ArrayMaxSize is an abuse cap; the limit of 30 is STORY_LIMIT_EXCEEDED.
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(60)
+  @ValidateNested({ each: true })
+  @Type(() => ProductStoryInputDto)
+  stories?: ProductStoryInputDto[];
 }

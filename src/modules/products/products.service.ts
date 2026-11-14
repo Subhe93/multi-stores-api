@@ -14,6 +14,7 @@ import {
   ProductImageSyncDto,
   ProductTranslationDto,
   ProductVideoInputDto,
+  ProductStoryInputDto,
 } from './dto/product.dto';
 import { parseExternalVideoUrl } from './product-video-url';
 import {
@@ -25,6 +26,18 @@ import {
   PRODUCT_VIDEOS_INCLUDE,
   toProductVideosOut,
 } from './product-video.mapper';
+import {
+  PRODUCT_STORIES_INCLUDE,
+  toProductStoriesOut,
+} from './product-story.mapper';
+import {
+  PRODUCT_VIDEO_FILE_URL,
+  PRODUCT_VIDEO_POSTER_URL,
+  normalizeStoryInputs,
+  storyError,
+  storyUnchanged,
+  type PreparedProductStory,
+} from './product-stories';
 import {
   UserRole,
   ProductStatus,
@@ -85,13 +98,6 @@ import { nextCollectionSortOrders } from '../creator-categories/product-order';
 
 /** Business limit of videos per product (files and links together, D2). */
 export const PRODUCT_VIDEO_MAX_PER_PRODUCT = 3;
-
-/** An uploaded product video file as stored (relative, uuid name, MP4). */
-const PRODUCT_VIDEO_FILE_URL = /^\/uploads\/products\/[0-9a-f-]{36}\.mp4$/;
-
-/** A poster: one of our own uploaded images. */
-const PRODUCT_VIDEO_POSTER_URL =
-  /^\/uploads\/[a-z0-9_-]+\/[A-Za-z0-9_-][A-Za-z0-9._-]*\.(webp|png|jpg|jpeg)$/i;
 
 /** A validated, normalised video of a product save (see prepareVideos). */
 export interface PreparedProductVideo {
@@ -347,6 +353,22 @@ export function normalizeFeedFields(
   if (data.condition === 'new') data.condition = null;
 }
 
+/** Stored story fields syncStories compares with the payload (storyUnchanged). */
+const STORED_STORY_SELECT = {
+  id: true,
+  kind: true,
+  url: true,
+  poster_url: true,
+  duration_s: true,
+  width: true,
+  height: true,
+  name: true,
+  rating: true,
+  verified: true,
+  sort_order: true,
+  translations: { select: { locale: true, quote: true, subtitle: true } },
+} as const satisfies Prisma.ProductStorySelect;
+
 @Injectable()
 export class ProductsService {
   constructor(
@@ -523,6 +545,7 @@ export class ProductsService {
     translations: true,
     images: { orderBy: { sort_order: 'asc' as const } },
     videos: PRODUCT_VIDEOS_INCLUDE,
+    stories: PRODUCT_STORIES_INCLUDE,
     attributes: {
       include: { template: { include: { translations: true } } },
     },
@@ -706,16 +729,23 @@ export class ProductsService {
    * Image rows are rebuilt: product-level rows from `images` (sort_order =
    * array index), variant rows from each variant's `image_url`.
    *
-   * Videos (already validated by prepareVideos) are synced last in the same
-   * transaction, and only when the payload carried `videos`.
+   * Videos (already validated by prepareVideos) are synced next in the same
+   * transaction, and only when the payload carried `videos`; stories
+   * (prepareStories) follow, only when the payload carried `stories`.
    */
   private async syncVariantsAndImages(
     productId: string,
     variants?: ProductVariantSyncDto[],
     images?: ProductImageSyncDto[],
     videos?: PreparedProductVideo[],
+    stories?: PreparedProductStory[],
   ) {
-    if (variants === undefined && images === undefined && videos === undefined)
+    if (
+      variants === undefined &&
+      images === undefined &&
+      videos === undefined &&
+      stories === undefined
+    )
       return;
 
     await this.prisma.$transaction(async (tx) => {
@@ -805,6 +835,10 @@ export class ProductsService {
         // An images-only save (older dashboard tab, importer) that removes
         // every product-level image must not strand stored videos (D6).
         await this.assertVideosKeepAnImage(tx, productId, 0);
+      }
+
+      if (stories !== undefined) {
+        await this.syncStories(tx, productId, stories);
       }
     });
   }
@@ -1048,6 +1082,215 @@ export class ProductsService {
     }
   }
 
+  /**
+   * Validates a `stories` save payload before anything is written
+   * (customer-stories contract 3.2). `undefined` = untouched. Throws the
+   * coded 400s of normalizeStoryInputs plus STORY_UPLOAD_EXPIRED,
+   * STORY_FILE_INVALID and STORY_IMAGE_INVALID for uploads that are gone or
+   * not the actor's / the product store's (ADMIN skips ownership, but a
+   * video file must still be an MP4 upload).
+   */
+  private async prepareStories(
+    product: { id: string | null; creator_id: string | null },
+    stories: ProductStoryInputDto[] | undefined,
+    actor: { userId: string; role: UserRole },
+  ): Promise<PreparedProductStory[] | undefined> {
+    if (stories === undefined) return undefined;
+    const prepared = normalizeStoryInputs(stories);
+    if (!prepared.length) return prepared;
+
+    // Media already on this product (its stories or its images) was checked
+    // when it was first saved.
+    const [onStories, onImages] = product.id
+      ? await Promise.all([
+          this.prisma.productStory.findMany({
+            where: { product_id: product.id },
+            select: { url: true, poster_url: true },
+          }),
+          this.prisma.productImage.findMany({
+            where: { product_id: product.id },
+            select: { url: true },
+          }),
+        ])
+      : [[], []];
+    const known = new Set<string>([
+      ...onStories.flatMap((r) =>
+        r.poster_url ? [r.url, r.poster_url] : [r.url],
+      ),
+      ...onImages.map((r) => r.url),
+    ]);
+
+    // Every new upload key with the index of the first story that uses it.
+    type Use = { index: number; role: 'file' | 'image' };
+    const uses = new Map<string, Use>();
+    prepared.forEach((st, index) => {
+      const add = (key: string | null, role: Use['role']) => {
+        if (!key || known.has(key) || uses.has(key)) return;
+        uses.set(key, { index, role });
+      };
+      if (st.kind === 'FILE') add(st.url, 'file');
+      if (st.kind === 'IMAGE') add(st.url, 'image');
+      add(st.poster_url, 'image');
+    });
+    const isAdmin = actor.role === UserRole.ADMIN;
+    const toCheck = [...uses.entries()].filter(
+      ([, u]) => u.role === 'file' || !isAdmin,
+    );
+    if (!toCheck.length) return prepared;
+
+    const storeId = product.creator_id
+      ? (
+          await this.prisma.store.findUnique({
+            where: { creator_id: product.creator_id },
+            select: { id: true },
+          })
+        )?.id
+      : undefined;
+    const rows = await this.prisma.uploadedFile.findMany({
+      where: { key: { in: toCheck.map(([k]) => k) } },
+      select: { key: true, user_id: true, store_id: true, content_type: true },
+    });
+    const byKey = new Map(rows.map((r) => [r.key, r]));
+    const ownedBy = (r: { user_id: string | null; store_id: string | null }) =>
+      isAdmin ||
+      r.user_id === actor.userId ||
+      (!!storeId && r.store_id === storeId);
+
+    for (const [key, { index, role }] of toCheck) {
+      const row = byKey.get(key);
+      if (role === 'file') {
+        if (!row) {
+          // The orphan sweep removed a file that stayed unsaved for > 24 h.
+          storyError(
+            'STORY_UPLOAD_EXPIRED',
+            'This story video has expired. Remove it and upload it again.',
+            { index },
+          );
+        }
+        if (row.content_type !== VIDEO_CONTENT_TYPE || !ownedBy(row)) {
+          storyError(
+            'STORY_FILE_INVALID',
+            'The story video was not uploaded by you.',
+            { index },
+          );
+        }
+        continue;
+      }
+      if (!row && key.startsWith(`/uploads/${VIDEO_POSTER_FOLDER}/`)) {
+        storyError(
+          'STORY_UPLOAD_EXPIRED',
+          'This story cover image has expired. Choose a new cover image.',
+          { index },
+        );
+      }
+      // Another store's image would become undeletable for its owner.
+      if (!row || !ownedBy(row)) {
+        storyError(
+          'STORY_IMAGE_INVALID',
+          'The story image is not one of your images.',
+          { index },
+        );
+      }
+    }
+    return prepared;
+  }
+
+  /**
+   * Writes the prepared stories of a product inside the save transaction:
+   * rows not in the payload are deleted (translations cascade), rows whose
+   * id belongs to this product are updated with their translations replaced,
+   * the rest are created. Files are never deleted here; the upload sweep
+   * removes unreferenced videos and posters.
+   */
+  private async syncStories(
+    tx: Prisma.TransactionClient,
+    productId: string,
+    stories: PreparedProductStory[],
+  ) {
+    const existing = await tx.productStory.findMany({
+      where: { product_id: productId },
+      select: STORED_STORY_SELECT,
+    });
+    const existingIds = new Set(existing.map((r) => r.id));
+    const existingById = new Map(existing.map((r) => [r.id, r]));
+
+    // Lock the upload rows of every referenced video file and poster until
+    // the commit: the orphan sweep claims rows FOR UPDATE SKIP LOCKED, so it
+    // skips them now, and a row it already deleted shows up as missing here.
+    const keysOf = (st: PreparedProductStory) =>
+      [st.kind === 'FILE' ? st.url : null, st.poster_url].filter(
+        (k): k is string => !!k,
+      );
+    const keys = [...new Set(stories.flatMap(keysOf))];
+    if (keys.length) {
+      const locked = await tx.$queryRaw<{ key: string }[]>`
+        SELECT uf."key" AS key FROM "UploadedFile" uf
+        WHERE uf."key" IN (${Prisma.join(keys)})
+        FOR SHARE`;
+      const present = new Set(locked.map((r) => r.key));
+      const known = new Set(
+        existing
+          .flatMap((r) => [r.url, r.poster_url])
+          .filter((k): k is string => !!k),
+      );
+      // Only video files and video posters are swept; other images (e.g. a
+      // product image used as poster) may have no upload row at all.
+      const index = stories.findIndex((st) =>
+        keysOf(st).some(
+          (k) =>
+            !present.has(k) &&
+            !known.has(k) &&
+            ((st.kind === 'FILE' && st.url === k) ||
+              k.startsWith(`/uploads/${VIDEO_POSTER_FOLDER}/`)),
+        ),
+      );
+      if (index >= 0) {
+        storyError(
+          'STORY_UPLOAD_EXPIRED',
+          'This story video has expired. Remove it and upload it again.',
+          { index },
+        );
+      }
+    }
+
+    const keep = new Set(
+      stories
+        .map((st) => st.id)
+        .filter((id): id is string => !!id && existingIds.has(id)),
+    );
+    await tx.productStory.deleteMany({
+      where: { product_id: productId, id: { notIn: [...keep] } },
+    });
+    const updated = new Set<string>();
+    for (const st of stories) {
+      const { id, translations, ...data } = st;
+      if (id && keep.has(id) && !updated.has(id)) {
+        updated.add(id);
+        // Unchanged row and texts: no writes (keeps updated_at, and a resave
+        // of 30 stories costs no extra queries in the save transaction).
+        const stored = existingById.get(id);
+        if (stored && storyUnchanged(stored, st)) continue;
+        await tx.productStory.update({ where: { id }, data });
+        await tx.productStoryTranslation.deleteMany({
+          where: { story_id: id },
+        });
+        if (translations.length) {
+          await tx.productStoryTranslation.createMany({
+            data: translations.map((t) => ({ ...t, story_id: id })),
+          });
+        }
+      } else {
+        await tx.productStory.create({
+          data: {
+            ...data,
+            product_id: productId,
+            translations: { create: translations },
+          },
+        });
+      }
+    }
+  }
+
   async create(userId: string, userRole: UserRole, dto: CreateProductDto) {
     const {
       translations,
@@ -1060,6 +1303,7 @@ export class ProductsService {
       variants,
       images,
       videos,
+      stories,
       ...data
     } = dto;
     void _legacyTags;
@@ -1148,6 +1392,11 @@ export class ProductsService {
       { userId, role: userRole },
       () => (images ?? []).length,
     );
+    const preparedStories = await this.prepareStories(
+      { id: null, creator_id: productData.creator_id ?? null },
+      stories,
+      { userId, role: userRole },
+    );
 
     // Create the product
     const product = await this.prisma.product.create({
@@ -1216,6 +1465,7 @@ export class ProductsService {
       variants,
       images,
       preparedVideos,
+      preparedStories,
     );
 
     await releaseLiveProductPaths(this.prisma, this.redirects, {
@@ -1548,7 +1798,12 @@ export class ProductsService {
       });
     // The editor GET always carries `videos` (possibly []), so the dashboard
     // can tell a video-aware API from an older one.
-    const product = { ...row, videos: toProductVideosOut(row.videos) };
+    // `stories` likewise (customer-stories contract 2).
+    const product = {
+      ...row,
+      videos: toProductVideosOut(row.videos),
+      stories: toProductStoriesOut(row.stories),
+    };
 
     // cost_price is the provider's confidential margin input — a creator
     // browsing the catalogue to import must never see it.
@@ -1610,6 +1865,7 @@ export class ProductsService {
       variants,
       images,
       videos,
+      stories,
       ...data
     } = dto;
     void _legacyTags;
@@ -1626,6 +1882,10 @@ export class ProductsService {
               where: { product_id: id, variant_id: null },
             }),
     );
+    const preparedStories = await this.prepareStories(product, stories, {
+      userId,
+      role: userRole,
+    });
     // An images-only save that clears the gallery must not strand stored
     // videos; checked before any write (re-checked in the transaction).
     if (videos === undefined && images !== undefined && images.length === 0) {
@@ -1652,7 +1912,13 @@ export class ProductsService {
       data,
     });
 
-    await this.syncVariantsAndImages(id, variants, images, preparedVideos);
+    await this.syncVariantsAndImages(
+      id,
+      variants,
+      images,
+      preparedVideos,
+      preparedStories,
+    );
 
     // Replace creator-collection attachments (creator-owned products only);
     // kept links keep their sort_order. The primary is re-resolved whenever
@@ -1873,6 +2139,7 @@ export class ProductsService {
           orderBy: [{ sort_order: 'asc' as const }, { id: 'asc' as const }],
         },
         faqs: { include: { translations: true } },
+        stories: PRODUCT_STORIES_INCLUDE,
       },
     });
     if (!source)
@@ -2129,6 +2396,33 @@ export class ProductsService {
         });
       }
 
+      // Customer stories with their translations: new rows pointing at the
+      // same media (the upload sweep counts references).
+      for (const st of source.stories ?? []) {
+        await tx.productStory.create({
+          data: {
+            product_id: created.id,
+            kind: st.kind,
+            url: st.url,
+            poster_url: st.poster_url,
+            duration_s: st.duration_s,
+            width: st.width,
+            height: st.height,
+            name: st.name,
+            rating: st.rating,
+            verified: st.verified,
+            sort_order: st.sort_order,
+            translations: {
+              create: st.translations.map((t) => ({
+                locale: t.locale,
+                quote: t.quote,
+                subtitle: t.subtitle,
+              })),
+            },
+          },
+        });
+      }
+
       return created;
     });
 
@@ -2291,6 +2585,8 @@ export class ProductsService {
         shipping_profile: { include: { zones: true } },
         // Decision D5: reselling stores show these; the creator sees them.
         videos: PRODUCT_VIDEOS_INCLUDE,
+        // Customer stories are inherited the same way (S7).
+        stories: PRODUCT_STORIES_INCLUDE,
       },
     });
 
@@ -2323,6 +2619,7 @@ export class ProductsService {
         return redactProductForNonOwner({
           ...product,
           videos: toProductVideosOut(product.videos),
+          stories: toProductStoriesOut(product.stories),
           shipping_profile: defaultProfile,
         });
       }
@@ -2332,6 +2629,7 @@ export class ProductsService {
     return redactProductForNonOwner({
       ...product,
       videos: toProductVideosOut(product.videos),
+      stories: toProductStoriesOut(product.stories),
     });
   }
 

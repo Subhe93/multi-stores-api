@@ -322,7 +322,7 @@ describe('tree helpers', () => {
 describe('product layout app gate', () => {
   it('names the store app and the gated keys', () => {
     expect(PRODUCT_LAYOUT_APP_KEY).toBe('product_layout');
-    expect(PRODUCT_LAYOUT_BLOCK_KEYS).toHaveLength(15);
+    expect(PRODUCT_LAYOUT_BLOCK_KEYS).toHaveLength(16);
     for (const k of [...CONTAINER_SECTION_KEYS, ...PRODUCT_LAYOUT_BLOCK_KEYS])
       expect(requiresProductLayoutApp(k)).toBe(true);
     for (const k of [

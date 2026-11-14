@@ -660,6 +660,7 @@ describe('PagesV2Service product layout app gate', () => {
     'product-specifications',
     'product-faq',
     'product-shipping-returns',
+    'product-stories',
   ])('rejects adding %s while the app is off', async (key) => {
     const { service, sections } = makeService(undefined, false);
     expect(

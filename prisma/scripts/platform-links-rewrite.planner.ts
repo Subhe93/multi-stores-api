@@ -79,7 +79,8 @@ export const LINK_COLUMNS: readonly LinkColumn[] = [
  *  - `Store.custom_domain`, `StoreDomain.hostname`: merchant domains;
  *  - `Invoice.snapshot`, `OrderItemDesign.*`, `ImportRunItem.*`: frozen
  *    legal / order copies;
- *  - `ProductImage.url`, `ProductVideo.url` / `poster_url` and every other
+ *  - `ProductImage.url`, `ProductVideo.url` / `poster_url`,
+ *    `ProductStory.url` / `poster_url` and every other
  *    media column (video urls are uploads or YouTube/Vimeo watch URLs): absolute
  *    `/uploads/` URLs are relativised by `uploads-url-normalize.ts`;
  *  - `ImportMedia.source_url`, `ImportSource.*`: foreign (source shop) URLs;
@@ -97,6 +98,9 @@ export const SKIPPED_COLUMNS: readonly string[] = [
   'productImage.url (media: uploads-url-normalize.ts)',
   'productVideo.url (media / external watch URL: uploads-url-normalize.ts)',
   'productVideo.poster_url (media: uploads-url-normalize.ts)',
+  'productStory.url (media / external watch URL: uploads-url-normalize.ts)',
+  'productStory.poster_url (media: uploads-url-normalize.ts)',
+  'productStoryTranslation.* (plain-text testimonials, no platform links)',
   'importMedia.source_url',
   'store.checkout_settings',
   'promotion.conditions',
