@@ -64,6 +64,7 @@ import { OverviewModule } from './modules/overview/overview.module';
 import { StoreCustomersModule } from './modules/store-customers/store-customers.module';
 import { HealthModule } from './modules/health/health.module';
 import { CspReportModule } from './modules/csp-report/csp-report.module';
+import { ConsentLogModule } from './modules/consent-log/consent-log.module';
 
 @Module({
   imports: [
@@ -146,6 +147,8 @@ import { CspReportModule } from './modules/csp-report/csp-report.module';
     HealthModule,
     // Security audit M6: CSP violation reports (POST /api/csp-report).
     CspReportModule,
+    // Consent v2: cookie consent log (POST /storefront/:slug/consent + owner reads).
+    ConsentLogModule,
   ],
   providers: [
     // ThrottlerModule alone throttles nothing — only routes that explicitly

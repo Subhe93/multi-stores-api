@@ -737,6 +737,50 @@ export class ShippingService {
   }
 
   /**
+   * Destination countries every one of these products can ship to, resolved
+   * exactly like quoteForItems: per profile, a country counts when its first
+   * matching zone has at least one active method (or no method rows at all,
+   * the legacy single-cost zone). The result is the intersection across the
+   * cart's profiles, sorted. `restricted: false` when no product has a
+   * shipping profile (such a cart ships free anywhere): the checkout then
+   * keeps its full country list.
+   */
+  async shippableCountries(
+    productIds: string[],
+  ): Promise<{ restricted: boolean; countries: string[] }> {
+    const profileIds = await this.resolveProfileIds(productIds);
+    if (profileIds.length === 0) return { restricted: false, countries: [] };
+    const profiles = await this.prisma.shippingProfile.findMany({
+      where: { id: { in: profileIds } },
+      include: zonesInclude,
+    });
+    let common: Set<string> | null = null;
+    for (const profile of profiles) {
+      const own = new Set<string>();
+      const candidates = new Set(
+        profile.zones.flatMap((z) =>
+          z.countries.map((c) => c.trim().toUpperCase()),
+        ),
+      );
+      for (const country of candidates) {
+        if (!/^[A-Z]{2}$/.test(country)) continue;
+        const zone = this.findZone(profile.zones, country);
+        if (
+          zone &&
+          (zone.methods.length === 0 || zone.methods.some((m) => m.is_active))
+        ) {
+          own.add(country);
+        }
+      }
+      const prev: Set<string> | null = common;
+      common = prev ? new Set([...prev].filter((c) => own.has(c))) : own;
+    }
+    // No profile row found (quoteForItems then quotes free shipping too).
+    if (!common) return { restricted: false, countries: [] };
+    return { restricted: true, countries: [...(common as Set<string>)].sort() };
+  }
+
+  /**
    * Free-shipping threshold of one product for a destination country (M4.1
    * §4.7, variation-card badge), in the base currency. Same profile and zone
    * resolution as checkout: the lowest `free_threshold` of the zone's active

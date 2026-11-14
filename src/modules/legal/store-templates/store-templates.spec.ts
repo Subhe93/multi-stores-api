@@ -499,38 +499,47 @@ describe('privacy cookie section: tracking vendors', () => {
   };
   const locales = Object.keys(STORE_LEGAL_TEMPLATES.privacy);
 
-  it.each(locales)('%s: no tracker configured → no vendor, no US-transfer note', (locale) => {
-    const html = STORE_LEGAL_TEMPLATES.privacy[locale as 'en']!.html;
-    const out =
-      sanitizeCreatorHtml(
-        fillStoreTemplate(html, { ...base, ...trackingTemplateContext({}) }),
-      ) ?? '';
-    for (const name of Object.values(VENDORS)) expect(out).not.toContain(name);
-    expect(out).not.toContain('_clck');
-    expect(out).not.toContain('privacy.microsoft.com');
-    expect(out).not.toMatch(/<(p|li)>\s*<\/\1>/);
-  });
+  it.each(locales)(
+    '%s: no tracker configured → no vendor, no US-transfer note',
+    (locale) => {
+      const html = STORE_LEGAL_TEMPLATES.privacy[locale as 'en']!.html;
+      const out =
+        sanitizeCreatorHtml(
+          fillStoreTemplate(html, { ...base, ...trackingTemplateContext({}) }),
+        ) ?? '';
+      for (const name of Object.values(VENDORS))
+        expect(out).not.toContain(name);
+      expect(out).not.toContain('_clck');
+      expect(out).not.toContain('privacy.microsoft.com');
+      expect(out).not.toMatch(/<(p|li)>\s*<\/\1>/);
+    },
+  );
 
-  it.each(locales)('%s: only Clarity configured → only Clarity is named, with cookies, retention and the US transfer', (locale) => {
-    const html = STORE_LEGAL_TEMPLATES.privacy[locale as 'en']!.html;
-    const ctx = {
-      ...base,
-      ...trackingTemplateContext({ clarity_project_id: 'sxtuobatm6' }),
-    };
-    const out = sanitizeCreatorHtml(fillStoreTemplate(html, ctx)) ?? '';
-    expect(out).toContain(VENDORS.clarity);
-    expect(out).toContain('_clck');
-    expect(out).toContain('_clsk');
-    expect(out).toContain('MUID');
-    expect(out).toContain('30');
-    expect(out).toContain('href="https://privacy.microsoft.com/privacystatement"');
-    expect(out).toMatch(/Data Privacy Framework/);
-    for (const name of [VENDORS.ga4, VENDORS.meta, VENDORS.tiktok]) {
-      expect(out).not.toContain(name);
-    }
-    // The project id itself is never printed.
-    expect(out).not.toContain('sxtuobatm6');
-  });
+  it.each(locales)(
+    '%s: only Clarity configured → only Clarity is named, with cookies, retention and the US transfer',
+    (locale) => {
+      const html = STORE_LEGAL_TEMPLATES.privacy[locale as 'en']!.html;
+      const ctx = {
+        ...base,
+        ...trackingTemplateContext({ clarity_project_id: 'sxtuobatm6' }),
+      };
+      const out = sanitizeCreatorHtml(fillStoreTemplate(html, ctx)) ?? '';
+      expect(out).toContain(VENDORS.clarity);
+      expect(out).toContain('_clck');
+      expect(out).toContain('_clsk');
+      expect(out).toContain('MUID');
+      expect(out).toContain('30');
+      expect(out).toContain(
+        'href="https://privacy.microsoft.com/privacystatement"',
+      );
+      expect(out).toMatch(/Data Privacy Framework/);
+      for (const name of [VENDORS.ga4, VENDORS.meta, VENDORS.tiktok]) {
+        expect(out).not.toContain(name);
+      }
+      // The project id itself is never printed.
+      expect(out).not.toContain('sxtuobatm6');
+    },
+  );
 
   it('GA4 + Meta configured (Namez today) → both named, Clarity and TikTok not', () => {
     const out = fillStoreTemplate(STORE_LEGAL_TEMPLATES.privacy.sv!.html, {
@@ -557,6 +566,8 @@ describe('privacy cookie section: tracking vendors', () => {
       'tracking.any': '',
       'tracking.gated': '',
       'tracking.ungated': '',
+      'tracking.analytics': '',
+      'tracking.marketing': '',
     });
     expect(
       trackingTemplateContext({ clarity_project_id: 'sxtuobatm6' }),
@@ -581,16 +592,78 @@ describe('privacy cookie section: tracking vendors', () => {
     ).toMatchObject({ 'tracking.gated': '', 'tracking.ungated': '1' });
   });
 
-  // Sentence "loaded only after Accept all" per locale, and the marker of the
+  it('trackingTemplateContext consent v2 category flags', () => {
+    expect(
+      trackingTemplateContext({
+        ga4_measurement_id: 'G-1',
+        meta_pixel_id: '1',
+      }),
+    ).toMatchObject({ 'tracking.analytics': '1', 'tracking.marketing': '1' });
+    expect(trackingTemplateContext({ tiktok_pixel_id: 'T' })).toMatchObject({
+      'tracking.analytics': '',
+      'tracking.marketing': '1',
+    });
+    // consent_required off: GA4 / Meta / TikTok ungated, Clarity still Analytics.
+    expect(
+      trackingTemplateContext({
+        ga4_measurement_id: 'G-1',
+        meta_pixel_id: '1',
+        consent_required: false,
+      }),
+    ).toMatchObject({ 'tracking.analytics': '', 'tracking.marketing': '' });
+    expect(
+      trackingTemplateContext({
+        ga4_measurement_id: 'G-1',
+        clarity_project_id: 'c',
+        consent_required: false,
+      }),
+    ).toMatchObject({ 'tracking.analytics': '1', 'tracking.marketing': '' });
+  });
+
+  // Per-category sentence (consent v2) per locale, and the marker of the
   // ungated alternative ("load on visit").
   const GATED: Record<string, string> = {
-    sv: 'De laddas först när du väljer',
-    en: 'They are loaded only after you choose',
-    de: 'Sie werden erst geladen',
-    fr: 'Ils ne sont chargés qu’après',
-    ar: 'ولا تُحمَّل إلا بعد اختيارك',
-    tr: 'Bu hizmetler yalnızca',
+    sv: 'Tjänsterna för statistik laddas bara om du godkänner Statistik',
+    en: 'Analytics services load only if you allow Analytics',
+    de: 'Statistikdienste werden nur geladen',
+    fr: 'Les services de statistiques ne sont chargés que si',
+    ar: 'ولا تُحمَّل خدمات الإحصاءات إلا إذا سمحت',
+    tr: 'İstatistik hizmetleri yalnızca',
   };
+  // Consent v2 paragraphs present in every store's policy.
+  const EXTERNAL: Record<string, string> = {
+    sv: 'Externa medier (YouTube, Vimeo, Google Maps)',
+    en: 'External media (YouTube, Vimeo, Google Maps)',
+    de: 'Externe Medien (YouTube, Vimeo, Google Maps)',
+    fr: 'Médias externes (YouTube, Vimeo, Google Maps)',
+    ar: 'الوسائط الخارجية (YouTube وVimeo وGoogle Maps)',
+    tr: 'Harici medya (YouTube, Vimeo, Google Maps)',
+  };
+
+  it.each(locales)(
+    '%s: external media, consent storage/log (24 months) and third-party cookies, also without trackers',
+    (locale) => {
+      const html = STORE_LEGAL_TEMPLATES.privacy[locale as 'en']!.html;
+      const out =
+        sanitizeCreatorHtml(
+          fillStoreTemplate(html, {
+            ...base,
+            'store.slug': 'namez-se',
+            ...trackingTemplateContext({}),
+          }),
+        ) ?? '';
+      expect(out).toContain(EXTERNAL[locale]);
+      expect(out).toContain('<em>consent:namez-se</em>');
+      expect(out).toContain('<em>consent_namez-se</em>');
+      expect(out).toContain('24');
+      expect(out).toContain('<em>MUID</em>');
+      expect(out).toContain('<em>CLID</em>');
+      // No "Accept all" promise is left anywhere in the policy.
+      expect(out).not.toMatch(
+        /Acceptera alla|Accept all|Alle akzeptieren|Tout accepter|قبول الكل|Tümünü kabul et/,
+      );
+    },
+  );
   const UNGATED: Record<string, string> = {
     sv: 'laddas när du besöker butiken',
     en: 'are loaded when you visit the store',
@@ -600,24 +673,27 @@ describe('privacy cookie section: tracking vendors', () => {
     tr: 'mağazayı ziyaret ettiğinizde yüklenir',
   };
 
-  it.each(locales)('%s: consent_required off → no "only after Accept all" promise for GA/Meta/TikTok', (locale) => {
-    const html = STORE_LEGAL_TEMPLATES.privacy[locale as 'en']!.html;
-    const fill = (consent_required: boolean) =>
-      sanitizeCreatorHtml(
-        fillStoreTemplate(html, {
-          ...base,
-          ...trackingTemplateContext({
-            ga4_measurement_id: 'G-1',
-            clarity_project_id: 'sxtuobatm6',
-            consent_required,
+  it.each(locales)(
+    '%s: consent_required off → no "only after Accept all" promise for GA/Meta/TikTok',
+    (locale) => {
+      const html = STORE_LEGAL_TEMPLATES.privacy[locale as 'en']!.html;
+      const fill = (consent_required: boolean) =>
+        sanitizeCreatorHtml(
+          fillStoreTemplate(html, {
+            ...base,
+            ...trackingTemplateContext({
+              ga4_measurement_id: 'G-1',
+              clarity_project_id: 'sxtuobatm6',
+              consent_required,
+            }),
           }),
-        }),
-      ) ?? '';
-    const off = fill(false);
-    expect(off).not.toContain(GATED[locale]);
-    expect(off).toContain(UNGATED[locale]);
-    const on = fill(true);
-    expect(on).toContain(GATED[locale]);
-    expect(on).not.toContain(UNGATED[locale]);
-  });
+        ) ?? '';
+      const off = fill(false);
+      expect(off).not.toContain(GATED[locale]);
+      expect(off).toContain(UNGATED[locale]);
+      const on = fill(true);
+      expect(on).toContain(GATED[locale]);
+      expect(on).not.toContain(UNGATED[locale]);
+    },
+  );
 });

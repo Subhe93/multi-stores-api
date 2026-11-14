@@ -1377,6 +1377,7 @@ model Store {
   customers                 User[]         @relation("StoreCustomers")
   uploaded_files            UploadedFile[]
   archived_orders           ArchivedOrder[]
+  consent_logs              ConsentLog[]
 
   @@index([slug])
   @@index([status])
@@ -3434,4 +3435,33 @@ model ArchivedOrderLine {
 
   @@index([archived_order_id])
   @@index([product_id])
+}
+
+// Proof of cookie consent (GDPR art. 7(1)), consent v2. One row per decision,
+// never per page view. No raw IP or user agent. Purged after 24 months by the
+// `consent-log` retention task.
+model ConsentLog {
+  id              String   @id @default(uuid())
+  store_id        String
+  event_id        String   @db.VarChar(36)
+  consent_id      String   @db.VarChar(36)
+  action          String   @db.VarChar(32)
+  source          String   @db.VarChar(16)
+  analytics       Boolean?
+  marketing       Boolean?
+  external_media  Boolean?
+  consent_version String   @db.VarChar(8)
+  vendors         String[] @default([])
+  text_hash       String   @db.VarChar(64)
+  locale          String   @db.VarChar(10)
+  ua_hash         String?  @db.VarChar(64)
+  ip_prefix       String?  @db.VarChar(45)
+  created_at      DateTime @default(now())
+
+  store Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
+
+  @@unique([store_id, event_id])
+  @@index([store_id, created_at])
+  @@index([store_id, consent_id])
+  @@index([created_at])
 }

@@ -516,6 +516,7 @@ export class StoreLegalService {
           locale,
         ),
         ...trackingTemplateContext(store),
+        'store.slug': str(store.slug),
       };
     }
     const t = (store.trader_details ?? {}) as Record<string, unknown>;
@@ -529,6 +530,7 @@ export class StoreLegalService {
       'trader.phone': str(t.phone),
       'store.name': str(store.name),
       'store.url': storeUrl,
+      'store.slug': str(store.slug),
       'seller.is_independent': '1',
       'seller.is_platform': '',
     };
@@ -588,17 +590,28 @@ export function trackingTemplateContext(
   };
   const any = Object.values(ctx).some(Boolean);
   // consent_required=false loads GA4 / Meta / TikTok on visit (StoreTracking);
-  // Clarity always waits for "Accept all". The intro sentence must say so.
+  // Clarity always waits for Analytics consent. The intro sentence must say so.
   const ungated =
     store.consent_required === false &&
     Boolean(
       ctx['tracking.ga4'] || ctx['tracking.meta'] || ctx['tracking.tiktok'],
     );
+  // Consent v2 categories, '1' when offered AND gated: Analytics = GA4 (unless
+  // consent_required is off) or Clarity (always gated); Marketing = Meta /
+  // TikTok (unless consent_required is off).
+  const consentRequired = store.consent_required !== false;
+  const analytics =
+    Boolean(ctx['tracking.clarity']) ||
+    (consentRequired && Boolean(ctx['tracking.ga4']));
+  const marketing =
+    consentRequired && Boolean(ctx['tracking.meta'] || ctx['tracking.tiktok']);
   return {
     ...ctx,
     'tracking.any': any ? '1' : '',
     'tracking.gated': any && !ungated ? '1' : '',
     'tracking.ungated': ungated ? '1' : '',
+    'tracking.analytics': analytics ? '1' : '',
+    'tracking.marketing': marketing ? '1' : '',
   };
 }
 

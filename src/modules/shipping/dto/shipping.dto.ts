@@ -284,6 +284,15 @@ export class UpdateShippingProfileDto {
 
 // ── Quotes ──────────────────────────────────────────────────────────────────
 
+// POST /shipping/countries: the cart's product ids (custom product ids are
+// resolved through their base product, as in the estimate).
+export class ShippableCountriesDto {
+  @IsArray()
+  @ArrayMaxSize(200)
+  @IsString({ each: true })
+  product_ids: string[];
+}
+
 export class EstimateShippingDto {
   @IsArray()
   @ArrayMaxSize(200)

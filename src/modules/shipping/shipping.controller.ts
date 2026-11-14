@@ -21,6 +21,7 @@ import {
   UpdateShippingMethodDto,
   CalculateShippingDto,
   EstimateShippingDto,
+  ShippableCountriesDto,
 } from './dto/shipping.dto';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -224,6 +225,13 @@ export class ShippingController {
   @Post('calculate')
   calculate(@Body() dto: CalculateShippingDto) {
     return this.shippingService.calculate(dto);
+  }
+
+  // Public: destination countries the given products can all ship to, so
+  // the checkout country list only offers countries it can deliver to.
+  @Post('countries')
+  countries(@Body() dto: ShippableCountriesDto) {
+    return this.shippingService.shippableCountries(dto.product_ids);
   }
 
   // Public: every shipping method for a set of products and a destination,
