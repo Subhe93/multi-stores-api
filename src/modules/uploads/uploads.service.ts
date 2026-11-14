@@ -127,6 +127,11 @@ export interface VideoUploadConfigResponse {
   accept: string[];
   quota_bytes: number | null;
   used_bytes: number;
+  /**
+   * Save-payload features this API accepts (CONTRACT-AUTOPLAY 2): the
+   * dashboard sends `position: 0`, `autoplay` and `loop` only when present.
+   */
+  features: { featured_video: boolean; autoplay: boolean };
 }
 
 /** Whose videos share one quota: a creator's store, or a provider/user. */
@@ -457,6 +462,7 @@ export class UploadsService {
       accept: [VIDEO_CONTENT_TYPE],
       quota_bytes: scope ? cfg.storeQuotaBytes : null,
       used_bytes: used,
+      features: { featured_video: true, autoplay: true },
     };
   }
 

@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import {
   storefrontVideosField,
   toProductVideoOut,
@@ -36,12 +37,33 @@ describe('product video mapper', () => {
       width: null,
       height: null,
       position: 1,
+      autoplay: false,
+      loop: false,
       alt: 'Clip',
       created_at: '2026-11-13T10:00:00.000Z',
     });
     expect(Object.keys(out)).not.toContain('sort_order');
     expect(Object.keys(out)).not.toContain('product_id');
     expect(Object.keys(out)).not.toContain('updated_at');
+  });
+
+  it('maps autoplay / loop (missing on an old row -> false) and position 0', () => {
+    expect(
+      toProductVideoOut(row({ position: 0, autoplay: true, loop: true })),
+    ).toMatchObject({ position: 0, autoplay: true, loop: true });
+    const legacy = toProductVideoOut(
+      row({ autoplay: undefined, loop: undefined }),
+    );
+    expect(legacy.autoplay).toBe(false);
+    expect(legacy.loop).toBe(false);
+  });
+
+  it('the featured video (position 0) comes first', () => {
+    const out = toProductVideosOut([
+      row({ id: 'b', position: 1, sort_order: 0 }),
+      row({ id: 'f', position: 0, sort_order: 1 }),
+    ]);
+    expect(out.map((v) => v.id)).toEqual(['f', 'b']);
   });
 
   it('orders by position, then sort_order', () => {
@@ -58,5 +80,37 @@ describe('product video mapper', () => {
     expect(storefrontVideosField(undefined)).toEqual({});
     expect(Object.keys({ a: 1, ...storefrontVideosField([]) })).toEqual(['a']);
     expect(storefrontVideosField([row()]).videos).toHaveLength(1);
+  });
+});
+
+// Jest mocks accept any row, so the new columns are checked against the
+// generated Prisma data model (DMMF).
+describe('ProductVideo / ProductStory autoplay columns exist in the Prisma models', () => {
+  const field = (model: string, name: string) =>
+    Prisma.dmmf.datamodel.models
+      .find((m) => m.name === model)
+      ?.fields.find((f) => f.name === name);
+
+  it.each([
+    ['ProductVideo', 'autoplay'],
+    ['ProductVideo', 'loop'],
+    ['ProductStory', 'autoplay'],
+    ['ProductStory', 'loop'],
+  ])('%s.%s is a Boolean defaulting to false', (model, name) => {
+    const f = field(model, name);
+    expect(f?.type).toBe('Boolean');
+    expect(f?.isRequired).toBe(true);
+    expect(f?.default).toBe(false);
+  });
+
+  it('every wire field except alt comes from a ProductVideo column', () => {
+    const cols = new Set(
+      Prisma.dmmf.datamodel.models
+        .find((m) => m.name === 'ProductVideo')!
+        .fields.map((f) => f.name),
+    );
+    for (const k of Object.keys(toProductVideoOut(row()))) {
+      expect(cols.has(k === 'alt' ? 'alt_text' : k)).toBe(true);
+    }
   });
 });

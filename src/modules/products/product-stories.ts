@@ -39,6 +39,12 @@ export interface PreparedProductStory {
   rating: number | null;
   verified: boolean;
   sort_order: number;
+  /**
+   * Undefined = not sent: an existing row keeps its stored value, a new row
+   * gets false. Always false for IMAGE.
+   */
+  autoplay?: boolean;
+  loop?: boolean;
   translations: PreparedProductStoryTranslation[];
 }
 
@@ -88,6 +94,8 @@ export interface StoredProductStory {
   rating: number | null;
   verified: boolean;
   sort_order: number;
+  autoplay: boolean;
+  loop: boolean;
   translations: PreparedProductStoryTranslation[];
 }
 
@@ -111,6 +119,9 @@ export function storyUnchanged(
     stored.rating !== next.rating ||
     stored.verified !== next.verified ||
     stored.sort_order !== next.sort_order ||
+    // Undefined = not sent by an older dashboard: the stored value is kept.
+    (next.autoplay !== undefined && stored.autoplay !== next.autoplay) ||
+    (next.loop !== undefined && stored.loop !== next.loop) ||
     stored.translations.length !== next.translations.length
   ) {
     return false;
@@ -226,6 +237,18 @@ export function normalizeStoryInputs(
           ? Math.min(s.duration_s, videoUploadConfig().maxSeconds + 1)
           : s.duration_s;
 
+    // Autoplay only applies to videos (CONTRACT-AUTOPLAY A3); an image story
+    // always stores false. Absent keys stay undefined (keep stored value).
+    const autoplayFields: Pick<PreparedProductStory, 'autoplay' | 'loop'> =
+      kind === 'IMAGE'
+        ? { autoplay: false, loop: false }
+        : {
+            ...(typeof s.autoplay === 'boolean'
+              ? { autoplay: s.autoplay }
+              : {}),
+            ...(typeof s.loop === 'boolean' ? { loop: s.loop } : {}),
+          };
+
     return {
       ...(s.id ? { id: s.id } : {}),
       kind,
@@ -238,6 +261,7 @@ export function normalizeStoryInputs(
       rating: s.rating ?? null,
       verified: s.verified === true,
       sort_order: index,
+      ...autoplayFields,
       translations,
     };
   });

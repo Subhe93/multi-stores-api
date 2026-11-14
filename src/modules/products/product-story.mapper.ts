@@ -26,6 +26,10 @@ export interface ProductStoryOut {
   /** 1..5 or null. */
   rating: number | null;
   verified: boolean;
+  /** Muted autoplay of a video story; always false for 'image'. */
+  autoplay: boolean;
+  /** Loop the autoplaying story video; always false for 'image'. */
+  loop: boolean;
   /** Sorted by locale asc. */
   translations: ProductStoryTranslationOut[];
 }
@@ -54,14 +58,16 @@ type ProductStoryRow = Pick<
   | 'rating'
   | 'verified'
 > &
-  Partial<Pick<ProductStory, 'sort_order'>> & {
+  Partial<Pick<ProductStory, 'sort_order' | 'autoplay' | 'loop'>> & {
     translations?: readonly ProductStoryTranslationOut[] | null;
   };
 
 export function toProductStoryOut(row: ProductStoryRow): ProductStoryOut {
+  const kind = String(row.kind).toLowerCase() as ProductStoryOut['kind'];
+  const isImage = kind === 'image';
   return {
     id: row.id,
-    kind: String(row.kind).toLowerCase() as ProductStoryOut['kind'],
+    kind,
     url: row.url,
     poster_url: row.poster_url ?? null,
     duration_s: row.duration_s ?? null,
@@ -70,6 +76,8 @@ export function toProductStoryOut(row: ProductStoryRow): ProductStoryOut {
     name: row.name,
     rating: row.rating ?? null,
     verified: row.verified === true,
+    autoplay: isImage ? false : (row.autoplay ?? false),
+    loop: isImage ? false : (row.loop ?? false),
     translations: [...(row.translations ?? [])]
       .sort((a, b) => (a.locale < b.locale ? -1 : a.locale > b.locale ? 1 : 0))
       .map((t) => ({

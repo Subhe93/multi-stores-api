@@ -44,10 +44,27 @@ describe('product story mapper', () => {
       name: 'Anna',
       rating: 4,
       verified: true,
+      autoplay: false,
+      loop: false,
       translations: [
         { locale: 'en', quote: 'Good', subtitle: null },
         { locale: 'sv', quote: 'Bra', subtitle: 'Stockholm' },
       ],
+    });
+  });
+
+  it('maps autoplay / loop for video stories, forced false for images', () => {
+    expect(
+      toProductStoryOut(row({ autoplay: true, loop: true }) as never),
+    ).toMatchObject({ autoplay: true, loop: true });
+    expect(
+      toProductStoryOut(
+        row({ kind: 'IMAGE', autoplay: true, loop: true }) as never,
+      ),
+    ).toMatchObject({ autoplay: false, loop: false });
+    expect(toProductStoryOut(row() as never)).toMatchObject({
+      autoplay: false,
+      loop: false,
     });
   });
 

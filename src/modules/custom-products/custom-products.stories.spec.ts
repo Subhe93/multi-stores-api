@@ -82,6 +82,8 @@ describe('CustomProductsService.findById base product stories', () => {
         name: 'Anna',
         rating: 5,
         verified: true,
+        autoplay: false,
+        loop: false,
         translations: [{ locale: 'sv', quote: 'Bra', subtitle: null }],
       },
       expect.objectContaining({ id: 's2', kind: 'youtube', name: 'Bo' }),

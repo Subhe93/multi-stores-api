@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument -- in-memory Prisma fake rows are untyped in tests */
 import { BadRequestException } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 import { ProductsService } from './products.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { ProductVideoInputDto } from './dto/product.dto';
@@ -47,6 +47,18 @@ function setup(
     files: opts.files ?? [],
   };
   const writes: string[] = [];
+  /** Video write calls in order: `update:<id>:<position>` / `create:<position>`. */
+  const videoCalls: string[] = [];
+  // Mirrors the partial unique index ProductVideo_product_id_featured_key.
+  const assertOneFeatured = () => {
+    const featured = db.videos.filter((v) => v.position === 0);
+    if (new Set(featured.map((v) => v.product_id)).size < featured.length) {
+      throw new Prisma.PrismaClientKnownRequestError('unique', {
+        code: 'P2002',
+        clientVersion: 'test',
+      });
+    }
+  };
   const matchVideo = (r: Row, where: Row) =>
     (!where.product_id || r.product_id === where.product_id) &&
     (!where.id?.notIn || !where.id.notIn.includes(r.id)) &&
@@ -113,13 +125,17 @@ function setup(
         return Promise.resolve({});
       }),
       update: jest.fn(({ where, data }: Row) => {
+        videoCalls.push(`update:${where.id}:${data.position}`);
         const r = db.videos.find((v) => v.id === where.id)!;
         Object.assign(r, data);
+        assertOneFeatured();
         return Promise.resolve(r);
       }),
       create: jest.fn(({ data }: Row) => {
+        videoCalls.push(`create:${data.position}`);
         const r = { id: `new${++n}`, created_at: 'now', ...data };
         db.videos.push(r);
+        assertOneFeatured();
         return Promise.resolve(r);
       }),
       createMany: jest.fn(({ data }: Row) => {
@@ -174,7 +190,7 @@ function setup(
   internals.assertTaxClassAllowed = jest.fn(() => Promise.resolve());
   internals.assertShippingProfileAllowed = jest.fn(() => Promise.resolve());
   internals.findById = jest.fn((id: string) => Promise.resolve({ id }));
-  return { svc, db, prisma, writes };
+  return { svc, db, prisma, writes, videoCalls };
 }
 
 const save = (
@@ -560,6 +576,152 @@ describe('ProductsService videos', () => {
   });
 });
 
+describe('ProductsService videos: featured (position 0) and autoplay (CONTRACT-AUTOPLAY)', () => {
+  const POSTER = '/uploads/products/i0.webp';
+  const V2 = '22222222-2222-4222-8222-222222222222';
+  const storedRow = (over: Row = {}): Row => ({
+    id: V1,
+    kind: 'YOUTUBE',
+    url: YT_CANON,
+    poster_url: POSTER,
+    position: 1,
+    sort_order: 0,
+    autoplay: false,
+    loop: false,
+    created_at: 'then',
+    ...over,
+  });
+
+  it('accepts position 0 (featured) with a poster', async () => {
+    const { svc, db } = setup();
+    await save(svc, { videos: [yt({ position: 0, poster_url: POSTER })] });
+    expect(db.videos[0]).toMatchObject({ position: 0, poster_url: POSTER });
+  });
+
+  it('VIDEO_FEATURED_MULTIPLE for two featured videos, before any write', async () => {
+    const { svc, writes } = setup();
+    expect(
+      await codeOf(
+        save(svc, {
+          videos: [
+            yt({ position: 0, poster_url: POSTER }),
+            yt({ position: 0, poster_url: POSTER }),
+          ],
+        }),
+      ),
+    ).toBe('VIDEO_FEATURED_MULTIPLE');
+    expect(writes).toEqual([]);
+  });
+
+  it('VIDEO_FEATURED_REQUIRES_POSTER with the index of the featured video', async () => {
+    const { svc, writes } = setup();
+    let response: Row | undefined;
+    try {
+      await save(svc, {
+        videos: [yt(), yt({ position: 0, poster_url: '  ' })],
+      });
+    } catch (e) {
+      response = (e as BadRequestException).getResponse() as Row;
+    }
+    expect(response).toMatchObject({
+      code: 'VIDEO_FEATURED_REQUIRES_POSTER',
+      index: 1,
+    });
+    expect(writes).toEqual([]);
+  });
+
+  it('a featured video still needs a product-level image (VIDEO_REQUIRES_IMAGE)', async () => {
+    const { svc } = setup({ images: 0 });
+    expect(
+      await codeOf(
+        // ADMIN skips the poster ownership check (no image to match here).
+        save(
+          svc,
+          { videos: [yt({ position: 0, poster_url: POSTER })] },
+          UserRole.ADMIN,
+        ),
+      ),
+    ).toBe('VIDEO_REQUIRES_IMAGE');
+  });
+
+  it('swaps the featured video between two stored rows in one save (write order 3.3)', async () => {
+    const { svc, db, videoCalls } = setup({
+      videos: [
+        storedRow({ id: V1, position: 0, sort_order: 0 }),
+        storedRow({ id: V2, position: 1, sort_order: 1 }),
+      ],
+    });
+    await save(svc, {
+      videos: [
+        yt({ id: V2, position: 0, poster_url: POSTER }),
+        yt({ id: V1, position: 1, poster_url: POSTER }),
+      ],
+    });
+    // The old featured row moves away before the new one takes slot 0.
+    expect(videoCalls).toEqual([`update:${V1}:1`, `update:${V2}:0`]);
+    expect(db.videos.find((v) => v.id === V2)!.position).toBe(0);
+    expect(db.videos.find((v) => v.id === V1)!.position).toBe(1);
+  });
+
+  it('a new featured video is created after the old featured row moved', async () => {
+    const { svc, db, videoCalls } = setup({
+      videos: [storedRow({ id: V1, position: 0 })],
+    });
+    await save(svc, {
+      videos: [
+        yt({ position: 0, poster_url: POSTER }),
+        yt({ id: V1, position: 1, poster_url: POSTER }),
+      ],
+    });
+    expect(videoCalls).toEqual([`update:${V1}:1`, 'create:0']);
+    expect(db.videos.filter((v) => v.position === 0)).toHaveLength(1);
+  });
+
+  it('a unique violation that still escapes maps to VIDEO_FEATURED_MULTIPLE', async () => {
+    const { svc, prisma } = setup();
+    prisma.productVideo.create = jest.fn(() =>
+      Promise.reject(
+        new Prisma.PrismaClientKnownRequestError('unique', {
+          code: 'P2002',
+          clientVersion: 'test',
+        }),
+      ),
+    );
+    expect(
+      await codeOf(
+        save(svc, { videos: [yt({ position: 0, poster_url: POSTER })] }),
+      ),
+    ).toBe('VIDEO_FEATURED_MULTIPLE');
+  });
+
+  it('absent autoplay / loop on a stored id keep the stored values (older dashboard)', async () => {
+    const { svc, db, prisma } = setup({
+      videos: [storedRow({ autoplay: true, loop: true })],
+    });
+    await save(svc, { videos: [yt({ id: V1, poster_url: POSTER })] });
+    expect(db.videos[0]).toMatchObject({ autoplay: true, loop: true });
+    const data = prisma.productVideo.update.mock.calls[0][0].data as Row;
+    expect('autoplay' in data).toBe(false);
+    expect('loop' in data).toBe(false);
+  });
+
+  it('absent autoplay / loop on a new row store false; present values are stored', async () => {
+    const { svc, db } = setup();
+    await save(svc, {
+      videos: [yt(), yt({ autoplay: true, loop: true })],
+    });
+    expect(db.videos.map((v) => [v.autoplay, v.loop])).toEqual([
+      [false, false],
+      [true, true],
+    ]);
+    const b = setup({ videos: [storedRow({ autoplay: true, loop: true })] });
+    await save(b.svc, {
+      videos: [yt({ id: V1, poster_url: POSTER, autoplay: false })],
+    });
+    expect(b.db.videos[0]).toMatchObject({ autoplay: false, loop: true });
+  });
+});
+
 describe('ProductsService.duplicate videos', () => {
   it('copies the video rows with new ids and the same files', async () => {
     const created: Row[] = [];
@@ -601,6 +763,25 @@ describe('ProductsService.duplicate videos', () => {
                 height: 1920,
                 position: 2,
                 sort_order: 1,
+                autoplay: true,
+                loop: true,
+                created_at: new Date(),
+                updated_at: new Date(),
+              },
+              {
+                id: 'v-feat',
+                product_id: 'src',
+                kind: 'YOUTUBE',
+                url: YT_CANON,
+                poster_url: '/uploads/products/f.webp',
+                alt_text: null,
+                duration_s: null,
+                width: null,
+                height: null,
+                position: 0,
+                sort_order: 0,
+                autoplay: false,
+                loop: false,
                 created_at: new Date(),
                 updated_at: new Date(),
               },
@@ -641,6 +822,22 @@ describe('ProductsService.duplicate videos', () => {
         height: 1920,
         position: 2,
         sort_order: 1,
+        autoplay: true,
+        loop: true,
+      },
+      {
+        product_id: 'new-product',
+        kind: 'YOUTUBE',
+        url: YT_CANON,
+        poster_url: '/uploads/products/f.webp',
+        alt_text: null,
+        duration_s: null,
+        width: null,
+        height: null,
+        position: 0,
+        sort_order: 0,
+        autoplay: false,
+        loop: false,
       },
     ]);
   });

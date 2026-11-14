@@ -176,11 +176,21 @@ export class ProductVideoInputDto {
   @Max(8192)
   height?: number | null;
 
-  /** Product-level images shown before this video; >= 1 (D6). */
+  /** Product-level images shown before this video; 0 = featured (A1). */
   @IsInt()
-  @Min(1)
+  @Min(0)
   @Max(1000)
   position!: number;
+
+  /** Muted autoplay while visible. Absent on an existing row keeps the stored value. */
+  @IsOptional()
+  @IsBoolean()
+  autoplay?: boolean;
+
+  /** Loop the autoplaying video. Absent on an existing row keeps the stored value. */
+  @IsOptional()
+  @IsBoolean()
+  loop?: boolean;
 }
 
 /** One locale of a customer story (customer-stories contract 3.1). */
@@ -262,6 +272,16 @@ export class ProductStoryInputDto {
   @IsOptional()
   @IsBoolean()
   verified?: boolean;
+
+  /** Muted autoplay of a video story (forced false for images). */
+  @IsOptional()
+  @IsBoolean()
+  autoplay?: boolean;
+
+  /** Loop the autoplaying story video (forced false for images). */
+  @IsOptional()
+  @IsBoolean()
+  loop?: boolean;
 
   @IsArray()
   @ArrayMaxSize(12)

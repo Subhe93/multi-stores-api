@@ -373,6 +373,70 @@ describe('ProductsService stories (save)', () => {
     expect(db.stories.find((s) => s.id === S2)!.name).toBe('Bo B');
   });
 
+  it('autoplay / loop: stored when sent, false on a new row when absent, kept on a stored id when absent', async () => {
+    const full = (over: Row = {}): Row => ({
+      id: S1,
+      kind: 'YOUTUBE',
+      url: YT_CANON,
+      poster_url: null,
+      duration_s: null,
+      width: null,
+      height: null,
+      name: 'Anna',
+      rating: null,
+      verified: false,
+      sort_order: 0,
+      autoplay: true,
+      loop: true,
+      ...over,
+    });
+    const a = setup({
+      stories: [full()],
+      translations: [
+        { story_id: S1, locale: 'sv', quote: 'Bra!', subtitle: 'Stockholm' },
+      ],
+    });
+    // Older dashboard: no autoplay / loop keys -> unchanged, no write.
+    await save(a.svc, { stories: [story({ id: S1 })] });
+    expect(a.writes).not.toContain(`productStory.update:${S1}`);
+    expect(a.db.stories[0]).toMatchObject({ autoplay: true, loop: true });
+
+    // Sent values are stored (a change counts as a change).
+    const b = setup({
+      stories: [full()],
+      translations: [
+        { story_id: S1, locale: 'sv', quote: 'Bra!', subtitle: 'Stockholm' },
+      ],
+    });
+    await save(b.svc, { stories: [story({ id: S1, autoplay: false })] });
+    expect(b.writes).toContain(`productStory.update:${S1}`);
+    expect(b.db.stories[0]).toMatchObject({ autoplay: false, loop: true });
+
+    // New rows: absent -> false, present -> stored.
+    const c = setup();
+    await save(c.svc, {
+      stories: [story(), story({ autoplay: true, loop: true })],
+    });
+    expect(c.db.stories.map((st) => [st.autoplay, st.loop])).toEqual([
+      [false, false],
+      [true, true],
+    ]);
+  });
+
+  it('an image story always stores autoplay / loop false', async () => {
+    const { svc, db } = setup({ files: [ownImage] });
+    await save(svc, {
+      stories: [
+        story({ kind: 'image', url: IMG_A, autoplay: true, loop: true }),
+      ],
+    });
+    expect(db.stories[0]).toMatchObject({
+      kind: 'IMAGE',
+      autoplay: false,
+      loop: false,
+    });
+  });
+
   it('a reorder rewrites the moved rows (sort_order changed)', async () => {
     const row = (id: string, sort_order: number): Row => ({
       id,
@@ -787,6 +851,8 @@ describe('ProductsService.duplicate stories', () => {
                 rating: 4,
                 verified: true,
                 sort_order: 3,
+                autoplay: true,
+                loop: true,
                 created_at: new Date(),
                 updated_at: new Date(),
                 translations: [
@@ -837,6 +903,8 @@ describe('ProductsService.duplicate stories', () => {
         rating: 4,
         verified: true,
         sort_order: 3,
+        autoplay: true,
+        loop: true,
         translations: {
           create: [
             { locale: 'en', quote: 'Great', subtitle: 'CEO' },
@@ -908,6 +976,8 @@ describe('ProductsService.findById stories (editor GET)', () => {
         name: 'Anna',
         rating: 5,
         verified: true,
+        autoplay: false,
+        loop: false,
         translations: [{ locale: 'sv', quote: 'Bra', subtitle: null }],
       },
     ]);

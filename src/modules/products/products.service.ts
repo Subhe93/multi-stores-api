@@ -111,6 +111,12 @@ export interface PreparedProductVideo {
   height: number | null;
   position: number;
   sort_order: number;
+  /**
+   * Undefined = not sent: an existing row keeps its stored value, a new row
+   * gets false (older dashboards send the list without these keys).
+   */
+  autoplay?: boolean;
+  loop?: boolean;
 }
 
 function videoError(code: string, message: string, extra = {}): never {
@@ -133,7 +139,7 @@ export function normalizeVideoInputs(
       { max: PRODUCT_VIDEO_MAX_PER_PRODUCT },
     );
   }
-  return videos.map((v, i) => {
+  const prepared = videos.map((v, i): PreparedProductVideo => {
     let kind: PreparedProductVideo['kind'];
     let url = String(v.url ?? '').trim();
     if (v.kind === 'file') {
@@ -186,8 +192,26 @@ export function normalizeVideoInputs(
       height: v.height ?? null,
       position: v.position,
       sort_order: i,
+      ...(typeof v.autoplay === 'boolean' ? { autoplay: v.autoplay } : {}),
+      ...(typeof v.loop === 'boolean' ? { loop: v.loop } : {}),
     };
   });
+  // Featured video (CONTRACT-AUTOPLAY A1): position 0, at most one, with a
+  // poster (the poster is the LCP image of the product page).
+  const featured = prepared
+    .map((v, index) => ({ v, index }))
+    .filter(({ v }) => v.position === 0);
+  if (featured.length > 1) {
+    videoError('VIDEO_FEATURED_MULTIPLE', 'Only one video can be shown first.');
+  }
+  if (featured.length === 1 && !featured[0].v.poster_url) {
+    videoError(
+      'VIDEO_FEATURED_REQUIRES_POSTER',
+      'The video shown first needs a poster image.',
+      { index: featured[0].index },
+    );
+  }
+  return prepared;
 }
 
 /**
@@ -366,6 +390,8 @@ const STORED_STORY_SELECT = {
   rating: true,
   verified: true,
   sort_order: true,
+  autoplay: true,
+  loop: true,
   translations: { select: { locale: true, quote: true, subtitle: true } },
 } as const satisfies Prisma.ProductStorySelect;
 
@@ -1065,20 +1091,56 @@ export class ProductsService {
         .map((v) => v.id)
         .filter((id): id is string => !!id && existingIds.has(id)),
     );
-    await tx.productVideo.deleteMany({
-      where: { product_id: productId, id: { notIn: [...keep] } },
-    });
+    // Write order (CONTRACT-AUTOPLAY 3.3), required by the partial unique
+    // index "one featured (position 0) video per product": delete, update the
+    // kept rows that end at position > 0 (frees an old featured slot), then
+    // the kept row that becomes featured, then create new rows.
+    const updates: { id: string; data: Omit<PreparedProductVideo, 'id'> }[] =
+      [];
+    const creates: Omit<PreparedProductVideo, 'id'>[] = [];
     const updated = new Set<string>();
     for (const v of videos) {
       const { id, ...data } = v;
       if (id && keep.has(id) && !updated.has(id)) {
         updated.add(id);
-        await tx.productVideo.update({ where: { id }, data });
+        updates.push({ id, data });
       } else {
+        creates.push(data);
+      }
+    }
+    try {
+      await tx.productVideo.deleteMany({
+        where: { product_id: productId, id: { notIn: [...keep] } },
+      });
+      const ordered = [
+        ...updates.filter((u) => u.data.position > 0),
+        ...updates.filter((u) => u.data.position === 0),
+      ];
+      for (const { id, data } of ordered) {
+        // Absent autoplay / loop keys are left out: the stored value is kept.
+        await tx.productVideo.update({ where: { id }, data });
+      }
+      for (const data of creates) {
         await tx.productVideo.create({
-          data: { ...data, product_id: productId },
+          data: {
+            ...data,
+            autoplay: data.autoplay ?? false,
+            loop: data.loop ?? false,
+            product_id: productId,
+          },
         });
       }
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        videoError(
+          'VIDEO_FEATURED_MULTIPLE',
+          'Only one video can be shown first.',
+        );
+      }
+      throw err;
     }
   }
 
@@ -1283,6 +1345,8 @@ export class ProductsService {
         await tx.productStory.create({
           data: {
             ...data,
+            autoplay: data.autoplay ?? false,
+            loop: data.loop ?? false,
             product_id: productId,
             translations: { create: translations },
           },
@@ -2300,8 +2364,11 @@ export class ProductsService {
             duration_s: v.duration_s,
             width: v.width,
             height: v.height,
+            // 0 (featured) is copied too: the copy has at most that one row.
             position: v.position,
             sort_order: v.sort_order,
+            autoplay: v.autoplay,
+            loop: v.loop,
           })),
         });
       }
@@ -2412,6 +2479,8 @@ export class ProductsService {
             rating: st.rating,
             verified: st.verified,
             sort_order: st.sort_order,
+            autoplay: st.autoplay,
+            loop: st.loop,
             translations: {
               create: st.translations.map((t) => ({
                 locale: t.locale,

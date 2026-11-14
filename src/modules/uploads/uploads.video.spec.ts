@@ -380,6 +380,7 @@ describe('product video uploads', () => {
       accept: ['video/mp4'],
       quota_bytes: 314572800,
       used_bytes: 12345,
+      features: { featured_video: true, autoplay: true },
     });
   });
 

@@ -20,6 +20,8 @@ in `prisma/raw-sql.spec.ts` in sync when a migration adds one.
 | `OrderItemDesign_assets_gin_idx` | GIN index (`jsonb_path_ops`) on `assets` | `OrderItemDesign` | `20261027120000_designer_indexes` | `assets @> [{"asset_id": …}]` lookups of the designer orphan sweep |
 | `User_staff_email_key` | partial unique index (`WHERE store_id IS NULL`) | `User` | `20261109120000_user_store_id` | staff emails unique platform-wide; customers are unique per store via `User_store_id_email_key` (NULLs are distinct there) |
 | `User_customer_store_chk` | CHECK constraint | `User` | `20261109130000_user_store_check` | `(role = 'CUSTOMER') = (store_id IS NOT NULL)`: every customer belongs to one store, staff to none |
+| `ProductVideo_position_check` | CHECK constraint (`position >= 0`) | `ProductVideo` | `20261126120000_video_autoplay_featured` (relaxed from `>= 1`) | position 0 = featured video, never negative |
+| `ProductVideo_product_id_featured_key` | partial unique index (`WHERE position = 0`) | `ProductVideo` | `20261126120000_video_autoplay_featured` | at most one featured video per product; `syncVideos` write order and the P2002 -> `VIDEO_FEATURED_MULTIPLE` mapping depend on it. A generated `DROP INDEX` for it is expected diff output, never something to put in a migration |
 
 The invoice objects are also kept verbatim in `prisma/sql/invoice-guards.sql`
 (idempotent) so an e2e database built with `prisma db push` can re-apply them.

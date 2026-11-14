@@ -625,6 +625,8 @@ enum ProductVideoKind {
 
 /// Product gallery video (own products and provider base products).
 /// CustomProduct inherits its base product's rows (decision D5).
+/// DB: partial unique index ProductVideo_product_id_featured_key (product_id) WHERE position = 0.
+/// Raw SQL (prisma/RAW-SQL.md): never drop it when a generated diff lists it.
 model ProductVideo {
   id         String           @id @default(uuid())
   product_id String
@@ -637,10 +639,15 @@ model ProductVideo {
   duration_s Int?
   width      Int?
   height     Int?
-  /// Number of product-level images shown before this video; always >= 1 (D6).
+  /// Number of product-level images shown before this video. 0 = featured
+  /// (first gallery slot; at most one per product, needs a poster). >= 0 (DB CHECK).
   position   Int              @default(1)
   /// Tie-break among videos at the same position (index in the saved array).
   sort_order Int              @default(0)
+  /// Muted autoplay while visible (storefront rules: product-video CONTRACT-AUTOPLAY A3).
+  autoplay   Boolean          @default(false)
+  /// Loop the autoplaying video (ignored when autoplay is false).
+  loop       Boolean          @default(false)
   created_at DateTime         @default(now())
   updated_at DateTime         @updatedAt
 
@@ -2500,6 +2507,10 @@ model ProductStory {
   rating     Int?
   /// Owner-asserted "verified buyer" flag (EU Omnibus: real buyers only).
   verified   Boolean          @default(false)
+  /// Muted autoplay of a video story while visible (ignored for IMAGE).
+  autoplay   Boolean          @default(false)
+  /// Loop the autoplaying story video (ignored when autoplay is false).
+  loop       Boolean          @default(false)
   /// Index in the saved array.
   sort_order Int              @default(0)
   created_at DateTime         @default(now())

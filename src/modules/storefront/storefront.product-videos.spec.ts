@@ -24,6 +24,8 @@ const VIDEO_ROW = {
   height: 1080,
   position: 1,
   sort_order: 0,
+  autoplay: false,
+  loop: false,
   created_at: new Date('2026-11-13T10:00:00Z'),
   updated_at: new Date('2026-11-13T10:00:00Z'),
 };
@@ -37,6 +39,8 @@ const VIDEO_OUT = {
   width: 1920,
   height: 1080,
   position: 1,
+  autoplay: false,
+  loop: false,
   alt: 'Demo',
   created_at: '2026-11-13T10:00:00.000Z',
 };

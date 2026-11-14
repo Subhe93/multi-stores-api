@@ -138,6 +138,8 @@ const STORY_ROW = {
   rating: 5,
   verified: true,
   sort_order: 0,
+  autoplay: false,
+  loop: false,
   created_at: new Date('2026-11-14T10:00:00Z'),
   updated_at: new Date('2026-11-14T10:00:00Z'),
   translations: [{ locale: 'sv', quote: 'Bra!', subtitle: 'Stockholm' }],
@@ -154,6 +156,8 @@ const STORY_OUT = {
   name: 'Anna',
   rating: 5,
   verified: true,
+  autoplay: false,
+  loop: false,
   translations: [{ locale: 'sv', quote: 'Bra!', subtitle: 'Stockholm' }],
 };
 

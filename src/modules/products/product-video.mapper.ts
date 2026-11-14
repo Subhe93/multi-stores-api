@@ -13,8 +13,12 @@ export interface ProductVideoOut {
   duration_s: number | null;
   width: number | null;
   height: number | null;
-  /** Product-level images shown before this video; always >= 1. */
+  /** Product-level images shown before this video; >= 0, 0 = featured. */
   position: number;
+  /** Muted autoplay while visible (CONTRACT-AUTOPLAY A3). */
+  autoplay: boolean;
+  /** Loop the autoplaying video (only meaningful with autoplay). */
+  loop: boolean;
   alt: string | null;
   /** ISO 8601 with "Z" (JSON-LD uploadDate). */
   created_at: string;
@@ -42,7 +46,7 @@ type ProductVideoRow = Pick<
   | 'position'
   | 'created_at'
 > &
-  Partial<Pick<ProductVideo, 'sort_order'>>;
+  Partial<Pick<ProductVideo, 'sort_order' | 'autoplay' | 'loop'>>;
 
 export function toProductVideoOut(row: ProductVideoRow): ProductVideoOut {
   return {
@@ -54,6 +58,8 @@ export function toProductVideoOut(row: ProductVideoRow): ProductVideoOut {
     width: row.width ?? null,
     height: row.height ?? null,
     position: row.position,
+    autoplay: row.autoplay ?? false,
+    loop: row.loop ?? false,
     alt: row.alt_text ?? null,
     created_at: new Date(row.created_at).toISOString(),
   };
