@@ -660,22 +660,36 @@ export class StoresService {
   ): Promise<void> {
     const audit = this.securityAudit;
     if (!audit) return;
-    await audit.record({
-      actor,
-      action: 'checkout.external_return.updated',
-      targetType: 'store',
-      targetId: store.id,
-      targetLabel: store.slug,
-      fields: change.fields,
-      meta,
-    });
-    if (actor.email) {
-      audit.alert(
-        [actor.email],
-        'external_return_changed',
-        { actorEmail: actor.email, fields: change.fields, meta },
-        await audit.localeFor(actor.id),
+    // The store row is already saved: an audit or alert failure is logged
+    // (store + field names only) and never turns the change into a 500.
+    try {
+      await audit.record({
+        actor,
+        action: 'checkout.external_return.updated',
+        targetType: 'store',
+        targetId: store.id,
+        targetLabel: store.slug,
+        fields: change.fields,
+        meta,
+      });
+    } catch (err) {
+      this.logger.error(
+        `checkout.external_return.updated audit row failed for store ${store.slug} (fields: ${change.fields.join(', ')}): ${(err as Error)?.message ?? err}`,
       );
+    }
+    if (actor.email) {
+      try {
+        audit.alert(
+          [actor.email],
+          'external_return_changed',
+          { actorEmail: actor.email, fields: change.fields, meta },
+          await audit.localeFor(actor.id),
+        );
+      } catch (err) {
+        this.logger.error(
+          `external_return_changed alert failed for store ${store.slug}: ${(err as Error)?.message ?? err}`,
+        );
+      }
     }
   }
 

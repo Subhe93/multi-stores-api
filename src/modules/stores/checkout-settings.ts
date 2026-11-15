@@ -25,9 +25,9 @@ export const RETURN_MODES = ['button', 'auto'] as const;
 export type ReturnMode = (typeof RETURN_MODES)[number];
 
 /**
- * The external-site keys (headless booking P3). A body that omits ALL of them
- * keeps the stored values (see `withStoredExternalReturn`), so a client that
- * does not know them cannot wipe them.
+ * The external-site keys (headless booking P3). A body that omits any of them
+ * keeps the stored value of each omitted key (see `withStoredExternalReturn`),
+ * so a client that does not know them cannot wipe them.
  */
 export const EXTERNAL_RETURN_KEYS = [
   'external_site_url',
@@ -237,17 +237,42 @@ function normalizeLocaleLabels(
 }
 
 /**
- * When a checkout_settings body (an object) omits every external-site key,
- * carries the stored ones over so an older client saving the other keys
- * cannot drop them. `null` still clears everything.
+ * Carries the stored external-site keys a checkout_settings body (an object)
+ * omits, key by key, so a client that saves only some keys (or none, an
+ * older client) cannot wipe the others. An explicit empty
+ * `external_site_url` (null or '') still clears every external key, and
+ * `null` as the whole body still clears everything. When the body names a
+ * new site, the stored return_url is carried only if it stays on that host.
  */
 export function withStoredExternalReturn(raw: unknown, stored: unknown): unknown {
   if (!isPlainObject(raw)) return raw;
-  if (EXTERNAL_RETURN_KEYS.some((k) => k in raw)) return raw;
+  if (
+    'external_site_url' in raw &&
+    (raw.external_site_url === null ||
+      raw.external_site_url === undefined ||
+      raw.external_site_url === '')
+  )
+    return raw;
+  const missing = EXTERNAL_RETURN_KEYS.filter((k) => !(k in raw));
+  if (!missing.length) return raw;
   const current = readStoredCheckoutSettings(stored);
   if (!current.external_site_url) return raw;
   const carried: Record<string, unknown> = { ...raw };
-  for (const k of EXTERNAL_RETURN_KEYS) carried[k] = current[k];
+  for (const k of missing) {
+    if (k === 'return_url' && 'external_site_url' in raw) {
+      const site = tryParseExternalReturnUrl(
+        raw.external_site_url,
+        'external_site_url',
+      );
+      if (
+        !site ||
+        !current.return_url ||
+        !isExternalHostAllowed(current.return_url, site)
+      )
+        continue;
+    }
+    carried[k] = current[k];
+  }
   return carried;
 }
 

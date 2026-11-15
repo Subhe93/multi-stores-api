@@ -1549,6 +1549,12 @@ export class CartService {
     await this.assertLineInAccountStore(cart.account_store_id, dto);
     await this.assertStoreLive(cart.account_store_id, preLiveViewer);
     await this.assertAvailableInMarket(dto, locale, marketKey, preview);
+    // B2: the product's per-order limit counts every line of it in the
+    // cart (variants and personalized lines); custom-product lines never.
+    // Checked before the designer step so a refused add claims no design.
+    if (!dto.custom_product_id) {
+      await this.assertCartMaxPerOrder(cart.id, dto.product_id, dto.quantity);
+    }
     // M4.2 designer (C29 step 2): a line with a design, or of a product the
     // designer is active for, is validated (and the design claimed for this
     // customer) here; it carries no field values, so the field rules are
@@ -1587,12 +1593,6 @@ export class CartService {
       );
       const finalQuantity = (existing?.quantity ?? 0) + dto.quantity;
       this.assertBundleQuantityValid(offer, finalQuantity);
-    }
-
-    // B2: the product's per-order limit counts every line of it in the
-    // cart (variants and personalized lines); custom-product lines never.
-    if (!dto.custom_product_id) {
-      await this.assertCartMaxPerOrder(cart.id, dto.product_id, dto.quantity);
     }
 
     if (existing) {

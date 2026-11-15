@@ -80,6 +80,8 @@ Other keys may appear (for example `trader_details`, `went_live_at`, `created_at
 
 **Never in this payload** (removed 2026-11, task D3; the contract spec fails if they come back): `notification_email`, `status_reason`, `golive_requested_at`, `stripe_key_lock_until`, `cache_enabled`, `oss_registered`, `shipping_tax_class_id`, `checkout_settings` (raw), `meta_capi_token`, `meta_test_event_code`. The store owner reads them through the owner endpoints (`/stores/my/store`, `/taxes/my/settings`, `/mail/store/notifications`), and the web reads the cache switch through `/storefront/:slug/cache-config`.
 
+The older public route `GET /stores/:slug` (not used by the web or the dashboard) drops the same columns plus the Meta token and test code (`publicStoreRow`, list `PRIVATE_STORE_KEYS` in `src/modules/stores/store-secrets.ts`; spec `stores.capi-token.spec.ts`). External sites should read `GET /storefront/:slug`.
+
 Trimmed example (shape from the code; values illustrative):
 
 ```json

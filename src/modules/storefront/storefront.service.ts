@@ -117,20 +117,9 @@ type PricedVariant = ProductVariant & { _custom_price?: number };
  * condition / feed_excluded never reach the storefront, and `brand` is
  * served only when set (products without it keep their pre-feeds payload).
  */
-/**
- * Store columns that are private to the owner / an admin and never travel in
- * GET /storefront/:slug (nor its owner preview). Removed in fullStore; the
- * public contract spec and docs/storefront-api.md list the same keys.
- */
-export const PRIVATE_STORE_KEYS = [
-  'notification_email',
-  'status_reason',
-  'golive_requested_at',
-  'stripe_key_lock_until',
-  'cache_enabled',
-  'oss_registered',
-  'shipping_tax_class_id',
-] as const;
+// Store columns private to the owner / an admin (single list in
+// stores/store-secrets.ts, also applied by publicStoreRow on GET /stores/:slug).
+export { PRIVATE_STORE_KEYS } from '../stores/store-secrets';
 
 /**
  * The public payload of a store that is not LIVE (SPEC §3): enough for the

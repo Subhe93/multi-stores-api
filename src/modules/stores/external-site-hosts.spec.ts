@@ -285,7 +285,7 @@ describe('checkout_settings external return keys', () => {
     ]);
   });
 
-  it('withStoredExternalReturn keeps stored keys only when the body omits all of them', () => {
+  it('withStoredExternalReturn carries each stored key the body omits', () => {
     const stored = {
       external_site_url: 'https://example.se/',
       return_url: 'https://example.se/tack',
@@ -301,5 +301,60 @@ describe('checkout_settings external return keys', () => {
     expect(withStoredExternalReturn(null, stored)).toBeNull();
     const body = { phone_required: true };
     expect(withStoredExternalReturn(body, null)).toBe(body);
+  });
+
+  it('a partial body keeps the stored site and the keys it omits', () => {
+    const stored = {
+      external_site_url: 'https://example.se/',
+      return_url: 'https://example.se/tack?o={order_number}',
+      return_mode: 'auto',
+      back_label: { sv: 'Tillbaka' },
+    };
+    // Only a label: the site and the other keys stay.
+    const labelOnly = withStoredExternalReturn(
+      { back_label: { sv: 'x' } },
+      stored,
+    ) as Record<string, unknown>;
+    expect(labelOnly).toEqual({
+      back_label: { sv: 'x' },
+      external_site_url: 'https://example.se/',
+      return_url: 'https://example.se/tack?o={order_number}',
+      return_mode: 'auto',
+    });
+    const normalized = normalizeCheckoutSettingsInput(labelOnly);
+    expect(normalized).toMatchObject({
+      external_site_url: 'https://example.se/',
+      return_mode: 'auto',
+      back_label: { sv: 'x' },
+    });
+    // return_mode only, or a return_url only, keeps the site too.
+    expect(
+      withStoredExternalReturn({ return_mode: 'button' }, stored),
+    ).toMatchObject({
+      external_site_url: 'https://example.se/',
+      return_mode: 'button',
+    });
+    const urlOnly = withStoredExternalReturn(
+      { return_url: 'https://www.example.se/tack' },
+      stored,
+    );
+    expect(normalizeCheckoutSettingsInput(urlOnly)).toMatchObject({
+      external_site_url: 'https://example.se/',
+      return_url: 'https://www.example.se/tack',
+    });
+    // An explicit empty site still clears everything.
+    const clear = { external_site_url: '' };
+    expect(withStoredExternalReturn(clear, stored)).toBe(clear);
+    // A new site on another host does not drag the old return_url along.
+    expect(
+      withStoredExternalReturn(
+        { external_site_url: 'https://other.se/' },
+        stored,
+      ),
+    ).toEqual({
+      external_site_url: 'https://other.se/',
+      return_mode: 'auto',
+      back_label: { sv: 'Tillbaka' },
+    });
   });
 });

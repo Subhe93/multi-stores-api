@@ -3,7 +3,11 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { StoresService } from './stores.service';
 import { UpdateStoreDto } from './dto/store.dto';
-import { ownerStorePayload, publicStoreRow } from './store-secrets';
+import {
+  ownerStorePayload,
+  PRIVATE_STORE_KEYS,
+  publicStoreRow,
+} from './store-secrets';
 import { ProvidersService } from '../providers/providers.service';
 import { PRISMA_GLOBAL_OMIT } from '../../prisma/prisma.service';
 import type { PrismaService } from '../../prisma/prisma.service';
@@ -247,6 +251,29 @@ describe('store payloads never carry the token', () => {
     expect(res).not.toHaveProperty('meta_capi_token_set');
     expect(res).not.toHaveProperty('meta_test_event_code');
     expect(JSON.stringify(res)).not.toContain('TEST12345');
+  });
+
+  it('GET /stores/:slug (public): no owner-private column (headless P0)', async () => {
+    const privateRow = storedRow({
+      notification_email: 'owner-private@example.com',
+      status_reason: 'internal note',
+      golive_requested_at: new Date('2026-11-01T00:00:00Z'),
+      stripe_key_lock_until: new Date('2026-11-02T00:00:00Z'),
+      cache_enabled: true,
+      oss_registered: true,
+      shipping_tax_class_id: 'tc-private',
+    });
+    const { service } = build(privateRow);
+    const res = (await service.findBySlug('namez')) as Record<string, unknown>;
+    for (const key of PRIVATE_STORE_KEYS) expect(res).not.toHaveProperty(key);
+    const json = JSON.stringify(res);
+    expect(json).not.toContain('owner-private@example.com');
+    expect(json).not.toContain('tc-private');
+    // Public columns are untouched.
+    expect(res).toMatchObject({ id: 's1', slug: 'namez' });
+    // The helper itself drops the same list (providers use it too).
+    const row = publicStoreRow(privateRow) as Record<string, unknown>;
+    for (const key of PRIVATE_STORE_KEYS) expect(row).not.toHaveProperty(key);
   });
 
   it('provider store list / detail: no token, flag or test code', async () => {

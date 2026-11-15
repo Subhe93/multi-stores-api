@@ -254,6 +254,31 @@ describe('CartService max_per_order (B2b)', () => {
     expect(prisma.cartItem.update).not.toHaveBeenCalled();
   });
 
+  it('a refused add never reaches the designer step (no design claimed)', async () => {
+    const { prisma } = build(1, [row({ quantity: 1 })]);
+    const designerCart = { resolveCartLine: jest.fn(() => Promise.resolve(null)) };
+    const tax = {
+      contextFor: jest.fn(() => Promise.resolve({ pricingMode: 'INCLUSIVE' })),
+    };
+    const service = new CartService(
+      prisma as unknown as PrismaService,
+      tax as unknown as TaxService,
+      { resolve: jest.fn(() => Promise.resolve(null)) } as unknown as MarketsContextService,
+      new MarketPricingService(prisma as unknown as PrismaService),
+      {
+        isEnabled: jest.fn(() => Promise.resolve(false)),
+        resolveBuyerType: jest.fn(() => Promise.resolve('PERSON')),
+      } as unknown as B2bService,
+      buildPersonalizationCore(prisma).core,
+      undefined,
+      designerCart as unknown as ConstructorParameters<typeof CartService>[7],
+    );
+    await expect(
+      service.addItem('u1', { product_id: 'p1', quantity: 1 }),
+    ).rejects.toMatchObject({ response: { code: CART_MAX_PER_ORDER } });
+    expect(designerCart.resolveCartLine).not.toHaveBeenCalled();
+  });
+
   it('accepts up to the limit and exposes max_per_order on the line', async () => {
     const { service, prisma } = build(2, [row({ quantity: 1 })]);
     const cart = await service.addItem('u1', { product_id: 'p1', quantity: 1 });

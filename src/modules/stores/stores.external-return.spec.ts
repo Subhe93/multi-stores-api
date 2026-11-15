@@ -219,6 +219,47 @@ describe('StoresService.update external return (P3)', () => {
     });
   });
 
+  it('a partial body (a label only) keeps the stored site and return target', async () => {
+    const stored = {
+      external_site_url: SITE,
+      return_url: RETURN,
+      return_mode: 'auto',
+      back_label: { sv: 'Tillbaka' },
+    };
+    const { service, prisma, reauth, audit } = build(stored);
+    await service.update('u1', {
+      checkout_settings: { back_label: { sv: 'Till startsidan' } },
+    });
+    expect(reauth.verify).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(writtenSettings(prisma)).toMatchObject({
+      external_site_url: SITE,
+      return_url: RETURN,
+      return_mode: 'auto',
+      back_label: { sv: 'Till startsidan' },
+    });
+  });
+
+  it('an audit failure after the save is logged, not returned as an error', async () => {
+    const { service, prisma, audit } = build({ external_site_url: SITE });
+    audit.record.mockImplementationOnce(() =>
+      Promise.reject(new Error('audit down')),
+    );
+    const logSpy = jest
+      .spyOn((service as unknown as { logger: { error: () => void } }).logger, 'error')
+      .mockImplementation(() => undefined);
+    await expect(
+      service.update('u1', {
+        checkout_settings: { external_site_url: SITE, return_url: RETURN },
+      }),
+    ).resolves.toBeDefined();
+    expect(prisma.store.update).toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalled();
+    // The owner alert still goes out.
+    expect(audit.alert).toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
+
   it('stores without an external site: no prompt, no audit, unchanged stored shape', async () => {
     const { service, prisma, reauth, audit } = build();
     await service.update('u1', {

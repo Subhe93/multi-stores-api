@@ -31,17 +31,38 @@ export function ownerStorePayload<T extends object>(
 }
 
 /**
+ * Store columns that are private to the owner / an admin and never travel in
+ * a public payload: GET /storefront/:slug (fullStore), GET /stores/:slug and
+ * the provider store views (publicStoreRow). The owner reads them from
+ * /stores/my/store, /taxes/my/settings and /mail/store/notifications. The
+ * public contract spec and docs/storefront-api.md list the same keys.
+ */
+export const PRIVATE_STORE_KEYS = [
+  'notification_email',
+  'status_reason',
+  'golive_requested_at',
+  'stripe_key_lock_until',
+  'cache_enabled',
+  'oss_registered',
+  'shipping_tax_class_id',
+] as const;
+
+type PrivateStoreKey = (typeof PRIVATE_STORE_KEYS)[number];
+
+/**
  * Store row for anyone who is not the owner or an admin (public storefront,
- * providers): neither the token, nor whether one is set, nor the test code.
+ * providers): neither the token, nor whether one is set, nor the test code,
+ * nor any PRIVATE_STORE_KEYS column.
  */
 export function publicStoreRow<T extends object>(
   store: T,
-): Omit<T, 'meta_capi_token' | 'meta_test_event_code'> {
-  const rest = { ...store } as T & {
-    meta_capi_token?: string | null;
-    meta_test_event_code?: string | null;
-  };
+): Omit<T, 'meta_capi_token' | 'meta_test_event_code' | PrivateStoreKey> {
+  const rest = { ...store } as Record<string, unknown>;
   delete rest.meta_capi_token;
   delete rest.meta_test_event_code;
-  return rest;
+  for (const key of PRIVATE_STORE_KEYS) delete rest[key];
+  return rest as Omit<
+    T,
+    'meta_capi_token' | 'meta_test_event_code' | PrivateStoreKey
+  >;
 }
