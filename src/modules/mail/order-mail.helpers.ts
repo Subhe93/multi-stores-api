@@ -47,6 +47,8 @@ const ITEMS_PHRASES = {
     fileUploaded: 'File uploaded',
     // M4.1: label of a personalization item without a stored label.
     itemN: 'Item {i}',
+    // Headless booking E2: per-product note in the template preview.
+    sampleEmailNote: "Sample note for this product, e.g. 'Bring your glasses.'",
   },
   ar: {
     product: 'المنتج',
@@ -70,6 +72,8 @@ const ITEMS_PHRASES = {
     fileUploaded: 'تم رفع ملف',
     // M4.1: label of a personalization item without a stored label.
     itemN: 'القطعة {i}',
+    // Headless booking E2: per-product note in the template preview.
+    sampleEmailNote: 'ملاحظة تجريبية لهذا المنتج، مثل: «أحضر نظارتك».',
   },
   tr: {
     product: 'Ürün',
@@ -93,6 +97,8 @@ const ITEMS_PHRASES = {
     fileUploaded: 'Dosya yüklendi',
     // M4.1: label of a personalization item without a stored label.
     itemN: 'Ürün {i}',
+    // Headless booking E2: per-product note in the template preview.
+    sampleEmailNote: "Bu ürün için örnek not, ör. 'Gözlüğünüzü getirin.'",
   },
   de: {
     product: 'Produkt',
@@ -116,6 +122,9 @@ const ITEMS_PHRASES = {
     fileUploaded: 'Datei hochgeladen',
     // M4.1: label of a personalization item without a stored label.
     itemN: 'Artikel {i}',
+    // Headless booking E2: per-product note in the template preview.
+    sampleEmailNote:
+      "Beispielhinweis zu diesem Produkt, z. B. 'Bitte Brille mitbringen.'",
   },
   fr: {
     product: 'Produit',
@@ -139,6 +148,9 @@ const ITEMS_PHRASES = {
     fileUploaded: 'Fichier téléversé',
     // M4.1: label of a personalization item without a stored label.
     itemN: 'Article {i}',
+    // Headless booking E2: per-product note in the template preview.
+    sampleEmailNote:
+      "Exemple de note pour ce produit, p. ex. 'Apportez vos lunettes.'",
   },
   sv: {
     product: 'Produkt',
@@ -162,6 +174,9 @@ const ITEMS_PHRASES = {
     fileUploaded: 'Fil uppladdad',
     // M4.1: label of a personalization item without a stored label.
     itemN: 'Artikel {i}',
+    // Headless booking E2: per-product note in the template preview.
+    sampleEmailNote:
+      "Exempelanteckning för produkten, t.ex. 'Ta med dina glasögon.'",
   },
 } as const;
 
@@ -222,8 +237,13 @@ export const orderWithItemsInclude = {
     include: {
       product: {
         include: {
-          translations: true,
-          images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
+          // Opts in to the globally omitted per-product confirmation note
+          // (headless booking E2); rendered only for order_confirmation.
+          translations: { omit: { email_note: false } },
+          images: {
+            take: 1,
+            orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }],
+          },
         },
       },
       // `images` on the variant, plus variant_option_config on both product
@@ -236,7 +256,10 @@ export const orderWithItemsInclude = {
           mockup_images: { take: 1, orderBy: { sort_order: 'asc' } },
           product: {
             include: {
-              images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
+              images: {
+                take: 1,
+                orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }],
+              },
             },
           },
         },
@@ -274,7 +297,11 @@ export const orderWithItemsInclude = {
   },
 } satisfies Prisma.OrderInclude;
 
-type Translation = { locale: string; title: string };
+type Translation = {
+  locale: string;
+  title: string;
+  email_note?: string | null;
+};
 
 function pickTitle(
   translations: Translation[] | undefined,
@@ -287,6 +314,33 @@ function pickTitle(
     translations[0].title ||
     ''
   );
+}
+
+/**
+ * Per-product confirmation note (headless booking E2) in the email locale,
+ * else the store's primary locale, else English; '' when none is set.
+ */
+function pickNote(
+  translations: Translation[] | undefined,
+  locale: string,
+  primaryLocale?: string,
+): string {
+  if (!translations?.length) return '';
+  const note = (l: string | undefined) =>
+    l
+      ? (translations.find((t) => t.locale === l)?.email_note ?? '').trim()
+      : '';
+  return note(locale) || note(primaryLocale) || note('en');
+}
+
+/** Options of renderOrderItems beyond the positional arguments. */
+export interface RenderOrderItemsOptions {
+  /**
+   * Show each product's confirmation note under its line (headless booking
+   * E2). Set only for order_confirmation; without it, or when no product
+   * has a note, the output is byte-identical to the renderer without notes.
+   */
+  emailNotes?: boolean;
 }
 
 interface OrderItemForEmail {
@@ -540,9 +594,14 @@ export function renderOrderItems(
    * entry (M5.6 double-sided) shows that image under the line's image.
    */
   imageOverrides?: Readonly<Record<string, string>>,
+  options?: RenderOrderItemsOptions,
 ): { items_html: string; items_text: string } {
   const phrases = emailPhrases(locale);
   const lang = pickLocale(locale);
+  const noteOf = (item: OrderItemForEmail): string =>
+    options?.emailNotes
+      ? pickNote(item.product?.translations, lang, primaryLocale)
+      : '';
 
   if (!items.length) return { items_html: '', items_text: '' };
 
@@ -587,6 +646,12 @@ export function renderOrderItems(
             `<div style="color:#71717a;font-size:11px;margin-top:2px;">${esc(v.label)}: ${v.parts ? v.parts.map((x) => esc(x)).join(' · ') : esc(v.text)}</div>`,
         )
         .join('');
+      const note = noteOf(item);
+      // Under the qty line; nothing at all without a note.
+      const noteHtml = note
+        ? `
+    <div style="color:#3f3f46;font-size:12px;margin-top:6px;white-space:pre-line;">${esc(note)}</div>`
+        : '';
 
       return `<tr>
   <td style="padding:12px 8px;border-bottom:1px solid #e4e4e7;vertical-align:top;">
@@ -606,7 +671,7 @@ export function renderOrderItems(
   <td style="padding:12px 8px;border-bottom:1px solid #e4e4e7;vertical-align:top;font-size:13px;color:#18181b;">
     <div style="font-weight:600;">${esc(title)}</div>
     ${vLabel ? `<div style="color:#71717a;font-size:11px;margin-top:2px;">${esc(vLabel)}</div>` : ''}${valuesHtml}
-    <div style="color:#71717a;font-size:11px;margin-top:2px;">${phrases.qty}: ${item.quantity}</div>
+    <div style="color:#71717a;font-size:11px;margin-top:2px;">${phrases.qty}: ${item.quantity}</div>${noteHtml}
   </td>
   <td style="padding:12px 8px;border-bottom:1px solid #e4e4e7;vertical-align:top;text-align:end;font-size:13px;color:#18181b;font-weight:600;white-space:nowrap;">
     ${esc(formatMoney(line, currency))}
@@ -636,7 +701,17 @@ export function renderOrderItems(
     ${v.label}: ${v.text}`,
         )
         .join('');
-      return `- ${title}${vLabel ? ` (${vLabel})` : ''} × ${item.quantity} — ${formatMoney(line, currency)}${valuesText}`;
+      const note = noteOf(item);
+      const noteText = note
+        ? note
+            .split(/\r?\n/)
+            .map(
+              (l) => `
+    ${l}`,
+            )
+            .join('')
+        : '';
+      return `- ${title}${vLabel ? ` (${vLabel})` : ''} × ${item.quantity} — ${formatMoney(line, currency)}${valuesText}${noteText}`;
     })
     .join('\n');
 

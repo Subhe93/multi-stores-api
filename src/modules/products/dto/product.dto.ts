@@ -60,6 +60,14 @@ export class ProductTranslationDto {
   @IsString()
   @MaxLength(10000)
   short_description?: string | null;
+
+  // Plain-text note under this product's line in the order confirmation
+  // email (headless booking E2); never public. On update `undefined` keeps
+  // the stored value for this locale, `null` or '' clears it.
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  email_note?: string | null;
 }
 
 export class ProductAttributeValueDto {

@@ -600,6 +600,11 @@ model ProductTranslation {
   meta_desc         String?
   // Short HTML summary shown above add-to-cart (M4.4); null for most products.
   short_description String?
+  // Plain-text note shown under this product's line in the order
+  // confirmation email only (headless booking E2); null = none. Never public:
+  // globally omitted in PrismaService, opted in by the mail include and the
+  // owner product reads/writes.
+  email_note        String?
 
   product Product @relation(fields: [product_id], references: [id], onDelete: Cascade)
 

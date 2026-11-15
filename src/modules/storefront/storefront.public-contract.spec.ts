@@ -424,7 +424,7 @@ function buildCatalog() {
     {} as MarketPricingService,
     {} as TaxService,
   );
-  return { service };
+  return { service, prisma };
 }
 
 function expectProductContract(p: Record<string, unknown>) {
@@ -488,6 +488,21 @@ describe('public contract: products', () => {
     // Empty video / story relations are omitted entirely.
     expect(p).not.toHaveProperty('videos');
     expect(p).not.toHaveProperty('stories');
+  });
+
+  it('email_note (headless booking E2) is never requested nor served', async () => {
+    // PrismaService omits ProductTranslation.email_note globally; a read only
+    // gets it by naming the column. The storefront never does.
+    const { service, prisma } = buildCatalog();
+    const list = await service.getProducts('prima', {});
+    const one = await service.getProduct('prima', 'riskettan-2026-12-01');
+    expect(JSON.stringify([list, one])).not.toContain('email_note');
+    const args = [
+      ...prisma.product.findMany.mock.calls,
+      ...prisma.product.findFirst.mock.calls,
+    ];
+    expect(args.length).toBeGreaterThan(0);
+    expect(JSON.stringify(args)).not.toContain('email_note');
   });
 
   it('GET /storefront/:slug/creator-categories hides importer and rule internals', async () => {

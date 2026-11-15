@@ -1791,6 +1791,13 @@ export class MailService {
     order: OrderForEmail,
     event: OrderEmailEvent,
     localeOverride?: string,
+    /**
+     * Per-product confirmation notes under the item lines (headless booking
+     * E2); defaults to `event === 'order_confirmation'`. The preview passes
+     * it explicitly because it renders every customer event through the
+     * order_confirmation context.
+     */
+    emailNotes: boolean = event === 'order_confirmation',
   ) {
     const customerEmail = order.customer?.user?.email;
     const ownerEmail = order.storeCtx?.ownerEmail;
@@ -1826,6 +1833,7 @@ export class MailService {
       publicBase,
       order.storeCtx?.primaryLocale,
       await this.collectItemImages(order, event),
+      emailNotes ? { emailNotes: true } : undefined,
     );
 
     const orderNumber = order.order_number;
@@ -1992,7 +2000,12 @@ export class MailService {
 
     let vars: Record<string, string>;
     if (order) {
-      const ctx = await this.orderTemplateContext(order, orderEvent, locale);
+      const ctx = await this.orderTemplateContext(
+        order,
+        orderEvent,
+        locale,
+        event === 'order_confirmation',
+      );
       vars = {
         ...ctx.extraVars,
         store_name: order.storeCtx?.name ?? platformName,
@@ -2030,17 +2043,30 @@ export class MailService {
         storefrontBase,
         publicHost ?? undefined,
       );
+      // order_confirmation shows where a per-product note goes (E2).
+      const withNote = event === 'order_confirmation';
       const { items_html, items_text } = renderOrderItems(
         [
           {
             quantity: 2,
             unit_price: 299,
-            product: { translations: [{ locale, title: 'Sample product' }] },
+            product: {
+              translations: [
+                {
+                  locale,
+                  title: 'Sample product',
+                  ...(withNote && { email_note: phrases.sampleEmailNote }),
+                },
+              ],
+            },
           },
         ],
         currency,
         locale,
         publicBase,
+        undefined,
+        undefined,
+        withNote ? { emailNotes: true } : undefined,
       );
       const { totals_html, totals_text } = renderOrderTotals(
         { subtotal: 598, discount: 0, shipping: 49, total: 647, taxLines: [] },

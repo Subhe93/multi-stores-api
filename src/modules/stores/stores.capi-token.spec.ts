@@ -95,6 +95,7 @@ describe('global Prisma omit', () => {
     expect(PRISMA_GLOBAL_OMIT).toEqual({
       store: { meta_capi_token: true },
       order: { tracking_context: true },
+      productTranslation: { email_note: true },
     });
   });
 });

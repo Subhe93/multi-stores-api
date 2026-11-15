@@ -218,9 +218,15 @@ export function normalizeVideoInputs(
  * `description` / `short_description` are rendered on the storefront as
  * HTML, so they are sanitized on every write (the importer has its own
  * sanitizer). `description` is NOT NULL in the schema: empty becomes ''.
+ * `email_note` is plain text (escaped when the email renders): trimmed, and
+ * empty becomes null; `undefined` stays undefined (no key written).
  */
 function sanitizeTranslationHtml<
-  T extends { description: string; short_description?: string | null },
+  T extends {
+    description: string;
+    short_description?: string | null;
+    email_note?: string | null;
+  },
 >(t: T): T {
   return {
     ...t,
@@ -228,8 +234,28 @@ function sanitizeTranslationHtml<
     ...(t.short_description !== undefined && {
       short_description: sanitizeCreatorHtml(t.short_description),
     }),
+    ...(t.email_note !== undefined && {
+      email_note: normalizeEmailNote(t.email_note),
+    }),
   };
 }
+
+/** Plain-text email note: trimmed, empty or null = no note (null). */
+export function normalizeEmailNote(
+  note: string | null | undefined,
+): string | null {
+  const v = typeof note === 'string' ? note.trim() : '';
+  return v ? v : null;
+}
+
+/**
+ * Product translations with the globally omitted `email_note` (headless
+ * booking E2): only the owner product read / create / update result and
+ * duplicate use it. Every other translation read keeps the global omit.
+ */
+export const OWNER_PRODUCT_TRANSLATIONS = {
+  omit: { email_note: false },
+} satisfies Prisma.ProductTranslationDefaultArgs;
 
 /**
  * Public projection of `GET /products` (anonymous callers and non-owners):
@@ -297,6 +323,7 @@ export function redactProductForNonOwner<
     cost_price?: unknown;
     external_ref?: unknown;
     variants?: { external_ref?: unknown }[];
+    translations?: { email_note?: unknown }[];
     creator_categories?: {
       creator_category?: {
         external_ref?: unknown;
@@ -317,6 +344,14 @@ export function redactProductForNonOwner<
       const { external_ref: _vref, ...vr } = v;
       void _vref;
       return vr;
+    });
+  }
+  // The confirmation email note is the owner's (headless booking E2).
+  if (Array.isArray(product.translations)) {
+    out.translations = product.translations.map((t) => {
+      const { email_note: _note, ...tr } = t;
+      void _note;
+      return tr;
     });
   }
   if (Array.isArray(product.creator_categories)) {
@@ -568,7 +603,9 @@ export class ProductsService {
   }
 
   private readonly productIncludes = {
-    translations: true,
+    // Owner editor shape: includes the confirmation email note; non-owners
+    // get it stripped by redactProductForNonOwner.
+    translations: OWNER_PRODUCT_TRANSLATIONS,
     images: { orderBy: { sort_order: 'asc' as const } },
     videos: PRODUCT_VIDEOS_INCLUDE,
     stories: PRODUCT_STORIES_INCLUDE,
@@ -2049,7 +2086,12 @@ export class ProductsService {
       // One read serves the slug rule and the X19 carry-over below.
       const storedSlugs = await this.prisma.productTranslation.findMany({
         where: { product_id: id },
-        select: { locale: true, slug: true, short_description: true },
+        select: {
+          locale: true,
+          slug: true,
+          short_description: true,
+          email_note: true,
+        },
       });
       const slugCtx = await productSlugContext(this.prisma, product.creator_id);
       const slugged = await resolveProductTranslationSlugs(
@@ -2065,7 +2107,8 @@ export class ProductsService {
       );
       // Translations are deleted and recreated, so fields the client did not
       // send must be carried over or they are wiped (M4.4 X19):
-      // short_description `undefined` = keep the stored value of that locale.
+      // short_description / email_note `undefined` = keep the stored value of
+      // that locale.
       const rows = await this.withTranslationCarryOver(
         id,
         slugged,
@@ -2146,36 +2189,47 @@ export class ProductsService {
 
   /**
    * X19 carry-over for the translation delete-and-recreate in update():
-   * a translation whose `short_description` is `undefined` keeps the value
-   * stored for the same locale; `null`/'' clears it. One read, and only when
-   * some row omits the field.
+   * a translation whose `short_description` (or `email_note`, headless
+   * booking E2) is `undefined` keeps the value stored for the same locale;
+   * `null`/'' clears it. One read, and only when some row omits a field.
    */
   private async withTranslationCarryOver(
     productId: string,
     translations: ProductTranslationDto[],
-    preRead?: { locale: string; short_description: string | null }[],
+    preRead?: {
+      locale: string;
+      short_description: string | null;
+      email_note?: string | null;
+    }[],
   ): Promise<ProductTranslationDto[]> {
-    if (!translations.some((t) => t.short_description === undefined)) {
+    if (
+      !translations.some(
+        (t) => t.short_description === undefined || t.email_note === undefined,
+      )
+    ) {
       return translations.map((t) => ({
         ...t,
         short_description: t.short_description || null,
+        email_note: t.email_note || null,
       }));
     }
     const stored =
       preRead ??
       (await this.prisma.productTranslation.findMany({
         where: { product_id: productId },
-        select: { locale: true, short_description: true },
+        select: { locale: true, short_description: true, email_note: true },
       }));
-    const byLocale = new Map(
-      stored.map((r) => [r.locale, r.short_description]),
-    );
+    const byLocale = new Map(stored.map((r) => [r.locale, r]));
     return translations.map((t) => ({
       ...t,
       short_description:
         t.short_description === undefined
-          ? (byLocale.get(t.locale) ?? null)
+          ? (byLocale.get(t.locale)?.short_description ?? null)
           : t.short_description || null,
+      email_note:
+        t.email_note === undefined
+          ? (byLocale.get(t.locale)?.email_note ?? null)
+          : t.email_note || null,
     }));
   }
 
@@ -2190,7 +2244,7 @@ export class ProductsService {
     const source = await this.prisma.product.findUnique({
       where: { id },
       include: {
-        translations: true,
+        translations: OWNER_PRODUCT_TRANSLATIONS,
         images: true,
         videos: true,
         attributes: true,
@@ -2288,6 +2342,8 @@ export class ProductsService {
             // M4.4 X20: copied; external refs are never copied (the clone
             // is not the imported product).
             short_description: t.short_description,
+            // Headless booking E2: the confirmation email note is copied.
+            email_note: t.email_note,
           })),
         });
       }
