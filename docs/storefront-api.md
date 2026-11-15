@@ -249,9 +249,56 @@ Rules (applied in the shopper's browser on the product page):
 - The limits are enforced again by the API at cart add, at checkout and at payment (`CART_MAX_PER_ORDER`, `ORDER_INSUFFICIENT_STOCK`), so a hand-edited link cannot book more seats than allowed.
 - Compute `qty` from the seats the visitor chose on the custom site; do not pass seats left from a cached build as `qty` (the store clamps anyway).
 
-## 11. Returning to the custom site after payment
+## 11. Order return: back to the custom site after payment
 
-**PLANNED (P3)**: the payment confirmation always renders on the store host first. A store that opts in shows a "back to <site>" button (or an opt-in auto redirect) to a return URL it configures, for example `https://primatrafikskola.se/tack?order={order_number}`. Only the order number is passed: `?order=ORD-XXXXXXX-XXXX` (not sequential; treat it as an opaque string). There is no API to look an order up by number. On `/tack`, show static text and the number only, and strip the query from analytics `page_location` (or read the number and replace the URL) so the order number never reaches analytics.
+**Shipped in code (P3), not yet deployed.** Until the deploy, and for every store that does not set it, checkout behaves exactly as before.
+
+### 11.1 Flow
+
+1. The visitor books on the store host (for example `boka.primatrafikskola.se`) and pays with Kustom (Klarna) or Stripe.
+2. The payment provider always returns to the **store's own confirmation page** first (Kustom `merchant_urls.confirmation` and the Stripe `return_url` are unchanged). That page shows the Kustom snippet / receipt and fires the purchase tags.
+3. Only when the order is in a final good state (Kustom: `paid`; Stripe: payment succeeded, inline card, or cash on delivery, never "processing" or "failed") the page shows a **"Tillbaka till <site>"** button. In `auto` mode an 8 second countdown with a "Stay on this page" button precedes the redirect, and the redirect waits up to 3 s for the purchase tags.
+4. The visitor lands on the configured return URL, for example `https://primatrafikskola.se/tack?order=ORD-MB3K9X1-7QZP`.
+
+### 11.2 Store settings (owner dashboard: Settings, Checkout behaviour, External website)
+
+Stored in `checkout_settings` (owner endpoint `PUT /stores/my/store`):
+
+| Key | Meaning |
+|---|---|
+| `external_site_url` | The custom site, for example `https://primatrafikskola.se`. Required for everything below. Setting or replacing it asks for the owner's password (plus the 2FA code when 2FA is on). |
+| `return_url` | Optional page after payment on the same site. May contain `{order_number}`, nothing else. Empty = `external_site_url`. |
+| `return_mode` | `button` (default) or `auto`. |
+| `back_label` | Optional button text per locale (`{ "sv": "Tillbaka till Prima" }`); default "Tillbaka till <host>". |
+
+URL rules, checked when saved, again when read, and again in the browser before rendering:
+
+- `https://` only, default port only, no `user:password@`, a real domain name (no IP address, no `localhost`).
+- The `return_url` host must be **exactly** the `external_site_url` host or its `www.` twin (`primatrafikskola.se` <-> `www.primatrafikskola.se`). Subdomains (`boka.primatrafikskola.se`) and look-alikes are refused; there is no "same registrable domain" rule.
+- `{order_number}` may appear in the path, query or fragment, never in the host. It is replaced with the URL-encoded order number. No other value is ever added: no email, name, personnummer, order uuid, session or token, and no totals.
+- A refused value returns `400 CHECKOUT_EXTERNAL_URL_NOT_ALLOWED` with `field` and `reason` (`invalid_url`, `too_long`, `https_required`, `userinfo_not_allowed`, `port_not_allowed`, `host_not_allowed`, `placeholder_not_allowed`, `external_site_url_required`).
+- Every change to either URL (including clearing it) writes the security log row `checkout.external_return.updated` and emails the owner.
+
+With an external site set, the checkout logo, the checkout footer link and the "continue shopping" links (empty cart, cart page, receipt) also lead to `external_site_url` (with `rel="noreferrer"`).
+
+### 11.3 What the custom site must do on the return page (`/tack`)
+
+- Read `order` from the query only to **show** it ("Ditt bokningsnummer: ORD-..."). Order numbers are not sequential; treat them as opaque strings.
+- There is **no API to look an order up by number**, and none is planned. Show static text; the order details are in the confirmation email.
+- Remove the number from the address bar and from analytics (see 11.4) before any tag reads `page_location`.
+- Do not fire a purchase / conversion event on `/tack`: the store's confirmation page already did.
+- Expect visitors who never reach `/tack` (button mode, closed tab): it is a convenience, not a confirmation channel.
+
+### 11.4 Consent and tracking checklist (two hosts)
+
+- [ ] **Consent is per host.** The store uses a host-only `consent_<slug>` cookie; the custom site needs its own banner (Consent Mode v2). Two banners in v1 are expected; shared consent across subdomains is not supported.
+- [ ] **GA4**: the same measurement ID on both hosts is fine. With consent, `_ga` is set on `.primatrafikskola.se` by both, so no cross-domain linker is needed. Add `kustom.co`, `klarna.com`, `stripe.com` and `checkout.stripe.com` to **unwanted referrals** so the return from the payment provider does not start a new session.
+- [ ] **Purchase only on the store confirmation page.** Never send `purchase` (GA4), `Purchase` (Meta) or `CompletePayment` (TikTok) from `/tack`. Meta deduplicates on `purchase_<order uuid>`, which the custom site never sees.
+- [ ] **No order number in analytics.** On `/tack`, strip the query from `page_location` (or call `history.replaceState` to `/tack` after reading the number) before GA4 / GTM / Meta run.
+- [ ] **Referrer**: both apps send `Referrer-Policy: strict-origin-when-cross-origin` and the return links carry `rel="noreferrer"`, so the store path is not leaked to the custom site.
+- [ ] **Clarity**: the store masks the checkout and does not record the confirmation pages; recordings are not stitched across the two hosts.
+- [ ] **Cookie / privacy page** of the custom site names the vendors used on both hosts (and links to the store's cookie page).
+- [ ] **CSP** of the custom site allows GA / GTM / Meta only after consent; no `frame-ancestors` change is needed (the store is never framed).
 
 ## 12. D3 decision record (private store columns)
 
@@ -272,4 +319,4 @@ The only dashboard reader of `GET /storefront/:slug` (`previewSampleProduct.ts` 
 - Keys documented here are not removed or renamed without a new version of this file and notice to the custom-site owner.
 - New keys may be **added** at any time (nullable or optional); clients must ignore unknown keys and treat a missing optional key as "not set".
 - Keys listed as "never in this payload" stay out; `storefront.public-contract.spec.ts` enforces both lists.
-- Additive keys documented so far: `max_per_order` on product list and detail (P1). `email_note` (P4) is never served by these routes.
+- Additive keys documented so far: `max_per_order` on product list and detail (P1); inside the store `checkout` block, `external_site_url`, `return_url`, `return_mode`, `back_label` (P3, present only when the store sets an external site). `email_note` (P4) is never served by these routes.
