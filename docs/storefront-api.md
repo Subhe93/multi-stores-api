@@ -219,8 +219,35 @@ One product per course date. The Swedish title carries the date in the fixed for
 
 - Product page on the store: `https://<store custom_domain>/products/<slug>` where `<slug>` is the product's primary-locale `translations[].slug` (for Prima: the `sv` slug), for example `https://boka.primatrafikskola.se/products/riskettan-2026-12-01`.
 - Without a custom domain the store lives on the platform host under the store slug; use `custom_domain` from 3.1 when it is set.
-- **PLANNED (P1, B3)**: `?qty=N` pre-selects N seats on the product page, for example `.../products/riskettan-2026-12-01?qty=2`. Rules: integer 1 or more; clamped on the store to the seats left and to `max_per_order`; anything else is ignored (quantity stays 1); it never adds to the cart by itself. Before P1 is deployed the parameter is ignored, so the link is safe to use early.
+- `?qty=N` pre-selects N seats on the product page; see 10.1.
 - Do not put personal data in links (no names, emails, personnummer).
+
+### 10.1 Pre-selecting seats: `?qty=N`
+
+**PLANNED (P1, B3)**: the store web part ships with P1. Before it is deployed the parameter is ignored (quantity stays 1), so links that carry it are safe to publish early.
+
+Format: append `qty` to the product link from section 10.
+
+```
+https://boka.primatrafikskola.se/products/riskettan-2026-12-01?qty=2
+https://boka.primatrafikskola.se/products/riskettan-2026-12-01?qty=2&utm_source=primatrafikskola.se
+```
+
+Rules (applied in the shopper's browser on the product page):
+
+| `qty` value | Quantity shown |
+|---|---|
+| missing | 1 (unchanged behaviour) |
+| integer N, 1 or more, within the limits | N |
+| integer above the limit | the limit (clamped) |
+| `0`, negative, decimal (`2.5`), text (`abc`), empty | ignored, quantity stays 1 |
+
+- **Limit** = the smallest of the seats left (`stock_quantity` when `track_inventory` is true; for a product with variants, the selected variant's stock) and `max_per_order` (section 3.2; null = no limit). A product that sells in fixed steps rounds the limit down to a whole step.
+- A sold-out product shows as sold out; `qty` does not change that.
+- The value only pre-fills the quantity selector. It **never adds to the cart** by itself and does not skip the participant fields; the shopper still presses "Boka".
+- The page renders with quantity 1 on the server and applies `qty` right after load, so cached pages are shared between links with different `qty` values.
+- The limits are enforced again by the API at cart add, at checkout and at payment (`CART_MAX_PER_ORDER`, `ORDER_INSUFFICIENT_STOCK`), so a hand-edited link cannot book more seats than allowed.
+- Compute `qty` from the seats the visitor chose on the custom site; do not pass seats left from a cached build as `qty` (the store clamps anyway).
 
 ## 11. Returning to the custom site after payment
 
