@@ -1,0 +1,248 @@
+# Storefront API (public, read-only): contract for external sites
+
+Audience: a developer building a custom website (for example `primatrafikskola.se`) that shows a ShopsDoor store's catalogue (courses, dates, prices, seats) and sends visitors to the ShopsDoor store (for example `boka.primatrafikskola.se`) to book and pay.
+
+This file is the single source for that work. The contract is enforced by `src/modules/storefront/storefront.public-contract.spec.ts`; change both together.
+
+Status markers: **LIVE** = deployed behaviour. **PLANNED (Pn)** = agreed in `plans/headless-booking/PLAN.md`, not built yet; do not depend on it before the phase is deployed.
+
+---
+
+## 1. Base, auth, envelope, errors
+
+- Base URL: `https://<api-host>/api` (all routes below are under the global prefix `/api`). The production API host is given to you by the platform owner; keep it in an env var (`SHOPSDOOR_API_URL`).
+- Store identifier: the store **slug** (`:slug`), for example `prima`. It never changes after the store is created.
+- Auth: none. These routes are public. Do **not** send `Authorization: Bearer ...`: on these routes a bearer is read as an owner/admin "viewer" (owner preview of a non-LIVE store). An anonymous request always sees the public view.
+- Method: `GET` only. No request body.
+- Success envelope (every route):
+
+```json
+{ "success": true, "data": <payload>, "timestamp": "2026-11-15T10:00:00.000Z" }
+```
+
+  Always read `data`. The examples below show `data` only.
+- Error envelope:
+
+```json
+{ "success": false, "statusCode": 404, "code": "STOREFRONT_STORE_NOT_FOUND", "message": "Store not found" }
+```
+
+  Branch on `statusCode` and `code`, never on `message` (English, may change). Codes you can meet: `STOREFRONT_STORE_NOT_FOUND` (unknown or suspended store, 404), `STOREFRONT_PRODUCT_NOT_FOUND` (404), `MARKET_NOT_FOUND` / `MARKET_NOT_LIVE` (only when you pass `?market=`; do not).
+- Dates are ISO 8601 strings in UTC. Money values are JSON numbers in major units (`4500` = 4 500 SEK, `199.5` = 199.50).
+
+## 2. Public gate (store not LIVE)
+
+Only a store with `status: "LIVE"` serves its catalogue. While the store is being set up (DRAFT, PENDING_REVIEW, CHANGES_REQUESTED) or PAUSED:
+
+| Route | Answer |
+|---|---|
+| `GET /storefront/:slug` | 200 with a small "closed shell": `{ slug, name, logo_url, status, coming_soon, paused, is_active: false, indexing: "noindex", language_config, theme... }` and no catalogue keys |
+| `GET /storefront/:slug/products` | 200 `[]` |
+| `GET /storefront/:slug/products/:productSlug` | 404 `STOREFRONT_STORE_NOT_FOUND` |
+| `GET /storefront/:slug/creator-categories` | 200 `[]` |
+| `GET /storefront/:slug/sitemap-data` | 200 with empty lists |
+
+SUSPENDED and unknown slugs: 404 on every route.
+
+Consequence for a custom site built before go-live: a staging build sees an empty catalogue until the store is LIVE. Treat `[]` as "no courses right now", and **fail the build** (do not publish an empty site) when the store payload has `coming_soon` or `paused` set to `true`.
+
+## 3. Routes
+
+### 3.1 `GET /storefront/:slug`: store
+
+Query: none needed (`market` and `preview` are internal, do not send them).
+
+Documented keys (LIVE store):
+
+| Key | Type | Meaning |
+|---|---|---|
+| `id` | string (uuid) | Store id |
+| `slug` | string | Store slug |
+| `name` | string | Store name |
+| `description` | string or null | Store description |
+| `logo_url`, `favicon_url` | string or null | Media URL (see section 6) |
+| `custom_domain` | string or null | The store's own host (for example `boka.primatrafikskola.se`); booking links go there |
+| `status` | `"LIVE"` | Lifecycle state (other values only in the closed shell) |
+| `is_active` | boolean | `true` when LIVE |
+| `store_type` | `"INDEPENDENT"` or `"MARKETPLACE"` | Prima is INDEPENDENT |
+| `currency` | string (ISO 4217) | Currency of every price (for example `"SEK"`) |
+| `language_config` | object | `{ primary_locale, secondary_locales[], fallback_locale, auto_translate, ... }` |
+| `tax` | object | `{ pricing_mode: "INCLUSIVE" or "EXCLUSIVE", display_prices_incl_tax: boolean, country: "SE", registrant: "STORE" or "PLATFORM" }` (section 5) |
+| `seller_details` | object or null | Legal trader identity (company name, org number, address, support email) |
+| `card_payments_enabled`, `kustom_enabled` | boolean | Payment methods available on the store |
+| `apps` | object | Enabled store apps by key (`{}` when none) |
+| `tracking` | object | Public analytics ids of the store (`ga4_measurement_id`, `meta_pixel_id`, `tiktok_pixel_id`, `clarity_project_id`, `consent_required`). These belong to the store host; the custom site uses its own |
+| `pages` | array | Published pages `{ slug, sort_order, translations: [{ locale, title }] }` |
+| `cookie_page_slug` | string or null | Slug of the store's cookie page |
+| `theme_key`, `theme_customizations`, `theme` | various | Store design data; ignore on a custom site |
+
+Other keys may appear (for example `trader_details`, `went_live_at`, `created_at`, `creator`, `checkout` when the store overrides checkout defaults). Ignore keys you do not use.
+
+**Never in this payload** (removed 2026-11, task D3; the contract spec fails if they come back): `notification_email`, `status_reason`, `golive_requested_at`, `stripe_key_lock_until`, `cache_enabled`, `oss_registered`, `shipping_tax_class_id`, `checkout_settings` (raw), `meta_capi_token`, `meta_test_event_code`. The store owner reads them through the owner endpoints (`/stores/my/store`, `/taxes/my/settings`, `/mail/store/notifications`), and the web reads the cache switch through `/storefront/:slug/cache-config`.
+
+Trimmed example (shape from the code; values illustrative):
+
+```json
+{
+  "id": "6f1c...", "slug": "prima", "name": "Prima Trafikskola",
+  "description": null, "logo_url": "/uploads/stores/prima/logo.webp", "favicon_url": null,
+  "custom_domain": "boka.primatrafikskola.se", "status": "LIVE", "is_active": true,
+  "store_type": "INDEPENDENT", "currency": "SEK",
+  "language_config": { "primary_locale": "sv", "secondary_locales": ["en"], "fallback_locale": "en", "auto_translate": false },
+  "tax": { "pricing_mode": "INCLUSIVE", "display_prices_incl_tax": true, "country": "SE", "registrant": "STORE" },
+  "seller_details": { "legal_name": "Prima Trafikskola AB", "org_number": "556...", "city": "...", "support_email": "..." },
+  "card_payments_enabled": false, "kustom_enabled": true, "apps": {},
+  "pages": [{ "slug": "villkor", "sort_order": 0, "translations": [{ "locale": "sv", "title": "Villkor" }] }],
+  "cookie_page_slug": null
+}
+```
+
+### 3.2 `GET /storefront/:slug/products`: product (course date) list
+
+Query parameters:
+
+| Param | Meaning |
+|---|---|
+| `creator_category=<collection slug>` | Only products in that collection (use one collection per course type, for example `riskettan`). Unknown or internal collections return `[]` |
+| `search=<text>` | Case-insensitive match on any translation title |
+| `category_id=<uuid>` | Platform taxonomy (not the store's collections); not needed |
+| `page`, `limit` | **Accepted and ignored**: the list is **not paginated**; you get every PUBLISHED product of the store (or of the collection) in one array |
+
+Order: newest product first (`created_at desc`). A MANUAL collection filtered with `creator_category` is returned in the owner's drag order. Sort course dates yourself (see section 7).
+
+Payload: a plain JSON array. Each own product item:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `id` | string (uuid) | Product id |
+| `status` | `"PUBLISHED"` | Only published products are listed |
+| `product_type` | string | `TRADITIONAL` for courses |
+| `base_price` | number | Price in `currency` (section 5) |
+| `compare_at_price` | number (optional) | "Before" price; key absent when not set |
+| `sku` | string or null | Owner's SKU |
+| `track_inventory` | boolean | Whether stock is counted (section 4) |
+| `stock_quantity` | number or null | Remaining seats of a product **without variants** |
+| `is_featured` | boolean | Owner's highlight flag |
+| `variant_option_config` | object or null | Option labels/swatches (ignore for courses) |
+| `translations` | array | `{ locale, title, description (HTML), slug, short_description, meta_title, meta_desc }` per locale |
+| `images` | array | **First image only** in the list: `{ url, alt_text, sort_order, is_featured, ... }` |
+| `variants` | array | Active variants: `{ id, options: { <name>: <value> }, sku, price, compare_at_price?, stock, stock_quantity, ... }` |
+| `category` | object or null | Platform category |
+| `promotions` | array | Active automatic promotions that apply: `{ id, type, value, translations }` |
+| `brand` | string (optional) | Only when set |
+| `created_at`, `updated_at` | string | ISO dates |
+| `max_per_order` | number or null | **PLANNED (P1, B2a)**: maximum quantity of this product in one order; null = no limit. Additive key |
+
+Product-level columns that are never served: `cost_price`, `external_ref`, `gtin`, `mpn`, `google_product_category`, `condition`, `feed_excluded`; variant `external_ref`.
+
+Size: the list carries every product with its translations (HTML descriptions included). Fetch it once per build/revalidation, not per page view, and filter by collection when possible. (Measured payload size of the Prima store: to fill in at P6 when the courses exist.)
+
+Trimmed example item:
+
+```json
+{
+  "id": "a3b1...", "status": "PUBLISHED", "product_type": "TRADITIONAL",
+  "base_price": 4500, "track_inventory": true, "stock_quantity": 3,
+  "translations": [{ "locale": "sv", "title": "Riskettan 2026-12-01 17:00", "slug": "riskettan-2026-12-01", "description": "<p>...</p>", "short_description": null }],
+  "images": [{ "url": "/uploads/products/risk1.webp", "alt_text": null, "sort_order": 0, "is_featured": true }],
+  "variants": [], "promotions": [],
+  "created_at": "2026-11-01T10:00:00.000Z", "updated_at": "2026-11-02T10:00:00.000Z"
+}
+```
+
+### 3.3 `GET /storefront/:slug/products/:productSlug`: one product
+
+`:productSlug` is any locale's `translations[].slug` (URL-encode it). Same core keys as the list item, plus: the full product gallery in `images` (product-level images, featured first), `variants[].images`, `custom_fields` (participant fields the booking page asks for), `faqs`, `attributes`, `creator_categories`, `primary_collection` keys, `shipping_profile`, `bundles`, and optional `videos` / `stories` (absent when empty). 404 `STOREFRONT_PRODUCT_NOT_FOUND` for an unknown or unpublished slug.
+
+You normally do not need this route on the custom site: the list has everything for a course table. Use it for a course detail page if the site has one.
+
+### 3.4 `GET /storefront/:slug/creator-categories`: collections
+
+The store's active PUBLIC collections as a tree: `[{ id, slug, parent_id, thumbnail_url, sort_order, path: ["parent", "child"], translations: [{ locale, name, description, long_description, meta_title, meta_desc }], children: [...] }]`. Use `slug` as the `creator_category` filter of 3.2. Rule and importer internals (`match_rule`, `match_tags`, `external_ref`, `creator_id`) are never served.
+
+### 3.5 Other public routes you may use
+
+| Route | Use |
+|---|---|
+| `GET /storefront/:slug/sitemap-data` | Product slugs + `lastmod`, collections, pages, locales (for redirect maps or your own sitemap) |
+| `GET /storefront/:slug/legal` and `/storefront/:slug/legal/:slug?locale=sv` | The store's legal pages (terms, privacy, refund, shipping). Link to them on the store host rather than copying them |
+| `GET /storefront/:slug/cache-config` | `{ enabled: boolean }`: whether the store wants caching (section 8) |
+
+Everything else under `/storefront/:slug/...` (menus, v2 page snapshots, templates) is internal to the ShopsDoor storefront; do not depend on it.
+
+## 4. Seats (stock) rules
+
+A course date is **one product**; its stock is the number of seats.
+
+- Product **without variants**: seats left = `stock_quantity` when `track_inventory` is `true`. `stock_quantity` null = unlimited. Sold out when `track_inventory && stock_quantity <= 0`.
+- Product **with variants** (for example a language option): each `variants[].stock` is that variant's seats; an untracked variant is served as `stock: 999`. The product is sold out only when **every** variant has `stock <= 0`.
+- This is the same rule the store uses (`multi-stores-web/src/lib/productAvailability.ts`) and the rule checkout enforces. Show "N platser kvar" from these numbers and "Fullbokat" when sold out.
+
+**Seat holds by unpaid orders.** Stock is taken when an order is created, before payment. An order that is never paid gives its seats back after **2 hours** (card / Stripe orders) or **6 hours** (Kustom orders created first). The release runs when the next order is placed on the platform (no scheduler), so an unpaid hold can last a little longer than that on a quiet day. With the Kustom session flow (the store creates the order only when Kustom validates the purchase) no seat is held while the visitor is still filling in the Klarna form. Consequence: the count you show can be briefly lower than the real free seats, never higher; overbooking is refused at checkout.
+
+## 5. Prices and tax
+
+- All prices are in the store payload's `currency` (one currency per store; never convert).
+- Own product price: `base_price`. A variant's price: `variants[].price` (= `base_price` + the variant's adjustment). Show the variant price when a visitor chooses a variant, otherwise `base_price`; "from" = the lowest active variant price.
+- Tax: with `tax.pricing_mode = "INCLUSIVE"` (Prima) every price **includes** VAT; show it as is ("inkl. moms"). With `"EXCLUSIVE"` the prices exclude VAT and `tax.display_prices_incl_tax` tells the store how it displays them; the exact tax is computed at checkout from the buyer's address. Courses are usually VAT exempt or 25 %; do not compute VAT yourself.
+- `compare_at_price` (when present and higher) is a "before" price; `promotions[]` are automatic discounts the store applies at checkout. Showing them is optional.
+
+## 6. Media URLs
+
+`images[].url`, `logo_url` and similar are either absolute (`https://...`, files on object storage) or **relative to the API origin** (`/uploads/products/x.webp`). Resolve a relative URL against the API origin (the base URL without `/api`), exactly like the store does:
+
+```ts
+const resolveMedia = (u?: string | null) =>
+  !u ? '' : /^https?:\/\//.test(u) ? u : `${API_ORIGIN}${u}`;
+```
+
+If you use `next/image`, allow the API host and the object-storage host in `images.remotePatterns`.
+
+## 7. Course date convention (Prima)
+
+One product per course date. The Swedish title carries the date in the fixed format `YYYY-MM-DD HH:mm` (Europe/Stockholm local time), for example `Riskettan 2026-12-01 17:00`. Parse it from the `sv` translation title with `/(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/`; hide products whose date is in the past; group by collection (`creator_category`). A title without a parsable date is a non-dated product (show it without a date, do not crash).
+
+## 8. Caching and freshness
+
+- The API sends no `Cache-Control`; caching is the caller's job.
+- Recommended on the custom site: server-side fetch with ISR/revalidate **60 s** for course lists; a seat count that must be fresher can be read through your own small server route cached about 15 s. Never cache a non-2xx answer.
+- The ShopsDoor store itself caches pages per store; a store with caching switched off (`cache-config` answers `{ "enabled": false }`, set for the Prima store) always renders fresh seats on the booking pages.
+- There is no push notification of seat changes today (webhooks are a possible later phase, P5).
+
+## 9. Rate limits and CORS
+
+- The storefront routes are not throttled per IP (they are read by the store's own server). Be a good citizen anyway: at build time fetch with limited concurrency (2 to 4 parallel requests), retry on 429/5xx with backoff, and do not poll.
+- **Call the API server-side** (Next.js server components, route handlers, build step). Browser calls from another site are not part of this contract: in production CORS allows only the platform's own hosts (`CORS_ALLOWED_ORIGINS`) and the stores' own domains, so a browser `fetch` from `primatrafikskola.se` is rejected. Server-side calls send no `Origin` and are not affected by CORS.
+- An optional per-store API key (`X-Storefront-Token`) and allowed-origins list are **PLANNED (P2, optional)**; until then no key is needed.
+
+## 10. Linking into the booking store
+
+- Product page on the store: `https://<store custom_domain>/products/<slug>` where `<slug>` is the product's primary-locale `translations[].slug` (for Prima: the `sv` slug), for example `https://boka.primatrafikskola.se/products/riskettan-2026-12-01`.
+- Without a custom domain the store lives on the platform host under the store slug; use `custom_domain` from 3.1 when it is set.
+- **PLANNED (P1, B3)**: `?qty=N` pre-selects N seats on the product page, for example `.../products/riskettan-2026-12-01?qty=2`. Rules: integer 1 or more; clamped on the store to the seats left and to `max_per_order`; anything else is ignored (quantity stays 1); it never adds to the cart by itself. Before P1 is deployed the parameter is ignored, so the link is safe to use early.
+- Do not put personal data in links (no names, emails, personnummer).
+
+## 11. Returning to the custom site after payment
+
+**PLANNED (P3)**: the payment confirmation always renders on the store host first. A store that opts in shows a "back to <site>" button (or an opt-in auto redirect) to a return URL it configures, for example `https://primatrafikskola.se/tack?order={order_number}`. Only the order number is passed: `?order=ORD-XXXXXXX-XXXX` (not sequential; treat it as an opaque string). There is no API to look an order up by number. On `/tack`, show static text and the number only, and strip the query from analytics `page_location` (or read the number and replace the URL) so the order number never reaches analytics.
+
+## 12. D3 decision record (private store columns)
+
+Before the seven columns were removed, `multi-stores-web/src` and `multi-stores-dashboard/src` were searched for each key, and the source endpoint of every reader was checked:
+
+| Key | Readers found | Source endpoint | Public reader? |
+|---|---|---|---|
+| `notification_email` | dashboard `OrderNotificationsCard.tsx` | `/mail/store/notifications` | no |
+| `status_reason`, `golive_requested_at` | dashboard `useStorefrontUrl.ts`, `StoreStatusCard.tsx`, `creator/store/page.tsx`, admin stores page | `/stores/my/store`, admin stores API | no |
+| `stripe_key_lock_until` | none | - | no |
+| `cache_enabled` | web `src/lib/api.ts`; dashboard `creator/settings/page.tsx` | `/storefront/:slug/cache-config`; `/stores/my/store` | no |
+| `oss_registered`, `shipping_tax_class_id` | dashboard `taxRate.ts`, `creator/settings/page.tsx`, admin taxes page | `/taxes/my/settings`, `/taxes/admin/settings` | no |
+
+The only dashboard reader of `GET /storefront/:slug` (`previewSampleProduct.ts` `loadPreviewStoreInfo`) reads `currency`, `apps` and `tax`; the web reads `seller_details ?? trader_details`. All seven keys were therefore removed; none was kept.
+
+## 13. Stability policy
+
+- Keys documented here are not removed or renamed without a new version of this file and notice to the custom-site owner.
+- New keys may be **added** at any time (nullable or optional); clients must ignore unknown keys and treat a missing optional key as "not set".
+- Keys listed as "never in this payload" stay out; `storefront.public-contract.spec.ts` enforces both lists.
+- Additive keys documented so far: `max_per_order` on product list and detail (P1). `email_note` (P4) is never served by these routes.

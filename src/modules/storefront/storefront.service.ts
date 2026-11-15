@@ -118,6 +118,21 @@ type PricedVariant = ProductVariant & { _custom_price?: number };
  * served only when set (products without it keep their pre-feeds payload).
  */
 /**
+ * Store columns that are private to the owner / an admin and never travel in
+ * GET /storefront/:slug (nor its owner preview). Removed in fullStore; the
+ * public contract spec and docs/storefront-api.md list the same keys.
+ */
+export const PRIVATE_STORE_KEYS = [
+  'notification_email',
+  'status_reason',
+  'golive_requested_at',
+  'stripe_key_lock_until',
+  'cache_enabled',
+  'oss_registered',
+  'shipping_tax_class_id',
+] as const;
+
+/**
  * The public payload of a store that is not LIVE (SPEC §3): enough for the
  * web to render a branded "coming soon" / "temporarily closed" page (name,
  * logo, theme tokens, locales) and nothing of the catalog. `indexing` tells
@@ -966,6 +981,17 @@ export class StorefrontService {
       // the test event code never travel to the storefront.
       meta_capi_token: _metaCapiToken,
       meta_test_event_code: _metaTestEventCode,
+      // Owner/admin-only columns (headless contract D3, PRIVATE_STORE_KEYS):
+      // the owner reads them from /stores/my/store, /taxes/my/settings and
+      // /mail/store/notifications, never from this public payload. The tax
+      // pair still feeds `tax` above through buildTaxContext(store).
+      notification_email: _notificationEmail,
+      status_reason: _statusReason,
+      golive_requested_at: _goliveRequestedAt,
+      stripe_key_lock_until: _stripeKeyLockUntil,
+      cache_enabled: _cacheEnabled,
+      oss_registered: _ossRegistered,
+      shipping_tax_class_id: _shippingTaxClassId,
       ...storeRow
     } = store;
     const checkout = publicCheckoutSettings(rawCheckoutSettings);
