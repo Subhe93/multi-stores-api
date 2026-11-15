@@ -1,5 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import type { TraderVatCheck } from './trader-vat-check';
+import { luhnValid, normalizeSwedishOrgNumber } from '@multi-stores/core/se-id';
+
+// Luhn and the 10-digit normalisation live in @multi-stores/core/se-id
+// (shared with the personnummer field format); re-exported for callers.
+export { luhnValid, normalizeSwedishOrgNumber };
 
 /**
  * Legal trader identity of a store (SPEC §1): what e-handelslagen 8 § and
@@ -25,39 +30,6 @@ export interface TraderDetails {
 }
 
 export const VAT_NUMBER_PATTERN = /^[A-Z]{2}[A-Z0-9]{2,12}$/;
-
-/** Luhn (mod 10) checksum over a digit string. */
-export function luhnValid(digits: string): boolean {
-  if (!/^\d+$/.test(digits)) return false;
-  let sum = 0;
-  let double = false;
-  for (let i = digits.length - 1; i >= 0; i--) {
-    let d = Number(digits[i]);
-    if (double) {
-      d *= 2;
-      if (d > 9) d -= 9;
-    }
-    sum += d;
-    double = !double;
-  }
-  return sum % 10 === 0;
-}
-
-/**
- * Digits of a Swedish org number / personnummer as the checksum sees them:
- * 10 digits. Accepts "556016-0680", "5560160680", a 12-digit personnummer
- * with century (the 19/20 prefix is dropped) and the "16" prefix some
- * sources put in front of org numbers. Null when the shape is wrong.
- */
-export function normalizeSwedishOrgNumber(raw: string): string | null {
-  const digits = raw.replace(/[\s\-+]/g, '');
-  if (!/^\d+$/.test(digits)) return null;
-  if (digits.length === 10) return digits;
-  if (digits.length === 12 && /^(16|18|19|20)/.test(digits)) {
-    return digits.slice(2);
-  }
-  return null;
-}
 
 /** 10 digits with a valid Luhn checksum (companies and private persons). */
 export function isValidSwedishOrgNumber(raw: string): boolean {

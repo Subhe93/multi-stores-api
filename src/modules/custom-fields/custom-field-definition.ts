@@ -4,6 +4,7 @@ import {
   charCount,
   isPlainObject,
   isValidAllowedChars,
+  isValidationFormat,
   patternProblem,
   PERSONALIZATION_LIMITS,
 } from '@multi-stores/core/personalization/rules';
@@ -13,7 +14,8 @@ import {
  *
  * - `validation_rules`: `{min_length?, max_length?, pattern?, allowed_chars?,
  *   min_checked?, max_checked?}`; `min_checked`/`max_checked` (CHECKBOX_GROUP,
- *   M4.1 C17) are integers 0–50; length bounds are integers 0–5000 (NUMBER fields reuse them as value bounds,
+ *   M4.1 C17) are integers 0–50; `format` is a built-in format name
+ *   (`VALIDATION_FORMATS`, e.g. 'personnummer'); length bounds are integers 0–5000 (NUMBER fields reuse them as value bounds,
  *   W12), `pattern` and `allowed_chars` must compile under the storefront's
  *   rules, and `pattern` must pass the ReDoS heuristic (`isPatternSafe`,
  *   `params.reason`: invalid | too_long | unsafe). Unknown keys are refused.
@@ -40,6 +42,7 @@ const RULE_KEYS = new Set([
   'allowed_chars',
   'min_checked',
   'max_checked',
+  'format',
 ]);
 const MAX_BOUND = 5000;
 const MAX_CHECKED_BOUND = 50;
@@ -103,6 +106,13 @@ export function sanitizeValidationRules(raw: unknown): JsonInput {
     if (value === null || value === undefined || value === '') continue;
     if (typeof value !== 'string') {
       fail(CUSTOM_FIELD_INVALID_RULES, `${key} must be a string`);
+    }
+    if (key === 'format') {
+      if (!isValidationFormat(value)) {
+        fail(CUSTOM_FIELD_INVALID_RULES, `Unknown format "${value}"`);
+      }
+      out[key] = value;
+      continue;
     }
     const problem = key === 'pattern' ? patternProblem(value) : null;
     if (problem === 'unsafe') {

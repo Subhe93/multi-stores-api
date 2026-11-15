@@ -2,6 +2,7 @@ import { ConflictException } from '@nestjs/common';
 import { Prisma, UserRole } from '@prisma/client';
 import { CustomFieldsService } from './custom-fields.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { sanitizeValidationRules } from './custom-field-definition';
 
 // M4.0 §3.2 / §6.2: merchant rules are checked at save time (coded 400s),
 // `null` clears a rule, links point at a sibling field name, names are unique
@@ -337,5 +338,27 @@ describe('CustomFieldsService definitions (M4.0)', () => {
     const p = svc(makePrisma({ deleteError: err })).delete('f1', 'u', ADMIN);
     await expect(p).rejects.toBeInstanceOf(ConflictException);
     expect(await code(p)).toBe('CUSTOM_FIELD_IN_USE');
+  });
+});
+
+// Headless booking B1c: `format` is a known rule key; only built-in formats
+// are stored, and an empty value clears it like the other string rules.
+describe('sanitizeValidationRules format (B1c)', () => {
+  it('stores personnummer, refuses an unknown format, drops an empty one', () => {
+    expect(sanitizeValidationRules({ format: 'personnummer' })).toEqual({
+      format: 'personnummer',
+    });
+    expect(
+      sanitizeValidationRules({ format: 'personnummer', max_length: 13 }),
+    ).toEqual({ format: 'personnummer', max_length: 13 });
+    expect(() => sanitizeValidationRules({ format: 'iban' })).toThrow(
+      expect.objectContaining({
+        response: expect.objectContaining({
+          code: 'CUSTOM_FIELD_INVALID_RULES',
+        }),
+      }),
+    );
+    expect(() => sanitizeValidationRules({ format: 7 })).toThrow();
+    expect(sanitizeValidationRules({ format: '' })).toBe(Prisma.DbNull);
   });
 });

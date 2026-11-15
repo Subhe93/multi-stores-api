@@ -331,6 +331,15 @@ export class CreateProductDto {
   @Type(() => Number)
   stock_quantity?: number;
 
+  // Most units of this product per order (summed across variants and
+  // personalized lines); null = unlimited. Absent on update keeps the value.
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsInt()
+  @Min(1)
+  @Max(9999)
+  max_per_order?: number | null;
+
   @IsOptional()
   @IsNumber()
   @Type(() => Number)
@@ -511,6 +520,15 @@ export class UpdateProductDto {
   @IsNumber()
   @Type(() => Number)
   stock_quantity?: number;
+
+  // Most units of this product per order (summed across variants and
+  // personalized lines); null = unlimited. Absent on update keeps the value.
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsInt()
+  @Min(1)
+  @Max(9999)
+  max_per_order?: number | null;
 
   @IsOptional()
   @IsNumber()

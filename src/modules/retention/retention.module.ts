@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { RetentionController } from './retention.controller';
 import { RetentionScheduler } from './retention.scheduler';
 import { RetentionService } from './retention.service';
+import { ParticipantDataRetentionService } from './participant-data-retention.service';
 
 /**
  * Generic retention job (M4.5 C22). Global so any module can register a task
@@ -10,7 +11,12 @@ import { RetentionService } from './retention.service';
 @Global()
 @Module({
   controllers: [RetentionController],
-  providers: [RetentionService, RetentionScheduler],
+  providers: [
+    RetentionService,
+    RetentionScheduler,
+    // Headless booking GD1: abandoned Kustom sessions, idle cart personnummer.
+    ParticipantDataRetentionService,
+  ],
   exports: [RetentionService],
 })
 export class RetentionModule {}

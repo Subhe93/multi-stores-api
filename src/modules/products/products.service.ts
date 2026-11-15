@@ -2234,6 +2234,7 @@ export class ProductsService {
           sku: null,
           track_inventory: source.track_inventory,
           stock_quantity: source.stock_quantity,
+          max_per_order: source.max_per_order,
           weight: source.weight,
           weight_unit: source.weight_unit,
           variant_option_config: source.variant_option_config ?? undefined,

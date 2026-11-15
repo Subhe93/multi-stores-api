@@ -585,3 +585,153 @@ describe('OrdersService personalization (M4.0)', () => {
     expect(prisma.productCustomField.findMany).toHaveBeenCalledTimes(1);
   });
 });
+
+// Headless booking B1c / B2c: a personnummer-format field and the product's
+// max_per_order are enforced on the quote (Kustom session pricing) and on
+// order create, whatever the storefront sent.
+describe('OrdersService booking rules (B1c, B2c)', () => {
+  const F_PNR = '66666666-6666-4666-8666-666666666666';
+  const PNR_FIELDS = [
+    {
+      id: F_PNR,
+      product_id: 'p1',
+      name: 'deltagare_pnr',
+      type: 'TEXT',
+      is_required: true,
+      options: null,
+      validation_rules: { format: 'personnummer' },
+      linked_validation: null,
+      sort_order: 0,
+      translations: [{ locale: 'sv', label: 'Personnummer' }],
+    },
+  ];
+  const limited = (max: number | null) => ({
+    id: 'p1',
+    creator_id: 'c1',
+    provider_id: null,
+    status: 'PUBLISHED',
+    base_price: 299,
+    tax_class_id: null,
+    tax_exempt: false,
+    track_inventory: false,
+    stock_quantity: null,
+    variant_option_config: null,
+    max_per_order: max,
+  });
+
+  it('quote and create refuse an invalid personnummer with its code', async () => {
+    const { service, prisma } = build({ fields: PNR_FIELDS });
+    const lines = [
+      {
+        product_id: 'p1',
+        quantity: 1,
+        custom_fields: { [F_PNR]: '811218-9877' },
+      },
+    ];
+    const q = await caught(
+      service.quoteLines(STORE_ID, lines, { countryCode: 'SE', locale: 'sv' }),
+    );
+    expect(q).toMatchObject({
+      code: 'CUSTOM_FIELD_INVALID_PERSONNUMMER',
+      field_id: F_PNR,
+      params: { label: 'Personnummer' },
+      line_index: 0,
+    });
+    const c = await caught(service.create('u1', DTO, { lines }));
+    expect(c.code).toBe('CUSTOM_FIELD_INVALID_PERSONNUMMER');
+    expect(prisma.order.create).not.toHaveBeenCalled();
+  });
+
+  it('a valid personnummer is quoted and ordered', async () => {
+    const { service, prisma } = build({ fields: PNR_FIELDS });
+    const lines = [
+      {
+        product_id: 'p1',
+        quantity: 1,
+        custom_fields: { [F_PNR]: '19811218-9876' },
+      },
+    ];
+    await expect(
+      service.quoteLines(STORE_ID, lines, { countryCode: 'SE', locale: 'sv' }),
+    ).resolves.toBeDefined();
+    await service.create('u1', DTO, { lines });
+    expect(prisma.order.create).toHaveBeenCalled();
+  });
+
+  it('max_per_order: quote and create refuse the sum of personalized lines over the limit', async () => {
+    const { service, prisma } = build({ fields: PNR_FIELDS });
+    prisma.product.findUnique.mockResolvedValue(limited(2) as never);
+    const lines = [
+      {
+        product_id: 'p1',
+        quantity: 1,
+        custom_fields: { [F_PNR]: '811218-9876' },
+      },
+      {
+        product_id: 'p1',
+        quantity: 2,
+        custom_fields: { [F_PNR]: '121212-1212' },
+      },
+    ];
+    const q = await caught(
+      service.quoteLines(STORE_ID, lines, { countryCode: 'SE', locale: 'sv' }),
+    );
+    expect(q).toMatchObject({
+      code: 'CART_MAX_PER_ORDER',
+      params: { max: 2, product_id: 'p1' },
+    });
+    const c = await caught(service.create('u1', DTO, { lines }));
+    expect(c.code).toBe('CART_MAX_PER_ORDER');
+    expect(prisma.order.create).not.toHaveBeenCalled();
+  });
+
+  it('max_per_order counts variant lines of the same product', async () => {
+    const { service, prisma } = build({ fields: [] });
+    prisma.productVariant.findUnique.mockImplementation((({
+      where,
+    }: {
+      where: { id: string };
+    }) =>
+      Promise.resolve({
+        id: where.id,
+        product_id: 'p1',
+        is_active: true,
+        price_adjustment: 0,
+        stock_quantity: null,
+        options: { Tid: where.id },
+        product: limited(3),
+      })) as never);
+    const lines = [
+      { product_id: 'p1', variant_id: 'v1', quantity: 2 },
+      { product_id: 'p1', variant_id: 'v2', quantity: 2 },
+    ];
+    const q = await caught(
+      service.quoteLines(STORE_ID, lines, { countryCode: 'SE', locale: 'sv' }),
+    );
+    expect(q).toMatchObject({ code: 'CART_MAX_PER_ORDER', params: { max: 3 } });
+  });
+
+  it('max_per_order: up to the limit is accepted; null is unlimited', async () => {
+    const atLimit = build({ fields: [] });
+    atLimit.prisma.product.findUnique.mockResolvedValue(limited(2) as never);
+    await expect(
+      atLimit.service.quoteLines(
+        STORE_ID,
+        [
+          { product_id: 'p1', quantity: 1 },
+          { product_id: 'p1', quantity: 1 },
+        ],
+        { countryCode: 'SE', locale: 'sv' },
+      ),
+    ).resolves.toBeDefined();
+
+    const unlimited = build({ fields: [] });
+    unlimited.prisma.product.findUnique.mockResolvedValue(
+      limited(null) as never,
+    );
+    await unlimited.service.create('u1', DTO, {
+      lines: [{ product_id: 'p1', quantity: 500 }],
+    });
+    expect(unlimited.prisma.order.create).toHaveBeenCalled();
+  });
+});

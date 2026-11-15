@@ -108,6 +108,11 @@ import {
   normalizeCartLine,
 } from '../cart/cart-line';
 import { B2B_COMPANY_NOT_ALLOWED, B2bService } from '../b2b/b2b.service';
+import {
+  assertLineLimits,
+  lineLimitOf,
+  type LineLimit,
+} from '../cart/max-per-order';
 import type {
   B2bTotals,
   BuyerType,
@@ -285,6 +290,12 @@ interface PricedLine {
    * later edit of the ProductVariant row. Null for lines without a variant.
    */
   variantOptions: Prisma.JsonValue | null;
+  /**
+   * Headless booking B2: the own product's per-order limit (summed over
+   * every line of that product after the loop); null without one and on
+   * custom-product lines.
+   */
+  limit: LineLimit | null;
 }
 
 /** What priceLine() needs to evaluate a line's personalization (M4.1). */
@@ -1185,6 +1196,7 @@ export class OrdersService {
     } | null = null;
     let appVariantOptions: unknown = {};
     let variantOptions: Prisma.JsonValue | null = null;
+    let limit: LineLimit | null = null;
 
     if (item.custom_product_id) {
       // Custom product (with or without a selected variant)
@@ -1292,6 +1304,7 @@ export class OrdersService {
       unitPrice =
         Number(variant.product.base_price) + Number(variant.price_adjustment);
       appProduct = variant.product;
+      limit = lineLimitOf(variant.product);
       appVariantOptions = variant.options;
       variantOptions = variant.options;
       marketInput = {
@@ -1329,6 +1342,7 @@ export class OrdersService {
 
       unitPrice = Number(product.base_price);
       appProduct = product;
+      limit = lineLimitOf(product);
       marketInput = {
         product_id: product.id,
         variant_id: null,
@@ -1579,6 +1593,7 @@ export class OrdersService {
       designerAddons,
       designerAddonsAmount,
       variantOptions,
+      limit,
     };
   }
 
@@ -2098,6 +2113,8 @@ export class OrdersService {
       values: NormalizedValues;
       ref: { line_id?: string; line_index: number };
     }[] = [];
+    // B2: per-order limits, checked over all lines after the loop.
+    const limitLines: { limit: LineLimit | null; quantity: number }[] = [];
     for (const [index, item] of items.entries()) {
       const lineId = opts.lineIds?.[index];
       const ref = lineId
@@ -2145,6 +2162,7 @@ export class OrdersService {
               ),
         ref,
       });
+      limitLines.push({ limit: priced.limit, quantity: item.quantity });
       const totalPrice = this.lineTotal(priced.unitPrice, item.quantity);
       unitLines.push({ unit_price: priced.unitPrice, quantity: item.quantity });
       const providerBaseForItem = this.lineTotal(
@@ -2174,6 +2192,7 @@ export class OrdersService {
       });
     }
     if (unavailable.length) throw cartItemsUnavailable(unavailable);
+    assertLineLimits(limitLines);
     // Customer files behind preview URLs must still be linkable to an order
     // of this store (same check as create); no query without preview URLs.
     await this.core.assertUploadsAvailable(
@@ -2511,6 +2530,8 @@ export class OrdersService {
       /** M4.1: snapshot lines of an app line (order currency). */
       lines?: PLine[];
     }[] = [];
+    // B2: per-order limits, checked over all lines after the loop.
+    const limitLines: { limit: LineLimit | null; quantity: number }[] = [];
     for (const [index, item] of lines.entries()) {
       // M4.0 (§4): the line's personalization source: the per-item
       // customization of the request when present, else the cart row /
@@ -2558,6 +2579,7 @@ export class OrdersService {
         fulfillerType,
       } = priced;
       if (priced.stockOp) stockOps.push(priced.stockOp);
+      limitLines.push({ limit: priced.limit, quantity: item.quantity });
       // M5.5: the add-ons priced into the line (order currency), frozen
       // with its design below.
       if (priced.designerAddons.length) {
@@ -2637,6 +2659,7 @@ export class OrdersService {
       });
     }
     if (unavailable.length) throw cartItemsUnavailable(unavailable);
+    assertLineLimits(limitLines);
 
     // M4.0 (K8, C19): snapshot rows built from the validated values and
     // created nested inside order.create below, so they can never be

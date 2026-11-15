@@ -591,3 +591,35 @@ describe('CartService personalization app (M4.1 fixes)', () => {
     expect(activeReads).toHaveLength(1);
   });
 });
+
+// Headless booking B1c: with the app on, a personnummer-format field fails
+// inside the evaluator (PERSONALIZATION_INVALID with the issue code).
+describe('CartService personalization app: personnummer format (B1c)', () => {
+  const pnrFields = () =>
+    (appFields() as { id: string; validation_rules: unknown }[]).map((f) =>
+      f.id === F_NAME
+        ? { ...f, validation_rules: { format: 'personnummer' } }
+        : f,
+    );
+
+  it('an invalid personnummer is refused with the issue code in errors[]', async () => {
+    const { service, prisma } = build({ fields: pnrFields(), appOn: true });
+    const body = await caught(
+      add(service, { ...validValues(), [F_NAME]: '811218-9877' }),
+    );
+    expect(body).toMatchObject({
+      code: 'PERSONALIZATION_INVALID',
+      errors: [{ code: 'CUSTOM_FIELD_INVALID_PERSONNUMMER', field_id: F_NAME }],
+    });
+    expect(prisma.rows).toHaveLength(0);
+  });
+
+  it('a valid personnummer is stored', async () => {
+    const { service, prisma } = build({ fields: pnrFields(), appOn: true });
+    await add(service, { ...validValues(), [F_NAME]: '811218-9876' });
+    expect(prisma.rows).toHaveLength(1);
+    expect(
+      (prisma.rows[0].custom_fields as Record<string, unknown>)[F_NAME],
+    ).toBe('811218-9876');
+  });
+});

@@ -19,6 +19,7 @@ import {
 } from '../../common/stores/store-gate';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
+import { assertMaxPerOrder, readMaxPerOrder } from './max-per-order';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
 import {
   resolveStoreCurrency,
@@ -117,7 +118,16 @@ export interface EnrichedCartItem {
    * Absent on every other line.
    */
   design?: CartDesignView;
+  /**
+   * Headless booking B2: most units of this line's own product one order
+   * may hold (summed across its lines). Absent when the product has no
+   * limit, so a cart without limited products is unchanged.
+   */
+  max_per_order?: number;
 }
+
+/** How often add / update refresh `Cart.updated_at` (activity, GD1). */
+const CART_TOUCH_INTERVAL_MS = 60 * 60 * 1000;
 
 /** 400 code of an add/update of a product hidden in the request's market. */
 export const CART_ITEM_NOT_AVAILABLE_IN_MARKET =
@@ -368,6 +378,22 @@ export class CartService {
   }
 
   /**
+   * GD1: `Cart.updated_at` is the cart's last activity, read by the
+   * participant-data retention (idle carts lose personnummer values).
+   * Refreshed on add / update at most once per CART_TOUCH_INTERVAL_MS.
+   */
+  private async touchCart(cart: { id: string; updated_at?: Date | null }) {
+    const now = Date.now();
+    const last = cart.updated_at;
+    if (!(last instanceof Date)) return;
+    if (now - last.getTime() < CART_TOUCH_INTERVAL_MS) return;
+    await this.prisma.cart.updateMany({
+      where: { id: cart.id },
+      data: { updated_at: new Date(now) },
+    });
+  }
+
+  /**
    * Store a cart line belongs to: the store of the creator owning the
    * product (own product) or the custom product. Null when it cannot be
    * resolved (no such product, or a product without a creator store).
@@ -612,6 +638,8 @@ export class CartService {
         variant_option_config: unknown;
       } | null = null;
       let variantOptions: unknown = null;
+      // B2: the own product's per-order limit (null = none).
+      let lineMaxPerOrder: number | null = null;
 
       if (item.custom_product_id) {
         // Custom product: fetch from CustomProduct with mockup images and base product
@@ -715,6 +743,7 @@ export class CartService {
 
         if (product) {
           ownProduct = product;
+          lineMaxPerOrder = readMaxPerOrder(product.max_per_order);
           customFieldDefs = product.custom_fields;
           title =
             this.pickTranslation(product.translations, locale)?.title || null;
@@ -985,6 +1014,7 @@ export class CartService {
         ...(personalizationInvalidLine
           ? { personalization_invalid: true as const }
           : {}),
+        ...(lineMaxPerOrder !== null ? { max_per_order: lineMaxPerOrder } : {}),
         ...(designView
           ? {
               design: designAddons
@@ -1501,6 +1531,7 @@ export class CartService {
     preLiveViewer?: PreLiveViewerCheck,
   ) {
     const cart = await this.getOrCreateCart(userId);
+    await this.touchCart(cart);
 
     // M4.0 (K2): the product's field rules apply on every add, and lines
     // with different personalization never merge. M4.1: a variant-only
@@ -1558,6 +1589,12 @@ export class CartService {
       this.assertBundleQuantityValid(offer, finalQuantity);
     }
 
+    // B2: the product's per-order limit counts every line of it in the
+    // cart (variants and personalized lines); custom-product lines never.
+    if (!dto.custom_product_id) {
+      await this.assertCartMaxPerOrder(cart.id, dto.product_id, dto.quantity);
+    }
+
     if (existing) {
       await this.prisma.cartItem.update({
         where: { id: existing.id },
@@ -1594,6 +1631,62 @@ export class CartService {
     return this.getCart(userId, locale, marketKey, buyer);
   }
 
+  /**
+   * B2: 400 CART_MAX_PER_ORDER when the cart's units of own product
+   * `productId` (every line but `exceptItemId`) plus `quantity` exceed the
+   * product's `max_per_order`. One indexed read for products without a
+   * limit; the cart rows are read only when a limit exists.
+   */
+  private async assertCartMaxPerOrder(
+    cartId: string,
+    productId: string | null | undefined,
+    quantity: number,
+    exceptItemId?: string,
+  ): Promise<void> {
+    if (!productId) return;
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+      select: { max_per_order: true },
+    });
+    const max = readMaxPerOrder(product?.max_per_order);
+    if (max === null) return;
+    const rows = await this.prisma.cartItem.findMany({
+      where: {
+        cart_id: cartId,
+        custom_product_id: null,
+        ...(exceptItemId ? { id: { not: exceptItemId } } : {}),
+      },
+      select: { product_id: true, variant_id: true, quantity: true },
+    });
+    // Legacy rows stored with a variant only resolve their product here.
+    const variantOnly = rows
+      .filter((r) => !r.product_id && r.variant_id)
+      .map((r) => r.variant_id as string);
+    const variantsOfProduct = new Set(
+      variantOnly.length
+        ? (
+            await this.prisma.productVariant.findMany({
+              where: {
+                id: { in: [...new Set(variantOnly)] },
+                product_id: productId,
+              },
+              select: { id: true },
+            })
+          ).map((v) => v.id)
+        : [],
+    );
+    const inCart = rows
+      .filter(
+        (r) =>
+          r.product_id === productId ||
+          (!r.product_id &&
+            !!r.variant_id &&
+            variantsOfProduct.has(r.variant_id)),
+      )
+      .reduce((sum, r) => sum + r.quantity, 0);
+    assertMaxPerOrder(productId, inCart + quantity, max);
+  }
+
   /** 400 PRODUCT_VARIANT_MISMATCH unless the variant exists on the product. */
   private async assertVariantOfProduct(
     productId: string,
@@ -1611,6 +1704,18 @@ export class CartService {
     }
   }
 
+  /** Product of a variant (variant-only legacy rows); null when unknown. */
+  private async productOfVariant(
+    variantId: string | null,
+  ): Promise<string | null> {
+    if (!variantId) return null;
+    const v = await this.prisma.productVariant.findUnique({
+      where: { id: variantId },
+      select: { product_id: true },
+    });
+    return v?.product_id ?? null;
+  }
+
   async updateItem(
     userId: string,
     itemId: string,
@@ -1621,6 +1726,7 @@ export class CartService {
     preview?: boolean,
   ) {
     const cart = await this.getOrCreateCart(userId);
+    await this.touchCart(cart);
 
     const item = await this.prisma.cartItem.findFirst({
       where: { id: itemId, cart_id: cart.id },
@@ -1640,6 +1746,20 @@ export class CartService {
     } = {};
     if (typeof dto.quantity === 'number') {
       data.quantity = dto.quantity;
+    }
+    // B2: a larger quantity must stay within the product's per-order limit
+    // (a smaller one is always allowed, even in a cart already over it).
+    if (
+      data.quantity !== undefined &&
+      data.quantity > item.quantity &&
+      !item.custom_product_id
+    ) {
+      await this.assertCartMaxPerOrder(
+        cart.id,
+        item.product_id ?? (await this.productOfVariant(item.variant_id)),
+        data.quantity,
+        item.id,
+      );
     }
     let nextBundleOfferId: string | null = item.bundle_offer_id;
     if (dto.bundle_offer_id !== undefined) {

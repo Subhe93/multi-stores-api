@@ -11,6 +11,8 @@
  *   - `customer-uploads`           (M4.0, CustomerUploadsService.runRetention)
  *   - `designer.drafts|orphans|originals|files` (M4.2)
  *   - `importer.bundles`           (M4.4)
+ *   - `kustom.abandoned-sessions`, `cart.personnummer-values` (headless
+ *     booking GD1, ParticipantDataRetentionService)
  * Admin: `POST /admin/retention/run?dry_run=1&task=<key>` (ADMIN).
  */
 

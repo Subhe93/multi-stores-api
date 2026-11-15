@@ -113,6 +113,8 @@ const ISSUE_MESSAGES: Record<Issue['code'], (label: string) => string> = {
   CUSTOM_FIELD_INVALID_FILE: (l) => `"${l}" has an invalid file`,
   CUSTOM_FIELD_TOO_MANY_FILES: (l) => `"${l}" has too many files`,
   CUSTOM_FIELD_INVALID_PAYLOAD: () => 'Invalid personalization values',
+  CUSTOM_FIELD_INVALID_PERSONNUMMER: (l) =>
+    `"${l}" must be a valid Swedish personal identity number (YYYYMMDD-XXXX)`,
 };
 
 const FILE_TYPES = new Set<string>(['IMAGE', 'FILE', 'MULTI_IMAGE']);

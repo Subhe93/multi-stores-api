@@ -52,7 +52,7 @@ describe('personalization evaluator cases', () => {
     expect((cases.evaluateGuards as Json[]).length).toBeGreaterThanOrEqual(8);
   });
 
-  it('runs all 174 cases', () => {
+  it('runs all 178 cases', () => {
     const count = [
       'evaluate',
       'conditions',
@@ -65,7 +65,7 @@ describe('personalization evaluator cases', () => {
       'groupLabels',
     ].reduce((n, k) => n + (cases[k] as Json[]).length, 0);
     expect(cases.version).toBe(1);
-    expect(count).toBe(174);
+    expect(count).toBe(178);
   });
 });
 

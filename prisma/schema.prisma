@@ -488,6 +488,9 @@ model Product {
   sku                         String?
   track_inventory             Boolean            @default(false)
   stock_quantity              Int?
+  // Most units of this product one order (and one cart) may hold, summed
+  // across variants and personalized lines; null = unlimited (headless B2).
+  max_per_order               Int?
   weight                      Decimal?           @db.Decimal(8, 2)
   weight_unit                 String?            @default("kg")
   variant_option_config       Json?

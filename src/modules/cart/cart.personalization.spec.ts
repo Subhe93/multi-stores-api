@@ -315,3 +315,48 @@ describe('CartService line signature (M4.0)', () => {
     });
   });
 });
+
+// Headless booking B1c: `validation_rules.format = 'personnummer'` is
+// enforced on cart add / update (the storefront check can be bypassed).
+describe('CartService personnummer format (B1c)', () => {
+  const PNR = [
+    {
+      ...FIELDS[0],
+      validation_rules: { format: 'personnummer' },
+      translations: [{ locale: 'sv', label: 'Personnummer' }],
+    },
+  ];
+
+  it('add: an invalid personnummer is a coded 400 and nothing is written', async () => {
+    const { service, prisma } = build(PNR);
+    await expect(add(service, { f1: '811218-9877' })).rejects.toMatchObject({
+      response: {
+        code: 'CUSTOM_FIELD_INVALID_PERSONNUMMER',
+        params: { label: 'Personnummer' },
+        field_id: 'f1',
+      },
+    });
+    expect(prisma.cartItem.create).not.toHaveBeenCalled();
+  });
+
+  it('add: a valid personnummer (12 digits or samordningsnummer) is stored', async () => {
+    const { service, prisma } = build(PNR);
+    await add(service, { f1: '19811218-9876' });
+    await add(service, { f1: '890161-2344' });
+    expect(prisma.rows.map((r) => r.custom_fields)).toEqual([
+      { f1: '19811218-9876' },
+      { f1: '890161-2344' },
+    ]);
+  });
+
+  it('update: an invalid personnummer is refused', async () => {
+    const { service } = build(PNR, [
+      row({ custom_fields: { f1: '811218-9876' } }),
+    ]);
+    await expect(
+      service.updateItem('u1', 'r0', { custom_fields: { f1: '811318-9876' } }),
+    ).rejects.toMatchObject({
+      response: { code: 'CUSTOM_FIELD_INVALID_PERSONNUMMER' },
+    });
+  });
+});

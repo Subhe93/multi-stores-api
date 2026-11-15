@@ -32,6 +32,8 @@ import { AccountCredentialsService } from '../../auth/account-credentials.servic
 import { KustomService, withMarket, type StoreContext } from './kustom.service';
 import { MarketsContextService } from '../../markets/markets-context.service';
 import { B2B_COMPANY_NOT_ALLOWED, B2bService } from '../../b2b/b2b.service';
+import { CART_MAX_PER_ORDER } from '../../cart/max-per-order';
+import { PERSONALIZATION_INVALID } from '../../personalization/personalization.errors';
 import type {
   BuyerType,
   CompanyInput,
@@ -88,6 +90,9 @@ const CONCURRENT_VALIDATION_POLL_MS = 250;
 // 57-symbol alphabet (~93 bits, generateAccountPassword) mailed to the shopper
 // with a magic link, so the lower cost does not weaken it in practice.
 const GUEST_PASSWORD_BCRYPT_COST = 10;
+
+/** Issue code of a value refused by `validation_rules.format = 'personnummer'`. */
+const INVALID_PERSONNUMMER = 'CUSTOM_FIELD_INVALID_PERSONNUMMER';
 
 /** The account an order belongs to (see resolveCustomer). */
 interface ResolvedCustomer {
@@ -1979,7 +1984,28 @@ export class KustomCheckoutService {
     if (code === 'ORDER_INSUFFICIENT_STOCK') return 'out_of_stock';
     if (code?.startsWith('PROMOTION_COUPON_')) return 'coupon_invalid';
     if (code === 'ORDER_DISCOUNT_BELOW_PROVIDER_COST') return 'coupon_invalid';
+    // Headless booking B4: per-order limit and participant identity number.
+    if (code === CART_MAX_PER_ORDER) return 'max_per_order';
+    if (this.isInvalidPersonnummer(err, code)) return 'invalid_participant';
     return 'unavailable';
+  }
+
+  /**
+   * True for a personnummer refusal: the M4.0 envelope carries the issue
+   * code itself, the personalization app wraps it in `errors[]`.
+   */
+  private isInvalidPersonnummer(err: unknown, code: string | null): boolean {
+    if (code === INVALID_PERSONNUMMER) return true;
+    if (code !== PERSONALIZATION_INVALID || !(err instanceof HttpException)) {
+      return false;
+    }
+    const errors = (err.getResponse() as { errors?: unknown } | null)?.errors;
+    return (
+      Array.isArray(errors) &&
+      errors.some(
+        (e) => (e as { code?: unknown } | null)?.code === INVALID_PERSONNUMMER,
+      )
+    );
   }
 
   private codeOf(err: unknown): string | null {

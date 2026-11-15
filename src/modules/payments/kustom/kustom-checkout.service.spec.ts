@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
 import { Prisma, StoreType } from '@prisma/client';
 import { KustomCheckoutService } from './kustom-checkout.service';
 import { KustomClient } from './kustom.client';
@@ -1293,5 +1293,99 @@ describe('KustomCheckoutService tracking context (Meta Conversions API)', () => 
       Record<string, unknown>,
     ];
     expect(createOpts.trackingContext).toBeNull();
+  });
+});
+
+// Headless booking B4: the booking refusals reach the storefront with their
+// own reason (validation redirect) and stop a session before Klarna opens.
+describe('KustomCheckoutService booking refusals (B4)', () => {
+  const body = {
+    order_id: 'k-1',
+    order_amount: 29900,
+    purchase_currency: 'SEK',
+    billing_address: kustomAddress,
+    shipping_address: kustomAddress,
+  };
+  const maxErr = () =>
+    new BadRequestException({
+      code: 'CART_MAX_PER_ORDER',
+      message: 'max',
+      params: { max: 2, product_id: 'p1' },
+    });
+  const reasonOf = async (err: unknown) => {
+    const { service, orders } = build(null, {
+      session: sessionRow({ customer_id: null }),
+    });
+    orders.create.mockImplementationOnce(() => Promise.reject(err));
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const res = await service.handleValidation('sess-1', 'cb-token', body);
+    expect(res.ok).toBe(false);
+    return new URL(
+      (res as { redirectUrl: string }).redirectUrl,
+    ).searchParams.get('reason');
+  };
+
+  it('maps CART_MAX_PER_ORDER to max_per_order', async () => {
+    expect(await reasonOf(maxErr())).toBe('max_per_order');
+  });
+
+  it('maps a personnummer refusal (M4.0 code or app errors[]) to invalid_participant', async () => {
+    expect(
+      await reasonOf(
+        new BadRequestException({
+          code: 'CUSTOM_FIELD_INVALID_PERSONNUMMER',
+          message: 'x',
+        }),
+      ),
+    ).toBe('invalid_participant');
+    expect(
+      await reasonOf(
+        new BadRequestException({
+          code: 'PERSONALIZATION_INVALID',
+          message: 'x',
+          errors: [
+            { code: 'CUSTOM_FIELD_REQUIRED' },
+            { code: 'CUSTOM_FIELD_INVALID_PERSONNUMMER' },
+          ],
+        }),
+      ),
+    ).toBe('invalid_participant');
+  });
+
+  it('other refusals keep their reasons', async () => {
+    expect(
+      await reasonOf(
+        new BadRequestException({ code: 'ORDER_INSUFFICIENT_STOCK' }),
+      ),
+    ).toBe('out_of_stock');
+    expect(
+      await reasonOf(
+        new BadRequestException({
+          code: 'PERSONALIZATION_INVALID',
+          errors: [{ code: 'CUSTOM_FIELD_REQUIRED' }],
+        }),
+      ),
+    ).toBe('unavailable');
+    expect(await reasonOf(new Error('boom'))).toBe('unavailable');
+  });
+
+  it('createSession: an over-limit cart is refused before any Kustom call', async () => {
+    const { service, orders, createCheckout } = build(null);
+    orders.quoteLines.mockRejectedValue(maxErr() as never);
+    await expect(service.createSession(null, dto)).rejects.toMatchObject({
+      response: { code: 'CART_MAX_PER_ORDER' },
+    });
+    expect(createCheckout).not.toHaveBeenCalled();
+  });
+
+  it('updateSession: an over-limit change never reaches Kustom', async () => {
+    const { service, orders, updateCheckout } = build(null, {
+      session: sessionRow({}),
+    });
+    orders.quoteLines.mockRejectedValue(maxErr() as never);
+    await expect(
+      service.updateSession('sess-1', { token: 'sf-token', notes: 'x' }),
+    ).rejects.toMatchObject({ response: { code: 'CART_MAX_PER_ORDER' } });
+    expect(updateCheckout).not.toHaveBeenCalled();
   });
 });
