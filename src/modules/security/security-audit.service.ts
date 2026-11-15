@@ -39,6 +39,9 @@ export const SECURITY_ACTIONS = [
   'order.deleted',
   'order.restored',
   'order.test_flag',
+  // Headless booking P3: the store owner set/changed/removed the external
+  // site or return URL of the checkout (an open-redirect target).
+  'checkout.external_return.updated',
 ] as const;
 export type SecurityAction = (typeof SECURITY_ACTIONS)[number];
 

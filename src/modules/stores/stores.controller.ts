@@ -154,8 +154,12 @@ export class StoresController {
   @UseGuards(AuthGuard('jwt'), RolesGuard, VerifiedAccountGuard)
   @Roles(UserRole.CREATOR)
   @VerifiedAccount({ fields: ['is_active', 'custom_domain'] })
-  update(@CurrentUser('id') userId: string, @Body() dto: UpdateStoreDto) {
-    return this.storesService.update(userId, dto);
+  update(
+    @CurrentUser('id') userId: string,
+    @Body() dto: UpdateStoreDto,
+    @ReqMeta() meta: RequestMeta,
+  ) {
+    return this.storesService.update(userId, dto, meta);
   }
 
   // Creator — Legal trader details (validated: Luhn org number, VAT format)

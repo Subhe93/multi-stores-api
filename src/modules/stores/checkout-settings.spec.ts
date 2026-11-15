@@ -34,7 +34,7 @@ describe('normalizeCheckoutSettingsInput', () => {
         coupon_param: [' coupon ', 'coupon1', 'coupon1', ''],
         coupon_autoapply: true,
       }),
-    ).toEqual({
+    ).toStrictEqual({
       after_add_to_cart: 'checkout',
       phone_required: false,
       pay_button_label: { sv: 'Betala med kort' },
@@ -46,7 +46,13 @@ describe('normalizeCheckoutSettingsInput', () => {
   it('an emptied coupon_param list falls back to the default key', () => {
     expect(
       normalizeCheckoutSettingsInput({ coupon_autoapply: true, coupon_param: [''] }),
-    ).toEqual({ ...DEFAULT_CHECKOUT_SETTINGS, coupon_autoapply: true });
+    ).toStrictEqual({
+      after_add_to_cart: 'stay',
+      phone_required: false,
+      pay_button_label: null,
+      coupon_param: ['coupon'],
+      coupon_autoapply: true,
+    });
   });
 
   it.each([
@@ -91,6 +97,11 @@ describe('readStoredCheckoutSettings / publicCheckoutSettings', () => {
       pay_button_label: { sv: 'Betala' },
       coupon_param: ['coupon1'],
       coupon_autoapply: false,
+      // P3 keys: the internal read is always full (defaults filled in).
+      external_site_url: null,
+      return_url: null,
+      return_mode: 'button',
+      back_label: null,
     });
     expect(readStoredCheckoutSettings('garbage')).toEqual(DEFAULT_CHECKOUT_SETTINGS);
     expect(isDefaultCheckoutSettings(readStoredCheckoutSettings(null))).toBe(true);
@@ -103,9 +114,13 @@ describe('readStoredCheckoutSettings / publicCheckoutSettings', () => {
   });
 
   it('a store with overrides projects the full normalized object', () => {
-    expect(publicCheckoutSettings({ phone_required: true })).toEqual({
-      ...DEFAULT_CHECKOUT_SETTINGS,
+    // Exactly the pre-P3 shape: no external-site keys without a site.
+    expect(publicCheckoutSettings({ phone_required: true })).toStrictEqual({
+      after_add_to_cart: 'stay',
       phone_required: true,
+      pay_button_label: null,
+      coupon_param: ['coupon'],
+      coupon_autoapply: false,
     });
   });
 });

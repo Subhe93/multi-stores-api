@@ -958,6 +958,8 @@ export type SecurityAlertKind =
   | 'stripe_disconnected'
   | 'stripe_own_key_changed'
   | 'stripe_own_key_revoked'
+  // Headless booking P3: external_site_url / return_url of the checkout.
+  | 'external_return_changed'
   | 'two_factor_enabled'
   | 'two_factor_disabled'
   | 'recovery_codes_regenerated'
@@ -1005,6 +1007,7 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Security alert: your Stripe account was disconnected',
       stripe_own_key_changed: 'Security alert: the Stripe key of your store was changed',
       stripe_own_key_revoked: 'Action needed: your Stripe key stopped working',
+      external_return_changed: "Security alert: your store's return to your website was changed",
       two_factor_enabled: 'Two-factor authentication was turned on',
       two_factor_disabled:
         'Security alert: two-factor authentication was turned off',
@@ -1023,6 +1026,7 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'The Stripe account that receives your payouts was disconnected.',
       stripe_own_key_changed: 'The Stripe key your store uses to receive card payments on your own Stripe account was connected, replaced or removed.',
       stripe_own_key_revoked: 'Stripe rejected the restricted key of your store (it was revoked, expired or deleted). Card payments are paused until you connect a new key.',
+      external_return_changed: 'The website address your customers are sent back to after checkout was set, changed or removed.',
       two_factor_enabled:
         'Two-factor authentication is now required to sign in to your account.',
       two_factor_disabled:
@@ -1055,6 +1059,7 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
       stripe_disconnected: 'تنبيه أمني: تم فصل حساب Stripe الخاص بك',
       stripe_own_key_changed: 'تنبيه أمني: تم تغيير مفتاح Stripe الخاص بمتجرك',
       stripe_own_key_revoked: 'إجراء مطلوب: مفتاح Stripe الخاص بك توقف عن العمل',
+      external_return_changed: 'تنبيه أمني: تم تغيير رابط العودة من متجرك إلى موقعك الإلكتروني',
       two_factor_enabled: 'تم تفعيل المصادقة الثنائية',
       two_factor_disabled: 'تنبيه أمني: تم إيقاف المصادقة الثنائية',
       recovery_codes_regenerated:
@@ -1071,6 +1076,7 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
       stripe_disconnected: 'تم فصل حساب Stripe الذي تُحوَّل إليه أرباحك.',
       stripe_own_key_changed: 'تم ربط أو استبدال أو إزالة مفتاح Stripe الذي يستخدمه متجرك لاستقبال مدفوعات البطاقات على حساب Stripe الخاص بك.',
       stripe_own_key_revoked: 'رفض Stripe المفتاح المقيّد لمتجرك (تم إلغاؤه أو انتهت صلاحيته أو حُذف). تم إيقاف مدفوعات البطاقات مؤقتاً حتى تربط مفتاحاً جديداً.',
+      external_return_changed: 'تم تعيين أو تغيير أو إزالة عنوان الموقع الذي يعود إليه عملاؤك بعد إتمام الدفع.',
       two_factor_enabled:
         'أصبح رمز المصادقة الثنائية مطلوباً لتسجيل الدخول إلى حسابك.',
       two_factor_disabled:
@@ -1103,6 +1109,7 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Säkerhetsvarning: ditt Stripe-konto har kopplats bort',
       stripe_own_key_changed: 'Säkerhetsvarning: butikens Stripe-nyckel har ändrats',
       stripe_own_key_revoked: 'Åtgärd krävs: din Stripe-nyckel slutade fungera',
+      external_return_changed: 'Säkerhetsvarning: butikens återgång till din webbplats har ändrats',
       two_factor_enabled: 'Tvåstegsverifiering har aktiverats',
       two_factor_disabled:
         'Säkerhetsvarning: tvåstegsverifiering har stängts av',
@@ -1122,6 +1129,7 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Stripe-kontot som tar emot dina utbetalningar har kopplats bort.',
       stripe_own_key_changed: 'Stripe-nyckeln som din butik använder för att ta emot kortbetalningar på ditt eget Stripe-konto har kopplats, bytts ut eller tagits bort.',
       stripe_own_key_revoked: 'Stripe avvisade butikens begränsade nyckel (den har återkallats, gått ut eller raderats). Kortbetalningar är pausade tills du kopplar en ny nyckel.',
+      external_return_changed: 'Webbadressen som dina kunder skickas tillbaka till efter kassan har angetts, ändrats eller tagits bort.',
       two_factor_enabled:
         'En tvåstegskod krävs nu för att logga in på ditt konto.',
       two_factor_disabled:
@@ -1156,6 +1164,7 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Güvenlik uyarısı: Stripe hesabınızın bağlantısı kesildi',
       stripe_own_key_changed: 'Güvenlik uyarısı: mağazanızın Stripe anahtarı değiştirildi',
       stripe_own_key_revoked: 'İşlem gerekli: Stripe anahtarınız çalışmayı durdurdu',
+      external_return_changed: 'Güvenlik uyarısı: mağazanızdan web sitenize dönüş ayarı değiştirildi',
       two_factor_enabled: 'İki adımlı doğrulama açıldı',
       two_factor_disabled: 'Güvenlik uyarısı: iki adımlı doğrulama kapatıldı',
       recovery_codes_regenerated:
@@ -1174,6 +1183,7 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Ödemelerinizi alan Stripe hesabının bağlantısı kesildi.',
       stripe_own_key_changed: 'Mağazanızın kendi Stripe hesabınızda kart ödemesi almak için kullandığı Stripe anahtarı bağlandı, değiştirildi veya kaldırıldı.',
       stripe_own_key_revoked: 'Stripe mağazanızın kısıtlı anahtarını reddetti (iptal edildi, süresi doldu veya silindi). Yeni bir anahtar bağlayana kadar kart ödemeleri duraklatıldı.',
+      external_return_changed: 'Müşterilerinizin ödemeden sonra geri gönderildiği web sitesi adresi ayarlandı, değiştirildi veya kaldırıldı.',
       two_factor_enabled:
         'Hesabınıza giriş için artık iki adımlı doğrulama kodu gerekiyor.',
       two_factor_disabled:
@@ -1207,6 +1217,7 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Sicherheitswarnung: Ihr Stripe-Konto wurde getrennt',
       stripe_own_key_changed: 'Sicherheitswarnung: Der Stripe-Schlüssel Ihres Shops wurde geändert',
       stripe_own_key_revoked: 'Handlung erforderlich: Ihr Stripe-Schlüssel funktioniert nicht mehr',
+      external_return_changed: 'Sicherheitswarnung: Die Rückkehr von Ihrem Shop zu Ihrer Website wurde geändert',
       two_factor_enabled: 'Zwei-Faktor-Authentifizierung wurde aktiviert',
       two_factor_disabled:
         'Sicherheitswarnung: Zwei-Faktor-Authentifizierung wurde deaktiviert',
@@ -1228,6 +1239,7 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Das Stripe-Konto, das Ihre Auszahlungen erhält, wurde getrennt.',
       stripe_own_key_changed: 'Der Stripe-Schlüssel, mit dem Ihr Shop Kartenzahlungen auf Ihrem eigenen Stripe-Konto empfängt, wurde verbunden, ersetzt oder entfernt.',
       stripe_own_key_revoked: 'Stripe hat den eingeschränkten Schlüssel Ihres Shops abgelehnt (widerrufen, abgelaufen oder gelöscht). Kartenzahlungen sind pausiert, bis Sie einen neuen Schlüssel verbinden.',
+      external_return_changed: 'Die Website-Adresse, zu der Ihre Kunden nach dem Bezahlen zurückgeleitet werden, wurde festgelegt, geändert oder entfernt.',
       two_factor_enabled:
         'Für die Anmeldung bei Ihrem Konto ist jetzt ein Zwei-Faktor-Code erforderlich.',
       two_factor_disabled:
@@ -1262,6 +1274,7 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Alerte de sécurité : votre compte Stripe a été déconnecté',
       stripe_own_key_changed: 'Alerte de sécurité : la clé Stripe de votre boutique a été modifiée',
       stripe_own_key_revoked: 'Action requise : votre clé Stripe ne fonctionne plus',
+      external_return_changed: 'Alerte de sécurité : le retour de votre boutique vers votre site web a été modifié',
       two_factor_enabled: "L'authentification à deux facteurs a été activée",
       two_factor_disabled:
         "Alerte de sécurité : l'authentification à deux facteurs a été désactivée",
@@ -1283,6 +1296,7 @@ const SECURITY_TEXT: Record<string, SecurityText> = {
         'Le compte Stripe qui reçoit vos versements a été déconnecté.',
       stripe_own_key_changed: 'La clé Stripe utilisée par votre boutique pour recevoir les paiements par carte sur votre propre compte Stripe a été connectée, remplacée ou supprimée.',
       stripe_own_key_revoked: 'Stripe a refusé la clé restreinte de votre boutique (révoquée, expirée ou supprimée). Les paiements par carte sont suspendus jusqu’à ce que vous connectiez une nouvelle clé.',
+      external_return_changed: "L'adresse du site web vers laquelle vos clients sont renvoyés après le paiement a été définie, modifiée ou supprimée.",
       two_factor_enabled:
         'Un code à deux facteurs est désormais requis pour vous connecter à votre compte.',
       two_factor_disabled:

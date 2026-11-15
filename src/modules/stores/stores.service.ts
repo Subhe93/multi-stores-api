@@ -4,11 +4,12 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  ForbiddenException,
   Optional,
 } from '@nestjs/common';
 import { keepOwnerCss } from '../themes/keep-owner-css';
 import { CorsOriginService } from '../../common/cors/cors-origin.service';
-import { Prisma, StoreStatus, StoreType } from '@prisma/client';
+import { Prisma, StoreStatus, StoreType, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { sanitizeTitle } from '@multi-stores/core/slug';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
@@ -38,7 +39,15 @@ import {
   loadStorefrontHosts,
   type StorefrontHosts,
 } from './storefront-hosts';
-import { normalizeCheckoutSettingsInput } from './checkout-settings';
+import {
+  changedExternalUrlKeys,
+  normalizeCheckoutSettingsInput,
+  readStoredCheckoutSettings,
+  withStoredExternalReturn,
+} from './checkout-settings';
+import { ReauthService } from '../security/reauth.service';
+import { SecurityAuditService } from '../security/security-audit.service';
+import type { RequestMeta } from '../security/request-meta';
 import { sanitizeCreatorHtml } from '../../common/html/creator-html';
 import {
   CreateStoreDto,
@@ -93,6 +102,11 @@ export class StoresService {
     // Encrypts the Meta Conversions API token. CryptoModule is global;
     // optional and trailing so positional spec constructors stay valid.
     @Optional() private readonly crypto?: CryptoService,
+    // Headless booking P3: step-up + audit for the external return URLs.
+    // SecurityModule is global; optional/trailing for positional specs, and
+    // a change that needs them fails closed when they are not wired.
+    @Optional() private readonly reauth?: ReauthService,
+    @Optional() private readonly securityAudit?: SecurityAuditService,
   ) {}
 
   /** Encrypts a secret store setting for storage (never stored in clear). */
@@ -407,7 +421,7 @@ export class StoresService {
     return { storeId: store.id, body: { slug: store.slug } };
   }
 
-  async update(userId: string, dto: UpdateStoreDto) {
+  async update(userId: string, dto: UpdateStoreDto, meta?: RequestMeta) {
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
     });
@@ -436,11 +450,46 @@ export class StoresService {
         });
     }
 
-    const { is_active: toggleActive, ...rest } = dto;
+    const {
+      is_active: toggleActive,
+      current_password,
+      totp_code,
+      ...rest
+    } = dto;
+    // External return URLs (P3): a body that does not mention them keeps the
+    // stored ones; the stored value is also the "before" of the change check.
+    let storedCheckout: unknown = null;
+    if (rest.checkout_settings !== undefined) {
+      const row = await this.prisma.store.findUnique({
+        where: { creator_id: creator.id },
+        select: { checkout_settings: true },
+      });
+      storedCheckout = row?.checkout_settings ?? null;
+      rest.checkout_settings = withStoredExternalReturn(
+        rest.checkout_settings,
+        storedCheckout,
+      ) as UpdateStoreDto['checkout_settings'];
+    }
     const data = normalizeStoreUpdate(
       rest as UpdateStoreDto,
       this.encryptSecret,
     );
+    const externalChange =
+      data.checkout_settings !== undefined
+        ? this.externalReturnChange(storedCheckout, data.checkout_settings)
+        : null;
+
+    // A new or changed external site URL is an open-redirect target: the
+    // owner confirms with the password (+ 2FA code when on) first,
+    // before any other part of the update (e.g. the is_active toggle) runs.
+    const actor = externalChange
+      ? await this.verifyExternalReturnChange(
+          userId,
+          externalChange,
+          { current_password, totp_code },
+          meta,
+        )
+      : null;
 
     // "Store active" toggle: LIVE↔PAUSED through the lifecycle service only
     // (409 STORE_STATUS_TRANSITION otherwise); the column itself is derived.
@@ -519,6 +568,7 @@ export class StoresService {
             data.custom_domain ?? null,
           )
         : null;
+
     const store = await this.runStoreUpdate(() =>
       this.updateWithMirrorDrop(
         this.prisma.store.update({
@@ -543,9 +593,90 @@ export class StoresService {
       );
     }
 
+    if (externalChange && actor) {
+      await this.recordExternalReturnChange(
+        actor,
+        { id: store.id, slug: store.slug },
+        externalChange,
+        meta,
+      );
+    }
+
     await this.revalidation.revalidateStoreBySlug(store.slug);
 
     return ownerStorePayload(store);
+  }
+
+  /**
+   * The external return URL keys an update changes (P3), or null when none.
+   * `requiresReauth` is true when a site URL is set or replaced; clearing it
+   * (or only touching return_url) is audited without a password prompt.
+   */
+  private externalReturnChange(
+    stored: unknown,
+    next: unknown,
+  ): { fields: string[]; requiresReauth: boolean } | null {
+    const before = readStoredCheckoutSettings(stored);
+    const after = readStoredCheckoutSettings(
+      next === Prisma.JsonNull ? null : next,
+    );
+    const keys = changedExternalUrlKeys(before, after);
+    if (!keys.length) return null;
+    return {
+      fields: keys.map((k) => (after[k] === null ? `${k} (cleared)` : k)),
+      requiresReauth:
+        keys.includes('external_site_url') && after.external_site_url !== null,
+    };
+  }
+
+  private async verifyExternalReturnChange(
+    userId: string,
+    change: { requiresReauth: boolean },
+    input: { current_password?: string; totp_code?: string },
+    meta?: RequestMeta,
+  ): Promise<{ id: string; email: string; role: UserRole | null }> {
+    if (!this.reauth || !this.securityAudit)
+      throw new Error('ReauthService / SecurityAuditService is not wired');
+    if (change.requiresReauth) {
+      const user = await this.reauth.verify(userId, input, {
+        purpose: 'checkout.external_return.updated',
+        meta,
+      });
+      return { id: user.id, email: user.email, role: user.role };
+    }
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true, role: true },
+    });
+    return { id: userId, email: user?.email ?? '', role: user?.role ?? null };
+  }
+
+  /** Audit row + owner alert email for an external return URL change. */
+  private async recordExternalReturnChange(
+    actor: { id: string; email: string; role: UserRole | null },
+    store: { id: string; slug: string },
+    change: { fields: string[] },
+    meta?: RequestMeta,
+  ): Promise<void> {
+    const audit = this.securityAudit;
+    if (!audit) return;
+    await audit.record({
+      actor,
+      action: 'checkout.external_return.updated',
+      targetType: 'store',
+      targetId: store.id,
+      targetLabel: store.slug,
+      fields: change.fields,
+      meta,
+    });
+    if (actor.email) {
+      audit.alert(
+        [actor.email],
+        'external_return_changed',
+        { actorEmail: actor.email, fields: change.fields, meta },
+        await audit.localeFor(actor.id),
+      );
+    }
   }
 
   /**
@@ -731,7 +862,13 @@ export class StoresService {
   async adminUpdateByCreatorId(creatorId: string, dto: AdminUpdateStoreDto) {
     const store = await this.prisma.store.findUnique({
       where: { creator_id: creatorId },
-      select: { id: true, slug: true, store_type: true, custom_domain: true },
+      select: {
+        id: true,
+        slug: true,
+        store_type: true,
+        custom_domain: true,
+        checkout_settings: true,
+      },
     });
     if (!store)
       throw new NotFoundException({
@@ -760,11 +897,34 @@ export class StoresService {
         });
     }
 
-    const { is_active: toggleActive, ...rest } = dto;
+    const {
+      is_active: toggleActive,
+      current_password: _password,
+      totp_code: _totp,
+      ...rest
+    } = dto;
+    // The external return URLs (P3) need the owner's own step-up and audit;
+    // the admin path keeps the stored ones and may not change them.
+    const storedCheckout: unknown = store.checkout_settings ?? null;
+    if (rest.checkout_settings !== undefined) {
+      rest.checkout_settings = withStoredExternalReturn(
+        rest.checkout_settings,
+        storedCheckout,
+      ) as UpdateStoreDto['checkout_settings'];
+    }
     const data = normalizeStoreUpdate(
       rest as UpdateStoreDto,
       this.encryptSecret,
     );
+    if (
+      data.checkout_settings !== undefined &&
+      this.externalReturnChange(storedCheckout, data.checkout_settings)
+    ) {
+      throw new ForbiddenException({
+        code: 'CHECKOUT_EXTERNAL_URL_OWNER_ONLY',
+        message: 'Only the store owner can change the external website URLs',
+      });
+    }
     // Admin is_active: same LIVE↔PAUSED rule; other transitions go through
     // PUT /admin/stores/:id/status.
     if (toggleActive !== undefined) {

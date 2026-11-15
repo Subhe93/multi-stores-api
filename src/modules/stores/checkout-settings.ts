@@ -1,4 +1,11 @@
 import { BadRequestException } from '@nestjs/common';
+import {
+  ExternalUrlRejected,
+  assertExternalHostAllowed,
+  isExternalHostAllowed,
+  parseExternalReturnUrl,
+  tryParseExternalReturnUrl,
+} from './external-site-hosts';
 
 // ── Store checkout settings (M5 W2-A, M5-PLAN §4 M5.1) ───────────────────────
 // Per-store checkout behaviour, stored in `Store.checkout_settings` (JSONB,
@@ -13,6 +20,22 @@ import { BadRequestException } from '@nestjs/common';
 export const AFTER_ADD_TO_CART = ['stay', 'cart', 'checkout'] as const;
 export type AfterAddToCart = (typeof AFTER_ADD_TO_CART)[number];
 
+/** After payment: a "back to site" button, or a cancellable auto-redirect. */
+export const RETURN_MODES = ['button', 'auto'] as const;
+export type ReturnMode = (typeof RETURN_MODES)[number];
+
+/**
+ * The external-site keys (headless booking P3). A body that omits ALL of them
+ * keeps the stored values (see `withStoredExternalReturn`), so a client that
+ * does not know them cannot wipe them.
+ */
+export const EXTERNAL_RETURN_KEYS = [
+  'external_site_url',
+  'return_url',
+  'return_mode',
+  'back_label',
+] as const;
+
 export interface CheckoutSettings {
   /** Where the shopper goes after "add to cart". `stay` = today's toast. */
   after_add_to_cart: AfterAddToCart;
@@ -25,6 +48,35 @@ export interface CheckoutSettings {
   coupon_param: string[];
   /** Apply a coupon found in the URL automatically. */
   coupon_autoapply: boolean;
+  /** The store's own website (https, exact host). Null = no external site. */
+  external_site_url: string | null;
+  /** Where "back to site" goes after payment; may carry `{order_number}`.
+   *  Host = the external_site_url host or its www twin. Null = the site URL. */
+  return_url: string | null;
+  /** `button` (default) or `auto` (countdown redirect after a paid order). */
+  return_mode: ReturnMode;
+  /** "Back to site" button label per locale; null = translated default. */
+  back_label: Record<string, string> | null;
+}
+
+type ExternalReturnKey = (typeof EXTERNAL_RETURN_KEYS)[number];
+
+/**
+ * What is stored and sent to the storefront: the external-site keys appear
+ * only while an external site is set, so the JSON of every other store stays
+ * exactly what it was before P3.
+ */
+export type CompactCheckoutSettings = Omit<CheckoutSettings, ExternalReturnKey> &
+  Partial<Pick<CheckoutSettings, ExternalReturnKey>>;
+
+/** Drops the external-site keys when no external site is configured. */
+export function compactCheckoutSettings(
+  s: CheckoutSettings,
+): CompactCheckoutSettings {
+  if (s.external_site_url) return s;
+  const out: CompactCheckoutSettings = { ...s };
+  for (const k of EXTERNAL_RETURN_KEYS) delete out[k];
+  return out;
 }
 
 export const DEFAULT_CHECKOUT_SETTINGS: Readonly<CheckoutSettings> = Object.freeze({
@@ -33,6 +85,10 @@ export const DEFAULT_CHECKOUT_SETTINGS: Readonly<CheckoutSettings> = Object.free
   pay_button_label: null,
   coupon_param: ['coupon'],
   coupon_autoapply: false,
+  external_site_url: null,
+  return_url: null,
+  return_mode: 'button',
+  back_label: null,
 });
 
 // Limits for the validator. Locale keys are BCP-47-ish short tags (`sv`,
@@ -63,7 +119,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  */
 export function normalizeCheckoutSettingsInput(
   raw: unknown,
-): CheckoutSettings | null {
+): CompactCheckoutSettings | null {
   if (raw === null || raw === undefined) return null;
   if (!isPlainObject(raw)) invalid('checkout_settings must be an object');
 
@@ -91,31 +147,27 @@ export function normalizeCheckoutSettingsInput(
           invalid('coupon_autoapply must be a boolean');
         out.coupon_autoapply = value;
         break;
-      case 'pay_button_label': {
+      case 'pay_button_label':
+      case 'back_label':
         if (value === undefined || value === null) break;
-        if (!isPlainObject(value))
-          invalid('pay_button_label must be an object keyed by locale');
-        const labels: Record<string, string> = {};
-        const entries = Object.entries(value);
-        if (entries.length > MAX_LOCALE_LABELS)
-          invalid(`pay_button_label may hold at most ${MAX_LOCALE_LABELS} locales`);
-        for (const [locale, label] of entries) {
-          if (!LOCALE_KEY_RE.test(locale))
-            invalid(`pay_button_label: "${locale}" is not a locale key`);
-          if (typeof label !== 'string')
-            invalid(`pay_button_label.${locale} must be a string`);
-          const trimmed = label.trim();
-          // An emptied field means "use the default for this locale".
-          if (!trimmed) continue;
-          if (trimmed.length > MAX_LABEL_LENGTH)
-            invalid(
-              `pay_button_label.${locale} must be at most ${MAX_LABEL_LENGTH} characters`,
-            );
-          labels[locale] = trimmed;
-        }
-        out.pay_button_label = Object.keys(labels).length ? labels : null;
+        if (key === 'back_label')
+          out.back_label = normalizeLocaleLabels('back_label', value);
+        else out.pay_button_label = normalizeLocaleLabels('pay_button_label', value);
         break;
-      }
+      case 'external_site_url':
+        if (value === undefined || value === null || value === '') break;
+        out.external_site_url = parseExternalReturnUrl(value, 'external_site_url');
+        break;
+      case 'return_url':
+        if (value === undefined || value === null || value === '') break;
+        out.return_url = parseExternalReturnUrl(value, 'return_url');
+        break;
+      case 'return_mode':
+        if (value === undefined || value === null) break;
+        if (!RETURN_MODES.includes(value as ReturnMode))
+          invalid(`return_mode must be one of ${RETURN_MODES.join(', ')}`);
+        out.return_mode = value as ReturnMode;
+        break;
       case 'coupon_param': {
         if (value === undefined || value === null) break;
         if (!Array.isArray(value))
@@ -146,7 +198,67 @@ export function normalizeCheckoutSettingsInput(
         invalid(`checkout_settings: unknown key "${key}"`);
     }
   }
-  return isDefaultCheckoutSettings(out) ? null : out;
+  if (out.external_site_url) {
+    if (out.return_url)
+      assertExternalHostAllowed(out.return_url, out.external_site_url);
+  } else {
+    // A return target without a site is refused; the cosmetic keys have no
+    // meaning without a site and fall back to their defaults.
+    if (out.return_url)
+      throw new ExternalUrlRejected('return_url', 'external_site_url_required');
+    out.return_mode = DEFAULT_CHECKOUT_SETTINGS.return_mode;
+    out.back_label = null;
+  }
+  return isDefaultCheckoutSettings(out) ? null : compactCheckoutSettings(out);
+}
+
+/** Validates a `{ locale: label }` map; an emptied entry means "default". */
+function normalizeLocaleLabels(
+  key: 'pay_button_label' | 'back_label',
+  value: unknown,
+): Record<string, string> | null {
+  if (!isPlainObject(value)) invalid(`${key} must be an object keyed by locale`);
+  const labels: Record<string, string> = {};
+  const entries = Object.entries(value);
+  if (entries.length > MAX_LOCALE_LABELS)
+    invalid(`${key} may hold at most ${MAX_LOCALE_LABELS} locales`);
+  for (const [locale, label] of entries) {
+    if (!LOCALE_KEY_RE.test(locale))
+      invalid(`${key}: "${locale}" is not a locale key`);
+    if (typeof label !== 'string') invalid(`${key}.${locale} must be a string`);
+    const trimmed = label.trim();
+    // An emptied field means "use the default for this locale".
+    if (!trimmed) continue;
+    if (trimmed.length > MAX_LABEL_LENGTH)
+      invalid(`${key}.${locale} must be at most ${MAX_LABEL_LENGTH} characters`);
+    labels[locale] = trimmed;
+  }
+  return Object.keys(labels).length ? labels : null;
+}
+
+/**
+ * When a checkout_settings body (an object) omits every external-site key,
+ * carries the stored ones over so an older client saving the other keys
+ * cannot drop them. `null` still clears everything.
+ */
+export function withStoredExternalReturn(raw: unknown, stored: unknown): unknown {
+  if (!isPlainObject(raw)) return raw;
+  if (EXTERNAL_RETURN_KEYS.some((k) => k in raw)) return raw;
+  const current = readStoredCheckoutSettings(stored);
+  if (!current.external_site_url) return raw;
+  const carried: Record<string, unknown> = { ...raw };
+  for (const k of EXTERNAL_RETURN_KEYS) carried[k] = current[k];
+  return carried;
+}
+
+/** Names of the external-site URL keys that differ between two settings. */
+export function changedExternalUrlKeys(
+  before: CheckoutSettings,
+  after: CheckoutSettings,
+): ('external_site_url' | 'return_url')[] {
+  return (['external_site_url', 'return_url'] as const).filter(
+    (k) => before[k] !== after[k],
+  );
 }
 
 /** True when every key equals the platform default. */
@@ -157,6 +269,10 @@ export function isDefaultCheckoutSettings(s: CheckoutSettings): boolean {
     s.phone_required === d.phone_required &&
     s.coupon_autoapply === d.coupon_autoapply &&
     s.pay_button_label === null &&
+    s.external_site_url === null &&
+    s.return_url === null &&
+    s.return_mode === d.return_mode &&
+    s.back_label === null &&
     s.coupon_param.length === d.coupon_param.length &&
     s.coupon_param.every((k, i) => k === d.coupon_param[i])
   );
@@ -176,12 +292,17 @@ export function readStoredCheckoutSettings(raw: unknown): CheckoutSettings {
     out.phone_required = raw.phone_required;
   if (typeof raw.coupon_autoapply === 'boolean')
     out.coupon_autoapply = raw.coupon_autoapply;
-  if (isPlainObject(raw.pay_button_label)) {
-    const labels: Record<string, string> = {};
-    for (const [locale, label] of Object.entries(raw.pay_button_label)) {
-      if (typeof label === 'string' && label.trim()) labels[locale] = label.trim();
-    }
-    if (Object.keys(labels).length) out.pay_button_label = labels;
+  out.pay_button_label = readStoredLabels(raw.pay_button_label);
+  // External site (P3): re-checked on every read, so a hand-edited row can
+  // never turn the storefront into an open redirect.
+  const site = tryParseExternalReturnUrl(raw.external_site_url, 'external_site_url');
+  if (site) {
+    out.external_site_url = site;
+    const ret = tryParseExternalReturnUrl(raw.return_url, 'return_url');
+    if (ret && isExternalHostAllowed(ret, site)) out.return_url = ret;
+    if (RETURN_MODES.includes(raw.return_mode as ReturnMode))
+      out.return_mode = raw.return_mode as ReturnMode;
+    out.back_label = readStoredLabels(raw.back_label);
   }
   if (Array.isArray(raw.coupon_param)) {
     const keys = raw.coupon_param.filter(
@@ -192,6 +313,15 @@ export function readStoredCheckoutSettings(raw: unknown): CheckoutSettings {
   return out;
 }
 
+function readStoredLabels(raw: unknown): Record<string, string> | null {
+  if (!isPlainObject(raw)) return null;
+  const labels: Record<string, string> = {};
+  for (const [locale, label] of Object.entries(raw)) {
+    if (typeof label === 'string' && label.trim()) labels[locale] = label.trim();
+  }
+  return Object.keys(labels).length ? labels : null;
+}
+
 /**
  * The public projection for `GET /storefront/:slug`: the full settings when
  * the store overrides anything, `undefined` when everything is default so the
@@ -199,8 +329,10 @@ export function readStoredCheckoutSettings(raw: unknown): CheckoutSettings {
  */
 export function publicCheckoutSettings(
   raw: unknown,
-): CheckoutSettings | undefined {
+): CompactCheckoutSettings | undefined {
   if (raw === null || raw === undefined) return undefined;
   const settings = readStoredCheckoutSettings(raw);
-  return isDefaultCheckoutSettings(settings) ? undefined : settings;
+  return isDefaultCheckoutSettings(settings)
+    ? undefined
+    : compactCheckoutSettings(settings);
 }

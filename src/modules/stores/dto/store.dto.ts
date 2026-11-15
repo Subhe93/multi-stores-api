@@ -264,6 +264,19 @@ export class UpdateStoreDto {
   @IsObject()
   checkout_settings?: Record<string, unknown> | null;
 
+  // Step-up for a new/changed `checkout_settings.external_site_url` (headless
+  // booking P3): the current password, plus a 2FA code when 2FA is on. Never
+  // stored; ignored by every other change.
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  current_password?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  totp_code?: string;
+
   // Tracking + cookie consent (Namez go-live 3.9). Empty string or null
   // clears an id. The storefront only loads a tracker whose id is set.
   @IsOptional()
