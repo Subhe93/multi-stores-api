@@ -1,6 +1,6 @@
 # Storefront API (public, read-only): contract for external sites
 
-Audience: a developer building a custom website (for example `primatrafikskola.se`) that shows a ShopsDoor store's catalogue (courses, dates, prices, seats) and sends visitors to the ShopsDoor store (for example `boka.primatrafikskola.se`) to book and pay.
+Audience: a developer building a custom website (for example `example.se`) that shows a ShopsDoor store's catalogue (courses, dates, prices, seats) and sends visitors to the ShopsDoor store (for example `shop.example.se`) to book and pay.
 
 This file is the single source for that work. The contract is enforced by `src/modules/storefront/storefront.public-contract.spec.ts`; change both together.
 
@@ -11,7 +11,7 @@ Status markers: **LIVE** = deployed behaviour. **PLANNED (Pn)** = agreed in `pla
 ## 1. Base, auth, envelope, errors
 
 - Base URL: `https://<api-host>/api` (all routes below are under the global prefix `/api`). The production API host is given to you by the platform owner; keep it in an env var (`SHOPSDOOR_API_URL`).
-- Store identifier: the store **slug** (`:slug`), for example `prima`. It never changes after the store is created.
+- Store identifier: the store **slug** (`:slug`), for example `example`. It never changes after the store is created.
 - Auth: none. These routes are public. Do **not** send `Authorization: Bearer ...`: on these routes a bearer is read as an owner/admin "viewer" (owner preview of a non-LIVE store). An anonymous request always sees the public view.
 - Method: `GET` only. No request body.
 - Success envelope (every route):
@@ -61,10 +61,10 @@ Documented keys (LIVE store):
 | `name` | string | Store name |
 | `description` | string or null | Store description |
 | `logo_url`, `favicon_url` | string or null | Media URL (see section 6) |
-| `custom_domain` | string or null | The store's own host (for example `boka.primatrafikskola.se`); booking links go there |
+| `custom_domain` | string or null | The store's own host (for example `shop.example.se`); booking links go there |
 | `status` | `"LIVE"` | Lifecycle state (other values only in the closed shell) |
 | `is_active` | boolean | `true` when LIVE |
-| `store_type` | `"INDEPENDENT"` or `"MARKETPLACE"` | Prima is INDEPENDENT |
+| `store_type` | `"INDEPENDENT"` or `"MARKETPLACE"` | A store that sells for itself is INDEPENDENT |
 | `currency` | string (ISO 4217) | Currency of every price (for example `"SEK"`) |
 | `language_config` | object | `{ primary_locale, secondary_locales[], fallback_locale, auto_translate, ... }` |
 | `tax` | object | `{ pricing_mode: "INCLUSIVE" or "EXCLUSIVE", display_prices_incl_tax: boolean, country: "SE", registrant: "STORE" or "PLATFORM" }` (section 5) |
@@ -86,13 +86,13 @@ Trimmed example (shape from the code; values illustrative):
 
 ```json
 {
-  "id": "6f1c...", "slug": "prima", "name": "Prima Trafikskola",
-  "description": null, "logo_url": "/uploads/stores/prima/logo.webp", "favicon_url": null,
-  "custom_domain": "boka.primatrafikskola.se", "status": "LIVE", "is_active": true,
+  "id": "6f1c...", "slug": "example", "name": "Example Trafikskola",
+  "description": null, "logo_url": "/uploads/stores/example/logo.webp", "favicon_url": null,
+  "custom_domain": "shop.example.se", "status": "LIVE", "is_active": true,
   "store_type": "INDEPENDENT", "currency": "SEK",
   "language_config": { "primary_locale": "sv", "secondary_locales": ["en"], "fallback_locale": "en", "auto_translate": false },
   "tax": { "pricing_mode": "INCLUSIVE", "display_prices_incl_tax": true, "country": "SE", "registrant": "STORE" },
-  "seller_details": { "legal_name": "Prima Trafikskola AB", "org_number": "556...", "city": "...", "support_email": "..." },
+  "seller_details": { "legal_name": "Example Trafikskola AB", "org_number": "556...", "city": "...", "support_email": "..." },
   "card_payments_enabled": false, "kustom_enabled": true, "apps": {},
   "pages": [{ "slug": "villkor", "sort_order": 0, "translations": [{ "locale": "sv", "title": "Villkor" }] }],
   "cookie_page_slug": null
@@ -133,11 +133,11 @@ Payload: a plain JSON array. Each own product item:
 | `promotions` | array | Active automatic promotions that apply: `{ id, type, value, translations }` |
 | `brand` | string (optional) | Only when set |
 | `created_at`, `updated_at` | string | ISO dates |
-| `max_per_order` | number or null | **PLANNED (P1, B2a)**: maximum quantity of this product in one order; null = no limit. Additive key |
+| `max_per_order` | number or null | **LIVE**: maximum quantity of this product in one order; null = no limit. Additive key |
 
 Product-level columns that are never served: `cost_price`, `external_ref`, `gtin`, `mpn`, `google_product_category`, `condition`, `feed_excluded`; variant `external_ref`.
 
-Size: the list carries every product with its translations (HTML descriptions included). Fetch it once per build/revalidation, not per page view, and filter by collection when possible. (Measured payload size of the Prima store: to fill in at P6 when the courses exist.)
+Size: the list carries every product with its translations (HTML descriptions included). Fetch it once per build/revalidation, not per page view, and filter by collection when possible.
 
 Trimmed example item:
 
@@ -186,7 +186,7 @@ A course date is **one product**; its stock is the number of seats.
 
 - All prices are in the store payload's `currency` (one currency per store; never convert).
 - Own product price: `base_price`. A variant's price: `variants[].price` (= `base_price` + the variant's adjustment). Show the variant price when a visitor chooses a variant, otherwise `base_price`; "from" = the lowest active variant price.
-- Tax: with `tax.pricing_mode = "INCLUSIVE"` (Prima) every price **includes** VAT; show it as is ("inkl. moms"). With `"EXCLUSIVE"` the prices exclude VAT and `tax.display_prices_incl_tax` tells the store how it displays them; the exact tax is computed at checkout from the buyer's address. Courses are usually VAT exempt or 25 %; do not compute VAT yourself.
+- Tax: with `tax.pricing_mode = "INCLUSIVE"` every price **includes** VAT; show it as is ("inkl. moms"). With `"EXCLUSIVE"` the prices exclude VAT and `tax.display_prices_incl_tax` tells the store how it displays them; the exact tax is computed at checkout from the buyer's address. Courses are usually VAT exempt or 25 %; do not compute VAT yourself.
 - `compare_at_price` (when present and higher) is a "before" price; `promotions[]` are automatic discounts the store applies at checkout. Showing them is optional.
 
 ## 6. Media URLs
@@ -200,7 +200,7 @@ const resolveMedia = (u?: string | null) =>
 
 If you use `next/image`, allow the API host and the object-storage host in `images.remotePatterns`.
 
-## 7. Course date convention (Prima)
+## 7. Course date convention (optional, per store)
 
 One product per course date. The Swedish title carries the date in the fixed format `YYYY-MM-DD HH:mm` (Europe/Stockholm local time), for example `Riskettan 2026-12-01 17:00`. Parse it from the `sv` translation title with `/(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/`; hide products whose date is in the past; group by collection (`creator_category`). A title without a parsable date is a non-dated product (show it without a date, do not crash).
 
@@ -208,31 +208,31 @@ One product per course date. The Swedish title carries the date in the fixed for
 
 - The API sends no `Cache-Control`; caching is the caller's job.
 - Recommended on the custom site: server-side fetch with ISR/revalidate **60 s** for course lists; a seat count that must be fresher can be read through your own small server route cached about 15 s. Never cache a non-2xx answer.
-- The ShopsDoor store itself caches pages per store; a store with caching switched off (`cache-config` answers `{ "enabled": false }`, set for the Prima store) always renders fresh seats on the booking pages.
+- The ShopsDoor store itself caches pages per store; a store with caching switched off (`cache-config` answers `{ "enabled": false }`) always renders fresh seats on the booking pages.
 - There is no push notification of seat changes today (webhooks are a possible later phase, P5).
 
 ## 9. Rate limits and CORS
 
 - The storefront routes are not throttled per IP (they are read by the store's own server). Be a good citizen anyway: at build time fetch with limited concurrency (2 to 4 parallel requests), retry on 429/5xx with backoff, and do not poll.
-- **Call the API server-side** (Next.js server components, route handlers, build step). Browser calls from another site are not part of this contract: in production CORS allows only the platform's own hosts (`CORS_ALLOWED_ORIGINS`) and the stores' own domains, so a browser `fetch` from `primatrafikskola.se` is rejected. Server-side calls send no `Origin` and are not affected by CORS.
+- **Call the API server-side** (Next.js server components, route handlers, build step). Browser calls from another site are not part of this contract: in production CORS allows only the platform's own hosts (`CORS_ALLOWED_ORIGINS`) and the stores' own domains, so a browser `fetch` from `example.se` is rejected. Server-side calls send no `Origin` and are not affected by CORS.
 - An optional per-store API key (`X-Storefront-Token`) and allowed-origins list are **PLANNED (P2, optional)**; until then no key is needed.
 
 ## 10. Linking into the booking store
 
-- Product page on the store: `https://<store custom_domain>/products/<slug>` where `<slug>` is the product's primary-locale `translations[].slug` (for Prima: the `sv` slug), for example `https://boka.primatrafikskola.se/products/riskettan-2026-12-01`.
+- Product page on the store: `https://<store custom_domain>/products/<slug>` where `<slug>` is the product's primary-locale `translations[].slug`, for example `https://shop.example.se/products/riskettan-2026-12-01`.
 - Without a custom domain the store lives on the platform host under the store slug; use `custom_domain` from 3.1 when it is set.
 - `?qty=N` pre-selects N seats on the product page; see 10.1.
 - Do not put personal data in links (no names, emails, personnummer).
 
 ### 10.1 Pre-selecting seats: `?qty=N`
 
-**PLANNED (P1, B3)**: the store web part ships with P1. Before it is deployed the parameter is ignored (quantity stays 1), so links that carry it are safe to publish early.
+**LIVE.** A store page that cannot apply the parameter ignores it (quantity stays 1).
 
 Format: append `qty` to the product link from section 10.
 
 ```
-https://boka.primatrafikskola.se/products/riskettan-2026-12-01?qty=2
-https://boka.primatrafikskola.se/products/riskettan-2026-12-01?qty=2&utm_source=primatrafikskola.se
+https://shop.example.se/products/riskettan-2026-12-01?qty=2
+https://shop.example.se/products/riskettan-2026-12-01?qty=2&utm_source=example.se
 ```
 
 Rules (applied in the shopper's browser on the product page):
@@ -253,14 +253,14 @@ Rules (applied in the shopper's browser on the product page):
 
 ## 11. Order return: back to the custom site after payment
 
-**Shipped in code (P3), not yet deployed.** Until the deploy, and for every store that does not set it, checkout behaves exactly as before.
+**LIVE.** For every store that does not set it, checkout behaves exactly as before.
 
 ### 11.1 Flow
 
-1. The visitor books on the store host (for example `boka.primatrafikskola.se`) and pays with Kustom (Klarna) or Stripe.
+1. The visitor books on the store host (for example `shop.example.se`) and pays with Kustom (Klarna) or Stripe.
 2. The payment provider always returns to the **store's own confirmation page** first (Kustom `merchant_urls.confirmation` and the Stripe `return_url` are unchanged). That page shows the Kustom snippet / receipt and fires the purchase tags.
 3. Only when the order is in a final good state (Kustom: `paid`; Stripe: payment succeeded, inline card, or cash on delivery, never "processing" or "failed") the page shows a **"Tillbaka till <site>"** button. In `auto` mode an 8 second countdown with a "Stay on this page" button precedes the redirect, and the redirect waits up to 3 s for the purchase tags.
-4. The visitor lands on the configured return URL, for example `https://primatrafikskola.se/tack?order=ORD-MB3K9X1-7QZP`.
+4. The visitor lands on the configured return URL, for example `https://example.se/tack?order=ORD-MB3K9X1-7QZP`.
 
 ### 11.2 Store settings (owner dashboard: Settings, Checkout behaviour, External website)
 
@@ -268,15 +268,15 @@ Stored in `checkout_settings` (owner endpoint `PUT /stores/my/store`):
 
 | Key | Meaning |
 |---|---|
-| `external_site_url` | The custom site, for example `https://primatrafikskola.se`. Required for everything below. Setting or replacing it asks for the owner's password (plus the 2FA code when 2FA is on). |
+| `external_site_url` | The custom site, for example `https://example.se`. Required for everything below. Setting or replacing it asks for the owner's password (plus the 2FA code when 2FA is on). |
 | `return_url` | Optional page after payment on the same site. May contain `{order_number}`, nothing else. Empty = `external_site_url`. |
 | `return_mode` | `button` (default) or `auto`. |
-| `back_label` | Optional button text per locale (`{ "sv": "Tillbaka till Prima" }`); default "Tillbaka till <host>". |
+| `back_label` | Optional button text per locale (`{ "sv": "Tillbaka till Example" }`); default "Tillbaka till <host>". |
 
 URL rules, checked when saved, again when read, and again in the browser before rendering:
 
 - `https://` only, default port only, no `user:password@`, a real domain name (no IP address, no `localhost`).
-- The `return_url` host must be **exactly** the `external_site_url` host or its `www.` twin (`primatrafikskola.se` <-> `www.primatrafikskola.se`). Subdomains (`boka.primatrafikskola.se`) and look-alikes are refused; there is no "same registrable domain" rule.
+- The `return_url` host must be **exactly** the `external_site_url` host or its `www.` twin (`example.se` <-> `www.example.se`). Subdomains (`shop.example.se`) and look-alikes are refused; there is no "same registrable domain" rule.
 - `{order_number}` may appear in the path, query or fragment, never in the host. It is replaced with the URL-encoded order number. No other value is ever added: no email, name, personnummer, order uuid, session or token, and no totals.
 - A refused value returns `400 CHECKOUT_EXTERNAL_URL_NOT_ALLOWED` with `field` and `reason` (`invalid_url`, `too_long`, `https_required`, `userinfo_not_allowed`, `port_not_allowed`, `host_not_allowed`, `placeholder_not_allowed`, `external_site_url_required`).
 - Every change to either URL (including clearing it) writes the security log row `checkout.external_return.updated` and emails the owner.
@@ -294,7 +294,7 @@ With an external site set, the checkout logo, the checkout footer link and the "
 ### 11.4 Consent and tracking checklist (two hosts)
 
 - [ ] **Consent is per host.** The store uses a host-only `consent_<slug>` cookie; the custom site needs its own banner (Consent Mode v2). Two banners in v1 are expected; shared consent across subdomains is not supported.
-- [ ] **GA4**: the same measurement ID on both hosts is fine. With consent, `_ga` is set on `.primatrafikskola.se` by both, so no cross-domain linker is needed. Add `kustom.co`, `klarna.com`, `stripe.com` and `checkout.stripe.com` to **unwanted referrals** so the return from the payment provider does not start a new session.
+- [ ] **GA4**: the same measurement ID on both hosts is fine. With consent, `_ga` is set on `.example.se` by both, so no cross-domain linker is needed. Add `kustom.co`, `klarna.com`, `stripe.com` and `checkout.stripe.com` to **unwanted referrals** so the return from the payment provider does not start a new session.
 - [ ] **Purchase only on the store confirmation page.** Never send `purchase` (GA4), `Purchase` (Meta) or `CompletePayment` (TikTok) from `/tack`. Meta deduplicates on `purchase_<order uuid>`, which the custom site never sees.
 - [ ] **No order number in analytics.** On `/tack`, strip the query from `page_location` (or call `history.replaceState` to `/tack` after reading the number) before GA4 / GTM / Meta run.
 - [ ] **Referrer**: both apps send `Referrer-Policy: strict-origin-when-cross-origin` and the return links carry `rel="noreferrer"`, so the store path is not leaked to the custom site.
