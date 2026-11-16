@@ -222,6 +222,7 @@ One product per course date. The Swedish title carries the date in the fixed for
 - Product page on the store: `https://<store custom_domain>/products/<slug>` where `<slug>` is the product's primary-locale `translations[].slug`, for example `https://shop.example.se/products/riskettan-2026-12-01`.
 - Without a custom domain the store lives on the platform host under the store slug; use `custom_domain` from 3.1 when it is set.
 - `?qty=N` pre-selects N seats on the product page; see 10.1.
+- `?back=<path>` tells a focused storefront which page of the custom site the buyer came from; see 10.2.
 - Do not put personal data in links (no names, emails, personnummer).
 
 ### 10.1 Pre-selecting seats: `?qty=N`
@@ -250,6 +251,38 @@ Rules (applied in the shopper's browser on the product page):
 - The page renders with quantity 1 on the server and applies `qty` right after load, so cached pages are shared between links with different `qty` values.
 - The limits are enforced again by the API at cart add, at checkout and at payment (`CART_MAX_PER_ORDER`, `ORDER_INSUFFICIENT_STOCK`), so a hand-edited link cannot book more seats than allowed.
 - Compute `qty` from the seats the visitor chose on the custom site; do not pass seats left from a cached build as `qty` (the store clamps anyway).
+
+### 10.2 Back to the page the buyer came from: `?back=<path>`
+
+**Not deployed yet** (storefront only; no API change). Only a focused storefront (11.5) reads it; every other store ignores the parameter.
+
+A buyer who leaves the store without buying should land on the page of the custom site he came from, not on its home page. The buy link says which page that is:
+
+```
+https://shop.example.se/products/testlektion-60-min?back=%2Fproduct%2Ftestlektion-60-min%2F
+https://shop.example.se/products/testlektion-60-min?qty=1&back=%2Fproduct%2Ftestlektion-60-min%2F
+```
+
+Format: `back` is the **path** of the page on the custom site (with its query and fragment when needed), URL-encoded once (`encodeURIComponent(location.pathname + location.search)`). It is never a full URL: the store always joins it to the origin of the stored `external_site_url`, so the host cannot be changed through the link.
+
+The value is accepted only when all of this holds; anything else is ignored (the back links then lead to `external_site_url`):
+
+| Rule | Refused examples |
+|---|---|
+| starts with exactly one `/` | `product/x`, `https://example.se/x`, `//evil.com` |
+| no `//` anywhere, no backslash | `/a//b`, `/\evil`, `/a?u=//x` |
+| no whitespace or control character, raw or percent-encoded (`%00`-`%1F`, `%7F`), no encoded backslash (`%5C`), no encoded slash right after the first one (`/%2F...`) | `/a b`, `/a%0Ab`, `/%2F%2Fevil.com` |
+| at most 300 characters after decoding | |
+
+Accepted examples: `/product/testlektion-60-min/`, `/kurser/b-korkort`, `/ok/path/?a=b#c`.
+
+Behaviour:
+
+- The store remembers the value for the browser tab (session storage). On every product page a valid `back` replaces the remembered one; a product link without `back` keeps it.
+- The header logo, the "back to site" links, the cart's "continue shopping" link and the empty-cart link lead to `<external site origin><back>`. Without a remembered value they lead to `external_site_url` as before.
+- The page is rendered with `external_site_url` in those links and switches to the remembered page right after load (same reason as `qty`: cached pages are shared between links).
+- The return after a completed purchase (`return_url`, section 11) is not affected.
+- Do not put personal data in the path.
 
 ## 11. Order return: back to the custom site after payment
 
@@ -310,15 +343,16 @@ With an external site set, the checkout logo, the checkout footer link and the "
 
 With it on, the store host is a purchase step of the custom site, not a second shop. The buyer arrives on a product page (section 10), fills the fields, adds to the cart, pays, and returns (11.1). On every host of the store:
 
-- **Header**: the store logo (links to `external_site_url`), a "back to site" link (`back_label` for the locale, else "Back to <host>") and the cart with its count. No menu, collections, search, country or language switcher, account link or announcement bar, whichever header the store uses (built-in or a published builder header).
-- **Footer**: the legal page links, the cookie page, the "back to site" link, the seller details, the cookie settings link and the platform line. No menu or collection columns, no newsletter.
+- **Header**: the store logo (links to `external_site_url`), a "back to site" link (`back_label` for the locale, else "Back to <host>") and the cart with its count. No menu, collections, search, country or language switcher, account link or announcement bar, whichever header the store uses (built-in or a published builder header). Under it, on the product, cart and checkout pages, a step indicator: 1 Your details, 2 Cart, 3 Payment. The logo and the back link follow `?back=<path>` (10.2).
+- **Footer**: a dark brand band (derived from the store's primary colour) with the logo, the seller's contact block (address, phone, e-mail from the seller details), one links column, the "back to site" link, the legal line (legal name, organisation number, platform line) and the cookie settings link. No collection columns, no newsletter.
+- **Footer links**: the store's navigation menu with key `footer` when it exists and has items (absolute URLs are rendered as given, so the links can be the custom site's own terms, privacy, FAQ and contact pages; relative ones are store links). Only without such a menu the store's own `/legal/*` pages are listed. The cookie page link stays in both cases. The checkout's own terms link is not affected.
 - **Redirected to `external_site_url`** (HTTP 307, temporary): the store home page, `/collections` and every collection page, the `/products` listing, and content pages at `/<page-slug>`. A locale prefix (`/en/...`) changes nothing.
 - **Never redirected**: product pages (`/products/<slug>`), `/cart`, the checkout and the order confirmation pages, `/account/*`, `/auth/*`, `/legal/*`, the cookie page and any content page that serves a legal slug (privacy, terms, refund, shipping), `robots.txt`, `sitemap.xml`, API and static routes, the builder preview, the owner's preview, and the "coming soon" / "temporarily closed" page of a store that is not LIVE.
-- **Product page**: same content (images, description, fields); the breadcrumb, the collection link and product listing sections ("related products") are not shown, so there is no in-page path into a listing.
+- **Product page**: presented as step 1 of the purchase: collection name, title and short description, a summary card (main image, price with the tax note, seller phone), one card with the buyer's fields (two columns on desktop), the options, the quantity (only when more than one unit can be bought) and the add-to-cart button, and the long description, specifications and FAQ behind a closed "More information" section. Same data, rules and add-to-cart as the regular product page; no breadcrumb, collection link or product listing sections, so there is no in-page path into a listing. Designer products keep the regular product page.
 - **After "add to cart"** the buyer goes to the cart page (several products can go into one order), unless the store chose `after_add_to_cart: "checkout"`. "Continue shopping" and the empty cart lead to `external_site_url` (as in 11.2).
 - **`sitemap.xml`** lists product pages only. Indexing rules are otherwise unchanged.
 
-What the custom site should do: link to product pages (never to the store home or a collection, they come straight back), and expect visitors to arrive on `external_site_url` from the store's logo and back links without a referrer.
+What the custom site should do: link to product pages (never to the store home or a collection, they come straight back), add `?back=<path>` to those links (10.2), and expect visitors to arrive on `external_site_url` (or on that page) from the store's logo and back links without a referrer.
 
 The public `checkout` block carries `"external_focus": true` only while it is on; a store with a site but without it serves exactly the block it served before.
 
