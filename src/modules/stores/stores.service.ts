@@ -39,7 +39,9 @@ import {
   loadStorefrontHosts,
   type StorefrontHosts,
 } from './storefront-hosts';
+import { assertExternalSiteNotStoreHost } from './external-site-hosts';
 import {
+  changedExternalFields,
   changedExternalUrlKeys,
   normalizeCheckoutSettingsInput,
   readStoredCheckoutSettings,
@@ -459,12 +461,17 @@ export class StoresService {
     // External return URLs (P3): a body that does not mention them keeps the
     // stored ones; the stored value is also the "before" of the change check.
     let storedCheckout: unknown = null;
+    let checkoutStore: { id: string; custom_domain: string | null } | null =
+      null;
     if (rest.checkout_settings !== undefined) {
       const row = await this.prisma.store.findUnique({
         where: { creator_id: creator.id },
-        select: { checkout_settings: true },
+        select: { id: true, custom_domain: true, checkout_settings: true },
       });
       storedCheckout = row?.checkout_settings ?? null;
+      checkoutStore = row
+        ? { id: row.id, custom_domain: row.custom_domain }
+        : null;
       rest.checkout_settings = withStoredExternalReturn(
         rest.checkout_settings,
         storedCheckout,
@@ -478,6 +485,19 @@ export class StoresService {
       data.checkout_settings !== undefined
         ? this.externalReturnChange(storedCheckout, data.checkout_settings)
         : null;
+
+    // The external site may not be one of this store's own hosts (the
+    // focused storefront redirects to it: that would loop). Checked on every
+    // change of the external keys (a new site, or the focused storefront
+    // turned on for a stored one) and refused like every other URL rule,
+    // before any re-auth or write.
+    if (externalChange && checkoutStore) {
+      await this.assertExternalSiteIsNotOwnHost(
+        data.checkout_settings,
+        checkoutStore,
+        data.custom_domain,
+      );
+    }
 
     // A new or changed external site URL is an open-redirect target: the
     // owner confirms with the password (+ 2FA code when on) first,
@@ -608,9 +628,12 @@ export class StoresService {
   }
 
   /**
-   * The external return URL keys an update changes (P3), or null when none.
-   * `requiresReauth` is true when a site URL is set or replaced; clearing it
-   * (or only touching return_url) is audited without a password prompt.
+   * The external-site keys an update changes (P3), or null when none: the
+   * two URLs and the focused storefront switch (`external_focus`).
+   * `requiresReauth` is true when a site URL is set or replaced; clearing it,
+   * only touching return_url, or turning the focused storefront on or off
+   * (the site URL already asked for the password) is audited without a
+   * password prompt.
    */
   private externalReturnChange(
     stored: unknown,
@@ -620,13 +643,40 @@ export class StoresService {
     const after = readStoredCheckoutSettings(
       next === Prisma.JsonNull ? null : next,
     );
-    const keys = changedExternalUrlKeys(before, after);
-    if (!keys.length) return null;
+    const fields = changedExternalFields(before, after);
+    if (!fields.length) return null;
     return {
-      fields: keys.map((k) => (after[k] === null ? `${k} (cleared)` : k)),
+      fields,
       requiresReauth:
-        keys.includes('external_site_url') && after.external_site_url !== null,
+        changedExternalUrlKeys(before, after).includes('external_site_url') &&
+        after.external_site_url !== null,
     };
+  }
+
+  /**
+   * Refuses (`store_host_not_allowed`) an external site whose host, or its
+   * `www.` twin, serves this very store: the custom domain (the one this
+   * update sets, else the stored one) and the live market domains.
+   */
+  private async assertExternalSiteIsNotOwnHost(
+    next: unknown,
+    store: { id: string; custom_domain: string | null },
+    nextCustomDomain: string | null | undefined,
+  ): Promise<void> {
+    const site = readStoredCheckoutSettings(
+      next === Prisma.JsonNull ? null : next,
+    ).external_site_url;
+    if (!site) return;
+    const customDomain =
+      nextCustomDomain !== undefined ? nextCustomDomain : store.custom_domain;
+    const { storefront_hosts } = await loadStorefrontHosts(
+      { prisma: this.prisma, storeApps: this.storeApps },
+      { id: store.id, custom_domain: customDomain },
+    );
+    assertExternalSiteNotStoreHost(site, [
+      ...storefront_hosts,
+      ...(store.custom_domain ? [store.custom_domain] : []),
+    ]);
   }
 
   private async verifyExternalReturnChange(

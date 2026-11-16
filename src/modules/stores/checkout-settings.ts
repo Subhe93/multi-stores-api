@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import {
   ExternalUrlRejected,
   assertExternalHostAllowed,
+  assertExternalSiteNotPlatformHost,
   isExternalHostAllowed,
   parseExternalReturnUrl,
   tryParseExternalReturnUrl,
@@ -34,6 +35,7 @@ export const EXTERNAL_RETURN_KEYS = [
   'return_url',
   'return_mode',
   'back_label',
+  'external_focus',
 ] as const;
 
 export interface CheckoutSettings {
@@ -57,6 +59,11 @@ export interface CheckoutSettings {
   return_mode: ReturnMode;
   /** "Back to site" button label per locale; null = translated default. */
   back_label: Record<string, string> | null;
+  /** Focused storefront: the store is a purchase step of the external site
+   *  (reduced header/footer, browsing pages redirect to the site). Only ever
+   *  true while an external site is set; absent = off, so the internal
+   *  shape of every store without it is unchanged. */
+  external_focus?: boolean;
 }
 
 type ExternalReturnKey = (typeof EXTERNAL_RETURN_KEYS)[number];
@@ -64,17 +71,22 @@ type ExternalReturnKey = (typeof EXTERNAL_RETURN_KEYS)[number];
 /**
  * What is stored and sent to the storefront: the external-site keys appear
  * only while an external site is set, so the JSON of every other store stays
- * exactly what it was before P3.
+ * exactly what it was before P3. `external_focus` appears only when true, so
+ * a store with a site but without the focused storefront keeps its P3 JSON.
  */
 export type CompactCheckoutSettings = Omit<CheckoutSettings, ExternalReturnKey> &
   Partial<Pick<CheckoutSettings, ExternalReturnKey>>;
 
-/** Drops the external-site keys when no external site is configured. */
+/**
+ * Drops the external-site keys when no external site is configured, and
+ * `external_focus` whenever it is off.
+ */
 export function compactCheckoutSettings(
   s: CheckoutSettings,
 ): CompactCheckoutSettings {
-  if (s.external_site_url) return s;
   const out: CompactCheckoutSettings = { ...s };
+  if (!s.external_focus) delete out.external_focus;
+  if (s.external_site_url) return out;
   for (const k of EXTERNAL_RETURN_KEYS) delete out[k];
   return out;
 }
@@ -147,6 +159,12 @@ export function normalizeCheckoutSettingsInput(
           invalid('coupon_autoapply must be a boolean');
         out.coupon_autoapply = value;
         break;
+      case 'external_focus':
+        if (value === undefined || value === null) break;
+        if (typeof value !== 'boolean')
+          invalid('external_focus must be a boolean');
+        if (value) out.external_focus = true;
+        break;
       case 'pay_button_label':
       case 'back_label':
         if (value === undefined || value === null) break;
@@ -199,13 +217,22 @@ export function normalizeCheckoutSettingsInput(
     }
   }
   if (out.external_site_url) {
+    // The external site is never the platform itself or a store subdomain
+    // of it (the focused storefront redirects there: it would loop).
+    assertExternalSiteNotPlatformHost(out.external_site_url);
     if (out.return_url)
       assertExternalHostAllowed(out.return_url, out.external_site_url);
   } else {
-    // A return target without a site is refused; the cosmetic keys have no
-    // meaning without a site and fall back to their defaults.
+    // A return target or the focused storefront without a site is refused;
+    // the cosmetic keys have no meaning without a site and fall back to
+    // their defaults.
     if (out.return_url)
       throw new ExternalUrlRejected('return_url', 'external_site_url_required');
+    if (out.external_focus)
+      throw new ExternalUrlRejected(
+        'external_focus',
+        'external_site_url_required',
+      );
     out.return_mode = DEFAULT_CHECKOUT_SETTINGS.return_mode;
     out.back_label = null;
   }
@@ -243,6 +270,8 @@ function normalizeLocaleLabels(
  * `external_site_url` (null or '') still clears every external key, and
  * `null` as the whole body still clears everything. When the body names a
  * new site, the stored return_url is carried only if it stays on that host.
+ * `external_focus` follows the same rule: omitted = kept, cleared with the
+ * site.
  */
 export function withStoredExternalReturn(raw: unknown, stored: unknown): unknown {
   if (!isPlainObject(raw)) return raw;
@@ -276,6 +305,25 @@ export function withStoredExternalReturn(raw: unknown, stored: unknown): unknown
   return carried;
 }
 
+/**
+ * Audit labels of the external-site keys an update changes: the two URLs
+ * (`<key> (cleared)` when emptied) and the focused storefront switch
+ * (`external_focus` when turned on, `external_focus (cleared)` when off).
+ */
+export function changedExternalFields(
+  before: CheckoutSettings,
+  after: CheckoutSettings,
+): string[] {
+  const fields: string[] = changedExternalUrlKeys(before, after).map((k) =>
+    after[k] === null ? `${k} (cleared)` : k,
+  );
+  if (Boolean(before.external_focus) !== Boolean(after.external_focus))
+    fields.push(
+      after.external_focus ? 'external_focus' : 'external_focus (cleared)',
+    );
+  return fields;
+}
+
 /** Names of the external-site URL keys that differ between two settings. */
 export function changedExternalUrlKeys(
   before: CheckoutSettings,
@@ -298,6 +346,7 @@ export function isDefaultCheckoutSettings(s: CheckoutSettings): boolean {
     s.return_url === null &&
     s.return_mode === d.return_mode &&
     s.back_label === null &&
+    !s.external_focus &&
     s.coupon_param.length === d.coupon_param.length &&
     s.coupon_param.every((k, i) => k === d.coupon_param[i])
   );
@@ -328,6 +377,7 @@ export function readStoredCheckoutSettings(raw: unknown): CheckoutSettings {
     if (RETURN_MODES.includes(raw.return_mode as ReturnMode))
       out.return_mode = raw.return_mode as ReturnMode;
     out.back_label = readStoredLabels(raw.back_label);
+    if (raw.external_focus === true) out.external_focus = true;
   }
   if (Array.isArray(raw.coupon_param)) {
     const keys = raw.coupon_param.filter(

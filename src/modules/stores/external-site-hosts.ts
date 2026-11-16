@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { isReservedDomain } from '../../common/domains/reserved-hosts';
 
 // ── External site return (headless booking P3, PLAN §7 R-D4) ────────────────
 // A store with its own website (e.g. primatrafikskola.se in front of a
@@ -17,7 +18,13 @@ export const EXTERNAL_URL_ERROR_CODE = 'CHECKOUT_EXTERNAL_URL_NOT_ALLOWED';
 /** The only placeholder `return_url` may contain. */
 export const ORDER_NUMBER_PLACEHOLDER = '{order_number}';
 
-export type ExternalUrlField = 'external_site_url' | 'return_url';
+/** The two URL keys the parser validates. */
+export type ExternalUrlKey = 'external_site_url' | 'return_url';
+
+export type ExternalUrlField =
+  | ExternalUrlKey
+  // The focused storefront switch: only `external_site_url_required`.
+  | 'external_focus';
 
 export type ExternalUrlRejectReason =
   | 'invalid_url'
@@ -27,7 +34,10 @@ export type ExternalUrlRejectReason =
   | 'port_not_allowed'
   | 'host_not_allowed'
   | 'placeholder_not_allowed'
-  | 'external_site_url_required';
+  | 'external_site_url_required'
+  // The external site is the platform, a subdomain of it (store subdomains
+  // included), or one of the hosts that serve this very store.
+  | 'store_host_not_allowed';
 
 export const MAX_EXTERNAL_URL_LENGTH = 500;
 
@@ -169,6 +179,41 @@ export function isExternalHostAllowed(
 ): boolean {
   const host = hostOf(url);
   return host !== null && externalSiteHosts(externalSiteUrl).includes(host);
+}
+
+/**
+ * The external site must be a site of its own: never a platform host or a
+ * subdomain of one (every store subdomain included). The focused storefront
+ * redirects its browsing pages to this URL, so a platform host could loop.
+ * Checked on write only; the platform host list is read at call time.
+ */
+export function assertExternalSiteNotPlatformHost(
+  externalSiteUrl: string,
+): void {
+  const host = hostOf(externalSiteUrl);
+  if (host && isReservedDomain(host))
+    throw new ExternalUrlRejected(
+      'external_site_url',
+      'store_host_not_allowed',
+    );
+}
+
+/**
+ * Refuses an external site whose host (or `www.` twin) is one of the hosts
+ * that serve this very store (custom domain, market domains).
+ */
+export function assertExternalSiteNotStoreHost(
+  externalSiteUrl: string,
+  storeHosts: readonly string[],
+): void {
+  const own = new Set(
+    storeHosts.map((h) => h.trim().toLowerCase().replace(/\.$/, '')),
+  );
+  if (externalSiteHosts(externalSiteUrl).some((h) => own.has(h)))
+    throw new ExternalUrlRejected(
+      'external_site_url',
+      'store_host_not_allowed',
+    );
 }
 
 /** Throws `CHECKOUT_EXTERNAL_URL_NOT_ALLOWED` unless the host is allowed. */

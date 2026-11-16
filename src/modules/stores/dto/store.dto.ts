@@ -266,7 +266,8 @@ export class UpdateStoreDto {
 
   // Step-up for a new/changed `checkout_settings.external_site_url` (headless
   // booking P3): the current password, plus a 2FA code when 2FA is on. Never
-  // stored; ignored by every other change.
+  // stored; ignored by every other change (`external_focus`, the focused
+  // storefront switch, included: the site URL already asked for it).
   @IsOptional()
   @IsString()
   @MaxLength(200)

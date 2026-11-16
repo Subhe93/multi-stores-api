@@ -312,3 +312,136 @@ describe('StoresService.update external return (P3)', () => {
     expect(prisma.store.update).not.toHaveBeenCalled();
   });
 });
+
+// Focused storefront (`external_focus`): no password prompt of its own (the
+// site URL already asked for it), audited with the same action, and the
+// external site may never be one of the store's own hosts.
+describe('StoresService.update focused storefront (external_focus)', () => {
+  it('turning it on for a stored site is audited without a password prompt', async () => {
+    const { service, prisma, reauth, audit } = build({
+      external_site_url: SITE,
+    });
+    await service.update('u1', { checkout_settings: { external_focus: true } });
+    expect(reauth.verify).not.toHaveBeenCalled();
+    expect(writtenSettings(prisma)).toMatchObject({
+      external_site_url: SITE,
+      external_focus: true,
+    });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'checkout.external_return.updated',
+        fields: ['external_focus'],
+      }),
+    );
+  });
+
+  it('turning it off is audited without a password prompt and drops the key', async () => {
+    const { service, prisma, reauth, audit } = build({
+      external_site_url: SITE,
+      external_focus: true,
+    });
+    await service.update('u1', {
+      checkout_settings: { external_focus: false },
+    });
+    expect(reauth.verify).not.toHaveBeenCalled();
+    expect(writtenSettings(prisma)).toStrictEqual({
+      after_add_to_cart: 'stay',
+      phone_required: false,
+      pay_button_label: null,
+      coupon_param: ['coupon'],
+      coupon_autoapply: false,
+      external_site_url: SITE,
+      return_url: null,
+      return_mode: 'button',
+      back_label: null,
+    });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ fields: ['external_focus (cleared)'] }),
+    );
+  });
+
+  it('set together with a new site: one re-auth, both fields audited', async () => {
+    const { service, reauth, audit } = build();
+    await service.update('u1', {
+      checkout_settings: { external_site_url: SITE, external_focus: true },
+      current_password: 'pw',
+    });
+    expect(reauth.verify).toHaveBeenCalledTimes(1);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fields: ['external_site_url', 'external_focus'],
+      }),
+    );
+  });
+
+  it('a body without it keeps the stored flag (no prompt, no audit)', async () => {
+    const { service, prisma, reauth, audit } = build({
+      external_site_url: SITE,
+      external_focus: true,
+    });
+    await service.update('u1', { checkout_settings: { phone_required: true } });
+    expect(reauth.verify).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(writtenSettings(prisma)).toMatchObject({
+      external_site_url: SITE,
+      external_focus: true,
+      phone_required: true,
+    });
+  });
+
+  it('true without a site is refused before any re-auth or write', async () => {
+    const { service, prisma, reauth } = build();
+    await expect(
+      service.update('u1', { checkout_settings: { external_focus: true } }),
+    ).rejects.toMatchObject({
+      response: {
+        code: 'CHECKOUT_EXTERNAL_URL_NOT_ALLOWED',
+        field: 'external_focus',
+        reason: 'external_site_url_required',
+      },
+    });
+    expect(reauth.verify).not.toHaveBeenCalled();
+    expect(prisma.store.update).not.toHaveBeenCalled();
+  });
+
+  it("the store's own custom domain is refused as the external site", async () => {
+    const { service, prisma, reauth } = build();
+    (
+      prisma.store.findUnique as unknown as jest.Mock<Promise<unknown>>
+    ).mockImplementation(() =>
+      Promise.resolve({
+        id: 's1',
+        slug: 'prima',
+        store_type: 'INDEPENDENT',
+        custom_domain: 'www.example.se',
+        checkout_settings: null,
+      }),
+    );
+    await expect(
+      service.update('u1', {
+        checkout_settings: { external_site_url: SITE, external_focus: true },
+        current_password: 'pw',
+      }),
+    ).rejects.toMatchObject({
+      response: {
+        code: 'CHECKOUT_EXTERNAL_URL_NOT_ALLOWED',
+        field: 'external_site_url',
+        reason: 'store_host_not_allowed',
+      },
+    });
+    expect(reauth.verify).not.toHaveBeenCalled();
+    expect(prisma.store.update).not.toHaveBeenCalled();
+  });
+
+  it('the admin path may not switch it', async () => {
+    const { service, prisma } = build({ external_site_url: SITE });
+    await expect(
+      service.adminUpdateByCreatorId('c1', {
+        checkout_settings: { external_focus: true },
+      }),
+    ).rejects.toMatchObject({
+      response: { code: 'CHECKOUT_EXTERNAL_URL_OWNER_ONLY' },
+    });
+    expect(prisma.store.update).not.toHaveBeenCalled();
+  });
+});

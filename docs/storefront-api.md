@@ -272,14 +272,16 @@ Stored in `checkout_settings` (owner endpoint `PUT /stores/my/store`):
 | `return_url` | Optional page after payment on the same site. May contain `{order_number}`, nothing else. Empty = `external_site_url`. |
 | `return_mode` | `button` (default) or `auto`. |
 | `back_label` | Optional button text per locale (`{ "sv": "Tillbaka till Example" }`); default "Tillbaka till <host>". |
+| `external_focus` | Optional boolean, default off: the **focused storefront** (11.5). Accepted as `true` only with an `external_site_url` (stored, or sent in the same body); cleared together with the site. No password prompt of its own. |
 
 URL rules, checked when saved, again when read, and again in the browser before rendering:
 
 - `https://` only, default port only, no `user:password@`, a real domain name (no IP address, no `localhost`).
 - The `return_url` host must be **exactly** the `external_site_url` host or its `www.` twin (`example.se` <-> `www.example.se`). Subdomains (`shop.example.se`) and look-alikes are refused; there is no "same registrable domain" rule.
 - `{order_number}` may appear in the path, query or fragment, never in the host. It is replaced with the URL-encoded order number. No other value is ever added: no email, name, personnummer, order uuid, session or token, and no totals.
-- A refused value returns `400 CHECKOUT_EXTERNAL_URL_NOT_ALLOWED` with `field` and `reason` (`invalid_url`, `too_long`, `https_required`, `userinfo_not_allowed`, `port_not_allowed`, `host_not_allowed`, `placeholder_not_allowed`, `external_site_url_required`).
-- Every change to either URL (including clearing it) writes the security log row `checkout.external_return.updated` and emails the owner.
+- The `external_site_url` host must be a site of its own: not the platform, not a store subdomain of the platform, and not one of the hosts that serve the same store (its custom domain or market domains, including the `www.` twin). Refused with reason `store_host_not_allowed`.
+- A refused value returns `400 CHECKOUT_EXTERNAL_URL_NOT_ALLOWED` with `field` (`external_site_url`, `return_url` or `external_focus`) and `reason` (`invalid_url`, `too_long`, `https_required`, `userinfo_not_allowed`, `port_not_allowed`, `host_not_allowed`, `placeholder_not_allowed`, `external_site_url_required`, `store_host_not_allowed`).
+- Every change to either URL (including clearing it) and every switch of `external_focus` writes the security log row `checkout.external_return.updated` and emails the owner. The changed fields are named `external_site_url`, `return_url`, `external_focus`, with ` (cleared)` appended when a URL is emptied or the focused storefront is turned off.
 
 With an external site set, the checkout logo, the checkout footer link and the "continue shopping" links (empty cart, cart page, receipt) also lead to `external_site_url` (with `rel="noreferrer"`).
 
@@ -302,6 +304,24 @@ With an external site set, the checkout logo, the checkout footer link and the "
 - [ ] **Cookie / privacy page** of the custom site names the vendors used on both hosts (and links to the store's cookie page).
 - [ ] **CSP** of the custom site allows GA / GTM / Meta only after consent; no `frame-ancestors` change is needed (the store is never framed).
 
+### 11.5 Focused storefront (`external_focus`)
+
+**Not deployed yet** (API, storefront and dashboard change together; see the deploy note of the release). Opt-in, default off; needs an `external_site_url`. Owner dashboard: Settings, Checkout behaviour, External website, "Focused storefront".
+
+With it on, the store host is a purchase step of the custom site, not a second shop. The buyer arrives on a product page (section 10), fills the fields, adds to the cart, pays, and returns (11.1). On every host of the store:
+
+- **Header**: the store logo (links to `external_site_url`), a "back to site" link (`back_label` for the locale, else "Back to <host>") and the cart with its count. No menu, collections, search, country or language switcher, account link or announcement bar, whichever header the store uses (built-in or a published builder header).
+- **Footer**: the legal page links, the cookie page, the "back to site" link, the seller details, the cookie settings link and the platform line. No menu or collection columns, no newsletter.
+- **Redirected to `external_site_url`** (HTTP 307, temporary): the store home page, `/collections` and every collection page, the `/products` listing, and content pages at `/<page-slug>`. A locale prefix (`/en/...`) changes nothing.
+- **Never redirected**: product pages (`/products/<slug>`), `/cart`, the checkout and the order confirmation pages, `/account/*`, `/auth/*`, `/legal/*`, the cookie page and any content page that serves a legal slug (privacy, terms, refund, shipping), `robots.txt`, `sitemap.xml`, API and static routes, the builder preview, the owner's preview, and the "coming soon" / "temporarily closed" page of a store that is not LIVE.
+- **Product page**: same content (images, description, fields); the breadcrumb, the collection link and product listing sections ("related products") are not shown, so there is no in-page path into a listing.
+- **After "add to cart"** the buyer goes to the cart page (several products can go into one order), unless the store chose `after_add_to_cart: "checkout"`. "Continue shopping" and the empty cart lead to `external_site_url` (as in 11.2).
+- **`sitemap.xml`** lists product pages only. Indexing rules are otherwise unchanged.
+
+What the custom site should do: link to product pages (never to the store home or a collection, they come straight back), and expect visitors to arrive on `external_site_url` from the store's logo and back links without a referrer.
+
+The public `checkout` block carries `"external_focus": true` only while it is on; a store with a site but without it serves exactly the block it served before.
+
 ## 12. D3 decision record (private store columns)
 
 Before the seven columns were removed, `multi-stores-web/src` and `multi-stores-dashboard/src` were searched for each key, and the source endpoint of every reader was checked:
@@ -321,4 +341,4 @@ The only dashboard reader of `GET /storefront/:slug` (`previewSampleProduct.ts` 
 - Keys documented here are not removed or renamed without a new version of this file and notice to the custom-site owner.
 - New keys may be **added** at any time (nullable or optional); clients must ignore unknown keys and treat a missing optional key as "not set".
 - Keys listed as "never in this payload" stay out; `storefront.public-contract.spec.ts` enforces both lists.
-- Additive keys documented so far: `max_per_order` on product list and detail (P1); inside the store `checkout` block, `external_site_url`, `return_url`, `return_mode`, `back_label` (P3, present only when the store sets an external site). `email_note` (P4) is never served by these routes.
+- Additive keys documented so far: `max_per_order` on product list and detail (P1); inside the store `checkout` block, `external_site_url`, `return_url`, `return_mode`, `back_label` (P3, present only when the store sets an external site) and `external_focus` (focused storefront, 11.5: present, as `true`, only while it is on). `email_note` (P4) is never served by these routes.
