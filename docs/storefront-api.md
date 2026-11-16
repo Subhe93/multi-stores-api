@@ -339,7 +339,7 @@ With an external site set, the checkout logo, the checkout footer link and the "
 
 ### 11.5 Focused storefront (`external_focus`)
 
-**Not deployed yet** (API, storefront and dashboard change together; see the deploy note of the release). Opt-in, default off; needs an `external_site_url`. Owner dashboard: Settings, Checkout behaviour, External website, "Focused storefront".
+**LIVE (M118).** (API, storefront and dashboard change together; see the deploy note of the release). Opt-in, default off; needs an `external_site_url`. Owner dashboard: Settings, Checkout behaviour, External website, "Focused storefront".
 
 With it on, the store host is a purchase step of the custom site, not a second shop. The buyer arrives on a product page (section 10), fills the fields, adds to the cart, pays, and returns (11.1). On every host of the store:
 
