@@ -39,7 +39,10 @@ import {
   loadStorefrontHosts,
   type StorefrontHosts,
 } from './storefront-hosts';
-import { assertExternalSiteNotStoreHost } from './external-site-hosts';
+import {
+  assertExternalSiteNotPlatformHost,
+  assertExternalSiteNotStoreHost,
+} from './external-site-hosts';
 import {
   changedExternalFields,
   changedExternalUrlKeys,
@@ -486,12 +489,27 @@ export class StoresService {
         ? this.externalReturnChange(storedCheckout, data.checkout_settings)
         : null;
 
-    // The external site may not be one of this store's own hosts (the
-    // focused storefront redirects to it: that would loop). Checked on every
-    // change of the external keys (a new site, or the focused storefront
-    // turned on for a stored one) and refused like every other URL rule,
-    // before any re-auth or write.
-    if (externalChange && checkoutStore) {
+    // The external site may not be a platform host or one of this store's
+    // own hosts (the focused storefront redirects to it: that would loop).
+    // Checked only when the site itself is new or changed, or the focused
+    // storefront ends up on: a save of any other key (the stored site is
+    // carried over into every body) must keep working for existing stores.
+    // Refused like every other URL rule, before any re-auth or write.
+    const nextExternal = readStoredCheckoutSettings(
+      data.checkout_settings === undefined ||
+        data.checkout_settings === Prisma.JsonNull
+        ? null
+        : data.checkout_settings,
+    );
+    const storedExternal = readStoredCheckoutSettings(storedCheckout);
+    const externalHostCheck =
+      Boolean(nextExternal.external_site_url) &&
+      (nextExternal.external_site_url !== storedExternal.external_site_url ||
+        nextExternal.external_focus === true);
+    if (externalChange && checkoutStore && externalHostCheck) {
+      assertExternalSiteNotPlatformHost(
+        nextExternal.external_site_url as string,
+      );
       await this.assertExternalSiteIsNotOwnHost(
         data.checkout_settings,
         checkoutStore,

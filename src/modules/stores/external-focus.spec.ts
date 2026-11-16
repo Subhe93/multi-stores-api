@@ -1,6 +1,7 @@
 import {
   EXTERNAL_URL_ERROR_CODE,
   ExternalUrlRejected,
+  assertExternalSiteNotPlatformHost,
   assertExternalSiteNotStoreHost,
 } from './external-site-hosts';
 import {
@@ -268,17 +269,29 @@ describe('external site may not be a host of the platform or of the store', () =
     'https://mystore.shopsdoor.test/kurser',
     'https://other.old-platform.test',
   ])('refuses the platform host %s', (url) => {
-    expect(
-      rejection(() =>
-        normalizeCheckoutSettingsInput({ external_site_url: url }),
-      ),
-    ).toEqual({
+    expect(rejection(() => assertExternalSiteNotPlatformHost(url))).toEqual({
       field: 'external_site_url',
       reason: 'store_host_not_allowed',
     });
   });
 
+  it('the body normaliser does not apply the platform-host rule (it also runs on carried-over sites)', () => {
+    // StoresService.update applies the rule when the site or the focused
+    // storefront changes; a save of another key must not start failing.
+    expect(
+      normalizeCheckoutSettingsInput({
+        external_site_url: 'https://mystore.shopsdoor.test',
+      }),
+    ).toMatchObject({ external_site_url: 'https://mystore.shopsdoor.test/' });
+  });
+
   it('accepts a site of its own', () => {
+    expect(() =>
+      assertExternalSiteNotPlatformHost('https://mystore.vercel.app/'),
+    ).not.toThrow();
+    expect(() =>
+      assertExternalSiteNotPlatformHost('https://notshopsdoor.test/'),
+    ).not.toThrow();
     expect(
       normalizeCheckoutSettingsInput({
         external_site_url: 'https://mystore.vercel.app',

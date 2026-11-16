@@ -2,7 +2,6 @@ import { BadRequestException } from '@nestjs/common';
 import {
   ExternalUrlRejected,
   assertExternalHostAllowed,
-  assertExternalSiteNotPlatformHost,
   isExternalHostAllowed,
   parseExternalReturnUrl,
   tryParseExternalReturnUrl,
@@ -217,9 +216,10 @@ export function normalizeCheckoutSettingsInput(
     }
   }
   if (out.external_site_url) {
-    // The external site is never the platform itself or a store subdomain
-    // of it (the focused storefront redirects there: it would loop).
-    assertExternalSiteNotPlatformHost(out.external_site_url);
+    // The platform-host rule is NOT checked here: this function also runs
+    // for bodies that only carry the stored site over, and a save of an
+    // unrelated key must never start failing. `StoresService.update` checks
+    // it when the site or the focused storefront actually changes.
     if (out.return_url)
       assertExternalHostAllowed(out.return_url, out.external_site_url);
   } else {

@@ -433,6 +433,63 @@ describe('StoresService.update focused storefront (external_focus)', () => {
     expect(prisma.store.update).not.toHaveBeenCalled();
   });
 
+  describe('host rules run only when the site or the focus changes', () => {
+    const env = { ...process.env };
+    beforeEach(() => {
+      process.env.STOREFRONT_URL = 'https://shopsdoor.test';
+    });
+    afterEach(() => {
+      process.env = { ...env };
+    });
+    const PLATFORM_SITE = 'https://other.shopsdoor.test/';
+
+    it('a new site on a platform host is refused', async () => {
+      const { service, prisma, reauth } = build();
+      await expect(
+        service.update('u1', {
+          checkout_settings: { external_site_url: PLATFORM_SITE },
+          current_password: 'pw',
+        }),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'CHECKOUT_EXTERNAL_URL_NOT_ALLOWED',
+          field: 'external_site_url',
+          reason: 'store_host_not_allowed',
+        },
+      });
+      expect(reauth.verify).not.toHaveBeenCalled();
+      expect(prisma.store.update).not.toHaveBeenCalled();
+    });
+
+    it('a store whose stored site is a platform host can still save another key', async () => {
+      const { service, prisma } = build({ external_site_url: PLATFORM_SITE });
+      await service.update('u1', {
+        checkout_settings: { phone_required: true },
+      });
+      expect(prisma.store.update).toHaveBeenCalled();
+    });
+
+    it('the same store can still change only the return URL', async () => {
+      const { service, prisma } = build({ external_site_url: PLATFORM_SITE });
+      await service.update('u1', {
+        checkout_settings: {
+          return_url: 'https://other.shopsdoor.test/tack/?order={order_number}',
+        },
+      });
+      expect(prisma.store.update).toHaveBeenCalled();
+    });
+
+    it('turning the focused storefront on for such a stored site is refused', async () => {
+      const { service, prisma } = build({ external_site_url: PLATFORM_SITE });
+      await expect(
+        service.update('u1', { checkout_settings: { external_focus: true } }),
+      ).rejects.toMatchObject({
+        response: { reason: 'store_host_not_allowed' },
+      });
+      expect(prisma.store.update).not.toHaveBeenCalled();
+    });
+  });
+
   it('the admin path may not switch it', async () => {
     const { service, prisma } = build({ external_site_url: SITE });
     await expect(
