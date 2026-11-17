@@ -315,6 +315,32 @@ export function orderDeliveredEmail(data: OrderDeliveredData): EmailParts {
   };
 }
 
+/**
+ * Fulfilment of an order that required no shipping (services / digital
+ * products): sent instead of orderDeliveredEmail, with neutral wording.
+ */
+export function orderFulfilledEmail(data: OrderDeliveredData): EmailParts {
+  const cta = data.orderUrl
+    ? `<p style="margin:20px 0;">${button('View your order', data.orderUrl)}</p>`
+    : '';
+  return {
+    subject: `Your order ${data.orderNumber} is complete`,
+    html: layout(
+      'Your order is complete',
+      `<p style="font-size:14px;line-height:1.6;color:#3f3f46;">
+         Your order <strong>${esc(data.orderNumber)}</strong> has been completed. Thank you for your purchase.
+       </p>
+       ${data.itemsHtml || ''}
+       ${cta}`,
+      data,
+    ),
+    text:
+      `Your order ${data.orderNumber} is complete.` +
+      (data.itemsText ? `\n\n${data.itemsText}` : '') +
+      (data.orderUrl ? `\n\nView order: ${data.orderUrl}` : ''),
+  };
+}
+
 export interface OrderCancelledData extends EmailBrand {
   orderNumber: string;
   reason?: string;

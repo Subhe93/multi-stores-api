@@ -129,3 +129,88 @@ describe('seeded store email templates with an invoice and no invoice_url', () =
     expect(text).toContain(`\nFaktura INV-1001: ${url}\n`);
   });
 });
+
+// Orders that required no shipping: the seeded set has an `order_fulfilled`
+// template (the delivered body with neutral wording), and the address block
+// prints a "Billing address" section from billing_address_* while the
+// delivery section disappears with its empty variable.
+describe('seeded store email templates for orders without shipping', () => {
+  const templates = buildTemplates(brand);
+  const byEvent = Object.fromEntries(templates.map((t) => [t.event, t]));
+
+  it('order_fulfilled exists in both locales with its own copy', () => {
+    const t = byEvent.order_fulfilled;
+    expect(t).toBeDefined();
+    expect(t.subject.en).toBe('Your order {{order_number}} is complete');
+    expect(t.subject.sv).toBe('Din beställning {{order_number}} är klar');
+    const html = substitute(t.body_html.en, htmlVars(sampleVars('en')));
+    expect(html).toContain('Your order is complete');
+    expect(html).not.toMatch(/delivered/i);
+    const text = substitute(t.body_text.sv, sampleVars('sv'));
+    expect(text).toContain('Din beställning är klar');
+    expect(text).not.toMatch(/levererats/);
+  });
+
+  it('order_fulfilled attaches the invoice line like order_delivered', () => {
+    const vars = htmlVars({
+      ...sampleVars('sv'),
+      invoice_number: 'INV-1001',
+      'html:invoice_number': 'INV-1001',
+      invoice_url: 'https://naturalcotton.se/account/orders/o1#invoices',
+    });
+    expect(substitute(byEvent.order_fulfilled.body_html.sv, vars)).toContain(
+      'Faktura INV-1001',
+    );
+  });
+
+  it('order_delivered keeps its own copy', () => {
+    expect(byEvent.order_delivered.subject.en).toBe(
+      'Your order {{order_number}} has been delivered',
+    );
+  });
+
+  const noShipping = (locale: 'sv' | 'en') => ({
+    ...sampleVars(locale),
+    shipping_address_html: '',
+    shipping_address_text: '',
+    billing_address_html: 'Anna Lindqvist<br />Storgatan 12',
+    billing_address_text: 'Anna Lindqvist\nStorgatan 12',
+  });
+
+  it('confirmation of an order without shipping: billing section only', () => {
+    const html = substitute(
+      byEvent.order_confirmation.body_html.en,
+      htmlVars(noShipping('en')),
+    );
+    expect(html).toContain('Billing address');
+    expect(html).toContain('Anna Lindqvist<br />Storgatan 12');
+    expect(html).not.toContain('Delivery address');
+    const text = substitute(
+      byEvent.order_confirmation.body_text.sv,
+      noShipping('sv'),
+    );
+    expect(text).toContain('Faktureringsadress:\nAnna Lindqvist\nStorgatan 12');
+    expect(text).not.toContain('Leveransadress');
+  });
+
+  it('confirmation of a shipping order: delivery section only (billing variable empty or missing)', () => {
+    for (const vars of [
+      sampleVars('en'),
+      {
+        ...sampleVars('en'),
+        billing_address_html: '',
+        billing_address_text: '',
+      },
+    ]) {
+      const html = substitute(
+        byEvent.order_confirmation.body_html.en,
+        htmlVars(vars),
+      );
+      expect(html).toContain('Delivery address');
+      expect(html).not.toContain('Billing address');
+      const text = substitute(byEvent.order_confirmation.body_text.en, vars);
+      expect(text).toContain('Delivery address:');
+      expect(text).not.toContain('Billing address');
+    }
+  });
+});

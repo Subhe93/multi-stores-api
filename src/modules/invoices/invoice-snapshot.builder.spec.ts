@@ -676,3 +676,46 @@ describe('buildInvoiceSnapshot personalization labels (M4.1 fixes)', () => {
     ]);
   });
 });
+
+// Orders that required no shipping (services / digital products): the
+// order's one address is the billing address, so the snapshot carries no
+// delivery address. Only the literal `false` changes anything.
+describe('buildInvoiceSnapshot (order without shipping)', () => {
+  const base = () =>
+    makeOrder({
+      mode: TaxPricingMode.INCLUSIVE,
+      currency: 'SEK',
+      lines: LINE_SETS.single25,
+      shipping: 0,
+      discount: 0,
+    });
+
+  it('requires_shipping false: billing address kept, no delivery address', () => {
+    const s = buildInvoiceSnapshot(
+      input({ ...base(), requires_shipping: false }),
+    );
+    expect(s.buyer.shipping_address).toBeNull();
+    expect(s.buyer.billing_address).toMatchObject({ name: 'Anna Svensson' });
+    expect(s.buyer.name).toBe('Anna Svensson');
+  });
+
+  it('missing, null and true: the snapshot is the one built before', () => {
+    const before = buildInvoiceSnapshot(input(base()));
+    expect(before.buyer.shipping_address).toEqual(before.buyer.billing_address);
+    for (const flag of [true, null, undefined]) {
+      const s = buildInvoiceSnapshot(
+        input({ ...base(), requires_shipping: flag }),
+      );
+      expect(s).toEqual(before);
+    }
+  });
+
+  it('the money of the invoice does not depend on the flag', () => {
+    const on = buildInvoiceSnapshot(input(base()));
+    const off = buildInvoiceSnapshot(
+      input({ ...base(), requires_shipping: false }),
+    );
+    expect(off.totals).toEqual(on.totals);
+    expect(off.lines).toEqual(on.lines);
+  });
+});

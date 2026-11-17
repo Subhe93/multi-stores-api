@@ -1293,6 +1293,8 @@ export type OrderEmailEvent =
   | 'order_confirmation'
   | 'order_shipped'
   | 'order_delivered'
+  // Sent instead of order_delivered when the order required no shipping.
+  | 'order_fulfilled'
   | 'order_cancelled'
   | 'order_refunded'
   | 'new_order_owner';

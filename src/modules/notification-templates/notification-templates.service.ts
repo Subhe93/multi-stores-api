@@ -114,6 +114,10 @@ const ORDER_COMMON_VARIABLES = [
   'totals_text',
   'shipping_address_html',
   'shipping_address_text',
+  // Filled instead of shipping_address_* when the order required no
+  // shipping (services / digital products); empty otherwise.
+  'billing_address_html',
+  'billing_address_text',
   // b2b app: company snapshot of a company order (empty for a person).
   'company_block_html',
   'company_block_text',
@@ -244,6 +248,19 @@ export class NotificationTemplatesService {
       },
       {
         event: 'order_delivered',
+        variables: [
+          ...ORDER_COMMON_VARIABLES,
+          'order_number',
+          'order_button',
+          'order_url_text',
+          'items_html',
+          'items_text',
+        ],
+      },
+      {
+        // Sent instead of order_delivered when the order required no
+        // shipping (services / digital products).
+        event: 'order_fulfilled',
         variables: [
           ...ORDER_COMMON_VARIABLES,
           'order_number',

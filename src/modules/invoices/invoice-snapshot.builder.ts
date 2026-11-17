@@ -18,6 +18,7 @@ import {
 } from '../mail/order-mail.helpers';
 import { hasPersonalizationGroups } from '@multi-stores/core/personalization/display';
 import type { TaxExemptReason } from '../b2b/b2b.types';
+import { orderRequiresShipping } from '../../common/shipping/requires-shipping';
 import {
   INVOICE_SNAPSHOT_VERSION,
   INVOICE_TEMPLATE_VERSION,
@@ -129,6 +130,12 @@ export interface SnapshotOrder {
   /** b2b app M2.5: VatEvidence JSON of the exemption decision. */
   vat_validation?: unknown;
   address?: SnapshotOrderAddress | null;
+  /**
+   * The order's snapshot (`Order.requires_shipping`): only the literal
+   * `false` (nothing on the order needed shipping) drops the delivery
+   * address; the order's address is then the billing address only.
+   */
+  requires_shipping?: boolean | null;
   customer?: {
     first_name?: string | null;
     last_name?: string | null;
@@ -406,7 +413,9 @@ function buildBuyer(order: SnapshotOrder): InvoiceBuyer {
     email: order.customer?.user?.email || null,
     // The Address row is mutable and shared, so it is copied, not referenced.
     billing_address: address,
-    shipping_address: address ? { ...address } : null,
+    // No delivery address on an order that required no shipping.
+    shipping_address:
+      address && orderRequiresShipping(order) ? { ...address } : null,
   };
 }
 

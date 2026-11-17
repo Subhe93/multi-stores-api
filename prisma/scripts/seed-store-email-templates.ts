@@ -59,6 +59,7 @@ interface Copy {
   payment: string;
   yourOrder: string;
   deliveryAddress: string;
+  billingAddress: string;
   viewOrder: string;
   openOrder: string;
   trackPackage: string;
@@ -80,6 +81,7 @@ const COPY: Record<Locale, Copy> = {
     payment: 'Betalning',
     yourOrder: 'Din beställning',
     deliveryAddress: 'Leveransadress',
+    billingAddress: 'Faktureringsadress',
     viewOrder: 'Visa din beställning',
     openOrder: 'Öppna beställningen',
     trackPackage: 'Spåra ditt paket',
@@ -116,6 +118,14 @@ const COPY: Record<Locale, Copy> = {
         title: 'Din beställning har levererats',
         intro:
           '{{#if customer_first_name}}Hej {{customer_first_name}}! {{/if}}Din beställning {{order_number}} har levererats. Vi hoppas att du kommer att trivas med dina nya plagg.',
+      },
+      order_fulfilled: {
+        subject: 'Din beställning {{order_number}} är klar',
+        preheader: 'Tack för ditt köp.',
+        eyebrow: 'Klar',
+        title: 'Din beställning är klar',
+        intro:
+          '{{#if customer_first_name}}Hej {{customer_first_name}}! {{/if}}Din beställning {{order_number}} är nu klar. Tack för ditt köp.',
       },
       order_cancelled: {
         subject: 'Din beställning {{order_number}} har makulerats',
@@ -158,6 +168,7 @@ const COPY: Record<Locale, Copy> = {
     payment: 'Payment',
     yourOrder: 'Your order',
     deliveryAddress: 'Delivery address',
+    billingAddress: 'Billing address',
     viewOrder: 'View your order',
     openOrder: 'Open the order',
     trackPackage: 'Track your package',
@@ -194,6 +205,14 @@ const COPY: Record<Locale, Copy> = {
         title: 'Your order has been delivered',
         intro:
           '{{#if customer_first_name}}Hi {{customer_first_name}}! {{/if}}Your order {{order_number}} has been delivered. We hope you enjoy your new pieces.',
+      },
+      order_fulfilled: {
+        subject: 'Your order {{order_number}} is complete',
+        preheader: 'Thank you for your purchase.',
+        eyebrow: 'Completed',
+        title: 'Your order is complete',
+        intro:
+          '{{#if customer_first_name}}Hi {{customer_first_name}}! {{/if}}Your order {{order_number}} has been completed. Thank you for your purchase.',
       },
       order_cancelled: {
         subject: 'Your order {{order_number}} has been cancelled',
@@ -287,9 +306,12 @@ function infoBox(b: Brand, label: string, value: string): string {
 
 // b2b app: the company block (name, org number, VAT, reference) sits right
 // under the delivery address and renders nothing for a person order.
+// An order that required no shipping has no delivery address: its address
+// arrives as billing_address_* and is titled "Billing address".
 function address(b: Brand, c: Copy): string {
   return `{{#if shipping_address_html}}${sectionTitle(b, c.deliveryAddress)}
-<p style="margin:12px 0 0;font-family:${SANS};font-size:13px;line-height:1.7;color:${b.text};">{{shipping_address_html}}</p>{{/if}}
+<p style="margin:12px 0 0;font-family:${SANS};font-size:13px;line-height:1.7;color:${b.text};">{{shipping_address_html}}</p>{{/if}}{{#if billing_address_html}}${sectionTitle(b, c.billingAddress)}
+<p style="margin:12px 0 0;font-family:${SANS};font-size:13px;line-height:1.7;color:${b.text};">{{billing_address_html}}</p>{{/if}}
 {{#if company_block_html}}<p style="margin:12px 0 0;font-family:${SANS};font-size:13px;line-height:1.7;color:${b.text};">{{company_block_html}}</p>{{/if}}`;
 }
 
@@ -386,6 +408,8 @@ ${address(b, c)}
 {{#unless tracking_url}}{{#if order_url}}${button(b, c.viewOrder, '{{order_url}}')}{{/if}}{{/unless}}`,
       );
     case 'order_delivered':
+    // Same body for the fulfilment of an order without shipping.
+    case 'order_fulfilled':
       return shell(
         b,
         locale,
@@ -452,7 +476,7 @@ function textFor(event: string, b: Brand, locale: Locale): string {
   const head = `${e.title}\n\n${e.intro}\n\n${c.orderNumber}: {{order_number}}\n${c.date}: {{order_date}}\n${c.payment}: {{payment_method}}\n`;
   const itemsText = `\n{{items_text}}\n`;
   const totals = `\n{{totals_text}}\n`;
-  const addr = `{{#if shipping_address_text}}\n${c.deliveryAddress}:\n{{shipping_address_text}}\n{{/if}}{{#if company_block_text}}\n{{company_block_text}}\n{{/if}}`;
+  const addr = `{{#if shipping_address_text}}\n${c.deliveryAddress}:\n{{shipping_address_text}}\n{{/if}}{{#if billing_address_text}}\n${c.billingAddress}:\n{{billing_address_text}}\n{{/if}}{{#if company_block_text}}\n{{company_block_text}}\n{{/if}}`;
   const staff = event === 'new_order_owner' || event === 'production_new_order';
   const view = `{{#if order_url}}\n${staff ? c.openOrder : c.viewOrder}: {{order_url}}\n{{/if}}`;
   const foot = `\n${b.name}{{#if platform_name}} · {{platform_name}}{{/if}}\n{{store_url}}{{#if seller_block_text}}\n\n{{seller_block_text}}{{/if}}`;
@@ -508,6 +532,7 @@ function textFor(event: string, b: Brand, locale: Locale): string {
         foot
       );
     case 'order_delivered':
+    case 'order_fulfilled':
       return head + itemsText + invoice + view + foot;
     default:
       return head + itemsText + view + foot;
@@ -518,6 +543,7 @@ const EVENTS = [
   'order_confirmation',
   'order_shipped',
   'order_delivered',
+  'order_fulfilled',
   'order_cancelled',
   'order_refunded',
   'new_order_owner',

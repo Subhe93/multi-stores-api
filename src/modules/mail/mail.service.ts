@@ -21,6 +21,7 @@ import {
   orderConfirmationEmail,
   orderShippedEmail,
   orderDeliveredEmail,
+  orderFulfilledEmail,
   orderCancelledEmail,
   orderRefundedEmail,
   newOrderOwnerEmail,
@@ -76,6 +77,7 @@ import {
   type OnboardingEvent,
 } from './onboarding-templates';
 import { UserRole } from '@prisma/client';
+import { orderRequiresShipping } from '../../common/shipping/requires-shipping';
 
 /** Delivery log retention. */
 const EMAIL_LOG_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
@@ -95,6 +97,8 @@ const INVOICE_SAMPLE_VARS = [
 const ATTACHMENT_EVENTS: ReadonlySet<OrderEmailEvent> = new Set([
   'order_confirmation',
   'order_delivered',
+  // Fulfilment of a non-shipping order: a COD invoice attaches here too.
+  'order_fulfilled',
   'order_refunded',
   'order_cancelled',
 ]);
@@ -927,6 +931,58 @@ export class MailService {
     });
   }
 
+  /**
+   * Fulfilment email of an order that required no shipping: the same
+   * variables as sendOrderDelivered, under the `order_fulfilled` event.
+   */
+  async sendOrderFulfilled(
+    to: string,
+    data: OrderDeliveredData,
+    locale?: string,
+  ) {
+    const phrases = emailPhrases(locale);
+    const cta = this.orderCta(data.orderUrl, phrases.viewOrder);
+
+    const rendered = await this.templates.render(
+      'order_fulfilled',
+      locale,
+      {
+        ...(data.extraVars ?? {}),
+        store_name: data.storeName ?? '',
+        order_number: data.orderNumber,
+        order_button: cta.html,
+        order_url_text: cta.text,
+        items_html: data.itemsHtml ?? '',
+        items_text: data.itemsText ?? '',
+      },
+      data.storeId,
+    );
+    const brandFooter = {
+      storeName: data.storeName,
+      customerEmail: to,
+      locale,
+    };
+    if (rendered)
+      return this.send({
+        to,
+        ...rendered,
+        storeId: data.storeId,
+        brandFooter,
+        event: 'order_fulfilled',
+        orderId: data.orderId,
+        attachments: data.attachments,
+      });
+    return this.send({
+      to,
+      ...orderFulfilledEmail(data),
+      storeId: data.storeId,
+      brandFooter,
+      event: 'order_fulfilled',
+      orderId: data.orderId,
+      attachments: data.attachments,
+    });
+  }
+
   async sendOrderCancelled(
     to: string,
     data: OrderCancelledData,
@@ -1630,6 +1686,22 @@ export class MailService {
         await this.afterAttachedSend(result, attached);
         return;
       }
+      case 'order_fulfilled': {
+        if (!customerEmail) return;
+        const result = await this.sendOrderFulfilled(
+          customerEmail,
+          {
+            ...brand,
+            orderNumber,
+            orderUrl,
+            itemsHtml: items_html,
+            itemsText: items_text,
+          },
+          locale,
+        );
+        await this.afterAttachedSend(result, attached);
+        return;
+      }
       case 'order_cancelled': {
         if (!customerEmail) return;
         const result = await this.sendOrderCancelled(
@@ -1883,6 +1955,9 @@ export class MailService {
       locale,
     );
     const address = renderShippingAddress(order.address, locale);
+    // An order that required no shipping has no delivery address: its one
+    // address is the billing address, served under its own variables.
+    const shipsOrder = orderRequiresShipping(order);
     const companyBlock = renderCompanyBlock(order, locale);
     const firstName = order.customer?.first_name?.trim() || '';
     const fullName = [firstName, order.customer?.last_name?.trim()]
@@ -1910,8 +1985,10 @@ export class MailService {
       total: totalStr,
       totals_html,
       totals_text,
-      shipping_address_html: address.html,
-      shipping_address_text: address.text,
+      shipping_address_html: shipsOrder ? address.html : '',
+      shipping_address_text: shipsOrder ? address.text : '',
+      billing_address_html: shipsOrder ? '' : address.html,
+      billing_address_text: shipsOrder ? '' : address.text,
       // b2b app: empty strings for a person order, so templates that print
       // them render nothing.
       company_block_html: companyBlock.html,
@@ -2130,9 +2207,24 @@ export class MailService {
       customer_name: 'Anna Lindqvist',
       customer_first_name: 'Anna',
       customer_email: 'anna@example.com',
+      // order_fulfilled is the email of an order without shipping: its
+      // sample carries the billing address instead of a delivery address.
       shipping_address_html:
-        'Anna Lindqvist<br />Storgatan 12<br />111 23 Stockholm',
-      shipping_address_text: 'Anna Lindqvist\nStorgatan 12\n111 23 Stockholm',
+        event === 'order_fulfilled'
+          ? ''
+          : 'Anna Lindqvist<br />Storgatan 12<br />111 23 Stockholm',
+      shipping_address_text:
+        event === 'order_fulfilled'
+          ? ''
+          : 'Anna Lindqvist\nStorgatan 12\n111 23 Stockholm',
+      billing_address_html:
+        event === 'order_fulfilled'
+          ? 'Anna Lindqvist<br />Storgatan 12<br />111 23 Stockholm'
+          : '',
+      billing_address_text:
+        event === 'order_fulfilled'
+          ? 'Anna Lindqvist\nStorgatan 12\n111 23 Stockholm'
+          : '',
       // b2b app: the sample is a person order.
       company_block_html: '',
       company_block_text: '',

@@ -99,6 +99,7 @@ type CoreEvent =
   | 'order_confirmation'
   | 'order_shipped'
   | 'order_delivered'
+  | 'order_fulfilled'
   | 'order_cancelled'
   | 'order_refunded'
   | 'new_order_owner'
@@ -127,6 +128,14 @@ const CORE_MARKUP: Record<CoreEvent, (t: CorePhrases) => string> = {
       '{{order_button}}',
     ].join(SEP),
   order_delivered: (t) =>
+    [
+      `<p style="${P_INTRO}">${t.intro}</p>`,
+      '{{items_html}}',
+      '{{order_button}}',
+    ].join(SEP),
+  // Fulfilment of an order that required no shipping: same markup as
+  // order_delivered.
+  order_fulfilled: (t) =>
     [
       `<p style="${P_INTRO}">${t.intro}</p>`,
       '{{items_html}}',
@@ -358,6 +367,50 @@ const CORE_TEXT: Record<CoreEvent, Record<PlatformEmailLocale, CorePhrases>> = {
       intro:
         'Din beställning <strong>{{order_number}}</strong> har markerats som levererad. Vi hoppas att du blir nöjd med ditt köp.',
       text: `Din beställning {{order_number}} har levererats.\n{{items_text}}{{order_url_text}}`,
+    },
+  },
+  order_fulfilled: {
+    en: {
+      subject: `Your order {{order_number}} is complete`,
+      title: 'Your order is complete',
+      intro:
+        'Your order <strong>{{order_number}}</strong> has been completed. Thank you for your purchase.',
+      text: `Your order {{order_number}} is complete.\n{{items_text}}{{order_url_text}}`,
+    },
+    ar: {
+      subject: `اكتمل طلبك {{order_number}}`,
+      title: 'اكتمل طلبك',
+      intro:
+        'تمّ إكمال طلبك <strong>{{order_number}}</strong>. شكرًا لشرائك.',
+      text: `اكتمل طلبك {{order_number}}.\n{{items_text}}{{order_url_text}}`,
+    },
+    tr: {
+      subject: `{{order_number}} numaralı siparişiniz tamamlandı`,
+      title: 'Siparişiniz tamamlandı',
+      intro:
+        '<strong>{{order_number}}</strong> numaralı siparişiniz tamamlandı. Alışverişiniz için teşekkür ederiz.',
+      text: `{{order_number}} numaralı siparişiniz tamamlandı.\n{{items_text}}{{order_url_text}}`,
+    },
+    de: {
+      subject: `Ihre Bestellung {{order_number}} ist abgeschlossen`,
+      title: 'Ihre Bestellung ist abgeschlossen',
+      intro:
+        'Ihre Bestellung <strong>{{order_number}}</strong> wurde abgeschlossen. Vielen Dank für Ihren Einkauf.',
+      text: `Ihre Bestellung {{order_number}} ist abgeschlossen.\n{{items_text}}{{order_url_text}}`,
+    },
+    fr: {
+      subject: `Votre commande {{order_number}} est terminée`,
+      title: 'Votre commande est terminée',
+      intro:
+        'Votre commande <strong>{{order_number}}</strong> est terminée. Merci pour votre achat.',
+      text: `Votre commande {{order_number}} est terminée.\n{{items_text}}{{order_url_text}}`,
+    },
+    sv: {
+      subject: `Din beställning {{order_number}} är klar`,
+      title: 'Din beställning är klar',
+      intro:
+        'Din beställning <strong>{{order_number}}</strong> är nu klar. Tack för ditt köp.',
+      text: `Din beställning {{order_number}} är klar.\n{{items_text}}{{order_url_text}}`,
     },
   },
   order_cancelled: {
