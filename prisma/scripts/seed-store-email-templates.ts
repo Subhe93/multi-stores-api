@@ -345,9 +345,11 @@ ${body}
 
 // invoices app: the invoice number with a link to the account page. Inline
 // after the preceding block, so it adds nothing when the variable is empty.
+// The link is a block of its own: a store without customer accounts gets an
+// empty invoice_url and shows the number alone (blocks cannot be nested).
 function invoiceLine(b: Brand, c: Copy): string {
   return `{{#if invoice_number}}
-<p style="margin:16px 0 0;font-family:${SANS};font-size:13px;line-height:1.6;color:${b.text};">${esc(c.invoice)} {{invoice_number}} – <a href="{{invoice_url}}" style="color:${b.text};text-decoration:underline;">${esc(c.viewInvoice)}</a></p>{{/if}}`;
+<p style="margin:16px 0 0;font-family:${SANS};font-size:13px;line-height:1.6;color:${b.text};">${esc(c.invoice)} {{invoice_number}}{{/if}}{{#if invoice_url}} – <a href="{{invoice_url}}" style="color:${b.text};text-decoration:underline;">${esc(c.viewInvoice)}</a>{{/if}}{{#if invoice_number}}</p>{{/if}}`;
 }
 
 function items(b: Brand, c: Copy): string {
@@ -454,8 +456,9 @@ function textFor(event: string, b: Brand, locale: Locale): string {
   const staff = event === 'new_order_owner' || event === 'production_new_order';
   const view = `{{#if order_url}}\n${staff ? c.openOrder : c.viewOrder}: {{order_url}}\n{{/if}}`;
   const foot = `\n${b.name}{{#if platform_name}} · {{platform_name}}{{/if}}\n{{store_url}}{{#if seller_block_text}}\n\n{{seller_block_text}}{{/if}}`;
-  // invoices app: empty without an issued invoice.
-  const invoice = `{{#if invoice_number}}\n${c.invoice} {{invoice_number}}: {{invoice_url}}\n{{/if}}`;
+  // invoices app: empty without an issued invoice. The address is a block
+  // of its own (empty for a store without customer accounts).
+  const invoice = `{{#if invoice_number}}\n${c.invoice} {{invoice_number}}{{/if}}{{#if invoice_url}}: {{invoice_url}}{{/if}}{{#if invoice_number}}\n{{/if}}`;
   switch (event) {
     case 'order_confirmation':
       return head + itemsText + totals + invoice + addr + view + foot;

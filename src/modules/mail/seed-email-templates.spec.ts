@@ -91,3 +91,41 @@ describe('seeded store email templates with invoice placeholders', () => {
     expect(shipped).toContain('Org.nr 556036-0793');
   });
 });
+
+// Store without customer accounts: the invoice exists but invoice_url is an
+// empty string, so the number shows without a (dead) link.
+describe('seeded store email templates with an invoice and no invoice_url', () => {
+  const templates = buildTemplates(brand);
+  const byEvent = Object.fromEntries(templates.map((t) => [t.event, t]));
+  const withInvoice = {
+    ...sampleVars('sv'),
+    invoice_number: 'INV-1001',
+    'html:invoice_number': 'INV-1001',
+  };
+
+  it('shows the invoice number alone, without an empty link', () => {
+    const vars = htmlVars({ ...withInvoice, invoice_url: '' });
+    for (const event of ['order_confirmation', 'order_delivered']) {
+      const html = substitute(byEvent[event].body_html.sv, vars);
+      expect(html).toContain('Faktura INV-1001</p>');
+      expect(html).not.toContain('href=""');
+      expect(html).not.toContain('#invoices');
+      const text = substitute(byEvent[event].body_text.sv, vars);
+      expect(text).toContain('\nFaktura INV-1001\n');
+      expect(text).not.toContain('Faktura INV-1001:');
+    }
+  });
+
+  it('with the address the line is the former one', () => {
+    const url = 'https://naturalcotton.se/account/orders/o1#invoices';
+    const vars = htmlVars({ ...withInvoice, invoice_url: url });
+    const html = substitute(byEvent.order_confirmation.body_html.sv, vars);
+    expect(html).toMatch(
+      new RegExp(
+        `Faktura INV-1001 – <a href="${url}" style="[^"]*">[^<]+</a></p>`,
+      ),
+    );
+    const text = substitute(byEvent.order_confirmation.body_text.sv, vars);
+    expect(text).toContain(`\nFaktura INV-1001: ${url}\n`);
+  });
+});
