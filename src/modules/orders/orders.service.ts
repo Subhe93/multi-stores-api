@@ -109,6 +109,13 @@ import {
 } from '../cart/cart-line';
 import { B2B_COMPANY_NOT_ALLOWED, B2bService } from '../b2b/b2b.service';
 import {
+  cartRequiresShipping,
+  fulfilmentRunsShippedHooks,
+  lineRequiresShipping,
+  orderRequiresShipping,
+  type ShippingFlagSource,
+} from '../../common/shipping/requires-shipping';
+import {
   assertLineLimits,
   lineLimitOf,
   type LineLimit,
@@ -296,6 +303,13 @@ interface PricedLine {
    * custom-product lines.
    */
   limit: LineLimit | null;
+  /**
+   * False for a service / digital product (Shopify "Physical product" off):
+   * the line gets no shipping rate and is snapshotted on the order line.
+   * Decided by lineRequiresShipping() from the product (and, later, the
+   * variant) behind the line.
+   */
+  requiresShipping: boolean;
 }
 
 /** What priceLine() needs to evaluate a line's personalization (M4.1). */
@@ -348,6 +362,11 @@ export interface OrderQuoteItem {
    * currency, per unit). Absent on lines without add-ons.
    */
   designer_addons?: PricedAddon[];
+  /**
+   * Present (always `false`) only on a line that requires no shipping
+   * (service / digital product). Absent = requires shipping.
+   */
+  requires_shipping?: false;
 }
 
 /** Everything an order from these lines would carry, without creating it. */
@@ -374,6 +393,12 @@ export interface OrderQuote {
   shipping_method_id: string | null;
   shipping_method_name: string | null;
   shipping_method_type: ShippingMethodType | null;
+  /**
+   * Present (always `false`) only when no line requires shipping: there is
+   * no shipping step, no method and no shipping cost. Absent = at least one
+   * line requires shipping.
+   */
+  requires_shipping?: false;
   coupon: CouponValidation | null;
   /** Markets app: present only when a market context applied. */
   market?: QuoteMarketInfo;
@@ -1197,6 +1222,7 @@ export class OrdersService {
     let appVariantOptions: unknown = {};
     let variantOptions: Prisma.JsonValue | null = null;
     let limit: LineLimit | null = null;
+    let requiresShipping = true;
 
     if (item.custom_product_id) {
       // Custom product (with or without a selected variant)
@@ -1222,6 +1248,8 @@ export class OrdersService {
       }
 
       let variant: { price_adjustment: any } | null = null;
+      // A custom product inherits the flag from its base product.
+      requiresShipping = lineRequiresShipping(cp.product);
       if (item.variant_id) {
         const variantRow = await this.prisma.productVariant.findUnique({
           where: { id: item.variant_id },
@@ -1235,6 +1263,11 @@ export class OrdersService {
         }
         variant = variantRow;
         variantOptions = variantRow.options;
+        // The variant row is passed for the later per-variant override.
+        requiresShipping = lineRequiresShipping(
+          cp.product,
+          variantRow as ShippingFlagSource,
+        );
       }
       const variantAdjustment = variant
         ? Number(variant.price_adjustment || 0)
@@ -1305,6 +1338,10 @@ export class OrdersService {
         Number(variant.product.base_price) + Number(variant.price_adjustment);
       appProduct = variant.product;
       limit = lineLimitOf(variant.product);
+      requiresShipping = lineRequiresShipping(
+        variant.product,
+        variant as ShippingFlagSource,
+      );
       appVariantOptions = variant.options;
       variantOptions = variant.options;
       marketInput = {
@@ -1343,6 +1380,7 @@ export class OrdersService {
       unitPrice = Number(product.base_price);
       appProduct = product;
       limit = lineLimitOf(product);
+      requiresShipping = lineRequiresShipping(product);
       marketInput = {
         product_id: product.id,
         variant_id: null,
@@ -1594,6 +1632,7 @@ export class OrdersService {
       designerAddonsAmount,
       variantOptions,
       limit,
+      requiresShipping,
     };
   }
 
@@ -1664,7 +1703,14 @@ export class OrdersService {
      */
     exemptionInputs?: ExemptionInputs | null;
     unitLines?: { unit_price: number; quantity: number }[];
+    /**
+     * One entry per line: whether the line requires shipping
+     * (PricedLine.requiresShipping). Absent = every line does.
+     */
+    shippingFlags?: boolean[];
   }): Promise<{
+    /** False only when no line requires shipping (services / digital). */
+    requiresShipping: boolean;
     shipping: ShippingQuote | null;
     shippingCost: number;
     shippingMethod: QuotedShippingMethod | null;
@@ -1793,16 +1839,40 @@ export class OrdersService {
       .map((item) => item.product_id || item.custom_product_id)
       .filter(Boolean) as string[];
     const totalItemCount = lines.reduce((sum, i) => sum + i.quantity, 0);
+    // Lines that require no shipping (services / digital products) get no
+    // rate: the shipping quote sees the shippable lines only (their profiles
+    // and unit count) with the whole cart's subtotal. With every line
+    // shippable these are the same values as above.
+    const flags = input.shippingFlags ?? lines.map(() => true);
+    const requiresShipping = cartRequiresShipping(flags);
+    const shippableLines = lines.filter((_, i) => flags[i] !== false);
+    const shippableProductIds = shippableLines
+      .map((item) => item.product_id || item.custom_product_id)
+      .filter(Boolean) as string[];
+    const shippableItemCount = shippableLines.reduce(
+      (sum, i) => sum + i.quantity,
+      0,
+    );
 
     // Quote every shipping method for the destination and pick one
     let shipping: ShippingQuote | null = null;
     let shippingCost = 0;
     let shippingMethod: QuotedShippingMethod | null = null;
-    if (input.countryCode) {
+    if (input.countryCode && !requiresShipping) {
+      // Nothing to ship: the shipping service is not asked, no country is
+      // unavailable and a requested method id is ignored (also when strict).
+      shipping = {
+        available: true,
+        cost: 0,
+        estimated_days: null,
+        method: null,
+        methods: [],
+      };
+    } else if (input.countryCode) {
       const quote = await this.shippingService.quoteForItems({
-        product_ids: productIds,
+        product_ids: shippableProductIds,
         country_code: input.countryCode,
-        item_count: totalItemCount,
+        item_count: shippableItemCount,
         subtotal: toBase(subtotal),
         locale: input.locale ?? orderStore.primary_locale ?? undefined,
       });
@@ -1823,6 +1893,7 @@ export class OrdersService {
       if (!quote.available) {
         const tax = await taxFor(0, 0);
         return {
+          requiresShipping,
           shipping: {
             available: false,
             message: quote.message || 'Shipping not available to your country',
@@ -1940,6 +2011,7 @@ export class OrdersService {
 
     const total = roundMoney(tax.total);
     return {
+      requiresShipping,
       shipping,
       shippingCost,
       shippingMethod,
@@ -2076,6 +2148,8 @@ export class OrdersService {
       'tax_rate_bp' | 'tax_amount' | 'tax_class_key'
     >[] = [];
     const taxLines: TaxLineInput[] = [];
+    // Per line: whether it requires shipping (same order as taxLines).
+    const shippingFlags: boolean[] = [];
     const unitLines: { unit_price: number; quantity: number }[] = [];
     const marketRows = orderStore.market
       ? await this.marketPricing.loadPricesForLines(orderStore.market, items)
@@ -2184,12 +2258,17 @@ export class OrdersService {
         ...(priced.designerAddons.length
           ? { designer_addons: priced.designerAddons }
           : {}),
+        // Key only on lines that require no shipping.
+        ...(priced.requiresShipping
+          ? {}
+          : { requires_shipping: false as const }),
       });
       taxLines.push({
         amount: totalPrice,
         tax_class_id: priced.taxClassId,
         tax_exempt: priced.taxExempt,
       });
+      shippingFlags.push(priced.requiresShipping);
     }
     if (unavailable.length) throw cartItemsUnavailable(unavailable);
     assertLineLimits(limitLines);
@@ -2218,6 +2297,7 @@ export class OrdersService {
       locale: opts.locale,
       exemptionInputs,
       unitLines,
+      shippingFlags,
     });
 
     const platformConfig = await this.prisma.platformConfig.findFirst({
@@ -2270,6 +2350,8 @@ export class OrdersService {
       shipping_method_id: totals.shippingMethod?.id ?? null,
       shipping_method_name: totals.shippingMethod?.name ?? null,
       shipping_method_type: totals.shippingMethod?.type ?? null,
+      // Key only when no line requires shipping.
+      ...(totals.requiresShipping ? {} : { requires_shipping: false as const }),
       coupon: totals.couponValidation,
       ...(orderStore.market
         ? {
@@ -2435,6 +2517,8 @@ export class OrdersService {
     const stockOps: StockOp[] = [];
     // One entry per order item, in order: what the tax engine needs per line.
     const taxLines: TaxLineInput[] = [];
+    // Per line: whether it requires shipping (same order as taxLines).
+    const shippingFlags: boolean[] = [];
     // b2b app M2.5: unit price and quantity per line (reverse-charge netting).
     const unitLines: { unit_price: number; quantity: number }[] = [];
 
@@ -2605,6 +2689,7 @@ export class OrdersService {
         tax_exempt: priced.taxExempt,
       });
       unitLines.push({ unit_price: unitPrice, quantity: item.quantity });
+      shippingFlags.push(priced.requiresShipping);
 
       // M4.0: validated against the product's fields (unknown keys
       // dropped, creator values injected); M4.1 app lines: the evaluator's
@@ -2656,6 +2741,9 @@ export class OrdersService {
         ...(isOptionMap(priced.variantOptions)
           ? { variant_options_snapshot: priced.variantOptions }
           : {}),
+        // Snapshot as sold; the key is absent (column default true) on a
+        // line that requires shipping.
+        ...(priced.requiresShipping ? {} : { requires_shipping: false }),
       });
     }
     if (unavailable.length) throw cartItemsUnavailable(unavailable);
@@ -2816,6 +2904,7 @@ export class OrdersService {
       strictMethod: true,
       exemptionInputs,
       unitLines,
+      shippingFlags,
     });
 
     if (totals.shipping && !totals.shipping.available) {
@@ -3037,6 +3126,9 @@ export class OrdersService {
             shipping_method_id: shippingMethod?.id ?? null,
             shipping_method_name: shippingMethod?.name ?? null,
             shipping_method_type: shippingMethod?.type ?? null,
+            // Snapshot: written only when no line requires shipping (the
+            // column default is true).
+            ...(totals.requiresShipping ? {} : { requires_shipping: false }),
             payment_method: paymentMethod,
             payment_status: paymentStatus,
             stripe_payment_id: dto.stripe_payment_intent_id,
@@ -3854,10 +3946,20 @@ export class OrdersService {
   private async recomputeOrderStatusFromItems(
     orderId: string,
     opts: { qcReject?: boolean } = {},
-  ): Promise<{ from: OrderStatus; to: OrderStatus } | null> {
+  ): Promise<{
+    from: OrderStatus;
+    to: OrderStatus;
+    /** The order's snapshot (false = nothing on it needed shipping). */
+    requiresShipping: boolean;
+  } | null> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      select: { status: true, store_id: true, payment_method: true },
+      select: {
+        status: true,
+        store_id: true,
+        payment_method: true,
+        requires_shipping: true,
+      },
     });
     if (!order) return null;
     const terminal: OrderStatus[] = [
@@ -3913,7 +4015,21 @@ export class OrdersService {
       where: { order_id: orderId },
       data: { status: deriveCommissionStatus(candidate) },
     });
-    if (candidate === OrderStatus.SHIPPED) await this.runShippedHooks(orderId);
+    const requiresShipping = orderRequiresShipping(order);
+    if (candidate === OrderStatus.SHIPPED) {
+      await this.runShippedHooks(orderId);
+    } else if (
+      // An order that requires no shipping is fulfilled without ever being
+      // SHIPPED: its fulfilment is its "shipment" (capture-on-shipment).
+      fulfilmentRunsShippedHooks({
+        requiresShipping,
+        fromRank: ORDER_STATUS_RANK[order.status] ?? Infinity,
+        shippedRank: ORDER_STATUS_RANK.SHIPPED,
+        to: candidate,
+      })
+    ) {
+      await this.runShippedHooks(orderId);
+    }
     // Invoices app: before the callers dispatch the status email, so a
     // DELIVERED email can attach a COD invoice issued here.
     await this.invoices?.onStatusChanged(
@@ -3937,23 +4053,32 @@ export class OrdersService {
         candidate,
       ),
     );
-    return { from: order.status, to: candidate };
+    return { from: order.status, to: candidate, requiresShipping };
   }
 
   /**
    * Map a status transition to the matching customer email. Best-effort and
    * triggered ONLY when the status actually changes; no-ops for intermediate
    * states like PROCESSING/CONFIRMED where we don't want to spam the inbox.
+   *
+   * An order that requires no shipping (`requiresShipping: false`) never
+   * gets the shipped email and gets `order_fulfilled` instead of
+   * `order_delivered`. `notifyCustomer: false` (the "Send a notification to
+   * the customer" checkbox) skips the SHIPPED / DELIVERED email only.
    */
   private async dispatchStatusEmail(
     orderId: string,
     from: OrderStatus,
     to: OrderStatus,
     note?: string,
+    opts: { requiresShipping?: boolean; notifyCustomer?: boolean } = {},
   ): Promise<void> {
     if (from === to) return;
+    const requiresShipping = opts.requiresShipping !== false;
+    const silent = opts.notifyCustomer === false;
     switch (to) {
       case OrderStatus.SHIPPED: {
+        if (silent || !requiresShipping) return;
         // Use the first non-empty tracking number found on any item.
         const item = await this.prisma.orderItem.findFirst({
           where: { order_id: orderId, tracking_number: { not: null } },
@@ -3966,7 +4091,11 @@ export class OrdersService {
         return;
       }
       case OrderStatus.DELIVERED:
-        await this.mail.dispatchOrderEmail(orderId, 'order_delivered');
+        if (silent) return;
+        await this.mail.dispatchOrderEmail(
+          orderId,
+          requiresShipping ? 'order_delivered' : 'order_fulfilled',
+        );
         return;
       case OrderStatus.CANCELLED:
         await this.mail.dispatchOrderEmail(orderId, 'order_cancelled', {
@@ -4040,6 +4169,17 @@ export class OrdersService {
         order.status !== OrderStatus.SHIPPED
       ) {
         await this.runShippedHooks(id);
+      } else if (
+        // An order that requires no shipping is fulfilled without ever
+        // being SHIPPED: its fulfilment is its "shipment".
+        fulfilmentRunsShippedHooks({
+          requiresShipping: orderRequiresShipping(order),
+          fromRank: ORDER_STATUS_RANK[order.status] ?? Infinity,
+          shippedRank: ORDER_STATUS_RANK.SHIPPED,
+          to: dto.status,
+        })
+      ) {
+        await this.runShippedHooks(id);
       }
       // Invoices app: issue (COD delivered) or credit (cancelled / refunded)
       // before the status email, so the document can be attached.
@@ -4048,7 +4188,10 @@ export class OrdersService {
       await this.fireDesigner((t) =>
         t.onStatusChanged(order, order.status, dto.status),
       );
-      await this.dispatchStatusEmail(id, order.status, dto.status, dto.note);
+      await this.dispatchStatusEmail(id, order.status, dto.status, dto.note, {
+        requiresShipping: orderRequiresShipping(order),
+        notifyCustomer: dto.notify_customer,
+      });
       return this.findById(id, actorId, actorRole);
     }
 
@@ -4121,6 +4264,10 @@ export class OrdersService {
         transition.from,
         transition.to,
         dto.note,
+        {
+          requiresShipping: transition.requiresShipping,
+          notifyCustomer: dto.notify_customer,
+        },
       );
     }
     return this.findById(id, actorId, actorRole);
@@ -4222,7 +4369,13 @@ export class OrdersService {
     // Re-derive the overall order status from all items (slowest item wins).
     const transition = await this.recomputeOrderStatusFromItems(orderId);
     if (transition) {
-      await this.dispatchStatusEmail(orderId, transition.from, transition.to);
+      await this.dispatchStatusEmail(
+        orderId,
+        transition.from,
+        transition.to,
+        undefined,
+        { requiresShipping: transition.requiresShipping },
+      );
     }
     return updated;
   }

@@ -87,6 +87,7 @@ import {
   PRODUCT_STORIES_INCLUDE,
   storefrontStoriesField,
 } from '../products/product-story.mapper';
+import { lineRequiresShipping } from '../../common/shipping/requires-shipping';
 
 /** The legacy freeform Store.theme_config JSON as getStore() reads it. */
 interface LegacyThemeConfig {
@@ -1648,9 +1649,13 @@ export class StorefrontService {
     if (product) {
       const prodBasePrice = Number(product.base_price);
 
+      // A product that requires no shipping (service / digital product)
+      // serves no shipping profile: no shipping table, no default fallback
+      // and no free-shipping threshold on the product page.
+      const requiresShipping = lineRequiresShipping(product);
       // If no product-level shipping profile, fall back to provider's default
-      let shippingProfile = product.shipping_profile;
-      if (!shippingProfile && product.provider_id) {
+      let shippingProfile = requiresShipping ? product.shipping_profile : null;
+      if (requiresShipping && !shippingProfile && product.provider_id) {
         const defaultProfile = await this.prisma.shippingProfile.findFirst({
           where: { provider_id: product.provider_id, is_default: true },
           include: {
@@ -1751,8 +1756,10 @@ export class StorefrontService {
                 product.id,
                 market,
                 // Own profile only: a missing one resolves to the creator's
-                // default inside freeThresholdFor.
-                product.shipping_profile ?? undefined,
+                // default inside freeThresholdFor (null threshold for a
+                // product that requires no shipping).
+                (requiresShipping ? product.shipping_profile : null) ??
+                  undefined,
               ),
             }
           : {}),
@@ -1877,9 +1884,14 @@ export class StorefrontService {
 
     const baseProduct = customProduct.product;
 
+    // A custom product inherits "requires no shipping" from its base
+    // product: no shipping profile and no default fallback then.
+    const requiresShipping = lineRequiresShipping(baseProduct);
     // Resolve shipping profile (fallback to provider default)
-    let shippingProfile = baseProduct.shipping_profile;
-    if (!shippingProfile && baseProduct.provider_id) {
+    let shippingProfile = requiresShipping
+      ? baseProduct.shipping_profile
+      : null;
+    if (requiresShipping && !shippingProfile && baseProduct.provider_id) {
       const defaultProfile = await this.prisma.shippingProfile.findFirst({
         where: { provider_id: baseProduct.provider_id, is_default: true },
         include: {
@@ -1950,6 +1962,8 @@ export class StorefrontService {
       ),
       pricing_type: customProduct.pricing_type,
       shipping_profile: shippingProfile,
+      // Present only when the base product requires no shipping.
+      ...(requiresShipping ? {} : { requires_shipping: false as const }),
       promotions,
       bundles,
       vendor: this.showVendor(store) ? (baseProduct.provider ?? null) : null,

@@ -348,6 +348,12 @@ export class CreateProductDto {
   @Max(9999)
   max_per_order?: number | null;
 
+  // "Physical product" setting: false = service / digital product (no
+  // shipping rates, no shipping step at checkout). Absent on create = true.
+  @IsOptional()
+  @IsBoolean()
+  requires_shipping?: boolean;
+
   @IsOptional()
   @IsNumber()
   @Type(() => Number)
@@ -537,6 +543,13 @@ export class UpdateProductDto {
   @Min(1)
   @Max(9999)
   max_per_order?: number | null;
+
+  // "Physical product" setting: false = service / digital product (no
+  // shipping rates, no shipping step at checkout). Absent on update keeps
+  // the value.
+  @IsOptional()
+  @IsBoolean()
+  requires_shipping?: boolean;
 
   @IsOptional()
   @IsNumber()

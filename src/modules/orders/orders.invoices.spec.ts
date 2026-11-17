@@ -466,7 +466,12 @@ describe('OrdersService invoices call sites', () => {
     );
     expect(prisma.order.findUnique).toHaveBeenCalledWith({
       where: { id: 'o1' },
-      select: { status: true, store_id: true, payment_method: true },
+      select: {
+        status: true,
+        store_id: true,
+        payment_method: true,
+        requires_shipping: true,
+      },
     });
     expect(invoices.onStatusChanged).toHaveBeenCalledWith(
       { id: 'o1', store_id: 's1', payment_method: 'COD' },

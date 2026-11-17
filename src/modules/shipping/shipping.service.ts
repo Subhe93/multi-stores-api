@@ -15,6 +15,10 @@ import {
   CalculateShippingDto,
   EstimateShippingDto,
 } from './dto/shipping.dto';
+import {
+  lineRequiresShipping,
+  PRODUCT_SHIPPING_SELECT,
+} from '../../common/shipping/requires-shipping';
 
 type OwnerType = 'provider' | 'creator';
 
@@ -53,6 +57,11 @@ export interface ShippingItemsQuote {
   available: boolean;
   message?: string;
   methods: QuotedShippingMethod[];
+  /**
+   * Present (always `false`) only when none of the products requires
+   * shipping (services / digital products): no rates, no shipping step.
+   */
+  requires_shipping?: false;
 }
 
 /** Legacy single-cost shape kept for calculateForItems() callers. */
@@ -637,8 +646,15 @@ export class ShippingService {
    * Shipping profiles the given products ship under: the product's own
    * profile, else its provider's / creator's default profile. Custom products
    * resolve through their base product.
+   *
+   * A product that requires no shipping (service / digital product) is
+   * skipped: it contributes no profile and never inherits a default one.
+   * `requiresShipping` is false only when at least one product was found and
+   * none of them requires shipping.
    */
-  private async resolveProfileIds(productIds: string[]): Promise<string[]> {
+  private async resolveProfileIds(
+    productIds: string[],
+  ): Promise<{ profileIds: string[]; requiresShipping: boolean }> {
     const products = await this.prisma.product.findMany({
       where: { id: { in: productIds } },
       select: {
@@ -646,6 +662,7 @@ export class ShippingService {
         shipping_profile_id: true,
         provider_id: true,
         creator_id: true,
+        ...PRODUCT_SHIPPING_SELECT,
       },
     });
 
@@ -663,6 +680,7 @@ export class ShippingService {
               shipping_profile_id: true,
               provider_id: true,
               creator_id: true,
+              ...PRODUCT_SHIPPING_SELECT,
             },
           },
         },
@@ -675,7 +693,10 @@ export class ShippingService {
     }
 
     const profileIds = new Set<string>();
+    let anyRequiresShipping = false;
     for (const prod of products) {
+      if (!lineRequiresShipping(prod)) continue;
+      anyRequiresShipping = true;
       if (prod.shipping_profile_id) {
         profileIds.add(prod.shipping_profile_id);
       } else if (prod.provider_id) {
@@ -693,7 +714,10 @@ export class ShippingService {
         if (defaultProfile) profileIds.add(defaultProfile.id);
       }
     }
-    return [...profileIds];
+    return {
+      profileIds: [...profileIds],
+      requiresShipping: products.length === 0 || anyRequiresShipping,
+    };
   }
 
   /**
@@ -702,7 +726,14 @@ export class ShippingService {
    * ship free: `available: true` with an empty `methods` list.
    */
   async quoteForItems(dto: EstimateShippingDto): Promise<ShippingItemsQuote> {
-    const profileIds = await this.resolveProfileIds(dto.product_ids);
+    const { profileIds, requiresShipping } = await this.resolveProfileIds(
+      dto.product_ids,
+    );
+    // Nothing to ship (services / digital products only): no rates and no
+    // zone lookup, so no destination is ever "unavailable".
+    if (!requiresShipping) {
+      return { available: true, methods: [], requires_shipping: false };
+    }
     if (profileIds.length === 0) return { available: true, methods: [] };
 
     const profiles = await this.prisma.shippingProfile.findMany({
@@ -745,10 +776,18 @@ export class ShippingService {
    * shipping profile (such a cart ships free anywhere): the checkout then
    * keeps its full country list.
    */
-  async shippableCountries(
-    productIds: string[],
-  ): Promise<{ restricted: boolean; countries: string[] }> {
-    const profileIds = await this.resolveProfileIds(productIds);
+  async shippableCountries(productIds: string[]): Promise<{
+    restricted: boolean;
+    countries: string[];
+    /** Present (always `false`) only when no product requires shipping. */
+    requires_shipping?: false;
+  }> {
+    const { profileIds, requiresShipping } =
+      await this.resolveProfileIds(productIds);
+    // Nothing to ship: shipping zones never restrict the country list.
+    if (!requiresShipping) {
+      return { restricted: false, countries: [], requires_shipping: false };
+    }
     if (profileIds.length === 0) return { restricted: false, countries: [] };
     const profiles = await this.prisma.shippingProfile.findMany({
       where: { id: { in: profileIds } },
@@ -801,7 +840,11 @@ export class ShippingService {
     if (!country) return null;
     let profile: { zones: ZoneWithMethods[] } | null = loadedProfile ?? null;
     if (!profile) {
-      const [profileId] = await this.resolveProfileIds([productId]);
+      // A product that requires no shipping resolves to no profile, so its
+      // threshold is null.
+      const {
+        profileIds: [profileId],
+      } = await this.resolveProfileIds([productId]);
       if (!profileId) return null;
       profile = await this.prisma.shippingProfile.findUnique({
         where: { id: profileId },

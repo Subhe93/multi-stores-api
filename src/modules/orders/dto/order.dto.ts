@@ -172,6 +172,13 @@ export class UpdateOrderStatusDto {
   @IsString()
   @MaxLength(80)
   carrier?: string;
+
+  // "Send a notification to the customer" on the fulfil action: `false`
+  // suppresses the customer email of a SHIPPED or DELIVERED transition only.
+  // Absent = send as before.
+  @IsOptional()
+  @IsBoolean()
+  notify_customer?: boolean;
 }
 
 export class UpdateFulfillmentDto {

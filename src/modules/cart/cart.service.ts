@@ -20,6 +20,11 @@ import {
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import { assertMaxPerOrder, readMaxPerOrder } from './max-per-order';
+import {
+  cartRequiresShipping,
+  lineRequiresShipping,
+  type ShippingFlagSource,
+} from '../../common/shipping/requires-shipping';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
 import {
   resolveStoreCurrency,
@@ -124,6 +129,12 @@ export interface EnrichedCartItem {
    * limit, so a cart without limited products is unchanged.
    */
   max_per_order?: number;
+  /**
+   * Present (always `false`) only on a line whose product requires no
+   * shipping (service / digital product). Absent otherwise, so a cart of
+   * physical products is unchanged.
+   */
+  requires_shipping?: false;
 }
 
 /** How often add / update refresh `Cart.updated_at` (activity, GD1). */
@@ -640,6 +651,10 @@ export class CartService {
       let variantOptions: unknown = null;
       // B2: the own product's per-order limit (null = none).
       let lineMaxPerOrder: number | null = null;
+      // The product (a custom product's base product) and variant behind the
+      // line, for the "requires shipping" decision below.
+      let shippingProduct: ShippingFlagSource | null = null;
+      let shippingVariant: ShippingFlagSource | null = null;
 
       if (item.custom_product_id) {
         // Custom product: fetch from CustomProduct with mockup images and base product
@@ -672,6 +687,7 @@ export class CartService {
         customFieldDefs = cp?.product?.custom_fields ?? [];
 
         if (cp) {
+          shippingProduct = cp.product;
           title =
             this.pickTranslation(cp.translations, locale)?.title ||
             this.pickTranslation(cp.product.translations, locale)?.title ||
@@ -743,6 +759,7 @@ export class CartService {
 
         if (product) {
           ownProduct = product;
+          shippingProduct = product;
           lineMaxPerOrder = readMaxPerOrder(product.max_per_order);
           customFieldDefs = product.custom_fields;
           title =
@@ -770,6 +787,8 @@ export class CartService {
         });
 
         if (variant) {
+          // Reserved for the later per-variant override.
+          shippingVariant = variant as ShippingFlagSource;
           if (!item.custom_product_id) {
             price = price + Number(variant.price_adjustment);
             ownAdjustment = Number(variant.price_adjustment);
@@ -1015,6 +1034,9 @@ export class CartService {
           ? { personalization_invalid: true as const }
           : {}),
         ...(lineMaxPerOrder !== null ? { max_per_order: lineMaxPerOrder } : {}),
+        ...(lineRequiresShipping(shippingProduct, shippingVariant)
+          ? {}
+          : { requires_shipping: false as const }),
         ...(designView
           ? {
               design: designAddons
@@ -1280,6 +1302,12 @@ export class CartService {
       // EXCLUSIVE: subtotal + tax; INCLUSIVE: the subtotal itself.
       total_with_tax: tax.total_with_tax,
       ...(tax.b2b ? { b2b: tax.b2b } : {}),
+      // Only when the cart has lines and none of them requires shipping.
+      ...(cartRequiresShipping(
+        enrichedItems.map((item) => lineRequiresShipping(item)),
+      )
+        ? {}
+        : { requires_shipping: false as const }),
     };
   }
 

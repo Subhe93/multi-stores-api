@@ -90,9 +90,14 @@ const PRODUCT_BLOCKLIST = [
 /**
  * Documented additive product keys: they pass through when the column has a
  * value (own-product scalars are spread). `max_per_order` is added by
- * headless-booking B2a; the spec pins that the read path carries it.
+ * headless-booking B2a, `requires_shipping` by the no-shipping products
+ * feature; the spec pins that the read path carries them.
  */
-const PRODUCT_ADDITIVE_KEYS = { max_per_order: 2 } as const;
+const PRODUCT_ADDITIVE_KEYS = {
+  max_per_order: 2,
+  // "Physical product" setting (always present on own products).
+  requires_shipping: true,
+} as const;
 
 const PRIVATE_VALUES = {
   notification_email: 'owner-private@example.com',
