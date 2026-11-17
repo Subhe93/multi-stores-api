@@ -23,6 +23,12 @@ export interface ShippingFlagSource {
  * Live decision for a cart / quote line. `variant` is reserved for the later
  * per-variant override (a nullable `ProductVariant.requires_shipping`): the
  * variant's value when it is a boolean, else the product's.
+ *
+ * When that column is added: the order quote, the cart and the order
+ * snapshot already decide per line (the order quote tells the shipping
+ * service so with `lines_prefiltered`). Two public routes still decide per
+ * product, `POST /shipping/estimate` and `POST /shipping/countries` (they
+ * receive product ids only), and need the variant ids to stay exact.
  */
 export function lineRequiresShipping(
   product: ShippingFlagSource | null | undefined,

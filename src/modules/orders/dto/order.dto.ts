@@ -200,6 +200,13 @@ export class UpdateFulfillmentDto {
   @IsString()
   @MaxLength(80)
   carrier?: string;
+
+  // "Send a notification to the customer" on the fulfil action, as on
+  // UpdateOrderStatusDto: `false` suppresses the customer email when this
+  // item update moves the order to SHIPPED or DELIVERED. Absent = send.
+  @IsOptional()
+  @IsBoolean()
+  notify_customer?: boolean;
 }
 
 // One purchase line for `POST /orders/quote` — the shape `POST /cart/items`

@@ -100,8 +100,10 @@ const COPY: Record<Locale, Copy> = {
         eyebrow: 'Orderbekräftelse',
         title:
           'Tack för din beställning{{#if customer_first_name}}, {{customer_first_name}}{{/if}}!',
+        // The "another email when it ships" sentence only for an order that
+        // ships (shipping_address_html is empty for an order without shipping).
         intro:
-          'Vi har tagit emot din beställning och börjar förbereda den direkt. {{payment_line}} Du får ett nytt mejl så snart paketet har skickats.',
+          'Vi har tagit emot din beställning och börjar förbereda den direkt. {{payment_line}}{{#if shipping_address_html}} Du får ett nytt mejl så snart paketet har skickats.{{/if}}',
       },
       order_shipped: {
         subject: 'Din beställning {{order_number}} är på väg',
@@ -188,7 +190,7 @@ const COPY: Record<Locale, Copy> = {
         title:
           'Thank you for your order{{#if customer_first_name}}, {{customer_first_name}}{{/if}}!',
         intro:
-          'We have received your order and are getting it ready. {{payment_line}} You will get another email as soon as your package has shipped.',
+          'We have received your order and are getting it ready. {{payment_line}}{{#if shipping_address_html}} You will get another email as soon as your package has shipped.{{/if}}',
       },
       order_shipped: {
         subject: 'Your order {{order_number}} is on its way',

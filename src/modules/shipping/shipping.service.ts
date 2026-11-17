@@ -52,6 +52,19 @@ export interface ShippingMoney {
   fromBase(amount: number): number;
 }
 
+/**
+ * Input of quoteForItems(). `lines_prefiltered` is for internal callers only
+ * (it is not a field of the HTTP DTO, so the validation pipe rejects it from
+ * a client): the caller already decided PER LINE which products ship
+ * (the order quote: `lineRequiresShipping(product, variant)`) and sends only
+ * those ids, so the product-level filter below is skipped. This is what
+ * keeps a later per-variant override correct: a physical variant of a
+ * product whose own flag is off still gets its rates.
+ */
+export interface ShippingQuoteInput extends EstimateShippingDto {
+  lines_prefiltered?: true;
+}
+
 /** What quoteForItems() returns: every method the customer may pick. */
 export interface ShippingItemsQuote {
   available: boolean;
@@ -651,9 +664,16 @@ export class ShippingService {
    * skipped: it contributes no profile and never inherits a default one.
    * `requiresShipping` is false only when at least one product was found and
    * none of them requires shipping.
+   *
+   * The filter here is per PRODUCT (the public `/shipping/estimate` and
+   * `/shipping/countries` take product ids only). A caller that decided per
+   * line passes `linesPrefiltered` and every id it sends counts as shippable.
+   * When the per-variant override is added, those two public routes also
+   * need the variant ids to stay exact; the order quote already is.
    */
   private async resolveProfileIds(
     productIds: string[],
+    opts: { linesPrefiltered?: boolean } = {},
   ): Promise<{ profileIds: string[]; requiresShipping: boolean }> {
     const products = await this.prisma.product.findMany({
       where: { id: { in: productIds } },
@@ -695,7 +715,7 @@ export class ShippingService {
     const profileIds = new Set<string>();
     let anyRequiresShipping = false;
     for (const prod of products) {
-      if (!lineRequiresShipping(prod)) continue;
+      if (!opts.linesPrefiltered && !lineRequiresShipping(prod)) continue;
       anyRequiresShipping = true;
       if (prod.shipping_profile_id) {
         profileIds.add(prod.shipping_profile_id);
@@ -725,9 +745,10 @@ export class ShippingService {
    * destination (API-CONTRACT-C). Products with no shipping profile at all
    * ship free: `available: true` with an empty `methods` list.
    */
-  async quoteForItems(dto: EstimateShippingDto): Promise<ShippingItemsQuote> {
+  async quoteForItems(dto: ShippingQuoteInput): Promise<ShippingItemsQuote> {
     const { profileIds, requiresShipping } = await this.resolveProfileIds(
       dto.product_ids,
+      { linesPrefiltered: dto.lines_prefiltered === true },
     );
     // Nothing to ship (services / digital products only): no rates and no
     // zone lookup, so no destination is ever "unavailable".

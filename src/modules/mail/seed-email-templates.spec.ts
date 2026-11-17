@@ -193,6 +193,60 @@ describe('seeded store email templates for orders without shipping', () => {
     expect(text).not.toContain('Leveransadress');
   });
 
+  it('confirmation of an order without shipping never promises a shipping email', () => {
+    const html = substitute(
+      byEvent.order_confirmation.body_html.en,
+      htmlVars(noShipping('en')),
+    );
+    expect(html).toContain('We have received your order');
+    expect(html).not.toMatch(/has shipped|package/i);
+    const textEn = substitute(
+      byEvent.order_confirmation.body_text.en,
+      noShipping('en'),
+    );
+    expect(textEn).not.toMatch(/has shipped|package/i);
+    for (const body of [
+      substitute(
+        byEvent.order_confirmation.body_html.sv,
+        htmlVars(noShipping('sv')),
+      ),
+      substitute(byEvent.order_confirmation.body_text.sv, noShipping('sv')),
+    ]) {
+      expect(body).toContain('Vi har tagit emot din beställning');
+      expect(body).not.toMatch(/paketet|skickats/);
+    }
+  });
+
+  it('confirmation of a shipping order keeps the shipping-email sentence, byte for byte', () => {
+    // The sentence now sits in a conditional; taking the markers out gives
+    // the former template, and both must render the same for a shipping order.
+    const MARKERS =
+      /\{\{#if shipping_address_html\}\}( [^{]*?(?:skickats|shipped)\.)\{\{\/if\}\}/g;
+    for (const locale of ['sv', 'en'] as const) {
+      const vars = sampleVars(locale);
+      for (const [body, bag] of [
+        [byEvent.order_confirmation.body_html[locale], htmlVars(vars)],
+        [byEvent.order_confirmation.body_text[locale], vars],
+      ] as const) {
+        const former = body.replace(MARKERS, '$1');
+        expect(former).not.toBe(body);
+        expect(substitute(body, bag)).toBe(substitute(former, bag));
+      }
+    }
+    const en = substitute(
+      byEvent.order_confirmation.body_text.en,
+      sampleVars('en'),
+    );
+    expect(en).toContain(
+      'You will get another email as soon as your package has shipped.',
+    );
+    const sv = substitute(
+      byEvent.order_confirmation.body_text.sv,
+      sampleVars('sv'),
+    );
+    expect(sv).toContain('Du får ett nytt mejl så snart paketet har skickats.');
+  });
+
   it('confirmation of a shipping order: delivery section only (billing variable empty or missing)', () => {
     for (const vars of [
       sampleVars('en'),

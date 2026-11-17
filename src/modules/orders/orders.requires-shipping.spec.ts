@@ -291,6 +291,8 @@ describe('quote: mixed cart', () => {
         // 2 x 300 + 3 x 500: the free threshold sees the whole cart.
         subtotal: 2100,
         country_code: 'SE',
+        // The ids are the shippable lines: no second filter by product.
+        lines_prefiltered: true,
       }),
     );
     // The coupon still validates against every line.
@@ -341,6 +343,8 @@ describe('quote and create: cart of physical products (unchanged)', () => {
       item_count: 3,
       subtotal: 700,
       locale: 'sv',
+      // Internal marker (not a payload key): the lines are already filtered.
+      lines_prefiltered: true,
     });
     expect('requires_shipping' in quote).toBe(false);
     for (const item of quote.items) {
@@ -677,6 +681,32 @@ describe('lifecycle: order that requires no shipping (fulfiller path)', () => {
       'o1',
       'order_fulfilled',
     );
+  });
+
+  it('per-item fulfilment with notify_customer false: fulfilled without an email', async () => {
+    const { service, prisma, mail, shippedHook } = fulfillerSetup(
+      OrderStatus.CONFIRMED,
+      false,
+    );
+    prisma.orderItem.findFirst.mockResolvedValue({
+      id: 'i1',
+      fulfiller_id: 'c1',
+      fulfiller_type: 'CREATOR',
+    });
+    await service.updateFulfillment(
+      'o1',
+      'i1',
+      { fulfillment_status: 'DELIVERED', notify_customer: false } as never,
+      'admin1',
+      UserRole.ADMIN,
+    );
+    expect(prisma.order.update).toHaveBeenCalledWith({
+      where: { id: 'o1' },
+      data: { status: OrderStatus.DELIVERED },
+    });
+    // The capture-on-fulfilment hook does not depend on the email.
+    expect(shippedHook).toHaveBeenCalledTimes(1);
+    expect(mail.dispatchOrderEmail).not.toHaveBeenCalled();
   });
 });
 

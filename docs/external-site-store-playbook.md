@@ -97,6 +97,12 @@ Code map (web): gate `src/lib/focusedStorefront.ts`; redirects `src/lib/focusedS
 
 12. **A service is "physical" until someone switches it off.** A new product needs shipping by default. For a store that sells only services, switch "Physical product" off on every product (Shipping card); until then the store's default shipping profile (if it has one) is applied to the product, and the order goes through the shipped / delivered statuses and emails.
 13. **An event the buyer collects in person** (tickets at the door, a course kit handed out on site) can stay a physical product with a pickup shipping method instead: the buyer then sees the pickup place in the checkout and the order follows the normal shipped / delivered steps. Use the no-shipping switch when there is nothing to hand over.
+14. **Before the first no-shipping product goes live** (the feature is not deployed yet):
+    - Deploy order: database migration first, then the API, then the dashboard and the storefront. The API cannot run without the three new columns, and an older API rejects the new dashboard fields.
+    - Run the platform email template sync. Until then the "order complete" email (`order_fulfilled`) is sent from the built-in English text in every language.
+    - A store with its own seeded email templates: seed it again or edit it by hand. Its `order_delivered` design is not used for these orders, its address block needs the new "Billing address" section, and its confirmation text should not promise a shipping email.
+    - A store that takes payment through Kustom: place a test order with a no-shipping product in the Kustom playground first. Digital order lines and "no separate shipping address" have not been tried against Kustom; if Kustom returns a short address, the purchase is refused before any money is reserved.
+    - Place one test order per payment method and mark it as fulfilled.
 
 ## 7. Not built yet
 

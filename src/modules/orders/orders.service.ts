@@ -1875,6 +1875,10 @@ export class OrdersService {
         item_count: shippableItemCount,
         subtotal: toBase(subtotal),
         locale: input.locale ?? orderStore.primary_locale ?? undefined,
+        // The ids above are already the shippable LINES (decided with the
+        // product and its variant in priceLine): the shipping service must
+        // not filter them again by the product flag alone.
+        lines_prefiltered: true,
       });
       if (market) {
         // Method costs are quoted in the base currency; present them in the
@@ -4374,7 +4378,10 @@ export class OrdersService {
         transition.from,
         transition.to,
         undefined,
-        { requiresShipping: transition.requiresShipping },
+        {
+          requiresShipping: transition.requiresShipping,
+          notifyCustomer: dto.notify_customer,
+        },
       );
     }
     return updated;

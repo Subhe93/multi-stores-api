@@ -168,6 +168,66 @@ describe('a service never inherits a default profile', () => {
   });
 });
 
+describe('lines the caller already filtered (order quote, later per-variant override)', () => {
+  // The order quote decides per line with the product AND its variant, and
+  // sends only the shippable lines. A product whose own flag is off can then
+  // still be in the list (a physical variant): it must get its rates.
+  it('lines_prefiltered: the product flag is not applied again', async () => {
+    const { service: svc, prisma } = build({
+      products: [service('s1', { shipping_profile_id: 'sp1' })],
+      profiles: { sp1: SE_PROFILE },
+    });
+    const quote = await svc.quoteForItems({
+      ...estimateDto(['s1']),
+      lines_prefiltered: true,
+    });
+    expect(prisma.shippingProfile.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: { in: ['sp1'] } } }),
+    );
+    expect(quote.available).toBe(true);
+    expect(quote.methods.map((m) => m.id)).toEqual(['m1']);
+    expect('requires_shipping' in quote).toBe(false);
+  });
+
+  it('lines_prefiltered: an unreachable country is still unavailable', async () => {
+    const { service: svc } = build({
+      products: [service('s1', { shipping_profile_id: 'sp1' })],
+      profiles: { sp1: SE_PROFILE },
+    });
+    const quote = await svc.quoteForItems({
+      ...estimateDto(['s1'], 'US'),
+      lines_prefiltered: true,
+    });
+    expect(quote.available).toBe(false);
+  });
+
+  it('without the marker (public estimate) the same product gets no rates', async () => {
+    const { service: svc } = build({
+      products: [service('s1', { shipping_profile_id: 'sp1' })],
+      profiles: { sp1: SE_PROFILE },
+    });
+    await expect(svc.quoteForItems(estimateDto(['s1']))).resolves.toEqual({
+      available: true,
+      methods: [],
+      requires_shipping: false,
+    });
+  });
+
+  it('lines_prefiltered changes nothing for products that ship', async () => {
+    const make = () =>
+      build({
+        products: [physical('p1', 'sp1')],
+        profiles: { sp1: SE_PROFILE },
+      }).service;
+    const plain = await make().quoteForItems(estimateDto(['p1']));
+    const marked = await make().quoteForItems({
+      ...estimateDto(['p1']),
+      lines_prefiltered: true,
+    });
+    expect(marked).toEqual(plain);
+  });
+});
+
 describe('mixed set', () => {
   it('resolves only the profiles of the shippable products', async () => {
     const { service: svc, prisma } = build({
