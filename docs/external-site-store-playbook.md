@@ -27,6 +27,7 @@ All are opt-in per store or per product. Stores that do not use them are unchang
 | Participant fields | Product, custom fields | One set per cart line, not per unit. Use `max_per_order = 1` when every participant needs their own data. |
 | Personnummer format | Custom field preset "Personnummer (Sweden)" | Checked in the browser and on cart, quote, order and Kustom session. |
 | Max per order | Product form, Inventory card | Sums all lines of the product. With tracked stock the lower of the two applies. |
+| Service / no-shipping product | Product form, Shipping card, "Physical product" switched off | Not deployed yet. For courses, bookings, services and digital products. The checkout skips the shipping method step and charges no shipping; the buyer still fills in the billing details. A cart with only such products never asks the shipping zones, so the store needs no shipping profile for them. The order is completed with "Mark as fulfilled" and the buyer gets the "order complete" email. Default is on (physical), so existing products are unchanged. API keys: [storefront-api.md](storefront-api.md), section 3.6. |
 | `?qty=N` | Buy link | Pre-fills the quantity, clamped; never adds to the cart. |
 | Email note | Product form, per content locale | Shown under the line in the order confirmation only. |
 | External website | Settings, Checkout, External website | Site URL (https, exact host), return URL with `{order_number}`, button or auto, button text. Setting the site URL asks for the owner password. |
@@ -94,6 +95,9 @@ Code map (web): gate `src/lib/focusedStorefront.ts`; redirects `src/lib/focusedS
 10. **Unconfirmed client data**: prices and titles came from the client's old pages; keep a list of what the client must confirm (model: `client-stores/mollstrands/PRICES-TO-CONFIRM.md`).
 11. **Server memory**: the production server was close to its limit during these deploys (one API build was killed and rolled back by itself). Build one app at a time.
 
+12. **A service is "physical" until someone switches it off.** A new product needs shipping by default. For a store that sells only services, switch "Physical product" off on every product (Shipping card); until then the store's default shipping profile (if it has one) is applied to the product, and the order goes through the shipped / delivered statuses and emails.
+13. **An event the buyer collects in person** (tickets at the door, a course kit handed out on site) can stay a physical product with a pickup shipping method instead: the buyer then sees the pickup place in the checkout and the order follows the normal shipped / delivered steps. Use the no-shipping switch when there is nothing to hand over.
+
 ## 7. Not built yet
 
 - Filling the participant fields on the external site and landing directly in the cart (planned next; the store product page stays as the fallback).
@@ -101,6 +105,7 @@ Code map (web): gate `src/lib/focusedStorefront.ts`; redirects `src/lib/focusedS
 - A storefront API key and allowed origins for browser calls (the API is called server-side today).
 - Outbound webhooks to the external site.
 - Per-unit participant data (one set per cart line today).
+- For no-shipping products: automatic fulfilment after payment (the owner marks the order as fulfilled by hand), delivery of a digital file, and a booking calendar. The switch is per product, not per variant.
 
 ## 8. Reference: the Möllstrands instance
 

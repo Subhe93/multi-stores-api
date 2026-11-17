@@ -134,6 +134,7 @@ Payload: a plain JSON array. Each own product item:
 | `brand` | string (optional) | Only when set |
 | `created_at`, `updated_at` | string | ISO dates |
 | `max_per_order` | number or null | **LIVE**: maximum quantity of this product in one order; null = no limit. Additive key |
+| `requires_shipping` | boolean | **Not deployed yet.** `false` = a service or digital product ("Physical product" switched off in the product form): the store's checkout has no shipping step for it and charges no shipping. Additive key; treat a missing key as `true` (section 3.6) |
 
 Product-level columns that are never served: `cost_price`, `external_ref`, `gtin`, `mpn`, `google_product_category`, `condition`, `feed_excluded`; variant `external_ref`.
 
@@ -154,7 +155,7 @@ Trimmed example item:
 
 ### 3.3 `GET /storefront/:slug/products/:productSlug`: one product
 
-`:productSlug` is any locale's `translations[].slug` (URL-encode it). Same core keys as the list item, plus: the full product gallery in `images` (product-level images, featured first), `variants[].images`, `custom_fields` (participant fields the booking page asks for), `faqs`, `attributes`, `creator_categories`, `primary_collection` keys, `shipping_profile`, `bundles`, and optional `videos` / `stories` (absent when empty). 404 `STOREFRONT_PRODUCT_NOT_FOUND` for an unknown or unpublished slug.
+`:productSlug` is any locale's `translations[].slug` (URL-encode it). Same core keys as the list item, plus: the full product gallery in `images` (product-level images, featured first), `variants[].images`, `custom_fields` (participant fields the booking page asks for), `faqs`, `attributes`, `creator_categories`, `primary_collection` keys, `shipping_profile` (always `null` for a product with `requires_shipping: false`: it has no shipping table and inherits no default profile), `bundles`, and optional `videos` / `stories` (absent when empty). 404 `STOREFRONT_PRODUCT_NOT_FOUND` for an unknown or unpublished slug.
 
 You normally do not need this route on the custom site: the list has everything for a course table. Use it for a course detail page if the site has one.
 
@@ -171,6 +172,30 @@ The store's active PUBLIC collections as a tree: `[{ id, slug, parent_id, thumbn
 | `GET /storefront/:slug/cache-config` | `{ enabled: boolean }`: whether the store wants caching (section 8) |
 
 Everything else under `/storefront/:slug/...` (menus, v2 page snapshots, templates) is internal to the ShopsDoor storefront; do not depend on it.
+
+### 3.6 Products that need no shipping (services, digital products)
+
+**Not deployed yet.** A product with `requires_shipping: false` is sold without shipping, the way Shopify treats a product whose "Physical product" setting is off. The owner sets it per product; every product has `true` until the owner switches it off, so nothing changes for a store that does not use it.
+
+One rule for every key below: **only the literal `false` means "no shipping"**. A missing key, `null` or `true` all mean "requires shipping", so a client written before the feature keeps working.
+
+| Where | Key | When it is present |
+|---|---|---|
+| Product list and detail (3.2, 3.3), own products | `requires_shipping: boolean` | Always |
+| Product detail of a resold (custom) product | `requires_shipping: false` | Only when `false` |
+| `GET /cart`, each line | `requires_shipping: false` | Only when the line's product needs no shipping |
+| `GET /cart`, top level | `requires_shipping: false` | Only when the cart has lines and none of them needs shipping |
+| `POST /orders/quote`, each item | `requires_shipping: false` | Only when `false` |
+| `POST /orders/quote`, top level | `requires_shipping: false` | Only when no line needs shipping |
+| `POST /shipping/estimate`, `POST /shipping/countries` | `requires_shipping: false` | Only when none of the `product_ids` needs shipping |
+| Order payloads (create response, `GET /orders/:id`, lists) | `requires_shipping: boolean` on the order and on each item | Always; the values are frozen when the order is placed |
+
+Behaviour:
+
+- **No line needs shipping**: there is no shipping step. The quote has `shipping_cost: 0`, `shipping_method_id: null` and, once a country is known, `shipping: { available: true, cost: 0, estimated_days: null, method: null, methods: [] }`. No country is ever "unavailable" and shipping zones are not consulted. A `shipping_method_id` sent with the quote or the order is ignored (never `ORDER_SHIPPING_METHOD_INVALID`). `/shipping/estimate` answers `{ available: true, methods: [], cost: 0, estimated_days: null, free_shipping: true, requires_shipping: false }` and `/shipping/countries` answers `{ restricted: false, countries: [], requires_shipping: false }`. The address the buyer gives is still required: it is the billing address, and tax is calculated from it.
+- **Mixed cart** (at least one line needs shipping): the shipping step is shown as usual. Rates are calculated for the lines that need shipping only (their shipping profiles and their unit count); a free-shipping threshold still compares against the subtotal of the whole cart. A client may keep sending every product id to `/shipping/estimate`: the API leaves the no-shipping products out by itself.
+- **After the order**: an order where nothing needed shipping is completed by the owner with "Mark as fulfilled" (stored status `DELIVERED`). The buyer then gets the "order complete" email (`order_fulfilled`) instead of the shipped / delivered emails.
+- A venue-bound service that the buyer collects in person (an event with tickets handed out at the door) can instead stay a physical product with a pickup shipping method; then nothing above applies to it.
 
 ## 4. Seats (stock) rules
 
@@ -378,4 +403,4 @@ The only dashboard reader of `GET /storefront/:slug` (`previewSampleProduct.ts` 
 - Keys documented here are not removed or renamed without a new version of this file and notice to the custom-site owner.
 - New keys may be **added** at any time (nullable or optional); clients must ignore unknown keys and treat a missing optional key as "not set".
 - Keys listed as "never in this payload" stay out; `storefront.public-contract.spec.ts` enforces both lists.
-- Additive keys documented so far: `max_per_order` on product list and detail (P1); inside the store `checkout` block, `external_site_url`, `return_url`, `return_mode`, `back_label` (P3, present only when the store sets an external site) and `external_focus` (focused storefront, 11.5: present, as `true`, only while it is on); `return_label` (11.2: present only when set, next to an external site) and `no_customer_accounts` (11.2: present, as `true`, only while it is on). `email_note` (P4) is never served by these routes.
+- Additive keys documented so far: `max_per_order` on product list and detail (P1); `requires_shipping` on product list and detail, and the `requires_shipping: false` keys of the cart, quote and shipping answers (3.6: only the literal `false` means "no shipping"); inside the store `checkout` block, `external_site_url`, `return_url`, `return_mode`, `back_label` (P3, present only when the store sets an external site) and `external_focus` (focused storefront, 11.5: present, as `true`, only while it is on); `return_label` (11.2: present only when set, next to an external site) and `no_customer_accounts` (11.2: present, as `true`, only while it is on). `email_note` (P4) is never served by these routes.
