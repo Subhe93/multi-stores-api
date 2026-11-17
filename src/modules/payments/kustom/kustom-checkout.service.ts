@@ -1865,6 +1865,8 @@ export class KustomCheckoutService {
         ctx.customDomain,
       ),
       locale: session.locale ?? ctx.primaryLocale ?? null,
+      // Automatic creation: skipped by a store without customer accounts.
+      checkoutStoreId: ctx.id,
     };
     setImmediate(() => {
       void credentials.send(input);

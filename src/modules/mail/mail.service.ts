@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { EmailLogStatus, Prisma, StoreType } from '@prisma/client';
 import * as nodemailer from 'nodemailer';
 import { PrismaService } from '../../prisma/prisma.service';
+import { readStoredCheckoutSettings } from '../stores/checkout-settings';
 import { CryptoService } from '../../common/crypto/crypto.service';
 import {
   NotificationTemplatesService,
@@ -1811,12 +1812,17 @@ export class MailService {
     const publicBase =
       this.config.get<string>('PUBLIC_API_URL') || 'http://localhost:3001';
 
-    const orderUrl = buildOrderUrl(
-      order.storeCtx?.slug,
-      order.id,
-      storefrontBase,
-      order.storeCtx?.customDomain,
-    );
+    // A store without customer accounts has no account page to link to:
+    // an empty URL blanks the button, the text link, `order_url` and the
+    // invoices-app `invoice_url` of every customer email.
+    const orderUrl = order.storeCtx?.noCustomerAccounts
+      ? ''
+      : buildOrderUrl(
+          order.storeCtx?.slug,
+          order.id,
+          storefrontBase,
+          order.storeCtx?.customDomain,
+        );
     const storeUrl = buildStoreUrl(
       order.storeCtx?.slug,
       storefrontBase,
@@ -2025,6 +2031,7 @@ export class MailService {
               custom_domain: true,
               logo_url: true,
               currency: true,
+              checkout_settings: true,
             },
           })
         : null;
@@ -2085,7 +2092,10 @@ export class MailService {
         order_url:
           event === 'new_order_owner'
             ? `${dashboardBase.replace(/\/$/, '')}/creator/orders`
-            : `${storeUrl}/account/orders`,
+            : readStoredCheckoutSettings(store?.checkout_settings)
+                  .no_customer_accounts
+              ? ''
+              : `${storeUrl}/account/orders`,
         payment_method: formatPaymentMethod(
           { payment_method: 'STRIPE' },
           locale,

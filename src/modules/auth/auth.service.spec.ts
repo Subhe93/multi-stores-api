@@ -516,3 +516,54 @@ describe('AuthService password changes invalidate magic links', () => {
     expect(magicLinks.invalidateForUser).toHaveBeenCalledWith('u9');
   });
 });
+
+// "Store without customer accounts": guest checkout names the store whose
+// checkout created the account, so AccountCredentialsService can skip the
+// email for a store with `checkout_settings.no_customer_accounts`. The
+// account itself is created exactly as before.
+describe('AuthService.guestRegister (checkoutStoreId)', () => {
+  it('passes the store of the checkout and still creates the account', async () => {
+    const send = jest
+      .spyOn(AccountCredentialsService.prototype, 'send')
+      .mockResolvedValue(undefined);
+    try {
+      const { service, prisma } = build({ store: activeStore });
+      const res = await service.guestRegister({
+        email: 'anna@example.com',
+        first_name: 'Anna',
+        store_slug: 'namez',
+      });
+      expect(res.user).toMatchObject({ id: 'u-new', store_id: 's1' });
+      expect(res.access_token).toBe('jwt-u-new');
+      expect(prisma.user.create).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0][0]).toMatchObject({
+        checkoutStoreId: 's1',
+        store: { id: 's1', name: 'Namez' },
+      });
+    } finally {
+      send.mockRestore();
+    }
+  });
+
+  it('a store that is not live yet still names itself', async () => {
+    const send = jest
+      .spyOn(AccountCredentialsService.prototype, 'send')
+      .mockResolvedValue(undefined);
+    try {
+      const { service } = build({
+        store: { ...activeStore, is_active: false },
+      });
+      await service.guestRegister({
+        email: 'anna@example.com',
+        store_slug: 'namez',
+      });
+      expect(send.mock.calls[0][0]).toMatchObject({
+        checkoutStoreId: 's1',
+        store: null,
+      });
+    } finally {
+      send.mockRestore();
+    }
+  });
+});

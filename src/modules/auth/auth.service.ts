@@ -771,6 +771,8 @@ export class AuthService {
         store: live ? { id: live.id, name: live.name } : null,
         storeBase: live?.base ?? null,
         locale: dto.locale ?? live?.primaryLocale ?? null,
+        // Automatic creation: skipped by a store without customer accounts.
+        checkoutStoreId: store.id,
       })
       .catch(() => undefined);
 

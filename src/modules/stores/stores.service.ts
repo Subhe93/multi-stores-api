@@ -48,7 +48,7 @@ import {
   changedExternalUrlKeys,
   normalizeCheckoutSettingsInput,
   readStoredCheckoutSettings,
-  withStoredExternalReturn,
+  withStoredCheckoutSettings,
 } from './checkout-settings';
 import { ReauthService } from '../security/reauth.service';
 import { SecurityAuditService } from '../security/security-audit.service';
@@ -475,7 +475,7 @@ export class StoresService {
       checkoutStore = row
         ? { id: row.id, custom_domain: row.custom_domain }
         : null;
-      rest.checkout_settings = withStoredExternalReturn(
+      rest.checkout_settings = withStoredCheckoutSettings(
         rest.checkout_settings,
         storedCheckout,
       ) as UpdateStoreDto['checkout_settings'];
@@ -989,7 +989,7 @@ export class StoresService {
     // the admin path keeps the stored ones and may not change them.
     const storedCheckout: unknown = store.checkout_settings ?? null;
     if (rest.checkout_settings !== undefined) {
-      rest.checkout_settings = withStoredExternalReturn(
+      rest.checkout_settings = withStoredCheckoutSettings(
         rest.checkout_settings,
         storedCheckout,
       ) as UpdateStoreDto['checkout_settings'];

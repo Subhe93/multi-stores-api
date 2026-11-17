@@ -305,6 +305,7 @@ Stored in `checkout_settings` (owner endpoint `PUT /stores/my/store`):
 | `return_url` | Optional page after payment on the same site. May contain `{order_number}`, nothing else. Empty = `external_site_url`. |
 | `return_mode` | `button` (default) or `auto`. |
 | `back_label` | Optional button text per locale (`{ "sv": "Tillbaka till Example" }`); default "Tillbaka till <host>". |
+| `return_label` | Optional text, per locale (`{ "sv": "Till bokningsbekraftelsen" }`), of the "return to the website" button on the **paid confirmation page only**. Same shape and limits as `back_label` (20 locales, 60 characters). Empty = that button uses `back_label`, else the default. The header back link and "continue shopping" always use `back_label`. Kept only with an `external_site_url`, cleared together with it, no password prompt. |
 | `external_focus` | Optional boolean, default off: the **focused storefront** (11.5). Accepted as `true` only with an `external_site_url` (stored, or sent in the same body); cleared together with the site. No password prompt of its own. |
 
 URL rules, checked when saved, again when read, and again in the browser before rendering:
@@ -314,7 +315,9 @@ URL rules, checked when saved, again when read, and again in the browser before 
 - `{order_number}` may appear in the path, query or fragment, never in the host. It is replaced with the URL-encoded order number. No other value is ever added: no email, name, personnummer, order uuid, session or token, and no totals.
 - The `external_site_url` host must be a site of its own: not the platform, not a store subdomain of the platform, and not one of the hosts that serve the same store (its custom domain or market domains, including the `www.` twin). Refused with reason `store_host_not_allowed`.
 - A refused value returns `400 CHECKOUT_EXTERNAL_URL_NOT_ALLOWED` with `field` (`external_site_url`, `return_url` or `external_focus`) and `reason` (`invalid_url`, `too_long`, `https_required`, `userinfo_not_allowed`, `port_not_allowed`, `host_not_allowed`, `placeholder_not_allowed`, `external_site_url_required`, `store_host_not_allowed`).
-- Every change to either URL (including clearing it) and every switch of `external_focus` writes the security log row `checkout.external_return.updated` and emails the owner. The changed fields are named `external_site_url`, `return_url`, `external_focus`, with ` (cleared)` appended when a URL is emptied or the focused storefront is turned off.
+- Every change to either URL (including clearing it) and every switch of `external_focus` writes the security log row `checkout.external_return.updated` and emails the owner. The changed fields are named `external_site_url`, `return_url`, `external_focus`, with ` (cleared)` appended when a URL is emptied or the focused storefront is turned off. A change of `return_label` is logged the same way (`return_label`, or `return_label (cleared)` when emptied) and, like the other keys of this table, can only be made by the owner.
+
+**Store without customer accounts** (`no_customer_accounts`, same settings card, not tied to the external site): an optional boolean, default off, that any store can use. While it is on, the buyer's account is still created at the first order and the order is still linked to it (customer data is stored exactly as before; sign-in and "forgot password" keep working), but the "account created" email with the password is not sent for accounts created by the checkout, the customer order emails (`order_confirmation`, `order_shipped`, `order_delivered`, `order_cancelled`, `order_refunded`) render `{{order_button}}`, `{{order_url_text}}`, `{{order_url}}` and `{{invoice_url}}` as empty strings, and the confirmation pages show no "view your order" link. Credentials an owner or admin sends on purpose ("New customer" with send credentials, "send login link") are not affected. `true` turns it on, `false` or `null` turns it off, any other type is `400 STORE_CHECKOUT_SETTINGS_INVALID`; a body that omits the key keeps the stored value. No password prompt and no security log row. A store email template override that hard-codes `<a href="{{order_url}}">` should wrap that link in `{{#if order_url}}` before the switch is turned on.
 
 With an external site set, the checkout logo, the checkout footer link and the "continue shopping" links (empty cart, cart page, receipt) also lead to `external_site_url` (with `rel="noreferrer"`).
 
@@ -354,7 +357,7 @@ With it on, the store host is a purchase step of the custom site, not a second s
 
 What the custom site should do: link to product pages (never to the store home or a collection, they come straight back), add `?back=<path>` to those links (10.2), and expect visitors to arrive on `external_site_url` (or on that page) from the store's logo and back links without a referrer.
 
-The public `checkout` block carries `"external_focus": true` only while it is on; a store with a site but without it serves exactly the block it served before.
+The public `checkout` block carries `"external_focus": true` only while it is on; a store with a site but without it serves exactly the block it served before. The same holds for `"return_label": { ... }` (only when set, next to a valid external site) and `"no_customer_accounts": true` (only while on, with or without a site).
 
 ## 12. D3 decision record (private store columns)
 
@@ -375,4 +378,4 @@ The only dashboard reader of `GET /storefront/:slug` (`previewSampleProduct.ts` 
 - Keys documented here are not removed or renamed without a new version of this file and notice to the custom-site owner.
 - New keys may be **added** at any time (nullable or optional); clients must ignore unknown keys and treat a missing optional key as "not set".
 - Keys listed as "never in this payload" stay out; `storefront.public-contract.spec.ts` enforces both lists.
-- Additive keys documented so far: `max_per_order` on product list and detail (P1); inside the store `checkout` block, `external_site_url`, `return_url`, `return_mode`, `back_label` (P3, present only when the store sets an external site) and `external_focus` (focused storefront, 11.5: present, as `true`, only while it is on). `email_note` (P4) is never served by these routes.
+- Additive keys documented so far: `max_per_order` on product list and detail (P1); inside the store `checkout` block, `external_site_url`, `return_url`, `return_mode`, `back_label` (P3, present only when the store sets an external site) and `external_focus` (focused storefront, 11.5: present, as `true`, only while it is on); `return_label` (11.2: present only when set, next to an external site) and `no_customer_accounts` (11.2: present, as `true`, only while it is on). `email_note` (P4) is never served by these routes.

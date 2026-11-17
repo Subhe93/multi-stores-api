@@ -19,6 +19,7 @@ import {
 } from '@multi-stores/core/personalization/display';
 import { SUPPORTED_LOCALES } from '../markets/market.types';
 import { loadPublicHost } from '../stores/storefront-hosts';
+import { readStoredCheckoutSettings } from '../stores/checkout-settings';
 import type { StoreAppsService } from '../store-apps/store-apps.service';
 
 // Per-locale phrasing used inside order emails. The admin can edit the
@@ -1162,6 +1163,11 @@ export interface OrderStoreContext {
   logoUrl?: string;
   primaryLocale?: string;
   ownerEmail?: string;
+  /**
+   * "Store without customer accounts" (checkout_settings): customer emails
+   * carry no "view your order" link. Present only when on.
+   */
+  noCustomerAccounts?: true;
 }
 
 /** Markets app: the locales the order's market serves. */
@@ -1204,6 +1210,7 @@ export async function loadOrderForEmail(
         custom_domain: true,
         logo_url: true,
         notification_email: true,
+        checkout_settings: true,
         language_config: { select: { primary_locale: true } },
         creator: { select: { user: { select: { email: true } } } },
       },
@@ -1225,6 +1232,8 @@ export async function loadOrderForEmail(
         // The store's notifications address wins over the login email.
         ownerEmail:
           store.notification_email?.trim() || store.creator?.user?.email,
+        ...(readStoredCheckoutSettings(store.checkout_settings)
+          .no_customer_accounts && { noCustomerAccounts: true as const }),
       };
     }
   }

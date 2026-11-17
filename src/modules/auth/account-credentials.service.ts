@@ -1,8 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { MailService } from '../mail/mail.service';
 import { MagicLinkService, MAGIC_LINK_TTL_HOURS } from './magic-link.service';
 import { AccountLinksService } from './account-links.service';
+import { PrismaService } from '../../prisma/prisma.service';
+import { readStoredCheckoutSettings } from '../stores/checkout-settings';
 
 export interface AccountCredentialsInput {
   user: { id: string; email: string; role: UserRole };
@@ -14,6 +16,13 @@ export interface AccountCredentialsInput {
   /** Public origin of that store; null/absent = platform links. */
   storeBase?: string | null;
   locale?: string | null;
+  /**
+   * Store whose checkout created the account automatically (guest checkout,
+   * Kustom callback). When that store runs without customer accounts
+   * (`checkout_settings.no_customer_accounts`) nothing is sent. Explicit
+   * operator sends leave it unset and are never suppressed.
+   */
+  checkoutStoreId?: string | null;
 }
 
 /**
@@ -29,9 +38,12 @@ export class AccountCredentialsService {
     private readonly magicLinks: MagicLinkService,
     private readonly links: AccountLinksService,
     private readonly mail: MailService,
+    @Optional() private readonly prisma?: PrismaService,
   ) {}
 
   async send(input: AccountCredentialsInput): Promise<void> {
+    // Before the magic link is minted: a suppressed email leaves no token.
+    if (await this.suppressedByStore(input.checkoutStoreId)) return;
     try {
       const raw = await this.magicLinks.issue(input.user.id, {
         storeId: input.store?.id ?? null,
@@ -65,6 +77,29 @@ export class AccountCredentialsService {
           err instanceof Error ? err.name : 'unknown error'
         })`,
       );
+    }
+  }
+
+  /**
+   * True when the store of an automatic account creation runs without
+   * customer accounts. A failed lookup means "not suppressed" (the email is
+   * sent as before).
+   */
+  private async suppressedByStore(
+    storeId: string | null | undefined,
+  ): Promise<boolean> {
+    if (!storeId || !this.prisma) return false;
+    try {
+      const row = await this.prisma.store.findUnique({
+        where: { id: storeId },
+        select: { checkout_settings: true },
+      });
+      return (
+        readStoredCheckoutSettings(row?.checkout_settings)
+          .no_customer_accounts === true
+      );
+    } catch {
+      return false;
     }
   }
 }

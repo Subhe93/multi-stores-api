@@ -544,3 +544,82 @@ describe('public contract: envelope', () => {
     expect(typeof (out as { timestamp: unknown }).timestamp).toBe('string');
   });
 });
+
+// "Store without customer accounts" and the return button label: additive
+// keys of the `checkout` block, served only when true / set. The strict
+// cases above cover the stores without them.
+describe('public contract: checkout block additive keys', () => {
+  const base = {
+    after_add_to_cart: 'stay',
+    phone_required: false,
+    pay_button_label: null,
+    coupon_param: ['coupon'],
+    coupon_autoapply: false,
+  };
+  const site = {
+    ...base,
+    external_site_url: 'https://example.se/',
+    return_url: null,
+    return_mode: 'button',
+    back_label: null,
+  };
+
+  async function checkoutOf(settings: unknown) {
+    const { service } = buildStore(StoreStatus.LIVE);
+    const prisma = (
+      service as unknown as {
+        prisma: {
+          store: { findUnique: () => Promise<{ checkout_settings: unknown }> };
+        };
+      }
+    ).prisma;
+    (await prisma.store.findUnique()).checkout_settings = settings;
+    const payload = (await service.getStore('prima')) as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(payload).not.toHaveProperty('checkout_settings');
+    return payload;
+  }
+
+  it('no_customer_accounts: true only while on', async () => {
+    expect(
+      (await checkoutOf({ no_customer_accounts: true })).checkout,
+    ).toStrictEqual({ ...base, no_customer_accounts: true });
+    for (const off of [
+      null,
+      {},
+      { no_customer_accounts: false },
+      { no_customer_accounts: 'true' },
+    ])
+      expect(await checkoutOf(off)).not.toHaveProperty('checkout');
+  });
+
+  it('return_label: only when set next to a valid external site', async () => {
+    expect(
+      (
+        await checkoutOf({
+          external_site_url: 'https://example.se/',
+          return_label: { sv: 'Till bokningen' },
+          no_customer_accounts: true,
+        })
+      ).checkout,
+    ).toStrictEqual({
+      ...site,
+      return_label: { sv: 'Till bokningen' },
+      no_customer_accounts: true,
+    });
+    expect(
+      await checkoutOf({ return_label: { sv: 'Till bokningen' } }),
+    ).not.toHaveProperty('checkout');
+  });
+
+  it('a store with a site but without the new keys keeps its exact block', async () => {
+    for (const settings of [
+      { external_site_url: 'https://example.se/' },
+      { external_site_url: 'https://example.se/', return_label: {} },
+      { external_site_url: 'https://example.se/', return_label: null },
+    ])
+      expect((await checkoutOf(settings)).checkout).toStrictEqual(site);
+  });
+});

@@ -35,6 +35,7 @@ export const EXTERNAL_RETURN_KEYS = [
   'return_mode',
   'back_label',
   'external_focus',
+  'return_label',
 ] as const;
 
 export interface CheckoutSettings {
@@ -63,6 +64,15 @@ export interface CheckoutSettings {
    *  true while an external site is set; absent = off, so the internal
    *  shape of every store without it is unchanged. */
   external_focus?: boolean;
+  /** Label of the "return to the website" button on the paid confirmation
+   *  page, per locale. Only ever a non-empty map next to an external site;
+   *  absent = the button uses `back_label` / the translated default. */
+  return_label?: Record<string, string> | null;
+  /** "Store without customer accounts": the automatic account email is not
+   *  sent and the customer-facing "view your order" links are hidden. The
+   *  customer record itself is still created. Independent of the external
+   *  site; present only as `true`, absent = off. */
+  no_customer_accounts?: boolean;
 }
 
 type ExternalReturnKey = (typeof EXTERNAL_RETURN_KEYS)[number];
@@ -85,6 +95,8 @@ export function compactCheckoutSettings(
 ): CompactCheckoutSettings {
   const out: CompactCheckoutSettings = { ...s };
   if (!s.external_focus) delete out.external_focus;
+  if (!s.no_customer_accounts) delete out.no_customer_accounts;
+  if (!s.return_label) delete out.return_label;
   if (s.external_site_url) return out;
   for (const k of EXTERNAL_RETURN_KEYS) delete out[k];
   return out;
@@ -164,6 +176,18 @@ export function normalizeCheckoutSettingsInput(
           invalid('external_focus must be a boolean');
         if (value) out.external_focus = true;
         break;
+      case 'no_customer_accounts':
+        if (value === undefined || value === null) break;
+        if (typeof value !== 'boolean')
+          invalid('no_customer_accounts must be a boolean');
+        if (value) out.no_customer_accounts = true;
+        break;
+      case 'return_label': {
+        if (value === undefined || value === null) break;
+        const labels = normalizeLocaleLabels('return_label', value);
+        if (labels) out.return_label = labels;
+        break;
+      }
       case 'pay_button_label':
       case 'back_label':
         if (value === undefined || value === null) break;
@@ -235,13 +259,14 @@ export function normalizeCheckoutSettingsInput(
       );
     out.return_mode = DEFAULT_CHECKOUT_SETTINGS.return_mode;
     out.back_label = null;
+    delete out.return_label;
   }
   return isDefaultCheckoutSettings(out) ? null : compactCheckoutSettings(out);
 }
 
 /** Validates a `{ locale: label }` map; an emptied entry means "default". */
 function normalizeLocaleLabels(
-  key: 'pay_button_label' | 'back_label',
+  key: 'pay_button_label' | 'back_label' | 'return_label',
   value: unknown,
 ): Record<string, string> | null {
   if (!isPlainObject(value)) invalid(`${key} must be an object keyed by locale`);
@@ -300,9 +325,27 @@ export function withStoredExternalReturn(raw: unknown, stored: unknown): unknown
       )
         continue;
     }
+    // A key the store never had is not carried as `undefined`, so the body
+    // of a store without it is exactly what it was.
+    if (current[k] === undefined) continue;
     carried[k] = current[k];
   }
   return carried;
+}
+
+/**
+ * `withStoredExternalReturn` plus the carry-over of `no_customer_accounts`:
+ * an object body that omits the key keeps the stored switch (an explicit
+ * `false` / `null` turns it off, `null` as the whole body clears everything).
+ * The switch is independent of the external site, so clearing the site does
+ * not touch it. Returns the same reference when nothing is carried.
+ */
+export function withStoredCheckoutSettings(raw: unknown, stored: unknown): unknown {
+  const carried = withStoredExternalReturn(raw, stored);
+  if (!isPlainObject(carried) || 'no_customer_accounts' in carried)
+    return carried;
+  if (!readStoredCheckoutSettings(stored).no_customer_accounts) return carried;
+  return { ...carried, no_customer_accounts: true };
 }
 
 /**
@@ -321,7 +364,23 @@ export function changedExternalFields(
     fields.push(
       after.external_focus ? 'external_focus' : 'external_focus (cleared)',
     );
+  if (!sameLabels(before.return_label, after.return_label))
+    fields.push(after.return_label ? 'return_label' : 'return_label (cleared)');
   return fields;
+}
+
+/** Locale-by-locale comparison of two label maps, independent of key order. */
+function sameLabels(
+  a: Record<string, string> | null | undefined,
+  b: Record<string, string> | null | undefined,
+): boolean {
+  const left = a ?? {};
+  const right = b ?? {};
+  const keys = Object.keys(left);
+  return (
+    keys.length === Object.keys(right).length &&
+    keys.every((k) => left[k] === right[k])
+  );
 }
 
 /** Names of the external-site URL keys that differ between two settings. */
@@ -347,6 +406,7 @@ export function isDefaultCheckoutSettings(s: CheckoutSettings): boolean {
     s.return_mode === d.return_mode &&
     s.back_label === null &&
     !s.external_focus &&
+    !s.no_customer_accounts &&
     s.coupon_param.length === d.coupon_param.length &&
     s.coupon_param.every((k, i) => k === d.coupon_param[i])
   );
@@ -378,7 +438,10 @@ export function readStoredCheckoutSettings(raw: unknown): CheckoutSettings {
       out.return_mode = raw.return_mode as ReturnMode;
     out.back_label = readStoredLabels(raw.back_label);
     if (raw.external_focus === true) out.external_focus = true;
+    const returnLabel = readStoredLabels(raw.return_label);
+    if (returnLabel) out.return_label = returnLabel;
   }
+  if (raw.no_customer_accounts === true) out.no_customer_accounts = true;
   if (Array.isArray(raw.coupon_param)) {
     const keys = raw.coupon_param.filter(
       (k): k is string => typeof k === 'string' && COUPON_PARAM_RE.test(k),

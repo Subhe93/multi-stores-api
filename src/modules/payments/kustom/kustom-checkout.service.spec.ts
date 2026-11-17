@@ -1193,6 +1193,24 @@ describe('KustomCheckoutService.handleValidation account credentials', () => {
     await flush();
     expect(send).toHaveBeenCalledTimes(1);
   });
+
+  // "Store without customer accounts": the callback names the store whose
+  // checkout created the account; the account row is created as before.
+  it('names the checkout store so a no-accounts store can skip the email', async () => {
+    const send = jest.fn((_input: unknown) => Promise.resolve());
+    const { service, prisma } = build(null, {
+      session: sessionRow({ customer_id: null }),
+      credentials: { send },
+    });
+    await service.handleValidation('sess-1', 'cb-token', body);
+    await flush();
+    expect(prisma.user.create).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toMatchObject({
+      checkoutStoreId: STORE_ID,
+      store: { id: STORE_ID, name: 'Store' },
+    });
+  });
 });
 
 // FIXES-1 item 5: a deleted / unavailable cart line surfaces as the quote's
