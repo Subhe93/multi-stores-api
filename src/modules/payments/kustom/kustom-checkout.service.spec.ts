@@ -376,6 +376,60 @@ describe('KustomCheckoutService.createSession with a market', () => {
     expect(res.totals.shipping_quoted).toBe(true);
   });
 
+  it('totals.requires_shipping mirrors the quote: false only, absent otherwise', () => {
+    const { service } = build(null);
+    const respond = (quote: unknown) =>
+      (
+        service as unknown as {
+          sessionResponse: (
+            s: unknown,
+            c: unknown,
+            q: unknown,
+          ) => { totals: Record<string, unknown> };
+        }
+      ).sessionResponse(
+        { id: 's1', token: 't1', kustom_order_id: 'k1' },
+        { order_id: 'k1', html_snippet: '', status: 'checkout_incomplete' },
+        quote,
+      ).totals;
+    expect('requires_shipping' in respond(quoteFor('SEK'))).toBe(false);
+    expect(
+      respond({ ...quoteFor('SEK'), requires_shipping: false }),
+    ).toMatchObject({ requires_shipping: false });
+  });
+
+  it('a session where nothing requires shipping: digital lines, no separate shipping address, totals key', async () => {
+    const { service, orders, createCheckout } = build(null);
+    const base = quoteFor('SEK');
+    orders.quoteLines.mockResolvedValueOnce({
+      ...base,
+      requires_shipping: false,
+      items: base.items.map((i) => ({ ...i, requires_shipping: false })),
+    } as never);
+    const res = await service.createSession(null, dto);
+    const payload = createCheckout.mock.calls[0][0] as {
+      order_lines: { type: string }[];
+      options: { allow_separate_shipping_address: boolean };
+    };
+    expect(payload.order_lines.map((l) => l.type)).toEqual(['digital']);
+    expect(payload.options.allow_separate_shipping_address).toBe(false);
+    expect('shipping_address' in payload).toBe(false);
+    expect('shipping_options' in payload).toBe(false);
+    expect(res.totals).toMatchObject({ requires_shipping: false });
+  });
+
+  it('a session of physical products: physical lines, option on, no totals key', async () => {
+    const { service, createCheckout } = build(null);
+    const res = await service.createSession(null, dto);
+    const payload = createCheckout.mock.calls[0][0] as {
+      order_lines: { type: string }[];
+      options: { allow_separate_shipping_address: boolean };
+    };
+    expect(payload.order_lines.map((l) => l.type)).toEqual(['physical']);
+    expect(payload.options.allow_separate_shipping_address).toBe(true);
+    expect(res.totals).not.toHaveProperty('requires_shipping');
+  });
+
   it('a foreign host is replaced by the market primary; dto.locale wins over the market default', async () => {
     const { service, prisma, orders } = build(euMarket);
     await service.createSession(null, {

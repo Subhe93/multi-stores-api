@@ -70,6 +70,10 @@ import {
   CreateKustomCheckoutSessionDto,
   UpdateKustomCheckoutSessionDto,
 } from './dto/kustom-checkout.dto';
+import {
+  orderLineRequiresShipping,
+  orderRequiresShipping,
+} from '../../../common/shipping/requires-shipping';
 
 // Kustom keeps a checkout alive for 48 h; so do we.
 const SESSION_TTL_MS = 48 * 60 * 60 * 1000;
@@ -585,6 +589,8 @@ export class KustomCheckoutService {
       ...(opts.buyerType === 'COMPANY'
         ? { buyerType: 'COMPANY', company: opts.company ?? null }
         : {}),
+      // Mirrors the quote: key only when no line requires shipping.
+      ...(orderRequiresShipping(quote) ? {} : { requiresShipping: false }),
     };
     return {
       ok: true,
@@ -661,6 +667,11 @@ export class KustomCheckoutService {
       ...(item.designer_addons?.length
         ? { designer_addons: item.designer_addons }
         : {}),
+      // From the quote item, never from the product: a line that requires
+      // no shipping becomes a `digital` Kustom line (key absent otherwise).
+      ...(orderLineRequiresShipping(item)
+        ? {}
+        : { requires_shipping: false as const }),
     }));
   }
 
@@ -873,6 +884,11 @@ export class KustomCheckoutService {
             total: quote.total,
             pricing_mode: quote.tax_pricing_mode,
             currency: quote.currency,
+            // Mirrors the quote: present (false) only when no line requires
+            // shipping, so the page summary shows no shipping row.
+            ...(orderRequiresShipping(quote)
+              ? {}
+              : { requires_shipping: false as const }),
             // b2b app: the net view, present only while the app is on.
             ...(quote.b2b ? { b2b: quote.b2b } : {}),
             // b2b app M2.5: the reverse-charge decision, present only while

@@ -1189,3 +1189,230 @@ describe('b2b app M2.5: reverse-charge session (zero tax from the quote)', () =>
     },
   );
 });
+
+// Orders / sessions where nothing requires shipping (services, digital
+// products): `digital` lines, no separate shipping address, no shipping
+// prefill. Only the literal `false` changes anything: with a missing, null
+// or true value the payload is byte-identical to the one sent before.
+describe('requires_shipping', () => {
+  const service = (over: Partial<KustomOrderInput> = {}) =>
+    order({
+      shipping_cost: 0,
+      total: 250,
+      requires_shipping: false,
+      items: order().items.map((i) => ({ ...i, requires_shipping: false })),
+      ...over,
+    });
+
+  const sessionCtx = {
+    storeSlug: 'my-shop',
+    primaryLocale: 'sv',
+    storefrontBase: 'https://shop.example.com/',
+    apiBase: 'https://api.example.com/',
+    sessionId: 'sess-1',
+    token: 'tok',
+    callbackToken: 'cb-secret',
+  };
+  const sessionInput = {
+    currency: 'SEK',
+    shipping_cost: 49,
+    discount_amount: 0,
+    total: 299,
+    items: order().items,
+    purchaseCountry: 'se',
+    reference: 'sess-1',
+    email: 'anna@example.com',
+    address: order().address,
+    shippingOptions: [
+      {
+        id: 'standard',
+        name: 'Standardfrakt',
+        type: 'delivery' as const,
+        cost: 49,
+        estimated_days: { min: 2, max: 5 },
+      },
+    ],
+    selectedShippingId: 'standard',
+  };
+
+  it('order-first: the payload of a shipping order is pinned', () => {
+    const address = {
+      given_name: 'Anna Maria',
+      family_name: 'Svensson',
+      street_address: 'Sturegatan 6',
+      postal_code: '114 35',
+      city: 'Stockholm',
+      country: 'SE',
+      email: 'anna@example.com',
+      phone: '+46701234567',
+    };
+    const payload = buildKustomCheckoutPayload(order(), ctx);
+    expect(payload.order_lines).toEqual([
+      {
+        type: 'physical',
+        reference: 'SKU-1',
+        name: 'Tröja (M / Blå)',
+        quantity: 2,
+        quantity_unit: 'pcs',
+        unit_price: 12500,
+        total_amount: 25000,
+        total_discount_amount: 0,
+        tax_rate: 0,
+        total_tax_amount: 0,
+      },
+      {
+        type: 'shipping_fee',
+        reference: 'shipping',
+        name: 'Shipping',
+        quantity: 1,
+        unit_price: 4900,
+        total_amount: 4900,
+        total_discount_amount: 0,
+        tax_rate: 0,
+        total_tax_amount: 0,
+      },
+    ]);
+    expect(Object.keys(payload)).toEqual([
+      'purchase_country',
+      'purchase_currency',
+      'locale',
+      'order_amount',
+      'order_tax_amount',
+      'order_lines',
+      'merchant_reference1',
+      'merchant_reference2',
+      'merchant_urls',
+      'billing_address',
+      'shipping_address',
+      'options',
+    ]);
+    expect(payload.billing_address).toEqual(address);
+    expect(payload.shipping_address).toEqual(address);
+    expect(payload.options).toEqual({
+      auto_capture: false,
+      allow_separate_shipping_address: true,
+      require_validate_callback_success: true,
+    });
+  });
+
+  it('order-first: missing, null and true all give the same bytes', () => {
+    const baseline = JSON.stringify(buildKustomCheckoutPayload(order(), ctx));
+    for (const flag of [true, null, undefined]) {
+      const flagged = order({
+        requires_shipping: flag,
+        items: order().items.map((i) => ({ ...i, requires_shipping: flag })),
+      });
+      expect(JSON.stringify(buildKustomCheckoutPayload(flagged, ctx))).toBe(
+        baseline,
+      );
+    }
+  });
+
+  it('order-first: digital lines, no separate shipping address, billing only', () => {
+    const payload = buildKustomCheckoutPayload(service(), ctx);
+    expect(payload.order_lines.map((l) => l.type)).toEqual(['digital']);
+    assertLineInvariants(payload.order_lines);
+    expect(payload.order_amount).toBe(25000);
+    expect(payload.options?.allow_separate_shipping_address).toBe(false);
+    expect('shipping_address' in payload).toBe(false);
+    expect(payload.billing_address).toMatchObject({
+      given_name: 'Anna Maria',
+      family_name: 'Svensson',
+      country: 'SE',
+    });
+    expect('shipping_options' in payload).toBe(false);
+  });
+
+  it('order-first mixed order: line types follow each line, the order still ships', () => {
+    const payload = buildKustomCheckoutPayload(
+      order({
+        subtotal: 350,
+        total: 399,
+        items: [
+          ...order().items,
+          {
+            id: 'item-2',
+            quantity: 1,
+            unit_price: 100,
+            total_price: 100,
+            product: { translations: [{ locale: 'sv', title: 'Kurs' }] },
+            requires_shipping: false,
+          },
+        ],
+      }),
+      ctx,
+    );
+    expect(payload.order_lines.map((l) => l.type)).toEqual([
+      'physical',
+      'digital',
+      'shipping_fee',
+    ]);
+    expect(payload.options?.allow_separate_shipping_address).toBe(true);
+    expect(payload.shipping_address).toEqual(payload.billing_address);
+  });
+
+  it('session-first: absent and true give the same bytes', () => {
+    const baseline = JSON.stringify(
+      buildKustomSessionPayload(sessionInput, sessionCtx),
+    );
+    expect(
+      JSON.stringify(
+        buildKustomSessionPayload(
+          { ...sessionInput, requiresShipping: true },
+          sessionCtx,
+        ),
+      ),
+    ).toBe(baseline);
+    const payload = buildKustomSessionPayload(sessionInput, sessionCtx);
+    expect(payload.options?.allow_separate_shipping_address).toBe(true);
+    expect(payload.shipping_address).toEqual(payload.billing_address);
+    expect(payload.order_lines[0].type).toBe('physical');
+  });
+
+  it('session-first: digital lines, option off, billing prefill only', () => {
+    const payload = buildKustomSessionPayload(
+      {
+        ...sessionInput,
+        shipping_cost: 0,
+        total: 250,
+        shippingOptions: [],
+        selectedShippingId: null,
+        requiresShipping: false,
+        items: sessionInput.items.map((i) => ({
+          ...i,
+          requires_shipping: false,
+        })),
+      },
+      sessionCtx,
+    );
+    expect(payload.order_lines.map((l) => l.type)).toEqual(['digital']);
+    expect(payload.options?.allow_separate_shipping_address).toBe(false);
+    expect('shipping_address' in payload).toBe(false);
+    expect(payload.billing_address).toMatchObject({
+      given_name: 'Anna Maria',
+      street_address: 'Sturegatan 6',
+      country: 'SE',
+    });
+    expect('shipping_options' in payload).toBe(false);
+    expect(payload.order_amount).toBe(25000);
+  });
+
+  it('session-first: an email-only prefill stays a billing prefill', () => {
+    const payload = buildKustomSessionPayload(
+      {
+        ...sessionInput,
+        address: null,
+        shipping_cost: 0,
+        total: 250,
+        shippingOptions: [],
+        requiresShipping: false,
+      },
+      sessionCtx,
+    );
+    expect(payload.billing_address).toEqual({
+      email: 'anna@example.com',
+      country: 'SE',
+    });
+    expect('shipping_address' in payload).toBe(false);
+  });
+});

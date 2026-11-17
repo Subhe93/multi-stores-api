@@ -23,6 +23,10 @@ import {
 } from '../../designer/designer-addons';
 
 import { PLATFORM_TERMS_PATH } from './store-terms';
+import {
+  orderLineRequiresShipping,
+  orderRequiresShipping,
+} from '../../../common/shipping/requires-shipping';
 /**
  * Pure functions that turn one of our orders — or a not-yet-ordered checkout
  * session — into the Kustom checkout payload. Nothing here touches the
@@ -56,6 +60,11 @@ export interface KustomOrderItemInput {
    */
   designer_addons?: Pick<PricedAddon, 'label' | 'qty' | 'type'>[] | null;
   design?: { price_breakdown?: unknown } | null;
+  /**
+   * The line's snapshot (an OrderItem column, or the quote item's key):
+   * only the literal `false` makes the line a `digital` one.
+   */
+  requires_shipping?: boolean | null;
 }
 
 export interface KustomAddressInput {
@@ -107,6 +116,11 @@ export interface KustomOrderInput extends KustomLinesInput, KustomCompanyInput {
     phone?: string | null;
     user?: { email?: string | null } | null;
   };
+  /**
+   * The order's snapshot (`Order.requires_shipping`): only the literal
+   * `false` drops the shipping address section and prefill.
+   */
+  requires_shipping?: boolean | null;
 }
 
 export interface KustomMapperContext {
@@ -372,7 +386,8 @@ export function buildKustomOrderLines(
       : netUnitMinor;
     const amounts = consistentLineAmounts(unitMinor, totalMinor, item.quantity);
     return {
-      type: 'physical',
+      // A line that requires no shipping (service / digital product).
+      type: orderLineRequiresShipping(item) ? 'physical' : 'digital',
       reference: (item.variant?.sku || item.id).slice(0, 64),
       name: resolveItemName(item, locale),
       quantity: item.quantity,
@@ -614,6 +629,9 @@ export function buildKustomCheckoutPayload(
     shippingName: order.shipping_method_name ?? undefined,
   });
   const customer = buildKustomCustomer(order);
+  // Nothing to ship: no shipping address section in the iframe and no
+  // shipping prefill; the billing address is the order's only address.
+  const requiresShipping = orderRequiresShipping(order);
 
   return {
     purchase_country: country,
@@ -630,12 +648,12 @@ export function buildKustomCheckoutPayload(
     // Prefill both with what the customer typed on our checkout page; they may
     // still change the shipping address inside the iframe.
     billing_address: address,
-    shipping_address: address,
+    ...(requiresShipping ? { shipping_address: address } : {}),
     // b2b app: both keys are absent (not undefined) without the app.
     ...(customer ? { customer } : {}),
     options: {
       auto_capture: false,
-      allow_separate_shipping_address: true,
+      allow_separate_shipping_address: requiresShipping,
       // Fail the purchase when our validation callback cannot answer in
       // time: stock and order state must be confirmed before Kustom
       // authorizes money, never assumed.
@@ -708,6 +726,12 @@ export interface KustomSessionInput extends KustomLinesInput {
   buyerType?: BuyerType | null;
   /** b2b app: the company prefill of a COMPANY session, if any was given. */
   company?: CompanySnapshot | null;
+  /**
+   * From the quote (`quote.requires_shipping !== false`): only the literal
+   * `false` drops the shipping address section and prefill. Absent = the
+   * session requires shipping.
+   */
+  requiresShipping?: boolean;
 }
 
 /**
@@ -801,6 +825,10 @@ export function buildKustomSessionPayload(
     if (org.organization_name || org.buyer_reference) address = org;
   }
   const customer = buildKustomCustomer(company);
+  // Nothing to ship: no shipping address section and no shipping prefill.
+  const requiresShipping = orderRequiresShipping({
+    requires_shipping: input.requiresShipping,
+  });
 
   const payload: KustomCheckoutPayload = {
     purchase_country: country,
@@ -813,7 +841,7 @@ export function buildKustomSessionPayload(
     merchant_urls: buildKustomSessionMerchantUrls(ctx),
     options: {
       auto_capture: false,
-      allow_separate_shipping_address: true,
+      allow_separate_shipping_address: requiresShipping,
       require_validate_callback_success: true,
       // b2b app: absent without the app, so the payload stays identical.
       ...(ctx.allowedCustomerTypes
@@ -837,7 +865,7 @@ export function buildKustomSessionPayload(
   }
   if (address) {
     payload.billing_address = address;
-    payload.shipping_address = address;
+    if (requiresShipping) payload.shipping_address = address;
   }
   if (customer) payload.customer = customer;
   // Omitted (not an empty array) until a destination is known.
