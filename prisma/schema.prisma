@@ -500,6 +500,9 @@ model Product {
   // rate lookup to 0 %.
   tax_class_id                String?
   tax_exempt                  Boolean            @default(false)
+  // False = service / digital product: no shipping rates, no shipping step
+  // (Shopify "Physical product" off). Read ONLY through lineRequiresShipping().
+  requires_shipping           Boolean            @default(true)
   status                      ProductStatus      @default(DRAFT)
   is_featured                 Boolean            @default(false)
   // Importer identity "woo:<site_host>:product:<id>" (M4.4); never copied by duplicate().
@@ -897,6 +900,9 @@ model Order {
   shipping_method_id      String?
   shipping_method_name    String?
   shipping_method_type    ShippingMethodType?
+  // True when at least one line required shipping at purchase time. Written
+  // once by create(); orders placed before the column read true.
+  requires_shipping       Boolean             @default(true)
   // Markets app: the market the order was placed in, the storefront host it
   // was placed on, the UI locale and the base->market rate the prices were
   // converted with (1 when the market prices in the store currency). All
@@ -1037,6 +1043,9 @@ model OrderItem {
   // so the checklist never follows a later edit / deletion of the variant.
   // Null on orders placed before the column existed (no backfill).
   variant_options_snapshot Json?
+  // Snapshot of the line's value at purchase time (Shopify
+  // line_item.requires_shipping). Never re-derived from the product.
+  requires_shipping        Boolean  @default(true)
 
   order               Order                   @relation(fields: [order_id], references: [id], onDelete: Cascade)
   product             Product?                @relation(fields: [product_id], references: [id])
