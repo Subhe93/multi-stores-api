@@ -7,7 +7,7 @@ import {
   ForbiddenException,
   Optional,
 } from '@nestjs/common';
-import { keepOwnerCss } from '../themes/keep-owner-css';
+import { keepOwnerSettings } from '../themes/keep-owner-css';
 import { CorsOriginService } from '../../common/cors/cors-origin.service';
 import { Prisma, StoreStatus, StoreType, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -1197,8 +1197,11 @@ export class StoresService {
       const store = await this.prisma.store.findUnique({
         where: { creator_id: creator.id },
       });
-      // Token overrides go; the owner's custom CSS (content) stays.
-      data.theme_customizations = keepOwnerCss(store?.theme_customizations);
+      // Token overrides go; the owner's custom CSS (content) and the store's
+      // behaviour settings (motion, product.card) stay.
+      data.theme_customizations = keepOwnerSettings(
+        store?.theme_customizations,
+      );
       data.theme_config = stripBrandFromThemeConfig(store?.theme_config);
     }
 

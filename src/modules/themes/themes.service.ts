@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { keepOwnerCss } from './keep-owner-css';
+import { keepOwnerSettings } from './keep-owner-css';
 import { PageStatus, PageType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
@@ -108,6 +108,23 @@ export class ThemesService {
     };
     const restoreLabel = `Before theme: ${preset.name.en ?? preset.id}`;
 
+    // The store's own content and behaviour settings (custom CSS, motion,
+    // product.card) are not look tokens: a preset keeps them. The preset's
+    // own `product` keys still apply; only `card` is carried over.
+    const kept = keepOwnerSettings(store?.theme_customizations);
+    const presetProduct = preset.theme_customizations.product;
+    const keptLook: Record<string, unknown> = { ...kept };
+    if (kept.product) {
+      keptLook.product = {
+        ...(presetProduct &&
+        typeof presetProduct === 'object' &&
+        !Array.isArray(presetProduct)
+          ? (presetProduct as Record<string, unknown>)
+          : {}),
+        card: kept.product.card,
+      };
+    }
+
     const outcomes = await this.prisma.$transaction(
       async (tx) => {
         // 1. Store look: base theme + tokens (tagged with the preset id so the
@@ -120,8 +137,8 @@ export class ThemesService {
             theme_customizations: {
               ...preset.theme_customizations,
               preset_id: preset.id,
-              // Owner CSS is content, not a look token: a preset keeps it.
-              ...keepOwnerCss(store?.theme_customizations),
+              // Owner CSS and behaviour settings survive a preset.
+              ...keptLook,
             } as Prisma.InputJsonValue,
             theme_config: themeConfig as Prisma.InputJsonValue,
           },
