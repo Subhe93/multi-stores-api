@@ -34,6 +34,18 @@ describe('keepOwnerSettings', () => {
     }
   });
 
+  it('keeps the filtered listing setting, even empty (on with defaults)', () => {
+    expect(
+      keepOwnerSettings({ colors: { primary: '#000' }, listing: {} }),
+    ).toEqual({ listing: {} });
+    expect(
+      keepOwnerSettings({ listing: { filters: ['size'], density: 3 } }),
+    ).toEqual({ listing: { filters: ['size'], density: 3 } });
+    for (const listing of [null, [], 'on', true]) {
+      expect(keepOwnerSettings({ listing })).toEqual({});
+    }
+  });
+
   it('keeps each key independently', () => {
     expect(keepOwnerSettings({ motion: { reveal: 'off' } })).toEqual({
       motion: { reveal: 'off' },

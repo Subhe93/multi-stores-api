@@ -85,6 +85,15 @@ import {
   type ListKey,
   type WindowQuery,
 } from './product-list-query';
+import {
+  normalizeFacetQuery,
+  runFacets,
+  toFacetRow,
+  type FacetCategory,
+  type FacetCollection,
+  type FacetQuery,
+  type FacetRow,
+} from './product-list-facets';
 import { storeSellerDetails } from '../legal/platform-seller';
 import {
   STORE_LEGAL_KIND,
@@ -441,6 +450,19 @@ export function rewriteCollectionMenuItems<
           url: `/collections/${paths.get(it.resource_id!)!.path.join('/')}`,
         }
       : it,
+  );
+}
+
+/** Name in `locale`, else English, else the first one (facet labels). */
+function pickName(
+  translations: { locale: string; name: string }[],
+  locale?: string,
+): string {
+  return (
+    (locale && translations.find((t) => t.locale === locale)?.name) ||
+    translations.find((t) => t.locale === 'en')?.name ||
+    translations[0]?.name ||
+    ''
   );
 }
 
@@ -1268,6 +1290,16 @@ export class StorefrontService {
       locale?: string;
       // Opt-in product card data; only the exact value '1' counts.
       card?: unknown;
+      // Opt-in shopper filters and facet counts (product-list-facets.ts).
+      // All absent = the list below, unchanged.
+      collection?: unknown;
+      type?: unknown;
+      color?: unknown;
+      size?: unknown;
+      price_min?: unknown;
+      price_max?: unknown;
+      in_stock?: unknown;
+      facets?: unknown;
     },
     marketKey?: string,
     preview?: boolean,
@@ -1388,6 +1420,12 @@ export class StorefrontService {
       locale: filters.locale,
       card: filters.card === '1',
     };
+    // Shopper filters / facet counts: a separate path, taken only when one
+    // of its parameters is present.
+    const facetQuery = normalizeFacetQuery(filters);
+    if (facetQuery.engaged) {
+      return this.listProductsFaceted(query, ctx, facetQuery);
+    }
     if (query.mode !== 'all') return this.listProductsWindow(query, ctx);
 
     const [ownProducts, customProducts] = await Promise.all([
@@ -1734,6 +1772,283 @@ export class StorefrontService {
       ? await this.hydrateListWindow(window, ctx)
       : [];
     return paged ? toProductsPage(q, items, total) : items;
+  }
+
+  /**
+   * The list with shopper filters and / or facet counts (opt-in, see
+   * product-list-facets.ts). Every mode, one algorithm:
+   *
+   * 1. Light rows of every product of the base list (same where as the
+   *    other paths): price, stock, variant options, category, collection
+   *    links; titles only for `sort=name`. One read per source, plus one
+   *    market price read, the store's public collections and the listed
+   *    categories (labels) when they are needed. No per-product query.
+   * 2. Filter and count in memory, order with the comparators of the
+   *    windowed modes (price = the listed price, market price included),
+   *    cut the window.
+   * 3. Hydrate the window ids through the shared pipeline, so an item is
+   *    the same object as on the other paths.
+   * `all` answers the filtered plain array, `limit` its first N, `paged`
+   * the page plus `facets` when `facets=1`.
+   */
+  private async listProductsFaceted(
+    q: ReturnType<typeof normalizeListQuery>,
+    ctx: ListContext,
+    fq: FacetQuery,
+  ) {
+    const { ownWhere, customWhere, isIndependent, market } = ctx;
+    const sort = q.mode === 'all' ? undefined : q.sort;
+    const byName = sort === 'name';
+    const locale = listLocale(ctx.locale);
+    const variantSelect = {
+      id: true,
+      options: true,
+      stock_quantity: true,
+      price_adjustment: true,
+      compare_at_price: true,
+      is_active: true,
+    } as const;
+    const links = { select: { creator_category_id: true } } as const;
+    const titles = { select: { locale: true, title: true } } as const;
+
+    const [own, custom] = await Promise.all([
+      this.prisma.product.findMany({
+        where: ownWhere,
+        select: {
+          id: true,
+          created_at: true,
+          base_price: true,
+          compare_at_price: true,
+          track_inventory: true,
+          stock_quantity: true,
+          category_id: true,
+          variant_option_config: true,
+          variants: { where: { is_active: true }, select: variantSelect },
+          creator_categories: links,
+          ...(byName ? { translations: titles } : {}),
+        },
+      }),
+      isIndependent
+        ? Promise.resolve([])
+        : this.prisma.customProduct.findMany({
+            where: customWhere,
+            select: {
+              id: true,
+              created_at: true,
+              final_price: true,
+              pricing_type: true,
+              margin_amount: true,
+              selected_variants: {
+                select: {
+                  variant_id: true,
+                  custom_price: true,
+                  variant: { select: variantSelect },
+                },
+              },
+              product: {
+                select: {
+                  base_price: true,
+                  track_inventory: true,
+                  stock_quantity: true,
+                  category_id: true,
+                  variant_option_config: true,
+                  variants: {
+                    where: { is_active: true },
+                    select: variantSelect,
+                  },
+                },
+              },
+              creator_categories: links,
+              ...(byName ? { translations: titles } : {}),
+            },
+          }),
+    ]);
+
+    const titleOf = (row: object) =>
+      byName
+        ? titleFor(
+            (row as { translations?: { locale: string; title: string }[] })
+              .translations ?? [],
+            locale,
+          )
+        : undefined;
+
+    // Own products: market price (one read); hidden ones are dropped as in
+    // applyMarketPrices.
+    const marketRows = market
+      ? await this.marketPricing.loadPrices(
+          market.id,
+          own.map((p) => p.id),
+        )
+      : null;
+    const rows: FacetRow[] = [];
+    for (const p of own) {
+      let price = Number(p.base_price);
+      if (market) {
+        const priced = this.marketPricing.priceProduct(
+          market,
+          {
+            id: p.id,
+            base_price: price,
+            compare_at_price: p.compare_at_price
+              ? Number(p.compare_at_price)
+              : null,
+            variants: p.variants.map((v) => ({
+              id: v.id,
+              price_adjustment: v.price_adjustment,
+              compare_at_price: v.compare_at_price
+                ? Number(v.compare_at_price)
+                : null,
+            })),
+          },
+          marketRows?.get(p.id),
+        );
+        if (priced.hidden) continue;
+        price = priced.base_price;
+      }
+      rows.push(
+        toFacetRow({
+          kind: 'p',
+          id: p.id,
+          created_at: p.created_at,
+          price,
+          title: titleOf(p),
+          category_id: p.category_id,
+          links: p.creator_categories.map((l) => l.creator_category_id),
+          track_inventory: p.track_inventory,
+          stock_quantity: p.stock_quantity,
+          variants: p.variants,
+          variant_option_config: p.variant_option_config,
+        }),
+      );
+    }
+    for (const cp of custom) {
+      const source = cp as unknown as CustomProductPricingSource;
+      const variants = this.customSourceVariants(source);
+      const price = this.computeDisplayPrice(
+        source,
+        this.computeVariants(source),
+      );
+      rows.push(
+        toFacetRow({
+          kind: 'cp',
+          id: cp.id,
+          created_at: cp.created_at,
+          price,
+          title: titleOf(cp),
+          category_id: cp.product.category_id,
+          links: cp.creator_categories.map((l) => l.creator_category_id),
+          track_inventory: cp.product.track_inventory,
+          stock_quantity: effectiveProductStock(cp.product, variants),
+          variants,
+          variant_option_config: cp.product.variant_option_config,
+        }),
+      );
+    }
+
+    const { filters } = fq;
+    const withFacets = fq.facets && q.mode === 'paged';
+    const [collections, categories] = await Promise.all([
+      withFacets || filters.collection.length > 0
+        ? this.facetCollections(ctx.store.creator.id, locale)
+        : Promise.resolve<FacetCollection[]>([]),
+      withFacets || filters.type.length > 0
+        ? this.facetCategories(rows, locale)
+        : Promise.resolve<FacetCategory[]>([]),
+    ]);
+
+    const { matched, facets } = runFacets(
+      { rows, filters, collections, categories },
+      withFacets,
+    );
+
+    const manual = !sort && ctx.creatorCategory?.match_rule === 'MANUAL';
+    const comparator: ListComparator = manual
+      ? compareManual(
+          await this.manualSortOrders(
+            ctx.creatorCategory!.id,
+            matched.some((r) => r.kind === 'cp'),
+          ),
+        )
+      : byName
+        ? compareName(locale)
+        : sort === 'newest'
+          ? compareTail
+          : sort === 'price_asc' || sort === 'price_desc'
+            ? comparePrice(sort === 'price_asc' ? 'asc' : 'desc')
+            : compareDefault;
+    const keys: ListKey[] = matched.map((r) => ({
+      kind: r.kind,
+      id: r.id,
+      created_at: r.created_at,
+      price: r.price,
+      title: r.title,
+    }));
+    keys.sort(comparator);
+    const window =
+      q.mode === 'all' ? keys : keys.slice(q.offset, q.offset + q.limit);
+    const items = window.length
+      ? await this.hydrateListWindow(window, ctx)
+      : [];
+    if (q.mode !== 'paged') return items;
+    return {
+      ...toProductsPage(q, items, keys.length),
+      ...(facets ? { facets } : {}),
+    };
+  }
+
+  /** Active public collections of the creator, labelled in `locale`. */
+  private async facetCollections(
+    creatorId: string,
+    locale?: string,
+  ): Promise<FacetCollection[]> {
+    const rows = await this.prisma.creatorCategory.findMany({
+      where: { creator_id: creatorId, is_active: true, visibility: 'PUBLIC' },
+      select: {
+        id: true,
+        slug: true,
+        parent_id: true,
+        sort_order: true,
+        match_rule: true,
+        match_tags: true,
+        translations: { select: { locale: true, name: true } },
+      },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      slug: r.slug,
+      parent_id: r.parent_id,
+      sort_order: r.sort_order,
+      match_rule: r.match_rule,
+      match_tags: r.match_tags,
+      label: pickName(r.translations, locale) || r.slug,
+    }));
+  }
+
+  /** The platform categories the listed rows use, labelled in `locale`. */
+  private async facetCategories(
+    rows: FacetRow[],
+    locale?: string,
+  ): Promise<FacetCategory[]> {
+    const ids = [
+      ...new Set(
+        rows.map((r) => r.category_id).filter((x): x is string => !!x),
+      ),
+    ];
+    if (!ids.length) return [];
+    const cats = await this.prisma.category.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        slug: true,
+        translations: { select: { locale: true, name: true } },
+      },
+    });
+    return cats.map((c) => ({
+      id: c.id,
+      slug: c.slug,
+      label: pickName(c.translations, locale) || c.slug,
+    }));
   }
 
   /** Full rows of a window, shaped, in window order. */

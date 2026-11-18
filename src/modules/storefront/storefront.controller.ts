@@ -82,6 +82,16 @@ export class StorefrontController {
     @Query('preview') preview?: string,
     // Opt-in product card data (`card=1`); anything else is ignored.
     @Query('card') card?: unknown,
+    // Opt-in shopper filters and facet counts (product-list-facets.ts);
+    // raw values, normalised by the service (never a 400).
+    @Query('collection') collection?: unknown,
+    @Query('type') type?: unknown,
+    @Query('color') color?: unknown,
+    @Query('size') size?: unknown,
+    @Query('price_min') price_min?: unknown,
+    @Query('price_max') price_max?: unknown,
+    @Query('in_stock') in_stock?: unknown,
+    @Query('facets') facets?: unknown,
   ) {
     return this.storefrontService.getProducts(
       slug,
@@ -95,6 +105,15 @@ export class StorefrontController {
         search,
         locale,
         card,
+        // Absent keys stay absent: the default call is unchanged.
+        ...(collection !== undefined ? { collection } : {}),
+        ...(type !== undefined ? { type } : {}),
+        ...(color !== undefined ? { color } : {}),
+        ...(size !== undefined ? { size } : {}),
+        ...(price_min !== undefined ? { price_min } : {}),
+        ...(price_max !== undefined ? { price_max } : {}),
+        ...(in_stock !== undefined ? { in_stock } : {}),
+        ...(facets !== undefined ? { facets } : {}),
       },
       market,
       isPreview(preview),
@@ -160,7 +179,10 @@ export class StorefrontController {
   // v2 published page snapshot — HOME or any LANDING/STATIC/PRODUCT_TEMPLATE slug.
   // Returns null when no version is published yet.
   @Get(':slug/v2/home')
-  getHome(@Viewer() viewer: StorefrontViewer | null, @Param('slug') slug: string) {
+  getHome(
+    @Viewer() viewer: StorefrontViewer | null,
+    @Param('slug') slug: string,
+  ) {
     return this.storefrontService.getPublishedPage(
       slug,
       { type: 'HOME' },
@@ -211,7 +233,10 @@ export class StorefrontController {
   // Returns null when the creator hasn't published the chrome yet; the
   // storefront falls back to its built-in header/footer in that case.
   @Get(':slug/v2/header')
-  getHeader(@Viewer() viewer: StorefrontViewer | null, @Param('slug') slug: string) {
+  getHeader(
+    @Viewer() viewer: StorefrontViewer | null,
+    @Param('slug') slug: string,
+  ) {
     return this.storefrontService.getPublishedPage(
       slug,
       { type: 'HEADER' },
@@ -220,7 +245,10 @@ export class StorefrontController {
   }
 
   @Get(':slug/v2/footer')
-  getFooter(@Viewer() viewer: StorefrontViewer | null, @Param('slug') slug: string) {
+  getFooter(
+    @Viewer() viewer: StorefrontViewer | null,
+    @Param('slug') slug: string,
+  ) {
     return this.storefrontService.getPublishedPage(
       slug,
       { type: 'FOOTER' },

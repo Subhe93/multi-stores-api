@@ -125,6 +125,34 @@ Payload: a plain JSON array (also with `limit`). With `page` (**not deployed yet
 
 `items` holds list items of the same shape as the array items; `total` is the number of products matching the same filters; `page` and `limit` are the values actually applied; `has_more` = `page * limit < total`. A page past the end returns `"items": []` with the true `total`.
 
+**Shopper filters and facets (not deployed yet, opt-in).** Used by the storefront's filtered listing; any client may send them. Every parameter is optional and never causes an error; with none of them the answer is the one above, byte for byte.
+
+| Param | Meaning |
+|---|---|
+| `collection=<slug>[,<slug>…]` | Products in any of these public collections (MANUAL links or the TAGS rule of each). Combines with `creator_category` (both must hold) |
+| `type=<category slug>[,…]` | Platform category of the product (imported products: of the base product) |
+| `color=<value>[,…]`, `size=<value>[,…]` | Variant option values. The colour option is the one styled as colours in the option config, else the option whose name contains colour / color / färg / farbe / couleur / renk / kleur / colore / لون; the size option is named size / storlek / größe / taille / beden / talla / maat / مقاس / قياس |
+| `price_min`, `price_max` | Listed price (`base_price` of the item, market price included), inclusive, up to 2 decimals. A reversed range is swapped |
+| `in_stock=1` | Only products that can be bought. With `color` / `size`: a variant of that colour and size that can be bought |
+| `facets=1` | With `page`: the answer gains `facets` (below) |
+
+Values are matched case-insensitively after trimming; commas and runs of spaces fold, so `Navy  Blue` and `navy blue` are one value. Several values of one parameter are OR, parameters are AND. Lists accept commas or repeated keys (at most 30 values of 80 characters each). The filters work in every mode (full list, `limit`, `page`); the order is the one of `sort` / the default order, with `price_asc` / `price_desc` comparing the listed price here (market price included). With `page`, `total` counts the filtered products.
+
+`facets` (counts are disjunctive: each facet applies every other active filter, so a value shows what selecting it would add):
+
+```json
+{
+  "collection": [{ "value": "new", "label": "New in", "count": 12, "parent": null }],
+  "type": [{ "value": "t-shirts", "label": "T-shirts", "count": 8 }],
+  "color": [{ "value": "black", "label": "Black", "count": 9, "swatch": "#111111" }],
+  "size": [{ "value": "m", "label": "M", "count": 7 }],
+  "price": { "min": 129, "max": 899 },
+  "in_stock": { "count": 31 }
+}
+```
+
+`collection` lists the store's active public collections that hold at least one product of the base list (labels in `locale`; `parent` = the parent's value), `type` only when the products span two or more categories, `color` with the seller's swatch colour(s) when set (`swatch2` for two-colour values), `size` in size order (XS…5XL, then numbers, then the rest). `price` is the range of the listed prices under the other filters (null when nothing matches). Values with count 0 are kept so a client can show them disabled.
+
 Each own product item:
 
 | Key | Type | Meaning |
@@ -444,4 +472,5 @@ The only dashboard reader of `GET /storefront/:slug` (`previewSampleProduct.ts` 
 - Keys listed as "never in this payload" stay out; `storefront.public-contract.spec.ts` enforces both lists.
 - Additive keys documented so far: `max_per_order` on product list and detail (P1); `requires_shipping` on product list and detail, and the `requires_shipping: false` keys of the cart, quote and shipping answers (3.6: only the literal `false` means "no shipping"); inside the store `checkout` block, `external_site_url`, `return_url`, `return_mode`, `back_label` (P3, present only when the store sets an external site) and `external_focus` (focused storefront, 11.5: present, as `true`, only while it is on); `return_label` (11.2: present only when set, next to an external site) and `no_customer_accounts` (11.2: present, as `true`, only while it is on). `email_note` (P4) is never served by these routes.
 - 2026-11-18, **LIVE (deployed 2026-11-18)**: `GET /storefront/:slug/products` honours `limit` (first N, still a plain array), and `page` switches to the paged object `{ items, total, page, limit, has_more }`; `sort` applies with either (3.2). A request without `page` and `limit` is unchanged (every product, plain array), so existing clients need no change.
+- 2026-11-19, **not deployed yet**: `GET /storefront/:slug/products` accepts the opt-in shopper filters `collection`, `type`, `color`, `size`, `price_min`, `price_max`, `in_stock` and, with `page`, `facets=1` (facet counts), see 3.2. A request without them is unchanged.
 - 2026-11-18, **not deployed yet**: `GET /storefront/:slug/products?card=1` adds product card data to each list item (a second image; `variant_option_config` and `compare_at_price` on imported products), see 3.2. A request without `card=1` is unchanged.

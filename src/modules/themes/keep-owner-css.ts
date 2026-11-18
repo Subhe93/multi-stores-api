@@ -20,6 +20,8 @@ export function keepOwnerCss(previous: unknown): { customCss?: string } {
  *  - `motion`: kept when it is a non-empty plain object.
  *  - `product.card`: kept when it is not null/undefined. Other `product` keys
  *    (e.g. `swatchShape`) are look tokens and are reset.
+ *  - `listing` (filtered product listing): kept when it is a plain object,
+ *    even empty (`{}` = switched on with the defaults).
  *
  * Spread the result into the new customizations object; when the new look
  * carries its own `product` keys, merge `card` into them.
@@ -28,15 +30,21 @@ export function keepOwnerSettings(previous: unknown): {
   customCss?: string;
   motion?: Record<string, unknown>;
   product?: { card: unknown };
+  listing?: Record<string, unknown>;
 } {
   if (!previous || typeof previous !== 'object' || Array.isArray(previous)) {
     return {};
   }
-  const prev = previous as { motion?: unknown; product?: unknown };
+  const prev = previous as {
+    motion?: unknown;
+    product?: unknown;
+    listing?: unknown;
+  };
   const kept: {
     customCss?: string;
     motion?: Record<string, unknown>;
     product?: { card: unknown };
+    listing?: Record<string, unknown>;
   } = { ...keepOwnerCss(previous) };
 
   const motion = prev.motion;
@@ -55,6 +63,11 @@ export function keepOwnerSettings(previous: unknown): {
     if (card !== null && card !== undefined) {
       kept.product = { card };
     }
+  }
+
+  const listing = prev.listing;
+  if (listing && typeof listing === 'object' && !Array.isArray(listing)) {
+    kept.listing = listing as Record<string, unknown>;
   }
   return kept;
 }
