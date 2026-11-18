@@ -55,6 +55,8 @@ import {
   routeOfOrder,
   type PaymentRoute,
 } from './payment-route';
+import { TransferReversalService } from './transfer-reversal.service';
+import { PAYOUT_REVERSED } from './transfer-reversal';
 
 // The stripe package does not surface the `Stripe.*` resource namespace through
 // its package entry under nodenext, so we derive the types we need from the
@@ -231,6 +233,10 @@ export class PaymentsService implements OnModuleInit {
     @Optional()
     @Inject(OWN_KEY_API)
     private readonly ownKey?: OwnKeyApi,
+    // Transfer reversal after a refund (bookkeeping always, Stripe calls
+    // behind TRANSFER_REVERSAL_ON_REFUND). Optional and last so positional
+    // spec constructors stay valid; PaymentsModule always provides it.
+    @Optional() private readonly transferReversal?: TransferReversalService,
   ) {}
 
   /**
@@ -2351,7 +2357,14 @@ export class PaymentsService implements OnModuleInit {
         },
       };
       const existing = await this.prisma.orderPayout.findUnique({ where: key });
-      if (existing?.status === 'paid') return;
+      // `reversed`: the transfer was sent and reversed in full after a
+      // refund. It is never sent again (not even when that refund fails).
+      if (
+        existing?.status === 'paid' ||
+        existing?.status === PAYOUT_REVERSED
+      ) {
+        return;
+      }
 
       const ledgerAmount = fromStripeAmount(presentmentCents, order.currency);
       // fxRate is derived from the charge's balance transaction, so both sides
@@ -2841,6 +2854,14 @@ export class PaymentsService implements OnModuleInit {
           );
         }
       }
+      // Also with nothing refunded any more (a refund that failed): the
+      // reversal bookkeeping of the order is then withdrawn.
+      await this.syncTransferReversal(
+        order,
+        refundedMinor,
+        capturedMinor ?? 0,
+        live.currency,
+      );
       return;
     }
 
@@ -2848,14 +2869,57 @@ export class PaymentsService implements OnModuleInit {
     // REFUNDED transition would (status, commission, stock, customer email)
     // and is idempotent, so a replayed event is a no-op.
     const result = await this.orders.markOrderRefunded(order.id);
-    if (!result?.changed) return;
+    if (result?.changed) {
+      await this.notifyStoreCreator(
+        order.store_id,
+        'order_refunded',
+        'Order refunded',
+        `The payment for order ${order.order_number} was fully refunded.`,
+        order.id,
+      );
+    }
+    // After the notifications, and also on a replayed event (the order is
+    // already refunded): the reversal is idempotent, and a replay is how a
+    // reversal that failed gets retried.
+    await this.syncTransferReversal(
+      order,
+      refundedMinor,
+      capturedMinor ?? refundedMinor,
+      live.currency,
+    );
+  }
 
-    await this.notifyStoreCreator(
-      order.store_id,
-      'order_refunded',
-      'Order refunded',
-      `The payment for order ${order.order_number} was fully refunded.`,
-      order.id,
+  /**
+   * Transfer reversal of a refunded PLATFORM-route order (see
+   * TransferReversalService): the bookkeeping always, the Stripe reversals
+   * only with TRANSFER_REVERSAL_ON_REFUND=on. Direct charges and own-key
+   * orders have no transfers and are never touched. The platform Stripe
+   * client is resolved only when the service really executes.
+   */
+  private async syncTransferReversal(
+    order: {
+      id: string;
+      order_number: string;
+      payment_route?: string | null;
+      stripe_account_id?: string | null;
+    },
+    refundedMinor: number,
+    capturedMinor: number,
+    currency: string,
+  ): Promise<void> {
+    if (!this.transferReversal) return;
+    if (routeOfOrder(order) !== 'PLATFORM') return;
+    await this.transferReversal.onRefundSynced(
+      { id: order.id, order_number: order.order_number },
+      { refundedMinor, capturedMinor, currency },
+      async () => {
+        const stripe = await this.requireStripe();
+        return {
+          retrieve: (id) => stripe.transfers.retrieve(id),
+          createReversal: (id, params, options) =>
+            stripe.transfers.createReversal(id, params, options),
+        };
+      },
     );
   }
 

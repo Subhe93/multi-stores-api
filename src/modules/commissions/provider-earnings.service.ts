@@ -220,8 +220,11 @@ export class ProviderSummaryAccumulator {
       case 'refunded':
         b.refunded_orders += 1;
         b.refunded += l.amountMinor;
-        // Refunds do not reverse transfers automatically (no reversal is
-        // issued by the platform), so surface what was already sent.
+        // Surface what was already sent and not taken back. Transfers are
+        // reversed automatically only with TRANSFER_REVERSAL_ON_REFUND=on
+        // (payments/transfer-reversal.service.ts); a payout reversed in
+        // full has status `reversed` and counts as not transferred
+        // (transferredMinor is 0 for anything but `paid`).
         b.refunded_after_transfer += l.transferredMinor;
         break;
       case 'unpaid':
