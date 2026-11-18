@@ -2,7 +2,9 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import {
   CommissionStatus,
   FulfillerType,
+  PaymentMethod,
   Prisma,
+  StoreType,
   UserRole,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -134,6 +136,13 @@ export class CommissionsService {
     // fulfiller_id. Provider only earns on items they actually fulfill.
     let where: { order: any } | null = null;
     let providerId: string | null = null;
+    // Creator of a MARKETPLACE store: cash-on-delivery orders (historical;
+    // such a store takes no COD any more) were collected outside the
+    // platform, so no payout ever reaches the creator for them. They are
+    // reported as `offline` instead of pending / paid, like the supplier
+    // side does (provider-earnings.service). An INDEPENDENT store keeps the
+    // cash as its own revenue and its summary is unchanged.
+    let offlineCod = false;
 
     if (role === 'provider') {
       const provider = await this.prisma.provider.findUnique({
@@ -170,6 +179,7 @@ export class CommissionsService {
       where = {
         order: { store_id: creator.store.id, is_test: false, deleted_at: null },
       };
+      offlineCod = creator.store.store_type === StoreType.MARKETPLACE;
     }
 
     // Test orders (FIXES-1) never count as earnings.
@@ -181,8 +191,16 @@ export class CommissionsService {
               order: { select: { items: { select: SHARE_LINE_SELECT } } },
             },
           }
-        : {}),
+        : offlineCod
+          ? { include: { order: { select: { payment_method: true } } } }
+          : {}),
     });
+    /** A commission whose money never passes through the platform. */
+    const isOffline = (c: (typeof rows)[number]): boolean =>
+      offlineCod &&
+      c.status !== CommissionStatus.FAILED &&
+      (c as typeof c & { order?: { payment_method?: string | null } }).order
+        ?.payment_method === PaymentMethod.COD;
     // A provider earns its own share of provider_amount only: on an order
     // shared with another provider the aggregate would count (and reveal)
     // the other provider's amount.
@@ -211,7 +229,11 @@ export class CommissionsService {
       .reduce((sum, c) => sum + Number(c[amountField]), 0);
 
     const pending = allCommissions
-      .filter((c) => c.status === 'PENDING')
+      .filter((c) => c.status === 'PENDING' && !isOffline(c))
+      .reduce((sum, c) => sum + Number(c[amountField]), 0);
+
+    const offline = allCommissions
+      .filter(isOffline)
       .reduce((sum, c) => sum + Number(c[amountField]), 0);
 
     // Markets app (L14): the same figures split per order currency, so a
@@ -220,7 +242,13 @@ export class CommissionsService {
     const byCurrency = new Map<
       string,
       // paid = COMPLETED commissions (the order was delivered).
-      { orders: number; total_earnings: number; pending: number; paid: number }
+      {
+        orders: number;
+        total_earnings: number;
+        pending: number;
+        paid: number;
+        offline: number;
+      }
     >();
     for (const c of allCommissions) {
       const code = (c.currency || 'EUR').toUpperCase();
@@ -229,12 +257,14 @@ export class CommissionsService {
         total_earnings: 0,
         pending: 0,
         paid: 0,
+        offline: 0,
       };
       const amount = Number(c[amountField]);
       entry.orders += 1;
       entry.total_earnings += amount;
-      if (c.status === 'PENDING') entry.pending += amount;
-      if (c.status === 'COMPLETED') entry.paid += amount;
+      if (isOffline(c)) entry.offline += amount;
+      else if (c.status === 'PENDING') entry.pending += amount;
+      else if (c.status === 'COMPLETED') entry.paid += amount;
       byCurrency.set(code, entry);
     }
 
@@ -243,6 +273,8 @@ export class CommissionsService {
       this_month: Math.round(thisMonth * 100) / 100,
       pending: Math.round(pending * 100) / 100,
       total_orders: allCommissions.length,
+      // Additive, creator of a MARKETPLACE store only.
+      ...(offlineCod ? { offline: Math.round(offline * 100) / 100 } : {}),
       by_currency: [...byCurrency.entries()]
         .map(([currency, e]) => ({
           currency,
@@ -250,6 +282,7 @@ export class CommissionsService {
           total_earnings: Math.round(e.total_earnings * 100) / 100,
           pending: Math.round(e.pending * 100) / 100,
           paid: Math.round(e.paid * 100) / 100,
+          ...(offlineCod ? { offline: Math.round(e.offline * 100) / 100 } : {}),
         }))
         .sort((a, b) => b.orders - a.orders),
     };
