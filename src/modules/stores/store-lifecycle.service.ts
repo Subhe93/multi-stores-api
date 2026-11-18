@@ -258,8 +258,7 @@ export class StoreLifecycleService {
       trader_details_complete: traderDetailsComplete(store.trader_details),
       has_published_product: ownPublished + customPublished > 0,
       has_published_theme: themeChosen,
-      payments_ready:
-        cardReady || kustomReady || effectiveCodEnabled(store),
+      payments_ready: cardReady || kustomReady || effectiveCodEnabled(store),
       legal_pages_published: storeLegalRows
         ? (['privacy', 'terms'] as const).every(
             (slug) =>

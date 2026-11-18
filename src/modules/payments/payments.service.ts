@@ -2359,10 +2359,7 @@ export class PaymentsService implements OnModuleInit {
       const existing = await this.prisma.orderPayout.findUnique({ where: key });
       // `reversed`: the transfer was sent and reversed in full after a
       // refund. It is never sent again (not even when that refund fails).
-      if (
-        existing?.status === 'paid' ||
-        existing?.status === PAYOUT_REVERSED
-      ) {
+      if (existing?.status === 'paid' || existing?.status === PAYOUT_REVERSED) {
         return;
       }
 

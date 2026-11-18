@@ -228,9 +228,9 @@ describe('effective_currency on the owner payloads', () => {
       (await unsupported.service.findByCreatorId('c1')).effective_currency,
     ).toBe('EUR');
     const empty = build({ store_type: 'INDEPENDENT', currency: null }, 'SEK');
-    expect(
-      (await empty.service.findByCreatorId('c1')).effective_currency,
-    ).toBe('SEK');
+    expect((await empty.service.findByCreatorId('c1')).effective_currency).toBe(
+      'SEK',
+    );
   });
 
   it('no platform config row: EUR', async () => {
