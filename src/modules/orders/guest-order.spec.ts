@@ -23,6 +23,7 @@ import type { PaymentKeysGuardService } from '../security/payment-keys-guard.ser
 import type { StorefrontGateService } from '../storefront/storefront-gate.service';
 import type { GuestOrderDto } from './dto/guest-order.dto';
 import { GuestOrderService } from './guest-order.service';
+import { buildOrderCreate } from './__fixtures__/order-create.harness';
 import { forGuest } from './guest-order-view';
 import { OrdersGuestController } from './orders-guest.controller';
 import type { OrdersService } from './orders.service';
@@ -328,6 +329,7 @@ describe('POST /orders/guest: a new email', () => {
     });
     expect(opts).toEqual({
       lines: [{ product_id: 'p1', quantity: 2 }],
+      guestCheckout: true,
       verifiedDesignIds: [],
     });
     expect(b.addresses[0]).toMatchObject({
@@ -889,5 +891,52 @@ describe('forGuest', () => {
     ).toEqual({ id: 'o1', total: 5 });
     expect(forGuest({ id: 'o1' })).toEqual({ id: 'o1' });
     expect(forGuest(null)).toBeNull();
+  });
+});
+
+describe('create() for a guest checkout snapshot', () => {
+  const catalogue = () => ({
+    products: {
+      p1: {
+        creator_id: 'c1',
+        provider_id: null,
+        track_inventory: true,
+        stock_quantity: 5,
+      },
+    },
+  });
+  const lines = [{ product_id: 'p1', variant_id: null, quantity: 1 }];
+  const withB2bTax = () => {
+    const h = buildOrderCreate(catalogue());
+    const prepare = jest.fn((..._args: unknown[]) => Promise.resolve(null));
+    (h.service as unknown as { b2bTax: unknown }).b2bTax = { prepare };
+    return { h, prepare };
+  };
+  const order = { address_id: 'a1', store_id: 's1', payment_method: 'STRIPE' };
+
+  it('reverse charge is decided live, without the stored exemption of the customer', async () => {
+    const { h, prepare } = withB2bTax();
+    await h.service.create('u1', order as never, {
+      lines: lines as never,
+      guestCheckout: true,
+    });
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(prepare.mock.calls[0][1]).toMatchObject({
+      mode: 'live',
+      source: 'order',
+      customerId: null,
+    });
+    // The server cart is left alone, as for every snapshot order.
+    expect(h.products.get('p1')?.stock_quantity).toBe(4);
+  });
+
+  it('a Kustom snapshot keeps the stored decision (unchanged)', async () => {
+    const { h, prepare } = withB2bTax();
+    await h.service.create('u1', order as never, { lines: lines as never });
+    expect(prepare.mock.calls[0][1]).toMatchObject({
+      mode: 'stored',
+      stored: null,
+      customerId: null,
+    });
   });
 });

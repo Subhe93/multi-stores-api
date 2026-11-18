@@ -467,6 +467,13 @@ export interface CreateOrderOptions {
    */
   exemptionInputs?: ExemptionInputs | null;
   /**
+   * The snapshot comes from an interactive guest checkout (POST
+   * /orders/guest), not from Kustom's timed validation callback: b2b
+   * reverse charge is then decided live from the VAT number of the request
+   * (as for a cart order), but without the customer's stored exemption.
+   */
+  guestCheckout?: boolean;
+  /**
    * Designer app: design ids whose ownership the stored checkout session
    * verified (Kustom snapshot, `verifiedDesignIds(session.items)`). With
    * `lines`, only these designs are trusted; absent = none.
@@ -3144,21 +3151,33 @@ export class OrdersService implements OnModuleInit {
         ? opts.exemptionInputs
         : ((await this.b2bTax?.prepare(
             orderStore.id,
-            opts.lines
+            opts.guestCheckout
               ? {
-                  buyerType: orderStore.buyerType,
-                  vatNumber: null,
-                  customerId: null,
-                  mode: 'stored',
-                  stored: null,
-                }
-              : {
+                  // Guest checkout: checked live on the VAT number typed
+                  // for this order. No customer id: a stored exemption of
+                  // the account behind the email is never applied to
+                  // someone who only typed that email.
                   buyerType: orderStore.buyerType,
                   vatNumber: b2bColumns.vat_number ?? null,
-                  customerId: customer.id,
+                  customerId: null,
                   mode: 'live',
                   source: 'order',
-                },
+                }
+              : opts.lines
+                ? {
+                    buyerType: orderStore.buyerType,
+                    vatNumber: null,
+                    customerId: null,
+                    mode: 'stored',
+                    stored: null,
+                  }
+                : {
+                    buyerType: orderStore.buyerType,
+                    vatNumber: b2bColumns.vat_number ?? null,
+                    customerId: customer.id,
+                    mode: 'live',
+                    source: 'order',
+                  },
           )) ?? null);
 
     const totals = await this.computeTotals({

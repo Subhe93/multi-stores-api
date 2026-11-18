@@ -122,6 +122,7 @@ export class GuestOrderService {
     };
     const order = await this.orders.create(userId, orderDto, {
       lines: dto.lines,
+      guestCheckout: true,
       verifiedDesignIds: [...verified],
       ...(ctx.preLiveViewer ? { preLiveViewer: ctx.preLiveViewer } : {}),
       ...(ctx.trackingContext ? { trackingContext: ctx.trackingContext } : {}),
