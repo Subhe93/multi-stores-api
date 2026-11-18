@@ -20,6 +20,21 @@ import {
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import { assertMaxPerOrder, readMaxPerOrder } from './max-per-order';
+import { ConfigService } from '@nestjs/config';
+import {
+  cartLineStockRef,
+  insufficientStockError,
+  roomOnRow,
+  stockRowKey,
+  unitsOnRow,
+  type CartStockLine,
+  type StockRowRef,
+} from './cart-stock';
+import {
+  CUSTOM_LINE_STOCK_ENV,
+  customLineHoldsStock,
+  parseCustomLineStockSince,
+} from '../orders/custom-line-stock';
 import {
   cartRequiresShipping,
   lineRequiresShipping,
@@ -101,6 +116,11 @@ export interface EnrichedCartItem {
   imageUrl: string | null;
   variant: string | null;
   currency: string;
+  /**
+   * Largest quantity the line may hold (cart-stock.ts); present only when
+   * the line's stock row is tracked.
+   */
+  stock_available?: number;
   bundleOfferId: string | null;
   bundleOriginalUnitPrice: number | null;
   bundleTitle: string | null;
@@ -187,7 +207,138 @@ export class CartService {
     // M4.2 designer app (C28/C29): optional and trailing. Absent = no line
     // is ever a designer line (a sent design_id is not stored).
     @Optional() private readonly designerCart?: DesignerCartService,
+    // Reads CUSTOM_LINE_STOCK_SINCE for the stock limit of imported lines
+    // (ConfigModule is global). Optional and trailing: absent = imported
+    // lines hold no stock, as while the variable is unset.
+    @Optional() private readonly config?: ConfigService,
   ) {}
+
+  /** Parsed CUSTOM_LINE_STOCK_SINCE (undefined = not read yet). */
+  private customLineStockSinceCache: Date | null | undefined;
+
+  /**
+   * Whether an imported (custom product) line holds the provider's stock
+   * right now: the same switch order creation reads (custom-line-stock.ts),
+   * so the cart never refuses a quantity the order would accept.
+   */
+  private customLinesHoldStock(): boolean {
+    if (this.customLineStockSinceCache === undefined) {
+      let raw: string | undefined;
+      try {
+        const value: unknown = this.config?.get<string>(CUSTOM_LINE_STOCK_ENV);
+        raw = typeof value === 'string' ? value : undefined;
+      } catch {
+        raw = undefined;
+      }
+      this.customLineStockSinceCache = parseCustomLineStockSince(raw);
+    }
+    return customLineHoldsStock(new Date(), this.customLineStockSinceCache);
+  }
+
+  /** Base product id of each given custom product (one query, or none). */
+  private async baseProductsOf(
+    customProductIds: (string | null | undefined)[],
+  ): Promise<Map<string, string>> {
+    const ids = [
+      ...new Set(customProductIds.filter((id): id is string => !!id)),
+    ];
+    if (!ids.length) return new Map();
+    const rows = await this.prisma.customProduct.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, product_id: true },
+    });
+    return new Map(rows.map((r) => [r.id, r.product_id]));
+  }
+
+  /**
+   * Tracked stock of one row (null = not tracked or gone), with the rules
+   * of order creation: a variant tracks when its stock is set, a product
+   * when it tracks inventory and its stock is set.
+   */
+  private async trackedStockOfRow(ref: StockRowRef): Promise<number | null> {
+    if (ref.kind === 'variant') {
+      const variant = await this.prisma.productVariant.findUnique({
+        where: { id: ref.id },
+        select: { stock_quantity: true },
+      });
+      return typeof variant?.stock_quantity === 'number'
+        ? variant.stock_quantity
+        : null;
+    }
+    const product = await this.prisma.product.findUnique({
+      where: { id: ref.id },
+      select: { track_inventory: true, stock_quantity: true },
+    });
+    return product?.track_inventory === true &&
+      typeof product.stock_quantity === 'number'
+      ? product.stock_quantity
+      : null;
+  }
+
+  /**
+   * 400 CART_INSUFFICIENT_STOCK when a line would hold more than its stock
+   * row has (cart-stock.ts).
+   *  - `add`: units added to the item; the cart rows of the same item
+   *    (product + variant + custom product) count as the line itself.
+   *  - `set`: the new quantity of the cart row `itemId`.
+   * Every other row that sells the same stock row counts against it. A line
+   * without a tracked row costs one indexed read and reads no cart row.
+   */
+  private async assertCartStock(
+    cartId: string,
+    line: Omit<CartStockLine, 'quantity'>,
+    change: { add: number } | { set: number; itemId: string },
+  ): Promise<void> {
+    const holds = this.customLinesHoldStock();
+    if (line.custom_product_id && !holds) return;
+    const ref = cartLineStockRef(
+      { ...line, quantity: 0 },
+      line.custom_product_id && !line.variant_id
+        ? await this.baseProductsOf([line.custom_product_id])
+        : new Map<string, string>(),
+      holds,
+    );
+    if (!ref) return;
+    const stock = await this.trackedStockOfRow(ref);
+    if (stock === null) return;
+
+    const rows = await this.prisma.cartItem.findMany({
+      where: { cart_id: cartId },
+      select: {
+        id: true,
+        product_id: true,
+        variant_id: true,
+        custom_product_id: true,
+        quantity: true,
+      },
+    });
+    const same = (a?: string | null, b?: string | null) =>
+      (a ?? null) === (b ?? null);
+    const isThisLine = (row: (typeof rows)[number]) =>
+      'itemId' in change
+        ? row.id === change.itemId
+        : same(row.product_id, line.product_id) &&
+          same(row.variant_id, line.variant_id) &&
+          same(row.custom_product_id, line.custom_product_id);
+    const others = rows.filter((r) => !isThisLine(r));
+    const quantity =
+      'itemId' in change
+        ? change.set
+        : change.add +
+          rows.filter(isThisLine).reduce((sum, r) => sum + r.quantity, 0);
+    // Imported rows without a variant resolve their base product (only
+    // needed for a product-level row, and only while they hold stock).
+    const baseOf =
+      ref.kind === 'product' && holds
+        ? await this.baseProductsOf(
+            others.filter((r) => !r.variant_id).map((r) => r.custom_product_id),
+          )
+        : new Map<string, string>();
+    const room = roomOnRow(stock, unitsOnRow(ref, others, baseOf, holds));
+    if (quantity > room) {
+      throw new BadRequestException(insufficientStockError(line, room));
+    }
+  }
 
   /**
    * Personalization app (M4.1 C29 step 3): evaluates a cart line in app
@@ -567,6 +718,10 @@ export class CartService {
     market: MarketContext | null = null,
   ) {
     const enriched: EnrichedCartItem[] = [];
+    const stockRows = new Map<string, { ref: StockRowRef; stock: number }>();
+    const customLinesHold = items.some((i) => i.custom_product_id)
+      ? this.customLinesHoldStock()
+      : false;
     // M4.1: app store per creator, resolved once per read (only for
     // products with M4.1 fields).
     const appStores = new Map<string, Promise<PersonalizationStore | null>>();
@@ -655,6 +810,9 @@ export class CartService {
       // line, for the "requires shipping" decision below.
       let shippingProduct: ShippingFlagSource | null = null;
       let shippingVariant: ShippingFlagSource | null = null;
+      // The tracked stock row behind the line (cart-stock.ts), taken from
+      // the rows this loop reads anyway: no extra query.
+      let stockRow: { ref: StockRowRef; stock: number } | null = null;
 
       if (item.custom_product_id) {
         // Custom product: fetch from CustomProduct with mockup images and base product
@@ -669,7 +827,13 @@ export class CartService {
             product: {
               include: {
                 translations: true,
-                images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
+                images: {
+                  take: 1,
+                  orderBy: [
+                    { is_featured: 'desc' as const },
+                    { sort_order: 'asc' as const },
+                  ],
+                },
                 custom_fields: {
                   include: { translations: true },
                   orderBy: [
@@ -688,6 +852,17 @@ export class CartService {
 
         if (cp) {
           shippingProduct = cp.product;
+          if (
+            customLinesHold &&
+            !item.variant_id &&
+            cp.product.track_inventory === true &&
+            typeof cp.product.stock_quantity === 'number'
+          ) {
+            stockRow = {
+              ref: { kind: 'product', id: cp.product_id },
+              stock: cp.product.stock_quantity,
+            };
+          }
           title =
             this.pickTranslation(cp.translations, locale)?.title ||
             this.pickTranslation(cp.product.translations, locale)?.title ||
@@ -760,6 +935,16 @@ export class CartService {
         if (product) {
           ownProduct = product;
           shippingProduct = product;
+          if (
+            !item.variant_id &&
+            product.track_inventory === true &&
+            typeof product.stock_quantity === 'number'
+          ) {
+            stockRow = {
+              ref: { kind: 'product', id: product.id },
+              stock: product.stock_quantity,
+            };
+          }
           lineMaxPerOrder = readMaxPerOrder(product.max_per_order);
           customFieldDefs = product.custom_fields;
           title =
@@ -789,6 +974,15 @@ export class CartService {
         if (variant) {
           // Reserved for the later per-variant override.
           shippingVariant = variant as ShippingFlagSource;
+          if (
+            (!item.custom_product_id || customLinesHold) &&
+            typeof variant.stock_quantity === 'number'
+          ) {
+            stockRow = {
+              ref: { kind: 'variant', id: variant.id },
+              stock: variant.stock_quantity,
+            };
+          }
           if (!item.custom_product_id) {
             price = price + Number(variant.price_adjustment);
             ownAdjustment = Number(variant.price_adjustment);
@@ -1003,6 +1197,7 @@ export class CartService {
         ? designViews?.get(item.design_id)
         : undefined;
       if (designView?.proof_url) imageUrl = designView.proof_url;
+      if (stockRow) stockRows.set(item.id, stockRow);
 
       enriched.push({
         id: item.id,
@@ -1045,6 +1240,24 @@ export class CartService {
             }
           : {}),
       });
+    }
+
+    // Stock limit per line: the row's stock minus the units of the same
+    // row on the other lines. Additive, and only on lines with a tracked
+    // row, so every other line is the object it always was.
+    for (const line of enriched) {
+      const row = stockRows.get(line.id);
+      if (!row) continue;
+      const key = stockRowKey(row.ref);
+      let onOtherLines = 0;
+      for (const other of enriched) {
+        if (other.id === line.id) continue;
+        const otherRow = stockRows.get(other.id);
+        if (otherRow && stockRowKey(otherRow.ref) === key) {
+          onOtherLines += other.quantity;
+        }
+      }
+      line.stock_available = roomOnRow(row.stock, onOtherLines);
     }
 
     return enriched;
@@ -1583,6 +1796,9 @@ export class CartService {
     if (!dto.custom_product_id) {
       await this.assertCartMaxPerOrder(cart.id, dto.product_id, dto.quantity);
     }
+    // The item may not hold more than its stock row has (cart-stock.ts);
+    // also checked before the designer step.
+    await this.assertCartStock(cart.id, dto, { add: dto.quantity });
     // M4.2 designer (C29 step 2): a line with a design, or of a product the
     // designer is active for, is validated (and the design claimed for this
     // customer) here; it carries no field values, so the field rules are
@@ -1788,6 +2004,14 @@ export class CartService {
         data.quantity,
         item.id,
       );
+    }
+    // A larger quantity must also fit the line's stock row (cart-stock.ts);
+    // a smaller one is always allowed, even in a cart already over it.
+    if (data.quantity !== undefined && data.quantity > item.quantity) {
+      await this.assertCartStock(cart.id, item, {
+        set: data.quantity,
+        itemId: item.id,
+      });
     }
     let nextBundleOfferId: string | null = item.bundle_offer_id;
     if (dto.bundle_offer_id !== undefined) {

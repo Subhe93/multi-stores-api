@@ -302,6 +302,7 @@ Rules (applied in the shopper's browser on the product page):
 - The value only pre-fills the quantity selector. It **never adds to the cart** by itself and does not skip the participant fields; the shopper still presses "Boka".
 - The page renders with quantity 1 on the server and applies `qty` right after load, so cached pages are shared between links with different `qty` values.
 - The limits are enforced again by the API at cart add, at checkout and at payment (`CART_MAX_PER_ORDER`, `ORDER_INSUFFICIENT_STOCK`), so a hand-edited link cannot book more seats than allowed.
+- **Not deployed yet:** the server cart also refuses a quantity above the stock. `POST /cart/items` and a quantity increase on `PUT /cart/items/:id` answer 400 `{ code: "CART_INSUFFICIENT_STOCK", message, available, product_id?, variant_id?, custom_product_id? }`; `available` is the largest quantity the line may hold (the stock minus the units of the same stock row on the cart's other lines, never below 0). A decrease is always accepted. `GET /cart` lines carry `stock_available` (same number) when their stock is counted, and no such key otherwise.
 - Compute `qty` from the seats the visitor chose on the custom site; do not pass seats left from a cached build as `qty` (the store clamps anyway).
 
 ### 10.2 Back to the page the buyer came from: `?back=<path>`
