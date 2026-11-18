@@ -95,6 +95,7 @@ import {
 import { isPlainObject } from '@multi-stores/core/personalization/rules';
 import { isValidGtin } from '../feeds/gtin';
 import { sanitizeCreatorHtml } from '../../common/html/creator-html';
+import { effectiveProductStock } from './effective-stock';
 import {
   CreatorCategoryLinks,
   resolvePrimaryCreatorCategory,
@@ -321,6 +322,24 @@ export type ProductListFilters = {
   search?: string;
   is_featured?: boolean;
 };
+
+/**
+ * Owner / catalogue product row plus `effective_stock_quantity`: the sum of
+ * the active variants when they all carry a number, else the product's own
+ * number (effective-stock.ts). The raw `stock_quantity` is kept as stored.
+ */
+export function withEffectiveStock<
+  T extends {
+    stock_quantity?: number | null;
+    variants?: { stock_quantity?: number | null; is_active?: boolean | null }[];
+  },
+>(product: T): T & { effective_stock_quantity: number | null } {
+  return {
+    ...product,
+    effective_stock_quantity:
+      effectiveProductStock(product, product.variants) ?? null,
+  };
+}
 
 /**
  * Product as served to a non-owner: drops the cost price, the importer
@@ -1684,7 +1703,7 @@ export class ProductsService {
       this.prisma.product.count({ where }),
     ]);
     return {
-      data,
+      data: data.map(withEffectiveStock),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -1737,7 +1756,7 @@ export class ProductsService {
     ]);
 
     return {
-      data,
+      data: data.map(withEffectiveStock),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -1928,11 +1947,11 @@ export class ProductsService {
     // The editor GET always carries `videos` (possibly []), so the dashboard
     // can tell a video-aware API from an older one.
     // `stories` likewise (customer-stories contract 2).
-    const product = {
+    const product = withEffectiveStock({
       ...row,
       videos: toProductVideosOut(row.videos),
       stories: toProductStoriesOut(row.stories),
-    };
+    });
 
     // Internal callers (the create / update / duplicate results) pass no
     // viewer and keep the redacted row they always got.

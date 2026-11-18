@@ -135,7 +135,7 @@ Each own product item:
 | `compare_at_price` | number (optional) | "Before" price; key absent when not set |
 | `sku` | string or null | Owner's SKU |
 | `track_inventory` | boolean | Whether stock is counted (section 4) |
-| `stock_quantity` | number or null | Remaining seats of a product **without variants** |
+| `stock_quantity` | number or null | Remaining seats of a product **without variants**. With variants: the sum of the active variants' numbers when every one of them carries a number (**not deployed yet**; before that deploy the raw product number, which does not follow variant sales); the product's own number when any variant is untracked. Per-variant stock stays `variants[].stock` |
 | `is_featured` | boolean | Owner's highlight flag |
 | `variant_option_config` | object or null | Option labels/swatches (ignore for courses) |
 | `translations` | array | `{ locale, title, description (HTML), slug, short_description, meta_title, meta_desc }` per locale |

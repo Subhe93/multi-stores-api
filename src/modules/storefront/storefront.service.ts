@@ -42,10 +42,7 @@ import {
   isKustomEnabledForStore,
   kustomCreatorSelect,
 } from '../payments/kustom/kustom.eligibility';
-import {
-  isOwnKeyCardReady,
-  isOwnKeyTestMode,
-} from '../payments/payment-route';
+import { isOwnKeyCardReady, isOwnKeyTestMode } from '../payments/payment-route';
 import { PersonalizationService } from '../personalization/personalization.service';
 import {
   legacyRow,
@@ -64,6 +61,7 @@ import {
 } from './cookie-page';
 import { publicCheckoutSettings } from '../stores/checkout-settings';
 import { effectiveCodEnabled } from '../stores/cod-policy';
+import { effectiveProductStock } from '../products/effective-stock';
 import { sanitizeAuthPagesConfig } from '../stores/theme-config';
 import {
   StorefrontGateService,
@@ -1418,9 +1416,13 @@ export class StorefrontService {
         base_price: displayPrice,
         // The provider's stock of the base product (shared by every store
         // reselling it), with the own-product semantics: counted only when
-        // track_inventory is true; variants carry their own `stock`.
+        // track_inventory is true; variants carry their own `stock`. With
+        // variants the number is the sum of the listed ones (effective-stock).
         track_inventory: cp.product.track_inventory,
-        stock_quantity: cp.product.stock_quantity,
+        stock_quantity: effectiveProductStock(
+          cp.product,
+          this.customSourceVariants(cp),
+        ),
         status: cp.status,
         translations: cp.translations,
         images:
@@ -1444,6 +1446,9 @@ export class StorefrontService {
     const mappedOwn = ownProducts.map(
       ({ cost_price: _costPrice, external_ref: _externalRef, ...p }) => ({
         ...withoutFeedFields(p),
+        // Variant sales never touch the product row: serve the sum of the
+        // variants when they all carry a number (effective-stock).
+        stock_quantity: effectiveProductStock(p, p.variants),
         base_price: Number(p.base_price),
         compare_at_price: p.compare_at_price
           ? Number(p.compare_at_price)
@@ -1911,12 +1916,7 @@ export class StorefrontService {
       const customExact =
         store.store_type !== StoreType.INDEPENDENT &&
         !!(await this.prisma.customProduct.findFirst({
-          ...productBySlugQuery(
-            store.creator.id,
-            productSlug,
-            false,
-            statuses,
-          ),
+          ...productBySlugQuery(store.creator.id, productSlug, false, statuses),
           select: { id: true },
         }));
       if (!customExact) {
@@ -2001,6 +2001,8 @@ export class StorefrontService {
       );
       const shaped = {
         ...publicProduct,
+        // As on the list row: the sum of the variants when all are numbered.
+        stock_quantity: effectiveProductStock(product, product.variants),
         custom_fields: shapeFieldsForStorefront(product.custom_fields, appOn),
         variant_option_config: shapeOptionConfigForStorefront(
           product.variant_option_config,
@@ -2203,7 +2205,10 @@ export class StorefrontService {
         : undefined,
       // The provider's stock of the base product, as on the list row.
       track_inventory: baseProduct.track_inventory,
-      stock_quantity: baseProduct.stock_quantity,
+      stock_quantity: effectiveProductStock(
+        baseProduct,
+        this.customSourceVariants(customProduct),
+      ),
       status: customProduct.status,
       product_type: baseProduct.product_type,
       customization_type: baseProduct.customization_type,
@@ -3064,17 +3069,26 @@ export class StorefrontService {
 
   // ── Price computation helpers ──────────────────────────
 
-  private computeVariants(cp: CustomProductPricingSource) {
+  /**
+   * The base-product variants an imported product shows: the creator's
+   * selection when there is one, else every (active) variant of the base.
+   */
+  private customSourceVariants(
+    cp: CustomProductPricingSource,
+  ): PricedVariant[] {
     const hasSelectedVariants =
       cp.selected_variants && cp.selected_variants.length > 0;
-
-    // Determine which variants to show
-    const sourceVariants: PricedVariant[] = hasSelectedVariants
+    return hasSelectedVariants
       ? cp.selected_variants!.map((sv) => ({
           ...sv.variant,
           _custom_price: sv.custom_price ? Number(sv.custom_price) : undefined,
         }))
       : cp.product.variants || [];
+  }
+
+  private computeVariants(cp: CustomProductPricingSource) {
+    // Determine which variants to show
+    const sourceVariants = this.customSourceVariants(cp);
 
     return sourceVariants.map((v) => {
       const price = this.computeVariantPrice(cp, v);
