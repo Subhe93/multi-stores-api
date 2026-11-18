@@ -424,7 +424,7 @@ describe('create: snapshot on the order and its lines', () => {
 // ── Lifecycle ───────────────────────────────────────────────────────────────
 
 function lifecyclePrisma() {
-  return {
+  const prisma = {
     order: {
       findUnique: jest.fn((): Promise<unknown> => Promise.resolve(null)),
       update: jest.fn(() => Promise.resolve({})),
@@ -445,6 +445,10 @@ function lifecyclePrisma() {
       updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
     },
   };
+  // The admin cancel claims the order and returns its stock in a transaction.
+  return Object.assign(prisma, {
+    $transaction: jest.fn((fn: (tx: unknown) => unknown) => fn(prisma)),
+  });
 }
 
 function buildLifecycle() {

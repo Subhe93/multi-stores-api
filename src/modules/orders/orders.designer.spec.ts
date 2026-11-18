@@ -645,7 +645,11 @@ describe('OrdersService designer lines (M4.2 WP4)', () => {
       updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
     });
     Object.assign(prisma, {
-      orderTimeline: { create: jest.fn(() => Promise.resolve({})) },
+      orderTimeline: {
+        create: jest.fn(() => Promise.resolve({})),
+        // Admin stock-return marker lookup (none on this order).
+        findFirst: jest.fn(() => Promise.resolve(null)),
+      },
       orderItem: { findMany: jest.fn(() => Promise.resolve([])) },
     });
     Object.assign(prisma.orderCommission, {
@@ -683,7 +687,11 @@ describe('OrdersService designer lines (M4.2 WP4)', () => {
         updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
       });
       Object.assign(prisma, {
-        orderTimeline: { create: jest.fn(() => Promise.resolve({})) },
+        orderTimeline: {
+          create: jest.fn(() => Promise.resolve({})),
+          // Admin stock-return marker lookup (none on this order).
+          findFirst: jest.fn(() => Promise.resolve(null)),
+        },
         orderItem: { findMany: jest.fn(() => Promise.resolve([])) },
       });
       Object.assign(prisma.orderCommission, {

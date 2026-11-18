@@ -38,6 +38,8 @@ function makePrisma() {
     },
     orderTimeline: {
       create: jest.fn(() => Promise.resolve({})),
+      // Admin stock-return marker lookup (none on these orders).
+      findFirst: jest.fn((): Promise<unknown> => Promise.resolve(null)),
     },
     orderItem: {
       findMany: jest.fn((): Promise<unknown> => Promise.resolve([])),

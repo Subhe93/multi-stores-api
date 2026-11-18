@@ -1,4 +1,4 @@
-import { buyerOrderItem } from './buyer-order-view';
+import { buyerOrderItem, publicTimeline } from './buyer-order-view';
 
 /**
  * The order as a PROVIDER may read it (GET /orders as PROVIDER,
@@ -19,6 +19,7 @@ import { buyerOrderItem } from './buyer-order-view';
  *   other providers' amount by subtraction (with two providers, the other
  *   one's exact cost price x quantity). `vat_amount` stays (the order's tax
  *   lines show it anyway).
+ * - the timeline loses the internal bookkeeping rows (publicTimeline).
  * Every other key is kept. Pure.
  */
 
@@ -56,6 +57,7 @@ export function forProvider<T>(
   if (!isRow(order)) return order;
   const items = Array.isArray(order.items) ? (order.items as unknown[]) : null;
   const out: Row = { ...order };
+  if ('timeline' in order) out.timeline = publicTimeline(order.timeline);
   if (items) {
     out.items = items.map((it) =>
       isOwnLine(it, providerId) ? it : buyerOrderItem(it),

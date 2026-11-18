@@ -41,11 +41,38 @@ const NEVER_PAID_STATUSES: ReadonlyArray<string | null> = [
 ];
 
 /** Order statuses after which the stock was (or will be) handled elsewhere. */
-const STOCK_RELEASED_STATUSES: ReadonlyArray<OrderStatus> = [
+export const STOCK_RELEASED_STATUSES: ReadonlyArray<OrderStatus> = [
   OrderStatus.CANCELLED,
   OrderStatus.REFUNDED,
   OrderStatus.RETURNED,
 ];
+
+/**
+ * Statuses an admin sets by hand that give the order's stock back at once
+ * (updateStatus, admin branch). RETURNED is not one of them: the goods of a
+ * returned order are handled by the store, as before.
+ */
+export const ADMIN_STOCK_RETURN_STATUSES: ReadonlyArray<OrderStatus> = [
+  OrderStatus.CANCELLED,
+  OrderStatus.REFUNDED,
+];
+
+/** Payment statuses under which the stock was already given back. */
+export const STOCK_RELEASED_PAYMENT_STATUSES: ReadonlyArray<string> = [
+  'failed',
+  'refunded',
+];
+
+/**
+ * Timeline markers of the admin stock return. The LATEST of the two tells
+ * where the stock is: `STOCK_RETURNED` = given back by an admin cancel /
+ * refund (every later return path skips, so it is never given back twice);
+ * `STOCK_RETAKEN` = taken again because the order went back to a live
+ * status. An order without either marker behaves exactly as before the
+ * markers existed.
+ */
+export const STOCK_RETURNED_MARKER = 'STOCK_RETURNED';
+export const STOCK_RETAKEN_MARKER = 'STOCK_RETAKEN';
 
 export interface DeletableInput {
   is_test: boolean;
@@ -93,9 +120,7 @@ export function orderHoldsStock(order: {
   payment_status: string | null;
 }): boolean {
   if (STOCK_RELEASED_STATUSES.includes(order.status)) return false;
-  return (
-    order.payment_status !== 'failed' && order.payment_status !== 'refunded'
-  );
+  return !STOCK_RELEASED_PAYMENT_STATUSES.includes(order.payment_status ?? '');
 }
 
 /** `deleted_by` is for admins only: strip it from every other response. */

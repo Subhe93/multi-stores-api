@@ -42,6 +42,11 @@ import { SecurityAuditService } from '../security/security-audit.service';
 import type { RequestMeta } from '../security/request-meta';
 import {
   deletableReason,
+  ADMIN_STOCK_RETURN_STATUSES,
+  STOCK_RELEASED_PAYMENT_STATUSES,
+  STOCK_RELEASED_STATUSES,
+  STOCK_RETAKEN_MARKER,
+  STOCK_RETURNED_MARKER,
   orderHoldsStock,
   trashActorLabel,
   withoutDeletedBy,
@@ -1026,7 +1031,13 @@ export class OrdersService implements OnModuleInit {
         omit: ORDER_PRODUCT_OMIT,
         include: {
           translations: true,
-          images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
+          images: {
+            take: 1,
+            orderBy: [
+              { is_featured: 'desc' as const },
+              { sort_order: 'asc' as const },
+            ],
+          },
         },
       },
       variant: {
@@ -1039,7 +1050,13 @@ export class OrdersService implements OnModuleInit {
             omit: ORDER_PRODUCT_OMIT,
             include: {
               translations: true,
-              images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
+              images: {
+                take: 1,
+                orderBy: [
+                  { is_featured: 'desc' as const },
+                  { sort_order: 'asc' as const },
+                ],
+              },
             },
           },
         },
@@ -1052,7 +1069,13 @@ export class OrdersService implements OnModuleInit {
             omit: ORDER_PRODUCT_OMIT,
             include: {
               translations: true,
-              images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
+              images: {
+                take: 1,
+                orderBy: [
+                  { is_featured: 'desc' as const },
+                  { sort_order: 'asc' as const },
+                ],
+              },
             },
           },
         },
@@ -4409,6 +4432,162 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
+   * The admin's status write, with the stock that goes with it.
+   *
+   * - A live order that still holds its stock (orderHoldsStock) moved to
+   *   CANCELLED / REFUNDED gives the stock back once. The status write is
+   *   the claim: one conditional update inside a transaction that also
+   *   writes the STOCK_RETURNED marker and the stock, so two requests (or a
+   *   payment failure / refund landing at the same moment) cannot both
+   *   return it. Every other return path reads the marker and skips.
+   * - A CANCELLED / REFUNDED order whose stock the admin returned, moved
+   *   back to a live status, takes it again where the stock still covers it
+   *   (STOCK_RETAKEN; a shortfall is flagged like a late payment).
+   * - Anything else is the plain status write it always was. RETURNED never
+   *   moves stock.
+   */
+  private async adminSetStatus(
+    order: {
+      id: string;
+      order_number: string;
+      store_id: string | null;
+      status: OrderStatus;
+      payment_status: string | null;
+    },
+    next: OrderStatus,
+    actorId: string,
+  ): Promise<void> {
+    const id = order.id;
+    if (ADMIN_STOCK_RETURN_STATUSES.includes(next) && orderHoldsStock(order)) {
+      const moves = await this.prisma.$transaction(async (tx) => {
+        const claim = await tx.order.updateMany({
+          where: {
+            id,
+            status: { notIn: [...STOCK_RELEASED_STATUSES] },
+            // NOT IN drops NULL rows in SQL: name the NULL case.
+            OR: [
+              { payment_status: null },
+              {
+                payment_status: {
+                  notIn: [...STOCK_RELEASED_PAYMENT_STATUSES],
+                },
+              },
+            ],
+          },
+          data: { status: next },
+        });
+        if (claim.count === 0) return null;
+        await tx.orderTimeline.create({
+          data: {
+            order_id: id,
+            status: STOCK_RETURNED_MARKER,
+            note: `Stock returned: order set to ${next} by an admin`,
+            actor: actorId,
+          },
+        });
+        return this.restoreOrderItemsStock(id, tx);
+      });
+      if (moves) {
+        // Committed: refresh the storefront where a buyer can see the units.
+        this.revalidateStockMoves(moves);
+        return;
+      }
+      // Lost the claim (the order stopped holding stock meanwhile): plain
+      // status write below, no stock.
+    } else if (
+      ADMIN_STOCK_RETURN_STATUSES.includes(order.status) &&
+      !STOCK_RELEASED_STATUSES.includes(next)
+    ) {
+      // Back to a live status: only an order whose stock the admin returned
+      // takes it again (an order cancelled before the markers existed, or
+      // whose payment failed / was refunded, moves no stock, as before).
+      const moved = await this.prisma.order.updateMany({
+        where: { id, status: { in: [...ADMIN_STOCK_RETURN_STATUSES] } },
+        data: { status: next },
+      });
+      if (moved.count > 0) {
+        const fresh = await this.prisma.order.findUnique({
+          where: { id },
+          select: { payment_status: true },
+        });
+        const holdsAgain = !STOCK_RELEASED_PAYMENT_STATUSES.includes(
+          fresh?.payment_status ?? '',
+        );
+        if (
+          holdsAgain &&
+          (await this.settleAdminStockReturn(id, true, actorId)) === 'retaken'
+        ) {
+          const short = await this.retakeOrderItemsStock(id);
+          if (short.length) await this.flagStockShortfall(order, short);
+        }
+        return;
+      }
+    }
+    await this.prisma.order.update({
+      where: { id },
+      data: { status: next },
+    });
+  }
+
+  /**
+   * True when the latest admin stock marker of the order is STOCK_RETURNED:
+   * an admin cancel / refund already gave the stock back, so a failure or a
+   * refund arriving afterwards must not give it back again.
+   */
+  private async adminStockReturned(orderId: string): Promise<boolean> {
+    const last = await this.prisma.orderTimeline.findFirst({
+      where: {
+        order_id: orderId,
+        status: { in: [STOCK_RETURNED_MARKER, STOCK_RETAKEN_MARKER] },
+      },
+      orderBy: { created_at: 'desc' },
+      select: { status: true },
+    });
+    return last?.status === STOCK_RETURNED_MARKER;
+  }
+
+  /**
+   * Decision for a path that would take an order's stock again (late
+   * payment, reverted refund, admin moving the order back):
+   * - 'none': no admin return stands; the caller does what it always did.
+   * - 'returned': the admin returned the stock and the order is not live
+   *   after this change: nothing to take.
+   * - 'retaken': the admin returned the stock and the order is live again:
+   *   the STOCK_RETAKEN marker is written here, under a per-order lock so
+   *   two paths cannot both take, and the caller takes the stock.
+   */
+  private async settleAdminStockReturn(
+    orderId: string,
+    liveAfter: boolean,
+    actor = 'system',
+  ): Promise<'none' | 'returned' | 'retaken'> {
+    if (!(await this.adminStockReturned(orderId))) return 'none';
+    if (!liveAfter) return 'returned';
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`order_stock:${orderId}`}))`;
+      const last = await tx.orderTimeline.findFirst({
+        where: {
+          order_id: orderId,
+          status: { in: [STOCK_RETURNED_MARKER, STOCK_RETAKEN_MARKER] },
+        },
+        orderBy: { created_at: 'desc' },
+        select: { status: true },
+      });
+      // Taken by a concurrent path meanwhile: nothing left to take.
+      if (last?.status !== STOCK_RETURNED_MARKER) return 'returned' as const;
+      await tx.orderTimeline.create({
+        data: {
+          order_id: orderId,
+          status: STOCK_RETAKEN_MARKER,
+          note: 'Stock taken again: the order is live again',
+          actor,
+        },
+      });
+      return 'retaken' as const;
+    });
+  }
+
+  /**
    * Update an order's status.
    * - ADMIN: sets the order status directly and cascades it onto all items.
    * - PROVIDER/CREATOR: advances ONLY their own items' fulfillment to the mapped
@@ -4432,10 +4611,7 @@ export class OrdersService implements OnModuleInit {
     if (order.deleted_at) throw orderDeleted();
 
     if (actorRole === UserRole.ADMIN) {
-      await this.prisma.order.update({
-        where: { id },
-        data: { status: dto.status },
-      });
+      await this.adminSetStatus(order, dto.status, actorId);
       await this.prisma.orderTimeline.create({
         data: {
           order_id: id,
@@ -4774,7 +4950,19 @@ export class OrdersService implements OnModuleInit {
     const stockReturned =
       order.payment_status === 'failed' ||
       (wasDeleted && orderHoldsStock(order));
-    if (stockReturned) {
+    // An order an admin cancelled / refunded before the failure had its
+    // stock returned by that cancel and stays cancelled: nothing to take.
+    const statusAfter =
+      order.status === OrderStatus.PENDING
+        ? OrderStatus.CONFIRMED
+        : order.status;
+    if (
+      stockReturned &&
+      (await this.settleAdminStockReturn(
+        orderId,
+        !STOCK_RELEASED_STATUSES.includes(statusAfter),
+      )) !== 'returned'
+    ) {
       const short = await this.retakeOrderItemsStock(orderId);
       if (short.length) {
         stockShortfall = true;
@@ -5066,7 +5254,13 @@ export class OrdersService implements OnModuleInit {
     // markOrderFailed only runs the flip once per order (guarded payment_status).
     // The returned units are committed here (no transaction): the storefront
     // cache is refreshed where a buyer can see them ("sold out" lifted).
-    this.revalidateStockMoves(await this.restoreOrderItemsStock(orderId));
+    // Not when an admin cancel already returned them (STOCK_RETURNED): the
+    // marker is written in the same transaction as that cancel, and the
+    // cancel cannot claim an order whose payment already failed, so the
+    // read after the flip above always sees it.
+    if (!(await this.adminStockReturned(orderId))) {
+      this.revalidateStockMoves(await this.restoreOrderItemsStock(orderId));
+    }
     // ...and hand the coupon redemption back (taken again on a late payment).
     await this.releaseFailedOrderCoupon(orderId);
     // Designer app: nothing was bought — the order's designs become terminal
@@ -5124,7 +5318,12 @@ export class OrdersService implements OnModuleInit {
 
     // The goods are coming back (or never shipped) — return them to stock.
     // Guarded by the flip above, so a replayed webhook cannot double-restock.
-    this.revalidateStockMoves(await this.restoreOrderItemsStock(orderId));
+    // Not when an admin cancel / refund already returned them (see
+    // markOrderFailed); an order cancelled before the marker existed has
+    // none and is restocked here, as before.
+    if (!(await this.adminStockReturned(orderId))) {
+      this.revalidateStockMoves(await this.restoreOrderItemsStock(orderId));
+    }
 
     // Invoices app: full credit note before the email, so it can be attached.
     await this.invoices?.onFullRefund(order);
@@ -5262,8 +5461,18 @@ export class OrdersService implements OnModuleInit {
       where: { order_id: orderId },
       data: { status: deriveCommissionStatus(restored) },
     });
-    const short = await this.retakeOrderItemsStock(orderId);
-    if (short.length) await this.flagStockShortfall(order, short);
+    // The refund path skipped the restock of an order whose stock an admin
+    // cancel had already returned: such an order takes it again only when
+    // this revert makes it live again (not when it goes back to CANCELLED).
+    if (
+      (await this.settleAdminStockReturn(
+        orderId,
+        !STOCK_RELEASED_STATUSES.includes(restored),
+      )) !== 'returned'
+    ) {
+      const short = await this.retakeOrderItemsStock(orderId);
+      if (short.length) await this.flagStockShortfall(order, short);
+    }
     return { changed: true, status: restored };
   }
 

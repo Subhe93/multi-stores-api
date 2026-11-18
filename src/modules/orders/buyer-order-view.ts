@@ -8,6 +8,9 @@
  * - the nested product / variant / custom product keep only what a receipt
  *   shows (titles, images, the chosen options), never base_price,
  *   cost_price, stock, SKUs, price adjustments or owner ids.
+ * - the timeline loses the internal bookkeeping rows (stock handed back or
+ *   re-taken by an admin move, transfer reversals of a refund): they are for
+ *   the store owner and the platform, not for the buyer;
  * Every other key of the order and of its lines is kept exactly as is (the
  * line prices the buyer paid, quantities, image_url, custom field values,
  * bundle, design / proof, shipping and tax snapshots, ids). Pure.
@@ -66,6 +69,29 @@ export function buyerOrderItem(item: unknown): unknown {
   return out;
 }
 
+/**
+ * Timeline statuses that are internal bookkeeping: the creator and admins
+ * see them, a buyer and a provider do not.
+ */
+export const INTERNAL_TIMELINE_STATUSES: ReadonlySet<string> = new Set([
+  'STOCK_RETURNED',
+  'STOCK_RETAKEN',
+  'TRANSFER_REVERSAL_DUE',
+  'TRANSFER_REVERSED',
+  'TRANSFER_REVERSAL_FAILED',
+]);
+
+/** The timeline without its internal rows (other values pass through). */
+export function publicTimeline(timeline: unknown): unknown {
+  if (!Array.isArray(timeline)) return timeline;
+  return (timeline as unknown[]).filter(
+    (row) =>
+      !isRow(row) ||
+      typeof row.status !== 'string' ||
+      !INTERNAL_TIMELINE_STATUSES.has(row.status),
+  );
+}
+
 export function forBuyer<T>(order: T): T {
   if (!isRow(order)) return order;
   const { commission: _c, payouts: _p, ...rest } = order;
@@ -73,5 +99,6 @@ export function forBuyer<T>(order: T): T {
   void _p;
   const out: Row = { ...rest };
   if (Array.isArray(order.items)) out.items = order.items.map(buyerOrderItem);
+  if ('timeline' in order) out.timeline = publicTimeline(order.timeline);
   return out as T;
 }
