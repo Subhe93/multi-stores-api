@@ -15,6 +15,11 @@ export type StockMove = {
   kind: 'product' | 'variant';
   id: string;
   delta: number;
+  /**
+   * The row's tracked stock as the writer loaded it BEFORE the write, when
+   * it has it (the order lines of a stock return). See isStockMoveVisible.
+   */
+  before?: number | null;
 };
 
 /**
@@ -36,6 +41,45 @@ export function isStockChangeVisible(
     newStock <= LOW_STOCK_DISPLAY_THRESHOLD ||
     oldStock <= LOW_STOCK_DISPLAY_THRESHOLD
   );
+}
+
+/**
+ * The decision for one moved row. `now` is the stock read after the commit
+ * and `delta` the row's net move, so the stock before is `now - delta`: the
+ * last of several concurrent writers reads the final count, which is what
+ * a sale needs (the count it ends on). Returns landing together are the
+ * opposite case: each reads the final count and sees a move far above the
+ * threshold (10 -> 11 -> 12 read as 11 -> 12 twice), while the first of
+ * them loaded the real starting stock. `before` is that loaded value.
+ */
+export function isStockMoveVisible(
+  now: number,
+  delta: number,
+  before?: number,
+): boolean {
+  return (
+    isStockChangeVisible(now - delta, now) ||
+    (before !== undefined && isStockChangeVisible(before, before + delta))
+  );
+}
+
+/**
+ * The stock each row had when its writer loaded it, for the moves that
+ * carry it (all lines of one order load it once: the first one counts).
+ */
+export function loadedStockBefore(
+  moves: StockMove[],
+): Record<StockMove['kind'], Map<string, number>> {
+  const before = {
+    product: new Map<string, number>(),
+    variant: new Map<string, number>(),
+  };
+  for (const move of moves) {
+    if (move.before != null && !before[move.kind].has(move.id)) {
+      before[move.kind].set(move.id, move.before);
+    }
+  }
+  return before;
 }
 
 /** The net move per row: two lines of one variant count once. */

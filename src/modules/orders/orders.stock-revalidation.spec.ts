@@ -20,6 +20,8 @@ import { RevalidationService } from '../../common/revalidation/revalidation.serv
 import {
   LOW_STOCK_DISPLAY_THRESHOLD,
   isStockChangeVisible,
+  isStockMoveVisible,
+  loadedStockBefore,
   netStockMoves,
 } from './stock-visibility';
 
@@ -86,6 +88,39 @@ describe('isStockChangeVisible', () => {
     expect([...net.variant]).toEqual([['v1', -3]]);
     expect([...net.product]).toEqual([['p1', 4]]);
   });
+
+  it.each([
+    // now, delta, before, visible
+    ['a sale read after the commit: 11 -> 10', 10, -1, undefined, true],
+    ['a sale of a well-stocked row', 499, -1, undefined, false],
+    ['a return read alone: 10 -> 11', 11, 1, undefined, true],
+    // Two returns landed together: both read 12, so each sees 11 -> 12.
+    [
+      'a return that read the final count, no loaded stock',
+      12,
+      1,
+      undefined,
+      false,
+    ],
+    ['the same return, loaded at 10 before its write', 12, 1, 10, true],
+    ['the same return, loaded at 11', 12, 1, 11, false],
+    ['sold out when loaded, far above when read', 30, 12, 0, true],
+    ['well stocked when loaded and when read', 500, 1, 498, false],
+  ])('isStockMoveVisible: %s', (_label, now, delta, before, visible) => {
+    expect(isStockMoveVisible(now, delta, before)).toBe(visible);
+  });
+
+  it('loadedStockBefore keeps the first loaded value of a row, tracked only', () => {
+    const before = loadedStockBefore([
+      { kind: 'variant', id: 'v1', delta: 1, before: 10 },
+      { kind: 'variant', id: 'v1', delta: 1, before: 10 },
+      { kind: 'variant', id: 'v2', delta: 1 },
+      { kind: 'product', id: 'p1', delta: 2, before: null },
+      { kind: 'product', id: 'p2', delta: 2, before: 0 },
+    ]);
+    expect([...before.variant]).toEqual([['v1', 10]]);
+    expect([...before.product]).toEqual([['p2', 0]]);
+  });
 });
 
 // ── Order creation ─────────────────────────────────────────────────────────
@@ -94,12 +129,18 @@ describe('isStockChangeVisible', () => {
  * `stock`: per product id, the tracked stock BEFORE the order (absent or
  * null = untracked). The double keeps the count, so the conditional
  * decrement, the restore and the read after the commit see the same rows.
+ * `variantStock`: the same per variant id; a variant `v1` belongs to the
+ * (untracked) product `p-v1`.
  */
 function buildCreate(
   revalidation: Revalidation | undefined,
   stock: Record<string, number | null>,
+  variantStock: Record<string, number | null> = {},
 ) {
   const stockNow = new Map<string, number | null>(Object.entries(stock));
+  const variantNow = new Map<string, number | null>(
+    Object.entries(variantStock),
+  );
   const productRow = (id: string) => ({
     ...own(id),
     status: 'PUBLISHED',
@@ -168,9 +209,49 @@ function buildCreate(
       ),
     },
     productVariant: {
-      findUnique: jest.fn((): Promise<unknown> => Promise.resolve(null)),
-      updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
-      findMany: jest.fn((): Promise<unknown> => Promise.resolve([])),
+      findUnique: jest.fn(
+        ({ where }: { where: { id: string } }): Promise<unknown> =>
+          Promise.resolve(
+            variantNow.has(where.id)
+              ? {
+                  id: where.id,
+                  product_id: `p-${where.id}`,
+                  is_active: true,
+                  price_adjustment: 0,
+                  options: {},
+                  stock_quantity: variantNow.get(where.id) ?? null,
+                  product: productRow(`p-${where.id}`),
+                }
+              : null,
+          ),
+      ),
+      // The conditional decrement of create().
+      updateMany: jest.fn(({ where, data }: StockWrite) => {
+        const have = variantNow.get(where.id);
+        const qty = data.stock_quantity.decrement ?? 0;
+        if (have == null || have < qty) return Promise.resolve({ count: 0 });
+        variantNow.set(where.id, have - qty);
+        return Promise.resolve({ count: 1 });
+      }),
+      // restoreStock() of a failed insert.
+      update: jest.fn(({ where, data }: StockWrite) => {
+        const have = variantNow.get(where.id) ?? 0;
+        variantNow.set(where.id, have + (data.stock_quantity.increment ?? 0));
+        return Promise.resolve({});
+      }),
+      // The read after the commit.
+      findMany: jest.fn(
+        ({ where }: { where: { id: { in: string[] } } }): Promise<unknown> =>
+          Promise.resolve(
+            where.id.in
+              .filter((id) => variantNow.has(id))
+              .map((id) => ({
+                id,
+                stock_quantity: variantNow.get(id) ?? null,
+                product: own(`p-${id}`),
+              })),
+          ),
+      ),
     },
     productMarketPrice: { findMany: jest.fn(() => Promise.resolve([])) },
     platformConfig: {
@@ -300,12 +381,17 @@ function buildCreate(
       { address_id: 'a1', store_id: STORE_ID, payment_method: 'STRIPE' },
       { lines },
     );
-  return { service, prisma, place, stockNow };
+  return { service, prisma, place, stockNow, variantNow };
 }
 
 const line = (product_id: string, quantity = 1) => ({
   product_id,
   variant_id: null,
+  quantity,
+});
+const variantLine = (variant_id: string, quantity = 1) => ({
+  product_id: `p-${variant_id}`,
+  variant_id,
   quantity,
 });
 
@@ -442,7 +528,11 @@ describe('order creation: storefront refresh after the stock decrement', () => {
     await settle();
   });
 
-  it('the order insert fails: the stock is restored and nothing is refreshed', async () => {
+  // The decrement of create() is committed on its own, before the order
+  // row. When the order then fails, the units are handed back; a page
+  // rendered in between may have cached "sold out", so the hand-back
+  // refreshes too (and only when that state could be seen).
+  it('the order insert fails: the last unit is handed back and the store refreshed', async () => {
     const revalidation = revalidationMock();
     const b = buildCreate(revalidation, { p1: 1 });
     const log = jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -451,27 +541,123 @@ describe('order creation: storefront refresh after the stock decrement', () => {
     await settle();
     log.mockRestore();
     expect(b.stockNow.get('p1')).toBe(1);
+    expect(revalidation.revalidateStoresOfProduct).toHaveBeenCalledTimes(1);
+    expect(revalidation.revalidateStoresOfProduct).toHaveBeenCalledWith(
+      own('p1'),
+    );
+    // Read after the hand-back, never before it.
+    expect(
+      b.prisma.product.findMany.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(b.prisma.product.update.mock.invocationCallOrder[0]);
+  });
+
+  it('the order insert fails on a well-stocked product: nothing is refreshed', async () => {
+    const revalidation = revalidationMock();
+    const b = buildCreate(revalidation, { p1: 500 });
+    const log = jest.spyOn(console, 'error').mockImplementation(() => {});
+    b.prisma.order.create.mockRejectedValueOnce(new Error('insert failed'));
+    await expect(b.place([line('p1')])).rejects.toThrow('insert failed');
+    await settle();
+    log.mockRestore();
+    expect(b.stockNow.get('p1')).toBe(500);
+    expect(revalidation.revalidateStoresOfProduct).not.toHaveBeenCalled();
+  });
+
+  it('the order insert fails and the refresh fails too: the original error is kept', async () => {
+    const revalidation = revalidationMock(() => {
+      throw new Error('sync failure');
+    });
+    const b = buildCreate(revalidation, { p1: 1 });
+    const log = jest.spyOn(console, 'error').mockImplementation(() => {});
+    b.prisma.order.create.mockRejectedValueOnce(new Error('insert failed'));
+    await expect(b.place([line('p1')])).rejects.toThrow('insert failed');
+    await settle();
+    log.mockRestore();
+    expect(b.stockNow.get('p1')).toBe(1);
+  });
+
+  it('a hand-back that fails itself is not refreshed (the stock did not come back)', async () => {
+    const revalidation = revalidationMock();
+    const b = buildCreate(revalidation, { p1: 1 });
+    const log = jest.spyOn(console, 'error').mockImplementation(() => {});
+    b.prisma.order.create.mockRejectedValueOnce(new Error('insert failed'));
+    b.prisma.product.update.mockRejectedValueOnce(new Error('db gone'));
+    await expect(b.place([line('p1')])).rejects.toThrow('insert failed');
+    await settle();
+    log.mockRestore();
+    expect(b.stockNow.get('p1')).toBe(0);
     expect(b.prisma.product.findMany).not.toHaveBeenCalled();
     expect(revalidation.revalidateStoresOfProduct).not.toHaveBeenCalled();
   });
 
-  it('sold out for this buyer (the conditional decrement misses): nothing is refreshed', async () => {
+  it('a later line is sold out: the unit taken for the first line is handed back and refreshed', async () => {
     const revalidation = revalidationMock();
-    const b = buildCreate(revalidation, { p1: 1, p2: 1 });
-    // p1 is taken, then p2 turns out to be gone: p1 is handed back.
-    b.prisma.product.updateMany
-      .mockImplementationOnce(() => {
-        b.stockNow.set('p1', 0);
-        return Promise.resolve({ count: 1 });
-      })
-      .mockImplementationOnce(() => Promise.resolve({ count: 0 }));
+    const b = buildCreate(revalidation, { p1: 1, p2: 0 });
+    // p1 is taken (1 -> 0), then p2 turns out to be gone: p1 is handed back.
     await expect(b.place([line('p1'), line('p2')])).rejects.toMatchObject({
       response: { code: 'ORDER_INSUFFICIENT_STOCK' },
     });
     await settle();
     expect(b.stockNow.get('p1')).toBe(1);
     expect(b.prisma.order.create).not.toHaveBeenCalled();
+    const asked = revalidation.revalidateStoresOfProduct.mock.calls.map(
+      (c) => (c[0] as { id: string }).id,
+    );
+    // Only the row that really moved; p2 was never written.
+    expect(asked).toEqual(['p1']);
+  });
+
+  it('sold out for this buyer on the only line: nothing moved, nothing is read or refreshed', async () => {
+    const revalidation = revalidationMock();
+    const b = buildCreate(revalidation, { p1: 0 });
+    await expect(b.place([line('p1')])).rejects.toMatchObject({
+      response: { code: 'ORDER_INSUFFICIENT_STOCK' },
+    });
+    await settle();
+    expect(b.stockNow.get('p1')).toBe(0);
+    expect(b.prisma.product.update).not.toHaveBeenCalled();
+    expect(b.prisma.product.findMany).not.toHaveBeenCalled();
     expect(revalidation.revalidateStoresOfProduct).not.toHaveBeenCalled();
+  });
+
+  it('a variant line: the last unit of a variant (1 -> 0) refreshes its product', async () => {
+    const revalidation = revalidationMock();
+    const b = buildCreate(revalidation, {}, { v1: 1 });
+    await expect(b.place([variantLine('v1')])).resolves.toMatchObject({
+      id: 'o1',
+    });
+    await settle();
+    expect(b.variantNow.get('v1')).toBe(0);
+    // The variant row is written, never its (untracked) product.
+    expect(b.prisma.product.updateMany).not.toHaveBeenCalled();
+    expect(revalidation.revalidateStoresOfProduct).toHaveBeenCalledTimes(1);
+    expect(revalidation.revalidateStoresOfProduct).toHaveBeenCalledWith(
+      own('p-v1'),
+    );
+  });
+
+  it('a variant line: 500 -> 499 and an untracked variant do not refresh', async () => {
+    const revalidation = revalidationMock();
+    const b = buildCreate(revalidation, {}, { v1: 500, v2: null });
+    await b.place([variantLine('v1'), variantLine('v2', 3)]);
+    await settle();
+    expect(b.variantNow.get('v1')).toBe(499);
+    expect(b.prisma.productVariant.updateMany).toHaveBeenCalledTimes(1);
+    expect(revalidation.revalidateStoresOfProduct).not.toHaveBeenCalled();
+  });
+
+  it('a variant line whose order insert fails: the variant is handed back and refreshed', async () => {
+    const revalidation = revalidationMock();
+    const b = buildCreate(revalidation, {}, { v1: 1 });
+    const log = jest.spyOn(console, 'error').mockImplementation(() => {});
+    b.prisma.order.create.mockRejectedValueOnce(new Error('insert failed'));
+    await expect(b.place([variantLine('v1')])).rejects.toThrow('insert failed');
+    await settle();
+    log.mockRestore();
+    expect(b.variantNow.get('v1')).toBe(1);
+    expect(revalidation.revalidateStoresOfProduct).toHaveBeenCalledWith(
+      own('p-v1'),
+    );
   });
 
   it('without the service wired the order works and nothing is read', async () => {
@@ -821,6 +1007,84 @@ describe('stock put back by an order: storefront refresh', () => {
     expect(revalidation.revalidateStoresOfProduct).toHaveBeenCalledWith(
       own('p-v1'),
     );
+  });
+
+  // Two orders of one variant are released together (the sweep, a bulk
+  // trash): stock 10 -> 11 -> 12. Both reads after the commit may see 12,
+  // so each would judge "11 -> 12" (invisible) and "In stock (10)" would
+  // stay cached. The stock loaded with the order lines settles it.
+  it('returns landing together: the stock loaded before the write decides (10, read as 12)', async () => {
+    const revalidation = revalidationMock();
+    const b = buildFlow(revalidation, { variants: { v1: 10 } });
+    b.prisma.order.findUnique.mockResolvedValue(unpaid());
+    b.prisma.orderItem.findMany.mockResolvedValue([
+      { ...variantItem('v1'), variant: { stock_quantity: 10 } },
+    ]);
+    // The other order's return landed before this order's read.
+    b.prisma.productVariant.findMany.mockResolvedValueOnce([
+      { id: 'v1', stock_quantity: 12, product: own('p-v1') },
+    ]);
+    await b.service.markOrderFailed('o1');
+    await settle();
+    expect(revalidation.revalidateStoresOfProduct).toHaveBeenCalledTimes(1);
+    expect(revalidation.revalidateStoresOfProduct).toHaveBeenCalledWith(
+      own('p-v1'),
+    );
+  });
+
+  it('returns landing together on a product: sold out when loaded, 30 when read', async () => {
+    const revalidation = revalidationMock();
+    const b = buildFlow(revalidation, { products: { p1: 0 } });
+    b.prisma.order.findUnique.mockResolvedValue(unpaid());
+    b.prisma.orderItem.findMany.mockResolvedValue([
+      {
+        ...productItem('p1', 12),
+        product: { sku: null, stock_quantity: 0, track_inventory: true },
+      },
+    ]);
+    b.prisma.product.findMany.mockResolvedValueOnce([
+      { ...own('p1'), track_inventory: true, stock_quantity: 30 },
+    ]);
+    await b.service.markOrderFailed('o1');
+    await settle();
+    expect(revalidation.revalidateStoresOfProduct).toHaveBeenCalledWith(
+      own('p1'),
+    );
+  });
+
+  it('a return loaded above the threshold and read above it does not refresh', async () => {
+    const revalidation = revalidationMock();
+    const b = buildFlow(revalidation, { variants: { v1: 11 } });
+    b.prisma.order.findUnique.mockResolvedValue(unpaid());
+    b.prisma.orderItem.findMany.mockResolvedValue([
+      { ...variantItem('v1'), variant: { stock_quantity: 11 } },
+    ]);
+    b.prisma.productVariant.findMany.mockResolvedValueOnce([
+      { id: 'v1', stock_quantity: 13, product: own('p-v1') },
+    ]);
+    await b.service.markOrderFailed('o1');
+    await settle();
+    expect(revalidation.revalidateStoresOfProduct).not.toHaveBeenCalled();
+  });
+
+  it('the order lines are loaded with their stock in the one query the return already made', async () => {
+    const revalidation = revalidationMock();
+    const b = buildFlow(revalidation, { variants: { v1: 0 } });
+    b.prisma.order.findUnique.mockResolvedValue(unpaid());
+    b.prisma.orderItem.findMany.mockResolvedValue([variantItem('v1')]);
+    await b.service.markOrderFailed('o1');
+    await settle();
+    expect(b.prisma.orderItem.findMany).toHaveBeenCalledTimes(1);
+    expect(b.prisma.orderItem.findMany).toHaveBeenCalledWith({
+      where: { order_id: 'o1' },
+      select: {
+        product_id: true,
+        variant_id: true,
+        quantity: true,
+        variant: { select: { stock_quantity: true } },
+        product: { select: { stock_quantity: true, track_inventory: true } },
+      },
+    });
   });
 
   it('a failing refresh or stock read never fails the payment flow', async () => {

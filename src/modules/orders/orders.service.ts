@@ -58,7 +58,8 @@ import { MetaConversionsService } from '../meta-capi/meta-conversions.service';
 import type { TrackingContext } from '../meta-capi/tracking-context';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import {
-  isStockChangeVisible,
+  isStockMoveVisible,
+  loadedStockBefore,
   netStockMoves,
   type StockMove,
 } from './stock-visibility';
@@ -767,9 +768,10 @@ export class OrdersService {
   /**
    * One guarded read after the commit gives each moved row's stock as it is
    * now and the owner of its product; the stock before the move is the
-   * current one minus the move. Read after the write (not from the values
-   * loaded before it) so that concurrent orders are seen: whichever commits
-   * last reads the final count. Never throws.
+   * current one minus the move. Read after the write so that concurrent
+   * orders are seen: whichever commits last reads the final count. A stock
+   * return also carries the stock its writer loaded before the write
+   * (StockMove.before), which covers returns landing together. Never throws.
    */
   private async refreshStoresOfStockMoves(
     revalidation: RevalidationService,
@@ -777,6 +779,7 @@ export class OrdersService {
   ): Promise<void> {
     try {
       const net = netStockMoves(moves);
+      const before = loadedStockBefore(moves);
       const owner = { id: true, creator_id: true, provider_id: true } as const;
       const variantIds = [...net.variant.keys()];
       const productIds = [...net.product.keys()];
@@ -804,14 +807,20 @@ export class OrdersService {
       for (const v of variants) {
         const now = v.stock_quantity;
         const delta = net.variant.get(v.id) ?? 0;
-        if (now !== null && isStockChangeVisible(now - delta, now)) {
+        if (
+          now !== null &&
+          isStockMoveVisible(now, delta, before.variant.get(v.id))
+        ) {
           affected.set(v.product.id, v.product);
         }
       }
       for (const p of products) {
         const now = p.track_inventory ? p.stock_quantity : null;
         const delta = net.product.get(p.id) ?? 0;
-        if (now !== null && isStockChangeVisible(now - delta, now)) {
+        if (
+          now !== null &&
+          isStockMoveVisible(now, delta, before.product.get(p.id))
+        ) {
           affected.set(p.id, {
             id: p.id,
             creator_id: p.creator_id,
@@ -3190,7 +3199,9 @@ export class OrdersService {
         decrementedStock.push(op);
       }
     } catch (err) {
-      await this.restoreStock(decrementedStock);
+      // Storefront cache: the units taken so far were committed until this
+      // hand-back (not awaited, never throws; nothing was taken = no-op).
+      this.revalidateStockMoves(await this.restoreStock(decrementedStock));
       if (redemptionClaimed)
         await this.promotionsService.releaseRedemption(redemptionClaimed);
       throw err;
@@ -3311,8 +3322,9 @@ export class OrdersService {
     } catch (err) {
       console.error('[OrderCreate] Failed to create order:', err);
       // Order creation failed AFTER stock was decremented — restore so the
-      // sold-out signal doesn't stick to a non-existent order.
-      await this.restoreStock(decrementedStock);
+      // sold-out signal doesn't stick to a non-existent order. The same goes
+      // for a storefront page cached in between (not awaited, never throws).
+      this.revalidateStockMoves(await this.restoreStock(decrementedStock));
       if (redemptionClaimed)
         await this.promotionsService.releaseRedemption(redemptionClaimed);
       // Coded errors raised inside the transaction (markAttached:
@@ -3324,8 +3336,9 @@ export class OrdersService {
     }
 
     // Storefront cache: the order row is committed, so the stock it took is
-    // final (a failed insert above restored it and never gets here). Not
-    // awaited; refreshes only the stores where a buyer can see the change.
+    // final (a failed insert above handed it back, refreshed for that, and
+    // never gets here). Not awaited; refreshes only the stores where a buyer
+    // can see the change.
     this.revalidateStockMoves(
       decrementedStock.map((op) => ({
         kind: op.kind,
@@ -5305,10 +5318,15 @@ export class OrdersService {
    * Restore stock for a list of operations recorded during order creation.
    * Best-effort: a failure in one restore is logged and does not stop the rest,
    * since this runs on the error path of order creation.
+   *
+   * Returns the rows it really handed back, for the storefront cache: the
+   * decrement was committed for a moment, so a page rendered in between
+   * may have cached "sold out" (or a lower count) for units that are back.
    */
   private async restoreStock(
     ops: { kind: 'product' | 'variant'; id: string; qty: number }[],
-  ) {
+  ): Promise<StockMove[]> {
+    const moves: StockMove[] = [];
     for (const op of ops) {
       try {
         if (op.kind === 'variant') {
@@ -5322,10 +5340,12 @@ export class OrdersService {
             data: { stock_quantity: { increment: op.qty } },
           });
         }
+        moves.push({ kind: op.kind, id: op.id, delta: op.qty });
       } catch (err) {
         console.error('[StockRestore] failed for', op, err);
       }
     }
+    return moves;
   }
 
   /**
@@ -5345,7 +5365,15 @@ export class OrdersService {
   ): Promise<StockMove[]> {
     const items = await db.orderItem.findMany({
       where: { order_id: orderId },
-      select: { product_id: true, variant_id: true, quantity: true },
+      select: {
+        product_id: true,
+        variant_id: true,
+        quantity: true,
+        // The stock before the return, for the cache refresh only
+        // (StockMove.before); the writes below never depend on it.
+        variant: { select: { stock_quantity: true } },
+        product: { select: { stock_quantity: true, track_inventory: true } },
+      },
     });
     const moves: StockMove[] = [];
     for (const it of items) {
@@ -5360,6 +5388,7 @@ export class OrdersService {
               kind: 'variant',
               id: it.variant_id,
               delta: it.quantity,
+              before: it.variant?.stock_quantity,
             });
           }
         } else if (it.product_id) {
@@ -5376,6 +5405,9 @@ export class OrdersService {
               kind: 'product',
               id: it.product_id,
               delta: it.quantity,
+              before: it.product?.track_inventory
+                ? it.product.stock_quantity
+                : null,
             });
           }
         }
