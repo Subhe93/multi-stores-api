@@ -195,9 +195,13 @@ async function main(): Promise<number> {
       `Applied: ${c.pages_matched} pages, ${c.translations_to_edit} section translations, ${c.snapshots_to_edit} published snapshots; kept ${c.custom_headings_kept} custom headings, ${c.unmapped_locale_kept} headings in an unmapped locale, ${c.subheadings_kept} existing subheadings.`,
     );
     // Best effort, like a dashboard publish: a failure only logs a warning.
-    await new RevalidationService(
+    // The service only schedules the request (debounce on an unref'd timer),
+    // so flush it here: this process exits right after.
+    const revalidation = new RevalidationService(
       prisma as unknown as PrismaService,
-    ).revalidateStoreBySlug(plan.store.slug);
+    );
+    await revalidation.revalidateStoreBySlug(plan.store.slug);
+    await revalidation.flush();
     return 0;
   } finally {
     await prisma.$disconnect();

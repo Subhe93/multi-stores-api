@@ -5,14 +5,23 @@ import { PrismaService } from '../../prisma/prisma.service';
 const DEBOUNCE_MS = 300;
 /** A steady stream of calls still sends at least this often. */
 const DEBOUNCE_MAX_WAIT_MS = 2000;
-/** Wait before each attempt: at once, then after 1 s, then after 5 s. */
-const ATTEMPT_DELAYS_MS = [0, 1000, 5000];
+/**
+ * Wait before each attempt: at once, then after 1 s, 5 s and 30 s. The last
+ * step outlasts a storefront restart (a deploy answers 502 for longer than
+ * the first three attempts take).
+ */
+const ATTEMPT_DELAYS_MS = [0, 1000, 5000, 30_000];
+/** Attempts of a send the caller waits for (manual flush). */
+const WAITED_ATTEMPTS = 2;
 /** One attempt may not hang longer than this. */
 const REQUEST_TIMEOUT_MS = 10_000;
 /** POSTs in flight at the same time (many reselling stores of one product). */
 const MAX_CONCURRENT = 10;
+/** Longest a flush (shutdown, script exit) waits for deliveries in flight. */
+const FLUSH_WAIT_MS = 5000;
 
 interface PendingSend {
+  key: string;
   body: Record<string, string>;
   label: string;
   firstAt: number;
@@ -33,7 +42,13 @@ export class RevalidationService implements OnModuleDestroy {
   private readonly logger = new Logger(RevalidationService.name);
   private readonly pending = new Map<string, PendingSend>();
   private readonly queue: PendingSend[] = [];
+  /** Keys waiting in `queue`: one slug is queued once. */
+  private readonly queued = new Set<string>();
+  /** Deliveries that were started and have not settled yet. */
+  private readonly inFlight = new Set<Promise<void>>();
   private active = 0;
+  /** Set at shutdown: nothing is debounced any more. */
+  private closing = false;
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -154,12 +169,54 @@ export class RevalidationService implements OnModuleDestroy {
     this.schedule(`tag:${tag}`, { tag }, `tag "${tag}"`);
   }
 
-  /** Shutdown: send what is still waiting in the debounce window, once. */
-  async onModuleDestroy(): Promise<void> {
-    const waiting = [...this.pending.values()];
+  /**
+   * Revalidate one store now and wait for the outcome (the manual "flush
+   * cache" action answers after the POST). No debounce; a send for the same
+   * slug that was still waiting is replaced by this one. Never rejects.
+   */
+  async revalidateStoreBySlugNow(slug: string): Promise<void> {
+    const key = `slug:${slug}`;
+    const waiting = this.pending.get(key);
+    if (waiting) {
+      clearTimeout(waiting.timer);
+      this.pending.delete(key);
+    }
+    await this.start({ slug }, `store "${slug}"`, WAITED_ATTEMPTS);
+  }
+
+  /**
+   * Send everything that is still waiting (debounce window and queue) now,
+   * one attempt each, and wait for all deliveries in flight, at most
+   * `maxWaitMs`. For a caller that is about to exit: the shutdown hook, or a
+   * script that uses this service outside Nest (the debounce timer is
+   * unref'd and would never fire there).
+   */
+  async flush(maxWaitMs = FLUSH_WAIT_MS): Promise<void> {
+    const waiting = [...this.pending.values(), ...this.queue.splice(0)];
     this.pending.clear();
-    for (const entry of waiting) clearTimeout(entry.timer);
-    await Promise.all(waiting.map((e) => this.deliver(e.body, e.label, 1)));
+    this.queued.clear();
+    for (const entry of waiting) {
+      clearTimeout(entry.timer);
+      void this.start(entry.body, entry.label, 1);
+    }
+    if (!this.inFlight.size) return;
+    let cap: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.all([...this.inFlight]),
+      new Promise<void>((resolve) => {
+        cap = setTimeout(resolve, maxWaitMs);
+      }),
+    ]);
+    clearTimeout(cap);
+  }
+
+  /**
+   * Shutdown: send what is waiting and give the deliveries in flight a few
+   * seconds. A mutation that finishes after this point is sent at once.
+   */
+  async onModuleDestroy(): Promise<void> {
+    this.closing = true;
+    await this.flush();
   }
 
   /** Trailing debounce per key; never throws into the caller. */
@@ -169,18 +226,23 @@ export class RevalidationService implements OnModuleDestroy {
     label: string,
   ): void {
     try {
+      if (this.closing) {
+        // No timer would fire any more: send now, once.
+        void this.start(body, label, 1);
+        return;
+      }
       const now = Date.now();
       let entry = this.pending.get(key);
       if (entry) clearTimeout(entry.timer);
       else {
-        entry = { body, label, firstAt: now };
+        entry = { key, body, label, firstAt: now };
         this.pending.set(key, entry);
       }
       const wait = Math.max(
         0,
         Math.min(DEBOUNCE_MS, entry.firstAt + DEBOUNCE_MAX_WAIT_MS - now),
       );
-      entry.timer = setTimeout(() => this.flush(key), wait);
+      entry.timer = setTimeout(() => this.enqueue(key), wait);
       // A waiting revalidation must not keep the process alive.
       entry.timer.unref?.();
     } catch (err) {
@@ -188,23 +250,46 @@ export class RevalidationService implements OnModuleDestroy {
     }
   }
 
-  private flush(key: string): void {
+  /** The debounce window of `key` ended: hand it to the sender. */
+  private enqueue(key: string): void {
     const entry = this.pending.get(key);
     if (!entry) return;
     this.pending.delete(key);
-    this.queue.push(entry);
+    // Already waiting for a slot: that send covers this call too.
+    if (!this.queued.has(key)) {
+      this.queued.add(key);
+      this.queue.push(entry);
+    }
     this.drain();
   }
 
   private drain(): void {
     while (this.active < MAX_CONCURRENT && this.queue.length) {
       const job = this.queue.shift() as PendingSend;
+      this.queued.delete(job.key);
       this.active++;
-      void this.deliver(job.body, job.label).finally(() => {
+      void this.start(job.body, job.label).then(() => {
         this.active--;
         this.drain();
       });
     }
+  }
+
+  /** Start one delivery and track it until it settles. Never rejects. */
+  private start(
+    body: Record<string, string>,
+    label: string,
+    maxAttempts?: number,
+  ): Promise<void> {
+    const run = this.deliver(body, label, maxAttempts)
+      .catch((err) => {
+        this.logger.warn(`Revalidation for ${label} not sent: ${reason(err)}`);
+      })
+      .finally(() => {
+        this.inFlight.delete(run);
+      });
+    this.inFlight.add(run);
+    return run;
   }
 
   /**
@@ -243,6 +328,8 @@ export class RevalidationService implements OnModuleDestroy {
           body: JSON.stringify(body),
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
+        // Release the connection: the answer's body is never read.
+        await res.body?.cancel().catch(() => undefined);
         if (res.ok) return;
         failure = `returned ${res.status} ${res.statusText}`;
         if (!isRetryableStatus(res.status)) break;

@@ -66,6 +66,7 @@ describe('RevalidationService: reselling stores of a base product', () => {
 
 describe('RevalidationService delivery', () => {
   const env = { ...process.env };
+  const realFetch = global.fetch;
   let fetchMock: jest.Mock<Promise<unknown>, [string, { body: string }]>;
   let warn: jest.SpyInstance;
   const warned = () => warn.mock.calls.map((c: unknown[]) => String(c[0]));
@@ -95,6 +96,7 @@ describe('RevalidationService delivery', () => {
   afterEach(() => {
     jest.useRealTimers();
     process.env = { ...env };
+    global.fetch = realFetch;
   });
 
   it('returns before the POST is sent (does not block the caller)', async () => {
@@ -133,7 +135,8 @@ describe('RevalidationService delivery', () => {
       await svc.revalidateStoreBySlug('namez');
       await jest.advanceTimersByTimeAsync(200);
     }
-    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+    // 2.4 s of calls every 200 ms: exactly one POST, at the 2 s max wait.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('a call after the POST went out sends again', async () => {
@@ -160,14 +163,21 @@ describe('RevalidationService delivery', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('retry: fails three times → one warning with slug and reason, no throw', async () => {
+  it('retry: every attempt fails → one warning with slug and reason, no throw', async () => {
     fetchMock.mockImplementation(() =>
       Promise.reject(new Error('ECONNREFUSED')),
     );
     const svc = make();
     await expect(svc.revalidateStoreBySlug('namez')).resolves.toBeUndefined();
-    await jest.advanceTimersByTimeAsync(60_000);
+    // Debounce, then attempts at once, +1 s and +5 s: three so far.
+    await jest.advanceTimersByTimeAsync(300 + 1000 + 5000);
     expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(warn).not.toHaveBeenCalled();
+    // The last attempt comes 30 s later (outlasts a storefront restart).
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    await jest.advanceTimersByTimeAsync(60_000);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warned()[0]).toContain('store "namez"');
     expect(warned()[0]).toContain('ECONNREFUSED');
@@ -216,5 +226,123 @@ describe('RevalidationService delivery', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     await jest.advanceTimersByTimeAsync(1000);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('the answer body is released after every attempt', async () => {
+    const cancel = jest.fn(() => Promise.resolve());
+    fetchMock.mockImplementation(() =>
+      Promise.resolve({ ok: true, status: 200, body: { cancel } }),
+    );
+    const svc = make();
+    await svc.revalidateStoreBySlug('namez');
+    await jest.advanceTimersByTimeAsync(300);
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  // A storefront that does not answer: every POST stays in flight.
+  const hang = () => new Promise<unknown>(() => undefined);
+
+  it('at most 10 POSTs are in flight; the rest waits, one entry per slug', async () => {
+    fetchMock.mockImplementation(hang);
+    const svc = make();
+    for (let i = 0; i < 14; i++) await svc.revalidateStoreBySlug(`s${i}`);
+    await jest.advanceTimersByTimeAsync(300);
+    expect(fetchMock).toHaveBeenCalledTimes(10);
+    // s12 is called again twice while it waits for a slot: still one entry.
+    await svc.revalidateStoreBySlug('s12');
+    await jest.advanceTimersByTimeAsync(300);
+    await svc.revalidateStoreBySlug('s12');
+    await jest.advanceTimersByTimeAsync(300);
+    expect(fetchMock).toHaveBeenCalledTimes(10);
+    const queue = (svc as unknown as { queue: unknown[] }).queue;
+    expect(queue).toHaveLength(4);
+  });
+
+  it('shutdown also sends the queued jobs and waits a bounded time for the rest', async () => {
+    fetchMock.mockImplementation(hang);
+    const svc = make();
+    for (let i = 0; i < 14; i++) await svc.revalidateStoreBySlug(`s${i}`);
+    await jest.advanceTimersByTimeAsync(300);
+    // Inside the debounce window at shutdown.
+    await svc.revalidateStoreBySlug('late');
+    expect(fetchMock).toHaveBeenCalledTimes(10);
+
+    let done = false;
+    const closing = svc.onModuleDestroy().then(() => (done = true));
+    await jest.advanceTimersByTimeAsync(0);
+    // 10 in flight + 4 queued + 1 debounced: all were sent.
+    expect(fetchMock).toHaveBeenCalledTimes(15);
+    const expected = Array.from({ length: 14 }, (_, i) => `s${i}`);
+    expect(
+      posted()
+        .map((b) => b.slug)
+        .sort(),
+    ).toEqual([...expected, 'late'].sort());
+    expect(done).toBe(false);
+    // Nothing answers: the hook gives up after its cap instead of hanging.
+    await jest.advanceTimersByTimeAsync(5000);
+    await closing;
+    expect(done).toBe(true);
+  });
+
+  it('shutdown waits for a delivery that is between two attempts', async () => {
+    fetchMock.mockImplementationOnce(() => bad(503));
+    const svc = make();
+    await svc.revalidateStoreBySlug('namez');
+    await jest.advanceTimersByTimeAsync(300);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    let done = false;
+    const closing = svc.onModuleDestroy().then(() => (done = true));
+    await jest.advanceTimersByTimeAsync(999);
+    expect(done).toBe(false);
+    await jest.advanceTimersByTimeAsync(1);
+    await closing;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('a call after shutdown started is sent at once', async () => {
+    const svc = make();
+    await svc.onModuleDestroy();
+    await svc.revalidateStoreBySlug('namez');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(posted()).toEqual([{ slug: 'namez' }]);
+  });
+
+  it('flush(): a script that exits right after still sends its revalidation', async () => {
+    const svc = make();
+    await svc.revalidateStoreBySlug('namez');
+    expect(fetchMock).not.toHaveBeenCalled();
+    await svc.flush();
+    expect(posted()).toEqual([{ slug: 'namez' }]);
+    // Nothing is left behind for a timer.
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('revalidateStoreBySlugNow resolves after the POST and replaces a waiting send', async () => {
+    const svc = make();
+    await svc.revalidateStoreBySlug('namez');
+    await svc.revalidateStoreBySlugNow('namez');
+    expect(posted()).toEqual([{ slug: 'namez' }]);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('revalidateStoreBySlugNow: two attempts, then one warning, never rejects', async () => {
+    fetchMock.mockImplementation(() => bad(502));
+    const svc = make();
+    let done = false;
+    const sent = svc
+      .revalidateStoreBySlugNow('namez')
+      .then(() => (done = true));
+    await jest.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(done).toBe(false);
+    await jest.advanceTimersByTimeAsync(1000);
+    await sent;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warned()[0]).toContain('502');
   });
 });

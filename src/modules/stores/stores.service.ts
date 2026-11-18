@@ -1237,7 +1237,8 @@ export class StoresService {
         message: 'Store not found',
       });
 
-    await this.revalidation.revalidateStoreBySlug(store.slug);
+    // Not debounced: the answer means the storefront was told.
+    await this.revalidation.revalidateStoreBySlugNow(store.slug);
     return { flushed: true, slug: store.slug };
   }
 
