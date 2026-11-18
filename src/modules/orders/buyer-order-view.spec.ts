@@ -110,7 +110,11 @@ function orderRow() {
         fulfiller_type: 'CREATOR',
         custom_field_values: [],
         bundle_offer: null,
-        product: { ...fullProduct('own1'), provider_id: null, creator_id: 'c1' },
+        product: {
+          ...fullProduct('own1'),
+          provider_id: null,
+          creator_id: 'c1',
+        },
         variant: null,
         custom_product: null,
       },
@@ -213,7 +217,9 @@ describe('forBuyer', () => {
   it('a line without relations (create result) only loses provider_base_amount', () => {
     const view = forBuyer({
       id: 'o1',
-      items: [{ id: 'i1', product_id: 'p1', provider_base_amount: 9, unit_price: 20 }],
+      items: [
+        { id: 'i1', product_id: 'p1', provider_base_amount: 9, unit_price: 20 },
+      ],
     });
     expect(view).toEqual({
       id: 'o1',
@@ -274,7 +280,9 @@ describe('buyer order payloads (OrdersService)', () => {
     expect(res.data[0]).toMatchObject({
       id: 'o1',
       items: [
-        { custom_product: { mockup_images: [{ url: '/uploads/mockup.webp' }] } },
+        {
+          custom_product: { mockup_images: [{ url: '/uploads/mockup.webp' }] },
+        },
         { product: { id: 'own1' } },
       ],
     });
@@ -330,7 +338,12 @@ describe('buyer order payloads (OrdersService)', () => {
       customProducts: { cp1: { product_id: 'base1', final_price: 150 } },
     });
     const created = (await h.place([
-      { product_id: null, variant_id: null, custom_product_id: 'cp1', quantity: 2 },
+      {
+        product_id: null,
+        variant_id: null,
+        custom_product_id: 'cp1',
+        quantity: 2,
+      },
       { product_id: 'own1', variant_id: null, quantity: 1 },
     ])) as unknown as { items: Record<string, unknown>[] };
     // The row written still records what the provider is owed.
