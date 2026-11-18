@@ -2,9 +2,11 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import {
   CreateProductFaqDto,
   FaqTranslationDto,
@@ -23,6 +25,13 @@ export interface FaqActor {
   role: UserRole;
 }
 
+/** What the storefront cache refresh needs to know about a product. */
+interface FaqProduct {
+  id: string;
+  provider_id: string | null;
+  creator_id: string | null;
+}
+
 const FORBIDDEN = {
   code: 'PRODUCT_FAQ_FORBIDDEN',
   message: 'Not your product',
@@ -30,11 +39,15 @@ const FORBIDDEN = {
 
 @Injectable()
 export class ProductFaqsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    // Storefront cache refresh; optional for positional tests.
+    @Optional() private readonly revalidation?: RevalidationService,
+  ) {}
 
   async create(productId: string, dto: CreateProductFaqDto, actor: FaqActor) {
-    await this.assertOwnsProduct(productId, actor);
-    return this.prisma.productFaq.create({
+    const product = await this.assertOwnsProduct(productId, actor);
+    const created = await this.prisma.productFaq.create({
       data: {
         product_id: productId,
         sort_order: dto.sort_order ?? 0,
@@ -42,6 +55,8 @@ export class ProductFaqsService {
       },
       include: { translations: true },
     });
+    await this.revalidation?.revalidateStoresOfProduct(product);
+    return created;
   }
 
   async findByProduct(productId: string) {
@@ -53,7 +68,7 @@ export class ProductFaqsService {
   }
 
   async update(id: string, dto: UpdateProductFaqDto, actor: FaqActor) {
-    await this.assertOwnsFaq(id, actor);
+    const product = await this.assertOwnsFaq(id, actor);
 
     if (dto.translations && dto.translations.length > 0) {
       await this.prisma.productFaqTranslation.deleteMany({
@@ -61,7 +76,7 @@ export class ProductFaqsService {
       });
     }
 
-    return this.prisma.productFaq.update({
+    const updated = await this.prisma.productFaq.update({
       where: { id },
       data: {
         ...(dto.sort_order !== undefined && { sort_order: dto.sort_order }),
@@ -74,15 +89,19 @@ export class ProductFaqsService {
       },
       include: { translations: true },
     });
+    await this.revalidation?.revalidateStoresOfProduct(product);
+    return updated;
   }
 
   async delete(id: string, actor: FaqActor) {
-    await this.assertOwnsFaq(id, actor);
-    return this.prisma.productFaq.delete({ where: { id } });
+    const product = await this.assertOwnsFaq(id, actor);
+    const deleted = await this.prisma.productFaq.delete({ where: { id } });
+    await this.revalidation?.revalidateStoresOfProduct(product);
+    return deleted;
   }
 
   async reorder(productId: string, faqIds: string[], actor: FaqActor) {
-    await this.assertOwnsProduct(productId, actor);
+    const product = await this.assertOwnsProduct(productId, actor);
     // Scoped to the product: ids of another product's FAQs match nothing.
     await Promise.all(
       (faqIds ?? []).map((id, i) =>
@@ -92,10 +111,14 @@ export class ProductFaqsService {
         }),
       ),
     );
+    await this.revalidation?.revalidateStoresOfProduct(product);
     return this.findByProduct(productId);
   }
 
-  private async assertOwnsFaq(id: string, actor: FaqActor): Promise<void> {
+  private async assertOwnsFaq(
+    id: string,
+    actor: FaqActor,
+  ): Promise<FaqProduct> {
     const faq = await this.prisma.productFaq.findUnique({
       where: { id },
       select: { product_id: true },
@@ -105,7 +128,7 @@ export class ProductFaqsService {
         code: 'PRODUCT_FAQ_NOT_FOUND',
         message: 'FAQ not found',
       });
-    await this.assertOwnsProduct(faq.product_id, actor);
+    return this.assertOwnsProduct(faq.product_id, actor);
   }
 
   /**
@@ -115,24 +138,24 @@ export class ProductFaqsService {
   private async assertOwnsProduct(
     productId: string,
     actor: FaqActor,
-  ): Promise<void> {
+  ): Promise<FaqProduct> {
     const product = await this.prisma.product.findUnique({
       where: { id: productId },
-      select: { provider_id: true, creator_id: true },
+      select: { id: true, provider_id: true, creator_id: true },
     });
     if (!product)
       throw new NotFoundException({
         code: 'PRODUCT_NOT_FOUND',
         message: 'Product not found',
       });
-    if (actor.role === UserRole.ADMIN) return;
+    if (actor.role === UserRole.ADMIN) return product;
 
     if (actor.role === UserRole.PROVIDER) {
       const provider = await this.prisma.provider.findUnique({
         where: { user_id: actor.id },
         select: { id: true },
       });
-      if (provider && product.provider_id === provider.id) return;
+      if (provider && product.provider_id === provider.id) return product;
       throw new ForbiddenException(FORBIDDEN);
     }
 
@@ -141,7 +164,7 @@ export class ProductFaqsService {
         where: { user_id: actor.id },
         select: { id: true },
       });
-      if (creator && product.creator_id === creator.id) return;
+      if (creator && product.creator_id === creator.id) return product;
     }
     throw new ForbiddenException(FORBIDDEN);
   }

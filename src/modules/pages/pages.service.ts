@@ -112,6 +112,7 @@ export class PagesService {
       }),
     );
     await this.releaseLivePagePath(created);
+    await this.revalidation?.revalidateStoreById(storeId);
     return created;
   }
 
@@ -227,21 +228,25 @@ export class PagesService {
     await this.releaseLivePagePath(updated);
     // Menu items that link this page carry its URL: point them at the new
     // slug, and refresh the cached storefront (nav pages + menus).
-    if (current && updated.slug !== current.slug) {
-      const relinked = await relinkPageMenuItems(
-        this.prisma,
-        current.store_id,
-        id,
-        updated.slug,
-      );
-      if (
-        this.revalidation &&
-        (relinked > 0 ||
-          current.status === 'PUBLISHED' ||
-          updated.status === 'PUBLISHED')
-      )
-        await this.revalidation.revalidateStoreById(current.store_id);
-    }
+    const relinked =
+      current && updated.slug !== current.slug
+        ? await relinkPageMenuItems(
+            this.prisma,
+            current.store_id,
+            id,
+            updated.slug,
+          )
+        : 0;
+    // Also without a slug change: publish, unpublish and content edits of a
+    // live page are served from the store cache.
+    if (
+      this.revalidation &&
+      current &&
+      (relinked > 0 ||
+        current.status === 'PUBLISHED' ||
+        updated.status === 'PUBLISHED')
+    )
+      await this.revalidation.revalidateStoreById(current.store_id);
     return updated;
   }
 
@@ -259,7 +264,9 @@ export class PagesService {
         message: 'Cannot delete required page',
       });
 
-    return this.prisma.staticPage.delete({ where: { id } });
+    const deleted = await this.prisma.staticPage.delete({ where: { id } });
+    await this.revalidation?.revalidateStoreById(page.store_id);
+    return deleted;
   }
 
   /**

@@ -27,10 +27,13 @@ function setup() {
   // Ownership is covered elsewhere; these tests are about the stored HTML.
   jest
     .spyOn(
-      svc as unknown as { assertCreatorOwns: () => Promise<void> },
+      svc as unknown as {
+        assertCreatorOwns: () => Promise<{ creator_id: string }>;
+      },
       'assertCreatorOwns',
     )
-    .mockResolvedValue(undefined);
+    // The owned row (its creator is read for the storefront cache refresh).
+    .mockResolvedValue({ creator_id: 'c1' });
   return { svc, create, update };
 }
 

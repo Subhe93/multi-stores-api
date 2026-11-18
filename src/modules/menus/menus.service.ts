@@ -146,10 +146,12 @@ export class MenusService {
   async create(userId: string, dto: CreateMenuDto) {
     const storeId = await this.resolveCreatorStoreId(userId);
     try {
-      return await this.prisma.menu.create({
+      const created = await this.prisma.menu.create({
         data: { store_id: storeId, key: dto.key, name: dto.name },
         include: { items: true },
       });
+      await this.revalidation.revalidateStoreById(storeId);
+      return created;
     } catch (err) {
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&

@@ -74,3 +74,85 @@ describe('PagesService HTML sanitizing on write', () => {
     expect(contents(update.mock.calls[0][0].data)).toEqual(['<p>c</p>']);
   });
 });
+
+// Legacy pages are served from the store cache of the storefront: a deleted
+// or unpublished page otherwise keeps answering 200.
+
+describe('PagesService storefront revalidation', () => {
+  function build(page: Row) {
+    const prisma = {
+      staticPage: {
+        create: jest.fn((args: { data: Row }) =>
+          Promise.resolve({ id: 'pg1', ...args.data }),
+        ),
+        update: jest.fn((args: { data: Row }) =>
+          Promise.resolve({ ...page, ...args.data }),
+        ),
+        delete: jest.fn(() => Promise.resolve(page)),
+        findUnique: jest.fn(() => Promise.resolve(page)),
+        findFirst: jest.fn(() => Promise.resolve(null)),
+      },
+      staticPageTranslation: { deleteMany: jest.fn() },
+      store: { findUnique: jest.fn(() => Promise.resolve(null)) },
+      page: { findFirst: jest.fn(() => Promise.resolve(null)) },
+    };
+    const revalidation = { revalidateStoreById: jest.fn() };
+    const svc = new PagesService(
+      prisma as unknown as PrismaService,
+      undefined,
+      revalidation as never,
+    );
+    return { svc, prisma, revalidation };
+  }
+  const live = { id: 'pg1', store_id: 's1', slug: 'faq', status: 'PUBLISHED' };
+  const draft = { ...live, status: 'DRAFT' };
+
+  it('delete revalidates the store after the row is gone', async () => {
+    const { svc, prisma, revalidation } = build(live);
+    await svc.delete('pg1', 'admin', UserRole.ADMIN);
+    expect(prisma.staticPage.delete).toHaveBeenCalled();
+    expect(revalidation.revalidateStoreById).toHaveBeenCalledWith('s1');
+  });
+
+  it('create revalidates the store', async () => {
+    const { svc, revalidation } = build(live);
+    await svc.create(
+      's1',
+      { type: 'CUSTOM', slug: 'faq' },
+      'admin',
+      UserRole.ADMIN,
+    );
+    expect(revalidation.revalidateStoreById).toHaveBeenCalledWith('s1');
+  });
+
+  it('a content edit of a published page (no slug change) revalidates', async () => {
+    const { svc, revalidation } = build(live);
+    await svc.update(
+      'pg1',
+      { translations: [{ locale: 'en', title: 'T', content: '<p>c</p>' }] },
+      'admin',
+      UserRole.ADMIN,
+    );
+    expect(revalidation.revalidateStoreById).toHaveBeenCalledWith('s1');
+  });
+
+  it('unpublish and publish (no slug change) revalidate', async () => {
+    const a = build(live);
+    await a.svc.update('pg1', { status: 'DRAFT' }, 'admin', UserRole.ADMIN);
+    expect(a.revalidation.revalidateStoreById).toHaveBeenCalledWith('s1');
+    const b = build(draft);
+    await b.svc.update('pg1', { status: 'PUBLISHED' }, 'admin', UserRole.ADMIN);
+    expect(b.revalidation.revalidateStoreById).toHaveBeenCalledWith('s1');
+  });
+
+  it('an edit of a draft page that stays a draft does not revalidate', async () => {
+    const { svc, revalidation } = build(draft);
+    await svc.update(
+      'pg1',
+      { translations: [{ locale: 'en', title: 'T' }] },
+      'admin',
+      UserRole.ADMIN,
+    );
+    expect(revalidation.revalidateStoreById).not.toHaveBeenCalled();
+  });
+});

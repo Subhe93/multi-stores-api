@@ -564,7 +564,7 @@ export class StoresService {
 
     const own = await this.prisma.store.findUnique({
       where: { creator_id: creator.id },
-      select: { id: true, custom_domain: true },
+      select: { id: true, slug: true, custom_domain: true },
     });
     if (
       data.custom_domain !== undefined &&
@@ -640,6 +640,9 @@ export class StoresService {
       );
     }
 
+    // A slug rename: the entries cached under the old slug must go too.
+    if (own?.slug && own.slug !== store.slug)
+      await this.revalidation.revalidateStoreBySlug(own.slug);
     await this.revalidation.revalidateStoreBySlug(store.slug);
 
     return ownerStorePayload(store);
@@ -1124,6 +1127,9 @@ export class StoresService {
       }
     }
 
+    // A slug rename: the entries cached under the old slug must go too.
+    if (store.slug && store.slug !== updated.slug)
+      await this.revalidation.revalidateStoreBySlug(store.slug);
     await this.revalidation.revalidateStoreBySlug(updated.slug);
 
     return ownerStorePayload(updated);

@@ -6,6 +6,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { CreateBundleDto, UpdateBundleDto } from './dto/bundle.dto';
 import { Prisma } from '@prisma/client';
 import {
@@ -56,6 +57,8 @@ export class BundlesService {
     // Marketplace minimum price (base + VAT) of SINGLE-priced custom
     // products; optional for positional tests (net base floor then).
     @Optional() private readonly taxService?: TaxService,
+    // Storefront cache refresh; optional for positional tests.
+    @Optional() private readonly revalidation?: RevalidationService,
   ) {}
 
   private async resolveCreatorId(userId: string): Promise<string> {
@@ -224,7 +227,7 @@ export class BundlesService {
       customProductIds,
     );
 
-    return this.prisma.bundle.create({
+    const created = await this.prisma.bundle.create({
       data: {
         creator_id: creatorId,
         status: dto.status ?? 'ACTIVE',
@@ -254,6 +257,9 @@ export class BundlesService {
       },
       include: bundleInclude,
     });
+    // Bundles are part of the storefront product payload.
+    await this.revalidation?.revalidateStoreByCreatorId(creatorId);
+    return created;
   }
 
   async findByOwner(userId: string, page = 1, limit = 20, q?: string) {
@@ -479,6 +485,7 @@ export class BundlesService {
     }
 
     await this.prisma.$transaction(ops);
+    await this.revalidation?.revalidateStoreByCreatorId(creatorId);
 
     return this.prisma.bundle.findUnique({
       where: { id },
@@ -518,6 +525,7 @@ export class BundlesService {
     }
 
     await this.prisma.bundle.delete({ where: { id } });
+    await this.revalidation?.revalidateStoreByCreatorId(creatorId);
     return { id };
   }
 

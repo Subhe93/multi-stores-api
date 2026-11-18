@@ -1345,6 +1345,10 @@ export class PagesV2Service {
       }
     });
 
+    // The restore rewrites page-level SEO, titles and status, which the
+    // storefront reads live for a published page.
+    await this.revalidation.revalidateStoreById(storeId);
+
     return this.getById(userId, pageId);
   }
 }

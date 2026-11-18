@@ -8,6 +8,7 @@ import {
 import { encodeSlugForUrl, sanitizeTitle } from '@multi-stores/core/slug';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RedirectsService } from '../redirects/redirects.service';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { uniqueProductSlug } from '../../common/slug/wp-slug';
 import {
   productRedirectMoves,
@@ -143,7 +144,16 @@ export class CustomProductsService {
     // Minimum price check (checkout tax engine); optional for positional
     // tests, which then skip the check.
     @Optional() private readonly taxService?: TaxService,
+    // Storefront cache refresh; optional for positional tests.
+    @Optional() private readonly revalidation?: RevalidationService,
   ) {}
+
+  // Refresh the creator's storefront cache after a custom product mutation.
+  private async revalidateForCreator(creatorId?: string | null): Promise<void> {
+    if (creatorId) {
+      await this.revalidation?.revalidateStoreByCreatorId(creatorId);
+    }
+  }
 
   private loadFloorSetup(creatorId: string): Promise<PriceFloorSetup> | null {
     return this.taxService
@@ -921,6 +931,7 @@ export class CustomProductsService {
         primary_creator_category_id,
         null,
       );
+      await this.revalidateForCreator(creator.id);
       return this.loadById(created.id);
     }
     // No links: a requested primary cannot be honoured (throws).
@@ -931,6 +942,7 @@ export class CustomProductsService {
       null,
     );
 
+    await this.revalidateForCreator(creator.id);
     return created;
   }
 
@@ -1439,12 +1451,21 @@ export class CustomProductsService {
       );
     }
 
+    await this.revalidateForCreator(existing.creator_id);
     return linksTouched ? this.loadById(id) : updated;
   }
 
   async delete(id: string, userId?: string) {
-    if (userId) await this.assertCreatorOwns(id, userId);
-    return this.prisma.customProduct.delete({ where: { id } });
+    // Owning creator, read while the row exists (for the cache refresh).
+    const cp = userId
+      ? await this.assertCreatorOwns(id, userId)
+      : await this.prisma.customProduct.findUnique({
+          where: { id },
+          select: { creator_id: true },
+        });
+    const deleted = await this.prisma.customProduct.delete({ where: { id } });
+    await this.revalidateForCreator(cp?.creator_id);
+    return deleted;
   }
 
   /**
@@ -1619,6 +1640,7 @@ export class CustomProductsService {
       await releaseLiveProductPaths(this.prisma, this.redirects, {
         customProductId: id,
       });
+      await this.revalidateForCreator(cp.creator_id);
       return published;
     }
 
@@ -1634,6 +1656,7 @@ export class CustomProductsService {
     });
 
     await this.notifyProviderOfSubmission(id, 'CUSTOM_PRODUCT_SUBMITTED');
+    await this.revalidateForCreator(cp.creator_id);
     return updated;
   }
 
@@ -1671,6 +1694,7 @@ export class CustomProductsService {
       { custom_product_id: id },
     );
 
+    await this.revalidateForCreator(cp.creator_id);
     return updated;
   }
 
@@ -1712,6 +1736,7 @@ export class CustomProductsService {
       { custom_product_id: id, reason: reason.trim() },
     );
 
+    await this.revalidateForCreator(cp.creator_id);
     return updated;
   }
 
@@ -1791,8 +1816,8 @@ export class CustomProductsService {
       translations: { locale: string; question: string; answer: string }[];
     },
   ) {
-    await this.assertCreatorOwns(customProductId, userId);
-    return this.prisma.customProductFaq.create({
+    const cp = await this.assertCreatorOwns(customProductId, userId);
+    const created = await this.prisma.customProductFaq.create({
       data: {
         custom_product_id: customProductId,
         sort_order: dto.sort_order ?? 0,
@@ -1800,6 +1825,8 @@ export class CustomProductsService {
       },
       include: { translations: true },
     });
+    await this.revalidateForCreator(cp.creator_id);
+    return created;
   }
 
   async findFaqs(customProductId: string) {
@@ -1826,7 +1853,7 @@ export class CustomProductsService {
         code: 'CUSTOM_PRODUCT_FAQ_NOT_FOUND',
         message: 'FAQ not found',
       });
-    await this.assertCreatorOwns(faq.custom_product_id, userId);
+    const cp = await this.assertCreatorOwns(faq.custom_product_id, userId);
 
     if (dto.translations && dto.translations.length > 0) {
       await this.prisma.customProductFaqTranslation.deleteMany({
@@ -1834,7 +1861,7 @@ export class CustomProductsService {
       });
     }
 
-    return this.prisma.customProductFaq.update({
+    const updated = await this.prisma.customProductFaq.update({
       where: { id: faqId },
       data: {
         ...(dto.sort_order !== undefined && { sort_order: dto.sort_order }),
@@ -1845,6 +1872,8 @@ export class CustomProductsService {
       },
       include: { translations: true },
     });
+    await this.revalidateForCreator(cp.creator_id);
+    return updated;
   }
 
   async deleteFaq(faqId: string, userId: string) {
@@ -1856,8 +1885,12 @@ export class CustomProductsService {
         code: 'CUSTOM_PRODUCT_FAQ_NOT_FOUND',
         message: 'FAQ not found',
       });
-    await this.assertCreatorOwns(faq.custom_product_id, userId);
-    return this.prisma.customProductFaq.delete({ where: { id: faqId } });
+    const cp = await this.assertCreatorOwns(faq.custom_product_id, userId);
+    const deleted = await this.prisma.customProductFaq.delete({
+      where: { id: faqId },
+    });
+    await this.revalidateForCreator(cp.creator_id);
+    return deleted;
   }
 
   private validatePricing(

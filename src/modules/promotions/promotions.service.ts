@@ -2,8 +2,10 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import {
   CreatePromotionDto,
   UpdatePromotionDto,
@@ -189,7 +191,17 @@ export class PromotionsService {
     private marketsContext: MarketsContextService,
     private marketPricing: MarketPricingService,
     private taxService: TaxService,
+    // Storefront cache refresh; optional for positional tests.
+    @Optional() private readonly revalidation?: RevalidationService,
   ) {}
+
+  // A creator's promotions are badges on the storefront product and listing
+  // payloads; a provider's promotions are not shown there.
+  private async revalidateForCreator(creatorId?: string | null): Promise<void> {
+    if (creatorId) {
+      await this.revalidation?.revalidateStoreByCreatorId(creatorId);
+    }
+  }
 
   async create(userId: string, userRole: UserRole, dto: CreatePromotionDto) {
     assertDiscountValue(dto.type, dto.value, dto.conditions);
@@ -225,10 +237,12 @@ export class PromotionsService {
       promotionData.creator_id = creator.id;
     }
 
-    return this.prisma.promotion.create({
+    const created = await this.prisma.promotion.create({
       data: promotionData,
       include: { translations: true },
     });
+    await this.revalidateForCreator(created.creator_id);
+    return created;
   }
 
   async findByOwner(userId: string, userRole: UserRole, page = 1, limit = 20) {
@@ -369,7 +383,7 @@ export class PromotionsService {
       });
     }
 
-    return this.prisma.promotion.update({
+    const updated = await this.prisma.promotion.update({
       where: { id },
       data: {
         ...data,
@@ -378,6 +392,8 @@ export class PromotionsService {
       },
       include: { translations: true },
     });
+    await this.revalidateForCreator(promo.creator_id);
+    return updated;
   }
 
   async delete(id: string, userId?: string, role?: UserRole) {
@@ -412,7 +428,9 @@ export class PromotionsService {
       }
     }
 
-    return this.prisma.promotion.delete({ where: { id } });
+    const deleted = await this.prisma.promotion.delete({ where: { id } });
+    await this.revalidateForCreator(promo.creator_id);
+    return deleted;
   }
 
   /**

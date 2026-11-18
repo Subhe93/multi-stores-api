@@ -4,12 +4,16 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { UserRole } from '@prisma/client';
 import { CreateVariantDto, UpdateVariantDto } from './dto/variant.dto';
 
 @Injectable()
 export class VariantsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly revalidation: RevalidationService,
+  ) {}
 
   async create(
     productId: string,
@@ -27,13 +31,15 @@ export class VariantsService {
       });
     await this.assertOwnsProduct(product, userId, userRole);
 
-    return this.prisma.productVariant.create({
+    const created = await this.prisma.productVariant.create({
       data: {
         product_id: productId,
         ...dto,
       },
       include: { images: true },
     });
+    await this.revalidation.revalidateStoresOfProduct(product);
+    return created;
   }
 
   async findByProduct(productId: string) {
@@ -64,17 +70,21 @@ export class VariantsService {
     userId: string,
     userRole: UserRole,
   ) {
-    await this.assertOwnsVariant(id, userId, userRole);
-    return this.prisma.productVariant.update({
+    const product = await this.assertOwnsVariant(id, userId, userRole);
+    const updated = await this.prisma.productVariant.update({
       where: { id },
       data: dto,
       include: { images: true },
     });
+    await this.revalidation.revalidateStoresOfProduct(product);
+    return updated;
   }
 
   async delete(id: string, userId: string, userRole: UserRole) {
-    await this.assertOwnsVariant(id, userId, userRole);
-    return this.prisma.productVariant.delete({ where: { id } });
+    const product = await this.assertOwnsVariant(id, userId, userRole);
+    const deleted = await this.prisma.productVariant.delete({ where: { id } });
+    await this.revalidation.revalidateStoresOfProduct(product);
+    return deleted;
   }
 
   async updateStock(
@@ -83,11 +93,13 @@ export class VariantsService {
     userId: string,
     userRole: UserRole,
   ) {
-    await this.assertOwnsVariant(id, userId, userRole);
-    return this.prisma.productVariant.update({
+    const product = await this.assertOwnsVariant(id, userId, userRole);
+    const updated = await this.prisma.productVariant.update({
       where: { id },
       data: { stock_quantity: quantity },
     });
+    await this.revalidation.revalidateStoresOfProduct(product);
+    return updated;
   }
 
   /**
@@ -102,7 +114,9 @@ export class VariantsService {
   ) {
     const variant = await this.prisma.productVariant.findUnique({
       where: { id: variantId },
-      select: { product: { select: { provider_id: true, creator_id: true } } },
+      select: {
+        product: { select: { id: true, provider_id: true, creator_id: true } },
+      },
     });
     if (!variant)
       throw new NotFoundException({
@@ -110,6 +124,7 @@ export class VariantsService {
         message: 'Variant not found',
       });
     await this.assertOwnsProduct(variant.product, userId, userRole);
+    return variant.product;
   }
 
   private async assertOwnsProduct(

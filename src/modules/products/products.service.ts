@@ -2578,6 +2578,8 @@ export class ProductsService {
     await releaseLiveProductPaths(this.prisma, this.redirects, {
       productId: id,
     });
+    // Publish / unpublish / archive changes what the storefront lists.
+    await this.revalidateForProduct(product);
     return updated;
   }
 
@@ -2592,7 +2594,11 @@ export class ProductsService {
     isFeatured?: boolean,
     variantId?: string,
   ) {
-    await this.assertOwnsProductById(productId, userId, userRole);
+    const product = await this.assertOwnsProductById(
+      productId,
+      userId,
+      userRole,
+    );
     // If setting as featured, unset others
     if (isFeatured) {
       await this.prisma.productImage.updateMany({
@@ -2600,7 +2606,7 @@ export class ProductsService {
         data: { is_featured: false },
       });
     }
-    return this.prisma.productImage.create({
+    const created = await this.prisma.productImage.create({
       data: {
         product_id: productId,
         url,
@@ -2610,6 +2616,8 @@ export class ProductsService {
         variant_id: variantId,
       },
     });
+    await this.revalidateForProduct(product);
+    return created;
   }
 
   async getImages(productId: string) {
@@ -2629,13 +2637,21 @@ export class ProductsService {
         code: 'PRODUCT_IMAGE_NOT_FOUND',
         message: 'Image not found',
       });
-    await this.assertOwnsProductById(image.product_id, userId, userRole);
+    const product = await this.assertOwnsProductById(
+      image.product_id,
+      userId,
+      userRole,
+    );
     // Decision D6: a product with videos keeps at least one product-level
     // image (the storefront drops videos with no image to sit after).
     if (image.variant_id === null) {
       await this.assertVideosKeepAnImage(this.prisma, image.product_id, 1);
     }
-    return this.prisma.productImage.delete({ where: { id: imageId } });
+    const deleted = await this.prisma.productImage.delete({
+      where: { id: imageId },
+    });
+    await this.revalidateForProduct(product);
+    return deleted;
   }
 
   async reorderImages(
@@ -2644,7 +2660,11 @@ export class ProductsService {
     userId: string,
     userRole: UserRole,
   ) {
-    await this.assertOwnsProductById(productId, userId, userRole);
+    const product = await this.assertOwnsProductById(
+      productId,
+      userId,
+      userRole,
+    );
     // Ignore ids that don't belong to this product, so a foreign image can't be
     // pulled into someone else's ordering.
     const owned = await this.prisma.productImage.findMany({
@@ -2663,6 +2683,7 @@ export class ProductsService {
           }),
         ),
     );
+    await this.revalidateForProduct(product);
     return this.getImages(productId);
   }
 
@@ -2678,7 +2699,7 @@ export class ProductsService {
   ) {
     const product = await this.prisma.product.findUnique({
       where: { id: productId },
-      select: { provider_id: true, creator_id: true },
+      select: { id: true, provider_id: true, creator_id: true },
     });
     if (!product)
       throw new NotFoundException({
@@ -2686,6 +2707,7 @@ export class ProductsService {
         message: 'Product not found',
       });
     await this.checkOwnership(product, userId, userRole);
+    return product;
   }
 
   async getImportDetails(id: string) {
