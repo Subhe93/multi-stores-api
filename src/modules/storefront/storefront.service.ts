@@ -510,6 +510,32 @@ const LIST_CUSTOM_INCLUDE = {
   },
 } satisfies Prisma.CustomProductInclude;
 
+/**
+ * `card=1` variants: the same rows with up to two images (the product card
+ * shows the second one on hover). Only the image `take` differs, so the row
+ * types are the ones of the default includes.
+ */
+const LIST_OWN_INCLUDE_CARD = {
+  ...LIST_OWN_INCLUDE,
+  images: { ...LIST_OWN_INCLUDE.images, take: 2 },
+} satisfies Prisma.ProductInclude;
+
+const LIST_CUSTOM_INCLUDE_CARD = {
+  ...LIST_CUSTOM_INCLUDE,
+  mockup_images: { ...LIST_CUSTOM_INCLUDE.mockup_images, take: 2 },
+  product: {
+    include: {
+      ...LIST_CUSTOM_INCLUDE.product.include,
+      images: { ...LIST_CUSTOM_INCLUDE.product.include.images, take: 2 },
+    },
+  },
+} satisfies Prisma.CustomProductInclude;
+
+const listOwnInclude = (card: boolean): typeof LIST_OWN_INCLUDE =>
+  card ? LIST_OWN_INCLUDE_CARD : LIST_OWN_INCLUDE;
+const listCustomInclude = (card: boolean): typeof LIST_CUSTOM_INCLUDE =>
+  card ? LIST_CUSTOM_INCLUDE_CARD : LIST_CUSTOM_INCLUDE;
+
 type ListedOwnRow = Prisma.ProductGetPayload<{
   include: typeof LIST_OWN_INCLUDE;
 }>;
@@ -534,6 +560,12 @@ interface ListContext {
   isIndependent: boolean;
   creatorCategory: CollectionFilter | null;
   locale?: string;
+  /**
+   * `card=1`: the rows also carry what the enhanced product card reads
+   * (second image; option config and compare-at price on custom rows).
+   * Off = the documented payload, byte for byte.
+   */
+  card: boolean;
 }
 
 /** A linked collection row as the product queries include it (M6). */
@@ -1234,6 +1266,8 @@ export class StorefrontService {
       creator_category_id?: string;
       search?: string;
       locale?: string;
+      // Opt-in product card data; only the exact value '1' counts.
+      card?: unknown;
     },
     marketKey?: string,
     preview?: boolean,
@@ -1352,20 +1386,21 @@ export class StorefrontService {
       isIndependent,
       creatorCategory,
       locale: filters.locale,
+      card: filters.card === '1',
     };
     if (query.mode !== 'all') return this.listProductsWindow(query, ctx);
 
     const [ownProducts, customProducts] = await Promise.all([
       this.prisma.product.findMany({
         where: ownWhere,
-        include: LIST_OWN_INCLUDE,
+        include: listOwnInclude(ctx.card),
         orderBy: { created_at: 'desc' },
       }),
       isIndependent
         ? Promise.resolve<ListedCustomRow[]>([])
         : this.prisma.customProduct.findMany({
             where: customWhere,
-            include: LIST_CUSTOM_INCLUDE,
+            include: listCustomInclude(ctx.card),
             orderBy: { created_at: 'desc' },
           }),
     ]);
@@ -1375,6 +1410,7 @@ export class StorefrontService {
       market,
       ownProducts,
       customProducts,
+      ctx.card,
     );
 
     // A MANUAL collection lists its products in the creator's drag order
@@ -1403,6 +1439,7 @@ export class StorefrontService {
     market: MarketContext | null,
     ownProducts: ListedOwnRow[],
     customProducts: ListedCustomRow[],
+    card = false,
   ) {
     // Vendor (provider) exposure is an opt-in marketplace-only setting.
     const showVendor = this.showVendor(store);
@@ -1438,6 +1475,19 @@ export class StorefrontService {
         pricing_type: cp.pricing_type,
         vendor: showVendor ? (cp.product.provider ?? null) : null,
         _type: 'custom_product' as const,
+        // `card=1` only: what an own row already carries, with the values
+        // of the product page (base product).
+        ...(card
+          ? {
+              variant_option_config: shapeOptionConfigForStorefront(
+                cp.product.variant_option_config,
+                false,
+              ),
+              compare_at_price: cp.product.compare_at_price
+                ? Number(cp.product.compare_at_price)
+                : undefined,
+            }
+          : {}),
       };
     });
 
@@ -1694,13 +1744,13 @@ export class StorefrontService {
       ownIds.length
         ? this.prisma.product.findMany({
             where: { AND: [ctx.ownWhere, { id: { in: ownIds } }] },
-            include: LIST_OWN_INCLUDE,
+            include: listOwnInclude(ctx.card),
           })
         : Promise.resolve<ListedOwnRow[]>([]),
       customIds.length
         ? this.prisma.customProduct.findMany({
             where: { AND: [ctx.customWhere, { id: { in: customIds } }] },
-            include: LIST_CUSTOM_INCLUDE,
+            include: listCustomInclude(ctx.card),
           })
         : Promise.resolve<ListedCustomRow[]>([]),
     ]);
@@ -1709,6 +1759,7 @@ export class StorefrontService {
       ctx.market,
       ownRows,
       customRows,
+      ctx.card,
     );
     const byToken = new Map(
       shaped.map((p) => [

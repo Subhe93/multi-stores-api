@@ -80,6 +80,8 @@ export class StorefrontController {
     @Query('locale') locale?: string,
     @Query('market') market?: string,
     @Query('preview') preview?: string,
+    // Opt-in product card data (`card=1`); anything else is ignored.
+    @Query('card') card?: unknown,
   ) {
     return this.storefrontService.getProducts(
       slug,
@@ -92,6 +94,7 @@ export class StorefrontController {
         creator_category_id,
         search,
         locale,
+        card,
       },
       market,
       isPreview(preview),
