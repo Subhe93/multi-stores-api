@@ -88,7 +88,7 @@ describe('RevalidationService delivery', () => {
     jest.useFakeTimers();
     process.env.STOREFRONT_URL = 'http://web.test';
     process.env.REVALIDATE_SECRET = 's3cret';
-    fetchMock = jest.fn(ok);
+    fetchMock = jest.fn<Promise<unknown>, [string, { body: string }]>(ok);
     (global as unknown as { fetch: unknown }).fetch = fetchMock;
   });
 
