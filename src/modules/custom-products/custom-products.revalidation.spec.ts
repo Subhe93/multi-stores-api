@@ -75,6 +75,18 @@ describe('CustomProductsService storefront revalidation', () => {
     expect(revalidation.revalidateStoreByCreatorId).toHaveBeenCalledWith('c1');
   });
 
+  it('approve revalidates even when the step after the write throws', async () => {
+    const { svc, prisma, revalidation } = setup();
+    (
+      svc as unknown as { notificationsService: { create: jest.Mock } }
+    ).notificationsService.create = jest.fn(() =>
+      Promise.reject(new Error('mail down')),
+    );
+    await expect(svc.approve('cp1', 'prov-user')).rejects.toThrow('mail down');
+    expect(prisma.customProduct.update).toHaveBeenCalled();
+    expect(revalidation.revalidateStoreByCreatorId).toHaveBeenCalledWith('c1');
+  });
+
   it('FAQ create, update and delete revalidate the creator store', async () => {
     const { svc, revalidation } = setup();
     const translations = [{ locale: 'en', question: 'Q', answer: '<p>A</p>' }];

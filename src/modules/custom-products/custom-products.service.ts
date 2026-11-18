@@ -1406,52 +1406,56 @@ export class CustomProductsService {
     const linksTouched =
       creator_category_ids !== undefined ||
       primary_creator_category_id !== undefined;
-    if (linksTouched) {
-      const links =
-        creator_category_ids !== undefined
-          ? await this.syncCreatorCategories(
-              id,
-              existing.creator_id,
-              creator_category_ids,
-            )
-          : await this.linkedCreatorCategoryIds(id);
-      await this.applyPrimaryCreatorCategory(
-        id,
-        links,
-        primary_creator_category_id,
-        existing.primary_creator_category_id,
-      );
-    }
+    // The row is written: whatever a later step does (it may throw), the
+    // storefront must drop the old state of this product.
+    try {
+      if (linksTouched) {
+        const links =
+          creator_category_ids !== undefined
+            ? await this.syncCreatorCategories(
+                id,
+                existing.creator_id,
+                creator_category_ids,
+              )
+            : await this.linkedCreatorCategoryIds(id);
+        await this.applyPrimaryCreatorCategory(
+          id,
+          links,
+          primary_creator_category_id,
+          existing.primary_creator_category_id,
+        );
+      }
 
-    // Old-slug 301s when a published custom product's slugs changed.
-    if (
-      slugCtx?.storeId &&
-      translations &&
-      existing.status === ProductStatus.PUBLISHED &&
-      this.redirects
-    ) {
-      const moves = await productRedirectMoves(this.prisma, {
-        creatorId: existing.creator_id,
-        primaryLocale: slugCtx.locale,
-        before: storedSlugs,
-        after: translations as LocaleSlug[],
-        exclude: { customProductId: id },
+      // Old-slug 301s when a published custom product's slugs changed.
+      if (
+        slugCtx?.storeId &&
+        translations &&
+        existing.status === ProductStatus.PUBLISHED &&
+        this.redirects
+      ) {
+        const moves = await productRedirectMoves(this.prisma, {
+          creatorId: existing.creator_id,
+          primaryLocale: slugCtx.locale,
+          before: storedSlugs,
+          after: translations as LocaleSlug[],
+          exclude: { customProductId: id },
+        });
+        await this.redirects.applySlugChangeRedirects(slugCtx.storeId, moves);
+      }
+      await releaseLiveProductPaths(this.prisma, this.redirects, {
+        customProductId: id,
       });
-      await this.redirects.applySlugChangeRedirects(slugCtx.storeId, moves);
-    }
-    await releaseLiveProductPaths(this.prisma, this.redirects, {
-      customProductId: id,
-    });
 
-    // Notify provider if product was auto-reverted to PENDING_REVIEW after edit
-    if (autoRevertedToReview && existing.product.provider_id) {
-      await this.notifyProviderOfSubmission(
-        updated.id,
-        'CUSTOM_PRODUCT_RESUBMITTED',
-      );
+      // Notify provider if product was auto-reverted to PENDING_REVIEW after edit
+      if (autoRevertedToReview && existing.product.provider_id) {
+        await this.notifyProviderOfSubmission(
+          updated.id,
+          'CUSTOM_PRODUCT_RESUBMITTED',
+        );
+      }
+    } finally {
+      await this.revalidateForCreator(existing.creator_id);
     }
-
-    await this.revalidateForCreator(existing.creator_id);
     return linksTouched ? this.loadById(id) : updated;
   }
 
@@ -1637,10 +1641,14 @@ export class CustomProductsService {
         },
         include: this.includes,
       });
-      await releaseLiveProductPaths(this.prisma, this.redirects, {
-        customProductId: id,
-      });
-      await this.revalidateForCreator(cp.creator_id);
+      // Revalidate also when the step after the write throws.
+      try {
+        await releaseLiveProductPaths(this.prisma, this.redirects, {
+          customProductId: id,
+        });
+      } finally {
+        await this.revalidateForCreator(cp.creator_id);
+      }
       return published;
     }
 
@@ -1680,21 +1688,24 @@ export class CustomProductsService {
       },
       include: this.includes,
     });
-    await releaseLiveProductPaths(this.prisma, this.redirects, {
-      customProductId: id,
-    });
+    // Revalidate also when a step after the write throws.
+    try {
+      await releaseLiveProductPaths(this.prisma, this.redirects, {
+        customProductId: id,
+      });
 
-    // Notify creator
-    const title = cp.translations?.[0]?.title || 'Your custom product';
-    await this.notificationsService.create(
-      cp.creator.user_id,
-      'CUSTOM_PRODUCT_APPROVED',
-      'Custom product approved',
-      `${title} has been approved and is now live`,
-      { custom_product_id: id },
-    );
-
-    await this.revalidateForCreator(cp.creator_id);
+      // Notify creator
+      const title = cp.translations?.[0]?.title || 'Your custom product';
+      await this.notificationsService.create(
+        cp.creator.user_id,
+        'CUSTOM_PRODUCT_APPROVED',
+        'Custom product approved',
+        `${title} has been approved and is now live`,
+        { custom_product_id: id },
+      );
+    } finally {
+      await this.revalidateForCreator(cp.creator_id);
+    }
     return updated;
   }
 

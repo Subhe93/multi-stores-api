@@ -2575,11 +2575,15 @@ export class ProductsService {
       where: { id },
       data: { status },
     });
-    await releaseLiveProductPaths(this.prisma, this.redirects, {
-      productId: id,
-    });
-    // Publish / unpublish / archive changes what the storefront lists.
-    await this.revalidateForProduct(product);
+    // Publish / unpublish / archive changes what the storefront lists:
+    // revalidate also when the step after the write throws.
+    try {
+      await releaseLiveProductPaths(this.prisma, this.redirects, {
+        productId: id,
+      });
+    } finally {
+      await this.revalidateForProduct(product);
+    }
     return updated;
   }
 

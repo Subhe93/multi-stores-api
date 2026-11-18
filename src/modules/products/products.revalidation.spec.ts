@@ -89,6 +89,20 @@ describe('ProductsService storefront revalidation', () => {
     expect(order).toEqual(['write', 'revalidate']);
   });
 
+  it('updateStatus revalidates even when the step after the write throws', async () => {
+    const { svc, prisma, revalidation } = setup(own);
+    // releaseLiveProductPaths reads the product again: make that read fail.
+    (svc as unknown as Record<string, unknown>).redirects = {};
+    prisma.product.findUnique
+      .mockImplementationOnce(() => Promise.resolve(own))
+      .mockImplementation(() => Promise.reject(new Error('db down')));
+    await expect(
+      svc.updateStatus('p1', ProductStatus.DRAFT, 'u', UserRole.CREATOR),
+    ).rejects.toThrow();
+    expect(prisma.product.update).toHaveBeenCalled();
+    expect(revalidation.revalidateStoreByCreatorId).toHaveBeenCalledWith('c1');
+  });
+
   it('addImage, deleteImage and reorderImages revalidate the creator store', async () => {
     const { svc, revalidation } = setup(own);
     await svc.addImage('p1', 'u', UserRole.CREATOR, '/uploads/a.jpg');
