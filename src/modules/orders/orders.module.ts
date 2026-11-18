@@ -1,6 +1,10 @@
 import { Module } from '@nestjs/common';
 import { OrdersController } from './orders.controller';
 import { OrdersQuoteController } from './orders-quote.controller';
+import { OrdersGuestController } from './orders-guest.controller';
+import { GuestOrderService } from './guest-order.service';
+import { AuthModule } from '../auth/auth.module';
+import { GuestOrderTokenModule } from '../auth/guest-order-token.module';
 import { OrdersService } from './orders.service';
 import { PromotionsModule } from '../promotions/promotions.module';
 import { ShippingModule } from '../shipping/shipping.module';
@@ -40,9 +44,16 @@ import { MetaCapiModule } from '../meta-capi/meta-capi.module';
     StorefrontGateModule,
     // Server-side Meta Purchase event (imports only globals, no cycle).
     MetaCapiModule,
+    // Guest checkout (POST /orders/guest): the customer record comes from
+    // AuthService (AuthModule imports MagicLinkModule only, no cycle) and
+    // the order-bound token from GuestOrderTokenModule.
+    AuthModule,
+    GuestOrderTokenModule,
   ],
-  controllers: [OrdersController, OrdersQuoteController],
-  providers: [OrdersService],
+  // The guest controller first: its fixed `guest` segment must never be
+  // read as an order id by a route of OrdersController.
+  controllers: [OrdersGuestController, OrdersController, OrdersQuoteController],
+  providers: [OrdersService, GuestOrderService],
   exports: [OrdersService],
 })
 export class OrdersModule {}

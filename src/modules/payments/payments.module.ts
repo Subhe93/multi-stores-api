@@ -15,6 +15,7 @@ import { InvoicesModule } from '../invoices/invoices.module';
 import { DesignerRenderModule } from '../designer/designer-render.module';
 import { DesignerCoreModule } from '../designer/designer-core.module';
 import { MagicLinkModule } from '../auth/magic-link.module';
+import { GuestOrderTokenModule } from '../auth/guest-order-token.module';
 import { StorefrontGateModule } from '../storefront/storefront-gate.service';
 
 // PrismaModule, CryptoModule and MailModule are @Global, so PrismaService,
@@ -49,6 +50,8 @@ import { StorefrontGateModule } from '../storefront/storefront-gate.service';
     DesignerCoreModule,
     // Optional-auth viewer of GET /payments/config (test-key preview).
     StorefrontGateModule,
+    // Guest checkout: the order-bound token of the two guest payment routes.
+    GuestOrderTokenModule,
   ],
   controllers: [PaymentsController, KustomController, KustomCheckoutController],
   providers: [PaymentsService, KustomService, KustomCheckoutService],

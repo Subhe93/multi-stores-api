@@ -220,6 +220,16 @@ Behaviour:
 - `items[].variant`: only `{ id, options, images }`; its nested `product` only `{ id, translations, images }`.
 - `items[].custom_product`: only `{ id, translations, mockup_images, product: { id, translations, images } }`.
 - Every other order and item key is unchanged (`unit_price`, `original_unit_price`, `total_price`, `quantity`, `image_url`, `custom_field_values`, `variant_options_snapshot`, tax, shipping and fulfillment fields, ids).
+- `timeline` carries no internal bookkeeping rows (`STOCK_RETURNED`, `STOCK_RETAKEN`, `TRANSFER_REVERSAL_DUE`, `TRANSFER_REVERSED`, `TRANSFER_REVERSAL_FAILED`); the store owner and admins see them.
+
+### 3.8 Guest checkout: `POST /orders/guest`
+
+**Not deployed yet.** A shopper without a session places an order in one public call. Nobody is signed in and no account email is sent. Rate limit 10 per minute.
+
+- Body: `email` (required), `first_name?`, `last_name?`, `phone?`, `store_slug?` or `hostname?` (one is required, 400 `STORE_REQUIRED`), `locale?`, `turnstile_token?`, `address: { full_name, line1, line2?, city, state?, postal_code, country_code, phone?, company_name?, org_number?, buyer_reference? }`, `lines` (1 to 100, the shape `POST /orders/quote` takes), and the order fields `store_id`, `payment_method?`, `coupon_code?`, `notes?`, `shipping_method_id?`, `market_key?`, `buyer_type?`, `company?`, `expect_reverse_charge?`, `tracking?`. Unknown keys are refused (400).
+- 201: `{ order, guest_token, guest_token_expires_at }`. `order` is the buyer payload of section 3.7 without the `customer` object. The answer has the same shape whether the email already had an account or not.
+- Errors of its own: 400 `GUEST_ORDER_STORE_MISMATCH` (the store of `store_slug` / `hostname` is not `store_id`), 400 `GUEST_ORDER_NOT_ALLOWED` (the email belongs to a blocked account), 400 `AUTH_CAPTCHA_FAILED`. Every error of `POST /orders` passes through unchanged (line errors carry `line_index`).
+- `guest_token` is good for 24 hours and only for that order: `GET /orders/guest/:id`, `POST /payments/guest/create-intent` and `POST /payments/guest/confirm` (body `{ order_id }`), each with `Authorization: Bearer <guest_token>`. They answer like `GET /orders/:id`, `POST /payments/create-intent` and `POST /payments/confirm` do for a signed-in customer. Any token problem, or another order id, is 401 `GUEST_TOKEN_INVALID`. The token is not a session: every other route refuses it.
 
 The seller-side catalogue routes (`GET /products`, `GET /products/:id`, `GET /products/:id/variants`, `GET /variants/:id`) are not public: they need a signed-in provider, creator or admin (401 without a token, 403 for a customer account). A custom site reads products through the `/storefront/:slug/...` routes above only.
 

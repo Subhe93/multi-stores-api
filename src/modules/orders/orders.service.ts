@@ -5657,6 +5657,15 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
+   * The pre-checkout release of a customer's own expired unpaid orders, for
+   * a caller that places a snapshot order (create() with `lines` skips it):
+   * the guest checkout. Best effort, never throws.
+   */
+  releaseStaleOrdersOfCustomer(customerId: string): Promise<void> {
+    return this.releaseCustomerStaleOrders(customerId);
+  }
+
+  /**
    * Awaited before a checkout: the same release for the customer's OWN
    * expired orders only (bounded), so their reserved stock is back before
    * the new order validates it. Best effort, never throws.

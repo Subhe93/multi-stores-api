@@ -31,6 +31,12 @@ import { PaymentKeysGuardService } from '../security/payment-keys-guard.service'
 import { ReauthDto } from '../security/dto/security.dto';
 import { ReqMeta, type RequestMeta } from '../security/request-meta';
 import {
+  GuestOrder,
+  GuestOrderGuard,
+  assertGuestOrder,
+} from '../auth/guest-order.guard';
+import type { GuestOrderClaims } from '../auth/guest-order-token.service';
+import {
   StorefrontGateService,
   StorefrontViewerGuard,
   Viewer,
@@ -68,7 +74,9 @@ export class PaymentsController {
       store,
       market,
       isPreview(preview),
-      viewer ? (storeId) => this.gate.isOwnerOrAdmin(storeId, viewer) : undefined,
+      viewer
+        ? (storeId) => this.gate.isOwnerOrAdmin(storeId, viewer)
+        : undefined,
     );
   }
 
@@ -184,7 +192,9 @@ export class PaymentsController {
     return this.paymentsService.createPaymentIntentForOrder(
       userId,
       dto.order_id,
-      viewer ? (storeId) => this.gate.isOwnerOrAdmin(storeId, viewer) : undefined,
+      viewer
+        ? (storeId) => this.gate.isOwnerOrAdmin(storeId, viewer)
+        : undefined,
     );
   }
 
@@ -199,6 +209,41 @@ export class PaymentsController {
     @Body() dto: CreatePaymentIntentDto,
   ) {
     return this.paymentsService.confirmOrderPayment(userId, dto.order_id);
+  }
+
+  // Guest checkout (POST /orders/guest): the same two calls for the holder
+  // of a guest order token, which is bound to one order. `order_id` must be
+  // that order (401 GUEST_TOKEN_INVALID otherwise); the service methods and
+  // the answers are those of the customer routes above.
+  @Post('guest/create-intent')
+  @UseGuards(GuestOrderGuard)
+  async guestCreateIntent(
+    @GuestOrder() claims: GuestOrderClaims,
+    @Body() dto: CreatePaymentIntentDto,
+    @Headers(STOREFRONT_VIEWER_HEADER) viewerHeader?: string,
+  ) {
+    assertGuestOrder(claims, dto.order_id);
+    const viewer = await this.gate.viewerFromHeader(viewerHeader);
+    return this.paymentsService.createPaymentIntentForOrder(
+      claims.userId,
+      dto.order_id,
+      viewer
+        ? (storeId) => this.gate.isOwnerOrAdmin(storeId, viewer)
+        : undefined,
+    );
+  }
+
+  @Post('guest/confirm')
+  @UseGuards(GuestOrderGuard)
+  guestConfirm(
+    @GuestOrder() claims: GuestOrderClaims,
+    @Body() dto: CreatePaymentIntentDto,
+  ) {
+    assertGuestOrder(claims, dto.order_id);
+    return this.paymentsService.confirmOrderPayment(
+      claims.userId,
+      dto.order_id,
+    );
   }
 
   // Admin — manually reconcile a stuck order's payment from Stripe.

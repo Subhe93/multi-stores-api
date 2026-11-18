@@ -780,6 +780,112 @@ export class AuthService {
   }
 
   /**
+   * The customer record a GUEST ORDER is attached to (POST /orders/guest).
+   *
+   * Unlike guestRegister this never creates a session and never mails
+   * anything: the shopper did not ask for an account. The order still needs
+   * a customer row (the schema requires one), so:
+   * - an email that already has a customer account in the store: that
+   *   account's customer record is used as it is (never updated; a missing
+   *   profile row is created so it can order). Nothing about the account is
+   *   returned to the caller. An account that is not ACTIVE is refused
+   *   (400 GUEST_ORDER_NOT_ALLOWED);
+   * - a new email: a CUSTOMER row with a random password nobody learns. The
+   *   shopper can turn it into a real account later with "choose a
+   *   password" (forgot password).
+   * Same store resolution and captcha as guestRegister. The password hash
+   * is computed before the lookup on both branches, so the answer takes the
+   * same time whether the email was known or not.
+   */
+  async resolveGuestOrderCustomer(
+    dto: {
+      email: string;
+      first_name?: string;
+      last_name?: string;
+      phone?: string;
+      store_slug?: string;
+      hostname?: string;
+      turnstile_token?: string;
+    },
+    meta: { ip?: string | null } = {},
+  ): Promise<{
+    store: { id: string; slug: string };
+    userId: string;
+    customerId: string;
+  }> {
+    const store = await this.links.resolveRequestStore(
+      dto.store_slug,
+      dto.hostname,
+    );
+    if (!store) throw this.storeRequired();
+    await this.turnstile?.verifyCustomer(
+      dto.turnstile_token,
+      meta.ip,
+      await this.storeCaptchaHosts(store.id),
+    );
+    const email = normalizeEmail(dto.email);
+    const password_hash = await bcrypt.hash(
+      generateAccountPassword(),
+      PASSWORD_BCRYPT_COST,
+    );
+    const profile = {
+      first_name: dto.first_name?.trim() || '',
+      last_name: dto.last_name?.trim() || '',
+      ...(dto.phone ? { phone: dto.phone } : {}),
+    };
+    const storeRef = { id: store.id, slug: store.slug };
+
+    const attach = async (existing: { id: string; status: string }) => {
+      if (existing.status !== 'ACTIVE') {
+        throw new BadRequestException({
+          code: 'GUEST_ORDER_NOT_ALLOWED',
+          message: 'An order cannot be placed with this email address.',
+        });
+      }
+      const customer =
+        (await this.prisma.customer.findUnique({
+          where: { user_id: existing.id },
+          select: { id: true },
+        })) ??
+        (await this.prisma.customer.create({
+          data: { user_id: existing.id, ...profile },
+          select: { id: true },
+        }));
+      return { store: storeRef, userId: existing.id, customerId: customer.id };
+    };
+
+    const existing = await this.findStoreCustomer(store.id, email);
+    if (existing) return attach(existing);
+
+    try {
+      const user = await this.prisma.user.create({
+        data: {
+          email,
+          password_hash,
+          role: UserRole.CUSTOMER,
+          status: 'ACTIVE',
+          store_id: store.id,
+          customer: { create: profile },
+        },
+        select: { id: true, customer: { select: { id: true } } },
+      });
+      return {
+        store: storeRef,
+        userId: user.id,
+        customerId: user.customer!.id,
+      };
+    } catch (err) {
+      // A concurrent checkout with the same email won the unique index:
+      // attach the order to that record instead.
+      const winner = this.isUniqueViolation(err)
+        ? await this.findStoreCustomer(store.id, email)
+        : null;
+      if (!winner) throw err;
+      return attach(winner);
+    }
+  }
+
+  /**
    * Exchanges a magic login link for a session. Unknown, expired, used and
    * inactive-account links all get the same 401.
    *
