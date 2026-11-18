@@ -437,6 +437,8 @@ function lifecyclePrisma() {
     orderCommission: {
       updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
     },
+    // Store type lookup of the COD paid-on-delivery rule (none here).
+    store: { findUnique: jest.fn(() => Promise.resolve(null)) },
     orderItem: {
       findMany: jest.fn((): Promise<unknown> => Promise.resolve([])),
       findFirst: jest.fn((): Promise<unknown> => Promise.resolve(null)),

@@ -98,6 +98,8 @@ function build(status: OrderStatus, items: Item[]) {
       }),
     },
     orderCommission: { updateMany: jest.fn(() => Promise.resolve({})) },
+    // Store type lookup of the COD paid-on-delivery rule (none here).
+    store: { findUnique: jest.fn(() => Promise.resolve(null)) },
   };
   const mail = { dispatchOrderEmail: jest.fn(() => Promise.resolve()) };
   const service = new OrdersService(

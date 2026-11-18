@@ -667,6 +667,10 @@ const ORDER_ITEM_STOCK_SELECT = {
   },
 } as const satisfies Prisma.OrderItemSelect;
 
+/** Timeline note of a COD order marked paid on delivery (markCodCollected). */
+export const COD_COLLECTED_NOTE =
+  'Cash on delivery collected (marked paid on delivery)';
+
 /** 409 of any status / fulfillment / payment move on a trashed order (M69). */
 function orderDeleted(): ConflictException {
   return new ConflictException({
@@ -4355,6 +4359,15 @@ export class OrdersService implements OnModuleInit {
       order.status,
       candidate,
     );
+    // Cash on delivery is collected at the door (after the invoice, before
+    // the callers' status email).
+    if (candidate === OrderStatus.DELIVERED) {
+      await this.markCodCollected({
+        id: orderId,
+        store_id: order.store_id,
+        payment_method: order.payment_method,
+      });
+    }
     // Designer app (WP5 port): shipped / delivered dates for retention.
     await this.fireDesigner((t) =>
       t.onStatusChanged(
@@ -4368,6 +4381,51 @@ export class OrdersService implements OnModuleInit {
       ),
     );
     return { from: order.status, to: candidate, requiresShipping };
+  }
+
+  /**
+   * A cash-on-delivery order of an INDEPENDENT store that was just
+   * DELIVERED: the cash was collected at the door, so the order is paid
+   * (as Shopify does with a manual payment). One conditional write, so a
+   * repeated DELIVERED, a second fulfiller or a retry marks it once; a
+   * timeline row PAID records it.
+   *
+   * It deliberately does not go through markOrderPaid: that would report
+   * the purchase to Meta a second time and may move the order status.
+   * Marketplace stores take no COD any more (stores/cod-policy.ts); their
+   * historical COD orders keep the state they have. Orders delivered before
+   * this existed are not backfilled.
+   */
+  private async markCodCollected(order: {
+    id: string;
+    store_id: string | null;
+    payment_method: PaymentMethod | string | null;
+  }): Promise<void> {
+    if (order.payment_method !== PaymentMethod.COD || !order.store_id) return;
+    const store = await this.prisma.store.findUnique({
+      where: { id: order.store_id },
+      select: { store_type: true },
+    });
+    if (store?.store_type !== StoreType.INDEPENDENT) return;
+    const flip = await this.prisma.order.updateMany({
+      where: {
+        id: order.id,
+        status: OrderStatus.DELIVERED,
+        payment_method: PaymentMethod.COD,
+        // A legacy COD order may carry no payment status at all.
+        OR: [{ payment_status: null }, { payment_status: 'pending' }],
+      },
+      data: { payment_status: 'paid', paid_at: new Date() },
+    });
+    if (flip.count === 0) return;
+    await this.prisma.orderTimeline.create({
+      data: {
+        order_id: order.id,
+        status: 'PAID',
+        note: COD_COLLECTED_NOTE,
+        actor: 'system',
+      },
+    });
   }
 
   /**
@@ -4651,6 +4709,11 @@ export class OrdersService implements OnModuleInit {
       // Invoices app: issue (COD delivered) or credit (cancelled / refunded)
       // before the status email, so the document can be attached.
       await this.invoices?.onStatusChanged(order, order.status, dto.status);
+      // Cash on delivery is collected at the door: after the invoice (its
+      // snapshot is the one it always was), before the status email.
+      if (dto.status === OrderStatus.DELIVERED) {
+        await this.markCodCollected(order);
+      }
       // Designer app (WP5 port): terminal / shipped bookkeeping of designs.
       await this.fireDesigner((t) =>
         t.onStatusChanged(order, order.status, dto.status),
