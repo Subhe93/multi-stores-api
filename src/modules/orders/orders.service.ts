@@ -56,6 +56,12 @@ import { MailService } from '../mail/mail.service';
 import { InvoiceTriggersService } from '../invoices/invoice-triggers.service';
 import { MetaConversionsService } from '../meta-capi/meta-conversions.service';
 import type { TrackingContext } from '../meta-capi/tracking-context';
+import { RevalidationService } from '../../common/revalidation/revalidation.service';
+import {
+  isStockChangeVisible,
+  netStockMoves,
+  type StockMove,
+} from './stock-visibility';
 import { computeBundlePricing } from '../bundles/bundle-pricing.util';
 import {
   currencyDecimals,
@@ -737,7 +743,100 @@ export class OrdersService {
     // Meta Conversions API: optional and trailing for the same reason.
     // Absent = no server-side Purchase event is ever sent.
     @Optional() private readonly metaConversions?: MetaConversionsService,
+    // Storefront cache refresh after an order moved stock (the module is
+    // global): optional and trailing for the same reason. Absent = no
+    // refresh, the storefront's time-based revalidation catches up.
+    @Optional() private readonly revalidation?: RevalidationService,
   ) {}
+
+  /**
+   * Storefront cache: an order moved stock and the write is COMMITTED (never
+   * call this inside a transaction that can still roll back). Refreshes the
+   * stores that show the affected products, but only for a change a buyer
+   * can see (isStockChangeVisible), so an ordinary sale of a well-stocked
+   * product keeps the store's cache. Fire-and-forget: never awaited by the
+   * order / payment flow and never able to fail it.
+   */
+  private revalidateStockMoves(moves: StockMove[]): void {
+    if (!this.revalidation || moves.length === 0) return;
+    void this.refreshStoresOfStockMoves(this.revalidation, moves).catch(
+      () => {},
+    );
+  }
+
+  /**
+   * One guarded read after the commit gives each moved row's stock as it is
+   * now and the owner of its product; the stock before the move is the
+   * current one minus the move. Read after the write (not from the values
+   * loaded before it) so that concurrent orders are seen: whichever commits
+   * last reads the final count. Never throws.
+   */
+  private async refreshStoresOfStockMoves(
+    revalidation: RevalidationService,
+    moves: StockMove[],
+  ): Promise<void> {
+    try {
+      const net = netStockMoves(moves);
+      const owner = { id: true, creator_id: true, provider_id: true } as const;
+      const variantIds = [...net.variant.keys()];
+      const productIds = [...net.product.keys()];
+      const variants = variantIds.length
+        ? await this.prisma.productVariant.findMany({
+            where: { id: { in: variantIds } },
+            select: {
+              id: true,
+              stock_quantity: true,
+              product: { select: owner },
+            },
+          })
+        : [];
+      const products = productIds.length
+        ? await this.prisma.product.findMany({
+            where: { id: { in: productIds } },
+            select: { ...owner, track_inventory: true, stock_quantity: true },
+          })
+        : [];
+      // One entry per product, however many of its rows moved.
+      const affected = new Map<
+        string,
+        { id: string; creator_id: string | null; provider_id: string | null }
+      >();
+      for (const v of variants) {
+        const now = v.stock_quantity;
+        const delta = net.variant.get(v.id) ?? 0;
+        if (now !== null && isStockChangeVisible(now - delta, now)) {
+          affected.set(v.product.id, v.product);
+        }
+      }
+      for (const p of products) {
+        const now = p.track_inventory ? p.stock_quantity : null;
+        const delta = net.product.get(p.id) ?? 0;
+        if (now !== null && isStockChangeVisible(now - delta, now)) {
+          affected.set(p.id, {
+            id: p.id,
+            creator_id: p.creator_id,
+            provider_id: p.provider_id,
+          });
+        }
+      }
+      for (const product of affected.values()) {
+        // The creator's store, or every store reselling a provider product
+        // (the service debounces per store slug: one POST per store). One
+        // failing product does not stop the others.
+        try {
+          await revalidation.revalidateStoresOfProduct(product);
+        } catch (err) {
+          this.logger.warn(
+            `Stock revalidation of product "${product.id}" failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Stock revalidation skipped: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   /**
    * Server-side Meta Purchase event for an order that just became confirmed
@@ -3224,6 +3323,17 @@ export class OrdersService {
       );
     }
 
+    // Storefront cache: the order row is committed, so the stock it took is
+    // final (a failed insert above restored it and never gets here). Not
+    // awaited; refreshes only the stores where a buyer can see the change.
+    this.revalidateStockMoves(
+      decrementedStock.map((op) => ({
+        kind: op.kind,
+        id: op.id,
+        delta: -op.qty,
+      })),
+    );
+
     // Production app (M4.3, X32): generate the checklist from the rows the
     // insert above just wrote. Best-effort, outside the transaction; a
     // no-op (one cached isEnabled) for stores without the app.
@@ -4521,6 +4631,7 @@ export class OrdersService {
       },
     });
     const short: { name: string; quantity: number }[] = [];
+    const moves: StockMove[] = [];
     for (const it of items) {
       try {
         if (it.variant_id) {
@@ -4539,6 +4650,12 @@ export class OrdersService {
             if (v && v.stock_quantity !== null) {
               short.push({ name: itemLabel(it), quantity: it.quantity });
             }
+          } else {
+            moves.push({
+              kind: 'variant',
+              id: it.variant_id,
+              delta: -it.quantity,
+            });
           }
         } else if (it.product_id) {
           const taken = await this.prisma.product.updateMany({
@@ -4557,12 +4674,20 @@ export class OrdersService {
             if (p && p.track_inventory && p.stock_quantity !== null) {
               short.push({ name: itemLabel(it), quantity: it.quantity });
             }
+          } else {
+            moves.push({
+              kind: 'product',
+              id: it.product_id,
+              delta: -it.quantity,
+            });
           }
         }
       } catch (err) {
         console.error('[StockRestore] order item re-take failed', it, err);
       }
     }
+    // Storefront cache: the re-taken units are committed (no transaction).
+    this.revalidateStockMoves(moves);
     return short;
   }
 
@@ -4715,7 +4840,7 @@ export class OrdersService {
       where: { order_id: orderId },
       data: { status: deriveCommissionStatus(OrderStatus.CANCELLED) },
     });
-    await this.restoreOrderItemsStock(orderId);
+    this.revalidateStockMoves(await this.restoreOrderItemsStock(orderId));
     // Invoices app (L2): a released authorization always credits the
     // invoice in full (credit_on_cancel does not apply: nothing was captured).
     await this.invoices?.onAuthorizationReleased(order);
@@ -4758,7 +4883,9 @@ export class OrdersService {
     // Failed payment → restock the order's items so the inventory isn't
     // permanently locked by an order that won't ship. Idempotent because
     // markOrderFailed only runs the flip once per order (guarded payment_status).
-    await this.restoreOrderItemsStock(orderId);
+    // The returned units are committed here (no transaction): the storefront
+    // cache is refreshed where a buyer can see them ("sold out" lifted).
+    this.revalidateStockMoves(await this.restoreOrderItemsStock(orderId));
     // ...and hand the coupon redemption back (taken again on a late payment).
     await this.releaseFailedOrderCoupon(orderId);
     // Designer app: nothing was bought — the order's designs become terminal
@@ -4816,7 +4943,7 @@ export class OrdersService {
 
     // The goods are coming back (or never shipped) — return them to stock.
     // Guarded by the flip above, so a replayed webhook cannot double-restock.
-    await this.restoreOrderItemsStock(orderId);
+    this.revalidateStockMoves(await this.restoreOrderItemsStock(orderId));
 
     // Invoices app: full credit note before the email, so it can be attached.
     await this.invoices?.onFullRefund(order);
@@ -5206,25 +5333,37 @@ export class OrdersService {
    * payment fails (or, in the future, when an order is cancelled). The
    * updateMany guards ensure untracked items are never written, so this is a
    * no-op for products/variants that don't track inventory.
+   *
+   * Returns the rows it really wrote, for the storefront cache refresh: the
+   * caller passes them to revalidateStockMoves once the write is committed
+   * (at once outside a transaction, after the commit inside one).
    */
   private async restoreOrderItemsStock(
     orderId: string,
     // Order trash (M69) runs it inside the delete transaction.
     db: Prisma.TransactionClient | PrismaService = this.prisma,
-  ) {
+  ): Promise<StockMove[]> {
     const items = await db.orderItem.findMany({
       where: { order_id: orderId },
       select: { product_id: true, variant_id: true, quantity: true },
     });
+    const moves: StockMove[] = [];
     for (const it of items) {
       try {
         if (it.variant_id) {
-          await db.productVariant.updateMany({
+          const res = await db.productVariant.updateMany({
             where: { id: it.variant_id, stock_quantity: { not: null } },
             data: { stock_quantity: { increment: it.quantity } },
           });
+          if (res.count > 0) {
+            moves.push({
+              kind: 'variant',
+              id: it.variant_id,
+              delta: it.quantity,
+            });
+          }
         } else if (it.product_id) {
-          await db.product.updateMany({
+          const res = await db.product.updateMany({
             where: {
               id: it.product_id,
               track_inventory: true,
@@ -5232,11 +5371,19 @@ export class OrdersService {
             },
             data: { stock_quantity: { increment: it.quantity } },
           });
+          if (res.count > 0) {
+            moves.push({
+              kind: 'product',
+              id: it.product_id,
+              delta: it.quantity,
+            });
+          }
         }
       } catch (err) {
         console.error('[StockRestore] order item restore failed', it, err);
       }
     }
+    return moves;
   }
 
   /**
@@ -5427,6 +5574,9 @@ export class OrdersService {
     ]
       .filter(Boolean)
       .join(' — ');
+    // Stock rows the delete transaction wrote (storefront cache refresh,
+    // only after the commit).
+    let stockMoves: StockMove[] = [];
     const claimed = await this.prisma.$transaction(async (tx) => {
       // The claim is the lock, optimistic on the guard columns: a concurrent
       // delete finds deleted_at set, and a payment that landed between the
@@ -5456,7 +5606,9 @@ export class OrdersService {
           actor: trashActorLabel(actor),
         },
       });
-      if (holdsStock) await this.restoreOrderItemsStock(order.id, tx);
+      if (holdsStock) {
+        stockMoves = await this.restoreOrderItemsStock(order.id, tx);
+      }
       return true;
     });
     if (!claimed) {
@@ -5473,6 +5625,9 @@ export class OrdersService {
       }
       throw notDeletable(deletableReason(fresh) ?? 'paid');
     }
+    // The transaction committed: the returned stock is visible now. A
+    // rolled-back delete threw above and never gets here.
+    this.revalidateStockMoves(stockMoves);
     if (!order.coupon_released_at) {
       await this.releaseFailedOrderCoupon(order.id);
     }
