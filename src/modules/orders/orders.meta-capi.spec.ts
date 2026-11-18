@@ -207,7 +207,10 @@ function buildPaid(meta?: { sendPurchase: SendPurchase }) {
       findUnique: jest.fn((): Promise<unknown> => Promise.resolve(null)),
       updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
     },
-    orderTimeline: { create: jest.fn(() => Promise.resolve({})) },
+    orderTimeline: {
+      create: jest.fn(() => Promise.resolve({})),
+      findFirst: jest.fn(() => Promise.resolve(null)),
+    },
   };
   const service = new OrdersService(
     prisma as unknown as PrismaService,
@@ -332,7 +335,11 @@ describe('CreateOrderDto.tracking', () => {
     ).toEqual([]);
     expect(await errorsFor({ tracking: { fbp: 'x'.repeat(500) } })).toEqual([]);
     // A long fbclid-derived cookie is accepted (and dropped later), never a 400.
-    expect(await errorsFor({ tracking: { fbc: `fb.1.1700000000000.${'x'.repeat(900)}` } })).toEqual([]);
+    expect(
+      await errorsFor({
+        tracking: { fbc: `fb.1.1700000000000.${'x'.repeat(900)}` },
+      }),
+    ).toEqual([]);
   });
 
   it('rejects unknown keys, non-strings and absurdly long values', async () => {

@@ -5,7 +5,13 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
-import { Prisma, StoreType, UserRole } from '@prisma/client';
+import {
+  OrderStatus,
+  PaymentMethod,
+  Prisma,
+  StoreType,
+  UserRole,
+} from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   CreateTaxClassDto,
@@ -620,6 +626,20 @@ export class TaxManagementService {
       deleted_at: null,
       created_at: { gte: from, lte: to },
       tax_lines: { not: Prisma.DbNull },
+      // A cash-on-delivery order is marked paid when it is delivered and no
+      // refund ever moves its payment status: once it is cancelled, refunded
+      // or returned its tax is not collected any more. Card and Kustom
+      // orders are unchanged (their refund sets the payment status).
+      NOT: {
+        payment_method: PaymentMethod.COD,
+        status: {
+          in: [
+            OrderStatus.CANCELLED,
+            OrderStatus.REFUNDED,
+            OrderStatus.RETURNED,
+          ],
+        },
+      },
     };
     if (scope.store_id) where.store_id = scope.store_id;
 

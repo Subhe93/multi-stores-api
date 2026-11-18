@@ -4540,6 +4540,8 @@ export class OrdersService implements OnModuleInit {
         const claim = await tx.order.updateMany({
           where: {
             id,
+            // A trashed order gave its stock back on delete (order trash).
+            deleted_at: null,
             status: { notIn: [...STOCK_RELEASED_STATUSES] },
             // NOT IN drops NULL rows in SQL: name the NULL case.
             OR: [
@@ -4611,8 +4613,11 @@ export class OrdersService implements OnModuleInit {
    * an admin cancel / refund already gave the stock back, so a failure or a
    * refund arriving afterwards must not give it back again.
    */
-  private async adminStockReturned(orderId: string): Promise<boolean> {
-    const last = await this.prisma.orderTimeline.findFirst({
+  private async adminStockReturned(
+    orderId: string,
+    db: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<boolean> {
+    const last = await db.orderTimeline.findFirst({
       where: {
         order_id: orderId,
         status: { in: [STOCK_RETURNED_MARKER, STOCK_RETAKEN_MARKER] },
@@ -5049,6 +5054,31 @@ export class OrdersService implements OnModuleInit {
       if (short.length) {
         stockShortfall = true;
         await this.flagStockShortfall(order, short);
+      }
+    } else if (
+      !stockReturned &&
+      !STOCK_RELEASED_STATUSES.includes(statusAfter) &&
+      (await this.adminStockReturned(orderId))
+    ) {
+      // An admin cancel committed between the read above and the flip: it
+      // returned the stock, and the flip then wrote the live status of the
+      // stale read over CANCELLED. The paid order is live and must hold its
+      // stock again. Read the status as it is now: a cancel that landed
+      // after the flip keeps the order cancelled and its stock returned.
+      const now = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: { status: true },
+      });
+      if (
+        now &&
+        !STOCK_RELEASED_STATUSES.includes(now.status) &&
+        (await this.settleAdminStockReturn(orderId, true)) === 'retaken'
+      ) {
+        const short = await this.retakeOrderItemsStock(orderId);
+        if (short.length) {
+          stockShortfall = true;
+          await this.flagStockShortfall(order, short);
+        }
       }
     }
     // The delete hands the coupon back whatever the stock did (also on a
@@ -5880,6 +5910,10 @@ export class OrdersService implements OnModuleInit {
         }
       } catch (err) {
         console.error('[StockRestore] order item restore failed', it, err);
+        // Inside a transaction a failed statement has aborted it: the claim
+        // and the rows written so far roll back, so the caller must not go
+        // on as if the order had been cancelled / deleted.
+        if (db !== this.prisma) throw err;
       }
     }
     return moves;
@@ -6033,12 +6067,10 @@ export class OrdersService implements OnModuleInit {
     if (blocked) throw notDeletable(blocked);
 
     const holdsStock = orderHoldsStock(order);
-    const note = [
-      reason?.trim() || null,
-      holdsStock ? 'Stock was returned' : null,
-    ]
-      .filter(Boolean)
-      .join(' — ');
+    const noteFor = (stockReturned: boolean) =>
+      [reason?.trim() || null, stockReturned ? 'Stock was returned' : null]
+        .filter(Boolean)
+        .join(' — ');
     // Stock rows the delete transaction wrote (storefront cache refresh,
     // only after the commit).
     let stockMoves: StockMove[] = [];
@@ -6063,15 +6095,19 @@ export class OrdersService implements OnModuleInit {
         data: { deleted_at: new Date(), deleted_by: actor.id },
       });
       if (flip.count === 0) return false;
+      // An admin cancel that committed after the read above already gave
+      // the stock back (its marker is on the timeline): never twice.
+      const returnsStock =
+        holdsStock && !(await this.adminStockReturned(order.id, tx));
       await tx.orderTimeline.create({
         data: {
           order_id: order.id,
           status: 'DELETED',
-          note: note || null,
+          note: noteFor(returnsStock) || null,
           actor: trashActorLabel(actor),
         },
       });
-      if (holdsStock) {
+      if (returnsStock) {
         stockMoves = await this.restoreOrderItemsStock(order.id, tx);
       }
       return true;

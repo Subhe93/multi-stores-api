@@ -251,7 +251,11 @@ function build(opts: {
         ({
           where,
         }: {
-          where: { status?: string | { in: string[] }; note?: string };
+          where: {
+            status?: string | { in: string[] };
+            note?: string;
+            NOT?: { note: { startsWith: string } };
+          };
         }) =>
           Promise.resolve(
             [...timeline]
@@ -259,7 +263,9 @@ function build(opts: {
               .find(
                 (t) =>
                   statusMatches(t, where.status) &&
-                  (where.note === undefined || t.note === where.note),
+                  (where.note === undefined || t.note === where.note) &&
+                  (where.NOT === undefined ||
+                    !t.note.startsWith(where.NOT.note.startsWith)),
               ) ?? null,
           ),
       ),
@@ -600,6 +606,62 @@ describe('switch on: reversals on (the double of) Stripe', () => {
     const retry = await b.sync(3000);
     expect(retry.failed).toEqual([]);
     expect(b.stripe.transfers.tr_1.amount_reversed).toBe(1500);
+  });
+
+  it('the timeline note of a failure carries no Stripe text; the admin notification does', async () => {
+    const b = on();
+    b.stripe.port.createReversal.mockRejectedValue(
+      new Error('Insufficient funds in acct_1SupplierXYZ'),
+    );
+    await b.sync(3000);
+    const note = b.rows('TRANSFER_REVERSAL_FAILED')[0].note;
+    expect(note).toMatch(
+      /^Transfer reversal failed for 2 transfer\(s\) \(ref [0-9a-f]{8}\)\./,
+    );
+    expect(note).not.toContain('acct_');
+    expect(note).not.toContain('Insufficient');
+    expect(note).not.toContain('tr_');
+    const admin = b.notifications.filter(
+      (n) => n.type === 'order_transfer_reversal_failed',
+    );
+    expect(admin[0].body).toContain('Insufficient funds in acct_1SupplierXYZ');
+    // A different failure of the same order is a new note.
+    b.stripe.port.createReversal.mockRejectedValue(new Error('another'));
+    await b.sync(3000);
+    expect(b.rows('TRANSFER_REVERSAL_FAILED')).toHaveLength(2);
+  });
+
+  it('part refunded with one transfer reversed by hand: a replay writes and notifies nothing more', async () => {
+    const b = on();
+    // The admin reversed the supplier transfer in full by hand.
+    b.stripe.transfers.tr_1.amount_reversed = 5000;
+    await b.sync(6000);
+    expect(b.payouts.map((p) => p.status)).toEqual(['reversed', 'paid']);
+    // The next deliveries see one reversed and one paid payout.
+    await b.sync(6000);
+    const dueRows = b.rows('TRANSFER_REVERSAL_DUE').length;
+    const sent = b.notifications.length;
+    const calls = b.stripe.calls.length;
+    for (let i = 0; i < 4; i++) await b.sync(6000);
+    expect(b.rows('TRANSFER_REVERSAL_DUE')).toHaveLength(dueRows);
+    expect(b.notifications).toHaveLength(sent);
+    expect(b.stripe.calls).toHaveLength(calls);
+    // The note says what is known, not that a refund failed.
+    const notes = b.rows('TRANSFER_REVERSAL_DUE').map((t) => t.note);
+    expect(
+      notes.filter((n) => n.startsWith('Already reversed in full:')),
+    ).toHaveLength(1);
+    expect(notes.some((n) => n.includes('refund failed'))).toBe(false);
+  });
+
+  it('the bookkeeping transaction outlives the lock an execution may hold', async () => {
+    const b = on();
+    await b.sync(3000);
+    const [book, exec] = b.prisma.$transaction.mock.calls as unknown as [
+      unknown,
+      { timeout: number },
+    ][];
+    expect(book[1].timeout).toBeGreaterThan(exec[1].timeout);
   });
 
   it('the same failure redelivered does not notify again', async () => {

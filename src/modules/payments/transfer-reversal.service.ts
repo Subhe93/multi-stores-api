@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { FulfillerType, Prisma, UserRole } from '@prisma/client';
@@ -49,9 +50,12 @@ import {
  * - one order at a time: the read-compute-reverse sequence runs under a
  *   per-order advisory lock, so two refund events cannot both reverse from
  *   the same stale reading;
- * - a failure never breaks the refund handling: it is recorded
- *   (TRANSFER_REVERSAL_FAILED + admin notification) and retried by the next
- *   sync of the order (the admin "Verify payment" action);
+ * - a Stripe failure never breaks the refund handling: it is recorded
+ *   (TRANSFER_REVERSAL_FAILED on the timeline without the Stripe text, which
+ *   only the admin notification carries) and retried by the next sync of
+ *   the order (the admin "Verify payment" action). A database error of the
+ *   bookkeeping does propagate: the refund handling before it is idempotent
+ *   and the webhook is delivered again;
  * - a refund that fails afterwards never re-sends a transfer: the admin is
  *   told so.
  */
@@ -119,6 +123,18 @@ type PayoutRow = {
 type Db = Prisma.TransactionClient | PrismaService;
 
 const LOCK_TIMEOUT_MS = 60_000;
+/**
+ * The bookkeeping waits for the per-order lock an execution may hold for up
+ * to LOCK_TIMEOUT_MS, so its own transaction must outlive that wait.
+ */
+const BOOK_TIMEOUT_MS = LOCK_TIMEOUT_MS + 10_000;
+
+/**
+ * First words of the "already reversed" timeline note. These notes share the
+ * status of the DUE notes but are recorded once each, apart from them.
+ */
+const ALREADY_REVERSED_PREFIX = 'Already reversed in full:';
+const BOOK_TX_OPTIONS = { timeout: BOOK_TIMEOUT_MS, maxWait: 10_000 } as const;
 
 @Injectable()
 export class TransferReversalService {
@@ -165,15 +181,20 @@ export class TransferReversalService {
       const payouts = await this.payoutsOf(tx, order.id);
       if (payouts.length === 0) return { due: [] as ReversalDue[], any: false };
 
-      // A refund that failed after its bookkeeping: nothing is due any more
-      // and what was reversed is not sent again.
       const reversedPayouts = payouts.filter(
         (p) => p.status === PAYOUT_REVERSED,
       );
-      if (refunded === 0 || (!full && reversedPayouts.length > 0)) {
+      if (refunded === 0) {
+        // A refund that failed after its bookkeeping: nothing is due any
+        // more and what was reversed is not sent again.
         await this.recordRefundReverted(tx, order, reversedPayouts.length);
+        return { due: [] as ReversalDue[], any: true };
       }
-      if (refunded === 0) return { due: [] as ReversalDue[], any: true };
+      if (!full && reversedPayouts.length > 0) {
+        // Part of the payment is refunded while some transfers are reversed
+        // in full (a refund failed afterwards, or a reversal made by hand).
+        await this.recordAlreadyReversed(tx, order, reversedPayouts.length);
+      }
 
       const due: ReversalDue[] = [];
       for (const p of payouts) {
@@ -222,7 +243,7 @@ export class TransferReversalService {
         );
       }
       return { due, any: true, recorded };
-    });
+    }, BOOK_TX_OPTIONS);
     outcome.due = book.due;
     outcome.recorded = book.recorded === true;
 
@@ -348,7 +369,9 @@ export class TransferReversalService {
   /**
    * Writes the DUE row unless it is the order's latest one already, so each
    * refunded total is recorded once (a replayed event finds its own note),
-   * while the same total after a failed refund is recorded again.
+   * while the same total after a failed refund is recorded again. The
+   * "already reversed" notes are not part of that sequence: a run that
+   * writes one of them and a DUE note must find both again on a replay.
    */
   private async recordOnce(
     db: Db,
@@ -356,7 +379,11 @@ export class TransferReversalService {
     note: string,
   ): Promise<boolean> {
     const latest = await db.orderTimeline.findFirst({
-      where: { order_id: orderId, status: TRANSFER_REVERSAL_DUE },
+      where: {
+        order_id: orderId,
+        status: TRANSFER_REVERSAL_DUE,
+        NOT: { note: { startsWith: ALREADY_REVERSED_PREFIX } },
+      },
       orderBy: { created_at: 'desc' },
       select: { note: true },
     });
@@ -407,15 +434,55 @@ export class TransferReversalService {
     );
   }
 
+  /**
+   * Part of the payment is refunded while `count` transfers are already
+   * reversed in full. The cause is not known here (a refund failed after a
+   * full refund, or somebody reversed a transfer by hand), so the wording
+   * names neither. Recorded and notified once per count, whatever else the
+   * timeline received meanwhile.
+   */
+  private async recordAlreadyReversed(
+    db: Db,
+    order: RefundedOrderRef,
+    count: number,
+  ): Promise<void> {
+    const note = `${ALREADY_REVERSED_PREFIX} ${count} transfer(s) of this order, while only part of the payment is refunded. They are not sent again automatically`;
+    const existing = await db.orderTimeline.findFirst({
+      where: { order_id: order.id, status: TRANSFER_REVERSAL_DUE, note },
+      select: { id: true },
+    });
+    if (existing) return;
+    await db.orderTimeline.create({
+      data: {
+        order_id: order.id,
+        status: TRANSFER_REVERSAL_DUE,
+        note,
+        actor: 'system',
+      },
+    });
+    await this.notifyAdmins(
+      db,
+      'order_transfer_reversal_due',
+      'Transfers reversed beyond the refunded part',
+      `Order ${order.order_number}: ${count} transfer(s) are reversed in full while only part of the payment is refunded (a refund failed afterwards, or a transfer was reversed by hand). They are NOT sent again automatically: pay those recipients by hand if they are still owed.`,
+      { order_id: order.id, reversed_transfers: count },
+    );
+  }
+
   private async recordFailures(
     order: RefundedOrderRef,
     failed: { transfer_id: string; message: string }[],
   ): Promise<void> {
     try {
-      const note = `Transfer reversal failed for ${failed.length} transfer(s): ${failed
-        .map((f) => f.message)
-        .join('; ')
-        .slice(0, 400)}`;
+      // The store owner reads the timeline: the Stripe text (it can name a
+      // supplier's connected account) goes to the admin notification only.
+      // The reference tells one failure from another, so the same failure
+      // redelivered is found again and a different one is recorded.
+      const ref = createHash('sha256')
+        .update(failed.map((f) => `${f.transfer_id}:${f.message}`).join('|'))
+        .digest('hex')
+        .slice(0, 8);
+      const note = `Transfer reversal failed for ${failed.length} transfer(s) (ref ${ref}). The platform admin has the details`;
       const existing = await this.prisma.orderTimeline.findFirst({
         where: { order_id: order.id, status: TRANSFER_REVERSAL_FAILED, note },
         select: { id: true },

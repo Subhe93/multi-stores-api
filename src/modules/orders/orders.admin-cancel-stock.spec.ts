@@ -618,6 +618,162 @@ describe('the other stock paths know about the admin return', () => {
   });
 });
 
+describe('races with a late payment, a trash and a failing stock write', () => {
+  // Columns the delete claim reads (the double's order row lacks them).
+  const NEVER_CHARGED = {
+    paid_at: null,
+    stripe_charge_id: null,
+    kustom_capture_id: null,
+  };
+  const pendingWorld = (): World => ({
+    status: OrderStatus.PENDING,
+    payment_status: 'awaiting_payment',
+    lines: oneOwnLine,
+    products: ownProduct(5),
+  });
+
+  it('a payment that read the order before the admin cancel: the live paid order holds its stock again', async () => {
+    const b = build(pendingWorld());
+    // The payment webhook read the order while it was still PENDING.
+    const stale = { ...b.order };
+    await b.admin(OrderStatus.CANCELLED);
+    expect(b.products.p1.stock_quantity).toBe(7);
+    b.prisma.order.findUnique.mockResolvedValueOnce(stale as never);
+    const res = await b.service.markOrderPaid('o1', 'pi_1');
+    expect(res?.changed).toBe(true);
+    // The flip wrote the live status of the stale read over CANCELLED...
+    expect(b.order.status).toBe(OrderStatus.CONFIRMED);
+    expect(b.order.payment_status).toBe('paid');
+    // ...so the units are taken again, once.
+    expect(b.products.p1.stock_quantity).toBe(5);
+    expect(b.markers()).toEqual(['STOCK_RETURNED', 'STOCK_RETAKEN']);
+  });
+
+  it('same race, stock sold meanwhile: nothing goes negative, the shortfall is flagged', async () => {
+    const b = build(pendingWorld());
+    const stale = { ...b.order };
+    await b.admin(OrderStatus.CANCELLED);
+    b.products.p1.stock_quantity = 1;
+    b.prisma.order.findUnique.mockResolvedValueOnce(stale as never);
+    const res = await b.service.markOrderPaid('o1', 'pi_1');
+    expect(res).toMatchObject({ changed: true, stockShortfall: true });
+    expect(b.products.p1.stock_quantity).toBe(1);
+    expect(b.timeline.map((t) => t.status)).toContain('STOCK_SHORTFALL');
+  });
+
+  it('the admin cancel landed after the paid flip: the order stays cancelled and takes no stock', async () => {
+    const b = build(pendingWorld());
+    const stale = { ...b.order };
+    await b.admin(OrderStatus.CANCELLED);
+    b.prisma.order.findUnique
+      // The read before the flip.
+      .mockResolvedValueOnce(stale as never)
+      // The read after it: the cancel is the last write.
+      .mockResolvedValueOnce({ status: OrderStatus.CANCELLED } as never);
+    await b.service.markOrderPaid('o1', 'pi_1');
+    expect(b.products.p1.stock_quantity).toBe(7);
+    expect(b.markers()).toEqual(['STOCK_RETURNED']);
+  });
+
+  it('a payment on a live order nobody cancelled moves no stock (unchanged)', async () => {
+    const b = build(pendingWorld());
+    await b.service.markOrderPaid('o1', 'pi_1');
+    expect(b.order.status).toBe(OrderStatus.CONFIRMED);
+    expect(b.products.p1.stock_quantity).toBe(5);
+    expect(b.markers()).toEqual([]);
+  });
+
+  it('an order trashed after the admin read it: the cancel returns nothing (the delete did)', async () => {
+    const b = build(pendingWorld());
+    const stale = { ...b.order };
+    // The owner's delete committed: deleted_at set, stock already returned.
+    b.order.deleted_at = new Date();
+    b.products.p1.stock_quantity = 7;
+    b.prisma.order.findUnique.mockResolvedValueOnce(stale as never);
+    await b.admin(OrderStatus.CANCELLED);
+    expect(b.order.status).toBe(OrderStatus.CANCELLED);
+    expect(b.products.p1.stock_quantity).toBe(7);
+    expect(b.markers()).toEqual([]);
+  });
+
+  it('an order cancelled by an admin after the owner read it: the delete returns nothing (the cancel did)', async () => {
+    const b = build(pendingWorld());
+    Object.assign(b.order, NEVER_CHARGED);
+    const stale = {
+      ...b.order,
+      is_test: false,
+      paid_at: null,
+      stripe_charge_id: null,
+      kustom_capture_id: null,
+      coupon_released_at: null,
+      currency: 'SEK',
+      _count: { payouts: 0, invoices: 0 },
+    };
+    await b.admin(OrderStatus.CANCELLED);
+    expect(b.products.p1.stock_quantity).toBe(7);
+    b.prisma.order.findUnique.mockResolvedValue(stale as never);
+    await b.service.deleteOrder('o1', {
+      id: 'admin1',
+      email: 'admin@test',
+      role: UserRole.ADMIN,
+    });
+    expect(b.order.deleted_at).toBeInstanceOf(Date);
+    expect(b.products.p1.stock_quantity).toBe(7);
+    const deleted = b.timeline.find((t) => t.status === 'DELETED');
+    expect(deleted?.note ?? '').not.toContain('Stock was returned');
+  });
+
+  it('a delete of a live order nobody cancelled still returns the stock (unchanged)', async () => {
+    const b = build(pendingWorld());
+    Object.assign(b.order, NEVER_CHARGED);
+    b.prisma.order.findUnique.mockResolvedValue({
+      ...b.order,
+      is_test: false,
+      paid_at: null,
+      stripe_charge_id: null,
+      kustom_capture_id: null,
+      coupon_released_at: null,
+      currency: 'SEK',
+      _count: { payouts: 0, invoices: 0 },
+    } as never);
+    await b.service.deleteOrder('o1', {
+      id: 'admin1',
+      email: 'admin@test',
+      role: UserRole.ADMIN,
+    });
+    expect(b.products.p1.stock_quantity).toBe(7);
+    expect(b.timeline.find((t) => t.status === 'DELETED')?.note).toBe(
+      'Stock was returned',
+    );
+  });
+
+  it('a stock write failing inside the cancel transaction fails the request: no email, no commission write-off', async () => {
+    const b = build({
+      status: OrderStatus.CONFIRMED,
+      payment_status: 'paid',
+      lines: oneOwnLine,
+      products: ownProduct(5),
+    });
+    // A real transaction client is not the PrismaService itself.
+    b.prisma.$transaction.mockImplementation((fn: (tx: unknown) => unknown) =>
+      fn({ ...b.prisma }),
+    );
+    b.prisma.product.updateMany.mockRejectedValueOnce(
+      new Error('deadlock detected') as never,
+    );
+    const quiet = jest.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(b.admin(OrderStatus.CANCELLED)).rejects.toThrow(
+      'deadlock detected',
+    );
+    quiet.mockRestore();
+    expect(b.revalidate).not.toHaveBeenCalled();
+    expect(b.prisma.orderCommission.updateMany).not.toHaveBeenCalled();
+    expect(b.timeline.map((t) => t.status)).not.toContain(
+      OrderStatus.CANCELLED,
+    );
+  });
+});
+
 describe('back to a live status', () => {
   it('an admin-cancelled order moved back takes the stock again (STOCK_RETAKEN)', async () => {
     const b = build({
