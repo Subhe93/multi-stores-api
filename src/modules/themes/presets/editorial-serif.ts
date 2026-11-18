@@ -20,6 +20,14 @@ const colors: PresetColors = {
 
 const fonts = { heading: 'Playfair Display', body: 'Lora' };
 
+// Playfair Display and Lora have no Arabic glyphs. Noto Naskh Arabic is the
+// naskh counterpart of a Latin serif; the storefront places it after the
+// Latin family, so it only draws Arabic-script text. One family for both
+// slots = one font file. Must be a name from the storefront's curated list
+// (multi-stores-web/src/lib/arabicFonts.ts). Written when the look is
+// applied: stores that applied it earlier keep their stored tokens.
+const fontsArabic = { heading: 'Noto Naskh Arabic', body: 'Noto Naskh Arabic' };
+
 const header: ChromeSectionPreset[] = [
   {
     section_key: 'header-bar',
@@ -61,6 +69,7 @@ export const editorialSerifPreset: ThemePreset = {
     colors,
     typography: {
       fontFamily: fonts,
+      fontFamilyArabic: fontsArabic,
       scale: { h1: 3.75, h2: 2.75, h3: 2 },
       lineHeight: { heading: 1.08, body: 1.7 },
       fontWeight: { heading: 600, body: 400, bold: 700 },

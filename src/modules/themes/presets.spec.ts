@@ -278,6 +278,80 @@ describe('theme presets catalog', () => {
     },
   );
 
+  // Optional storefront tokens: an Arabic-script fallback font per slot
+  // (typography.fontFamilyArabic) and a theme button radius
+  // (spacing.radius.button). Only the editorial look sets the fonts.
+  describe('optional Arabic font and button radius tokens', () => {
+    // Keep in sync with ARABIC_FONTS in
+    // multi-stores-web/src/lib/arabicFonts.ts (the storefront ignores any
+    // other name).
+    const ARABIC_FONTS = [
+      'Noto Naskh Arabic',
+      'Markazi Text',
+      'Noto Kufi Arabic',
+      'Noto Sans Arabic',
+      'IBM Plex Sans Arabic',
+      'Cairo',
+    ];
+    type Tokens = {
+      typography: {
+        fontFamily: { heading: string; body: string };
+        fontFamilyArabic?: { heading?: string; body?: string };
+      };
+      spacing?: { radius?: Record<string, string> };
+    };
+    const tokens = (id: string) =>
+      findPreset(id)!.theme_customizations as unknown as Tokens;
+
+    it('editorial-serif sets an Arabic font for headings and body from the curated list', () => {
+      const typography = tokens('editorial-serif').typography;
+      expect(typography.fontFamilyArabic).toEqual({
+        heading: 'Noto Naskh Arabic',
+        body: 'Noto Naskh Arabic',
+      });
+      expect(ARABIC_FONTS).toContain(typography.fontFamilyArabic!.heading);
+      expect(ARABIC_FONTS).toContain(typography.fontFamilyArabic!.body);
+      // A sibling of fontFamily, which stays the Latin pair of the preset.
+      expect(typography.fontFamily).toEqual({
+        heading: 'Playfair Display',
+        body: 'Lora',
+      });
+      expect(typography.fontFamily).not.toHaveProperty('arabic');
+      expect(findPreset('editorial-serif')!.fonts).toEqual(
+        typography.fontFamily,
+      );
+    });
+
+    it('the other five presets set no Arabic font', () => {
+      const others = THEME_PRESETS.filter((p) => p.id !== 'editorial-serif');
+      expect(others).toHaveLength(5);
+      for (const preset of others) {
+        expect(tokens(preset.id).typography).not.toHaveProperty(
+          'fontFamilyArabic',
+        );
+      }
+    });
+
+    it('no preset sets a button radius', () => {
+      for (const preset of THEME_PRESETS) {
+        expect(tokens(preset.id).spacing?.radius ?? {}).not.toHaveProperty(
+          'button',
+        );
+      }
+    });
+
+    it('the summary of a preset is unchanged (the token is not exposed there)', () => {
+      const summary = listPresetSummaries().find(
+        (s) => s.id === 'editorial-serif',
+      )!;
+      expect(summary.fonts).toEqual({
+        heading: 'Playfair Display',
+        body: 'Lora',
+      });
+      expect(JSON.stringify(summary)).not.toContain('Noto Naskh Arabic');
+    });
+  });
+
   it('covers all three base themes and varied chrome layouts', () => {
     const bases = new Set(THEME_PRESETS.map((p) => p.base_theme_key));
     expect(bases).toEqual(new Set(['minimal', 'bold', 'classic']));
