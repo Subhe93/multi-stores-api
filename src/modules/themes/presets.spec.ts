@@ -19,6 +19,7 @@ const CHROME_SECTION_KEYS: Record<string, ReadonlySet<string>> = {
     'show_logo',
     'show_store_name',
     'logo_size',
+    'logo_fit',
     'show_search',
     'show_cart',
     'cart_action',
@@ -228,6 +229,16 @@ describe('theme presets catalog', () => {
         expect(
           preset.footer.some((s) => s.section_key === 'copyright-bar'),
         ).toBe(true);
+      });
+
+      it('the header keeps a wide logo readable: logo_fit "height" with its own logo size', () => {
+        const header = preset.header.find(
+          (s) => s.section_key === 'header-bar',
+        );
+        expect(header?.settings.logo_fit).toBe('height');
+        // The storefront caps the height at 56 px; the size arrives with it.
+        expect(typeof header?.settings.logo_size).toBe('number');
+        expect(header?.settings.logo_size as number).toBeLessThanOrEqual(56);
       });
 
       it('uses each chrome key at most once per page, on the right page', () => {

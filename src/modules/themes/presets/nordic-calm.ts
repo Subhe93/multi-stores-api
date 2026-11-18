@@ -27,6 +27,9 @@ const header: ChromeSectionPreset[] = [
       show_logo: true,
       show_store_name: true,
       logo_size: 28,
+      // A wide wordmark keeps its proportions under this height (storefront
+      // header setting; the look's own logo size arrives with it).
+      logo_fit: 'height',
       show_search: true,
       show_cart: true,
       cart_action: 'popup',
