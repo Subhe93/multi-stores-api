@@ -99,6 +99,7 @@ import {
   loadPriceFloorSetup,
 } from '../custom-products/price-floor';
 import { computeMarketplaceCommission } from './marketplace-commission';
+import { forBuyer } from './buyer-order-view';
 import {
   couponBelowProviderCost,
   couponBelowProviderCostError,
@@ -3455,7 +3456,9 @@ export class OrdersService {
     // Kustom push token, which must never reach the customer's browser.
     // b2b app: the `b2b` block travels with the created order only when the
     // app is enabled (same rule as the quote).
-    const shaped = this.forCustomer(this.withItemImages(order));
+    // The buyer never gets the provider amounts or catalogue internals
+    // (forBuyer).
+    const shaped = forBuyer(this.forCustomer(this.withItemImages(order)));
     return orderStore.b2bEnabled
       ? { ...shaped, b2b: this.b2bTotals(tax) }
       : shaped;
@@ -3593,7 +3596,9 @@ export class OrdersService {
     ]);
 
     return {
-      data: data.map((o) => this.forCustomer(this.withItemImages(o))),
+      data: data.map((o) =>
+        forBuyer(this.forCustomer(this.withItemImages(o))),
+      ),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -3924,7 +3929,7 @@ export class OrdersService {
           ? providerOrderShare(order, fulfillerId)
           : {};
       // Customers / providers: reverse-charge evidence without internals.
-      return this.forCustomer(
+      const view = this.forCustomer(
         this.withItemImages({
           ...customerSafe,
           customer,
@@ -3932,6 +3937,9 @@ export class OrdersService {
           ...providerShare,
         }),
       );
+      // The buyer never gets the commission, the provider amounts or the
+      // catalogue internals of the lines (forBuyer); providers keep them.
+      return role === UserRole.CUSTOMER ? forBuyer(view) : view;
     }
     // The buyer's account email / status go to the store's owner only: a
     // creator reading a foreign store's order as a fulfiller of one of its

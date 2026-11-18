@@ -17,6 +17,7 @@ import {
   ProductStoryInputDto,
 } from './dto/product.dto';
 import { parseExternalVideoUrl } from './product-video-url';
+import { catalogueReadLevel, loadCatalogueViewer } from './catalogue-access';
 import {
   VIDEO_CONTENT_TYPE,
   VIDEO_POSTER_FOLDER,
@@ -258,8 +259,11 @@ export const OWNER_PRODUCT_TRANSLATIONS = {
 } satisfies Prisma.ProductTranslationDefaultArgs;
 
 /**
- * Public projection of `GET /products` (anonymous callers and non-owners):
- * no cost price, no importer identities, published provider catalogue only.
+ * Projection of `GET /products` for a CREATOR browsing the published
+ * provider catalogue to import (the route is never public). It carries the
+ * provider price (base_price) and stock, which the creator needs to choose
+ * and price an import, but no cost_price, importer identities or owner
+ * internals. The name is historical.
  */
 export const PUBLIC_PRODUCT_LIST_SELECT = {
   id: true,
@@ -1586,50 +1590,70 @@ export class ProductsService {
   }
 
   /**
-   * `GET /products`. Admins and owners filtering their own catalogue
-   * (`creator_id` / `provider_id` of the caller) get the full rows; everyone
-   * else, anonymous callers included, only sees PUBLISHED provider products
-   * through `PUBLIC_PRODUCT_LIST_SELECT`. Filtering by somebody else's
-   * creator id is refused (creator catalogues are public per store only,
-   * through the storefront API).
+   * `GET /products`, signed-in PROVIDER / CREATOR / ADMIN only (the route
+   * guard answers 401 / 403 first; this re-checks as defence in depth).
+   * - ADMIN: full rows, any filter.
+   * - PROVIDER: the full rows of its OWN catalogue only; a foreign
+   *   `provider_id` or any `creator_id` is refused. A provider never sees
+   *   another provider's cost prices or stock.
+   * - CREATOR: its own catalogue (`creator_id` = own) in full rows, or the
+   *   PUBLISHED provider catalogue to import from, through
+   *   `PUBLIC_PRODUCT_LIST_SELECT` (cost price and stock included: the
+   *   creator needs them to choose and price an import). Somebody else's
+   *   creator id is refused.
+   * Everyone else (customers, anonymous) is refused.
    */
   async listForViewer(
     filters: ProductListFilters,
     viewer: ProductListViewer = {},
   ) {
+    const forbidden = () =>
+      new ForbiddenException({
+        code: 'PRODUCT_LIST_FORBIDDEN',
+        message: 'You can only list your own products',
+      });
+    const allowed: UserRole[] = [
+      UserRole.PROVIDER,
+      UserRole.CREATOR,
+      UserRole.ADMIN,
+    ];
+    if (!viewer.userId || !viewer.role || !allowed.includes(viewer.role)) {
+      throw forbidden();
+    }
     if (viewer.role === UserRole.ADMIN) return this.findAll(filters);
-
-    if (filters.creator_id) {
-      const own =
-        viewer.userId && viewer.role === UserRole.CREATOR
-          ? await this.prisma.creator.findUnique({
-              where: { user_id: viewer.userId },
-              select: { id: true },
-            })
-          : null;
-      if (!own || own.id !== filters.creator_id) {
-        throw new ForbiddenException({
-          code: 'PRODUCT_LIST_FORBIDDEN',
-          message: 'You can only list your own products',
-        });
-      }
-      return this.findAll(filters);
-    }
-
-    if (filters.provider_id && viewer.userId) {
-      const own =
-        viewer.role === UserRole.PROVIDER
-          ? await this.prisma.provider.findUnique({
-              where: { user_id: viewer.userId },
-              select: { id: true },
-            })
-          : null;
-      if (own && own.id === filters.provider_id) return this.findAll(filters);
-    }
 
     const page = filters.page ?? 1;
     const limit = filters.limit ?? 20;
     const empty = { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
+
+    if (viewer.role === UserRole.PROVIDER) {
+      if (filters.creator_id) throw forbidden();
+      const own = await this.prisma.provider.findUnique({
+        where: { user_id: viewer.userId },
+        select: { id: true },
+      });
+      if (!own) return empty;
+      if (filters.provider_id && filters.provider_id !== own.id) {
+        throw forbidden();
+      }
+      return this.findAll({
+        ...filters,
+        provider_id: own.id,
+        creator_id: undefined,
+        owner_type: undefined,
+      });
+    }
+
+    // CREATOR
+    if (filters.creator_id) {
+      const own = await this.prisma.creator.findUnique({
+        where: { user_id: viewer.userId },
+        select: { id: true },
+      });
+      if (!own || own.id !== filters.creator_id) throw forbidden();
+      return this.findAll(filters);
+    }
+
     if (filters.status && filters.status !== ProductStatus.PUBLISHED) {
       return empty;
     }
@@ -1906,37 +1930,25 @@ export class ProductsService {
       stories: toProductStoriesOut(row.stories),
     };
 
-    // cost_price is the provider's confidential margin input — a creator
-    // browsing the catalogue to import must never see it.
-    if (userRole !== UserRole.ADMIN) {
-      const owns = userId
-        ? await this.userOwnsProduct(product, userId, userRole)
-        : false;
-      if (!owns) return redactProductForNonOwner(product);
-    }
-    return product;
-  }
+    // Internal callers (the create / update / duplicate results) pass no
+    // viewer and keep the redacted row they always got.
+    if (!userId || !userRole) return redactProductForNonOwner(product);
 
-  private async userOwnsProduct(
-    product: { provider_id: string | null; creator_id: string | null },
-    userId: string,
-    userRole?: UserRole,
-  ): Promise<boolean> {
-    if (userRole === UserRole.PROVIDER) {
-      const provider = await this.prisma.provider.findUnique({
-        where: { user_id: userId },
-        select: { id: true },
-      });
-      return !!provider && product.provider_id === provider.id;
-    }
-    if (userRole === UserRole.CREATOR) {
-      const creator = await this.prisma.creator.findUnique({
-        where: { user_id: userId },
-        select: { id: true },
-      });
-      return !!creator && product.creator_id === creator.id;
-    }
-    return false;
+    // `GET /products/:id`: the owner and admins get the record; a creator
+    // browsing to import gets a PUBLISHED provider product without the
+    // provider's confidential cost_price; anyone else gets a 404 (customers,
+    // competing providers, drafts, other creators' products), so ids
+    // cannot be probed.
+    const level = catalogueReadLevel(
+      product,
+      await loadCatalogueViewer(this.prisma, userId, userRole),
+    );
+    if (level === 'full') return product;
+    if (level === 'catalogue') return redactProductForNonOwner(product);
+    throw new NotFoundException({
+      code: 'PRODUCT_NOT_FOUND',
+      message: 'Product not found',
+    });
   }
 
   async update(

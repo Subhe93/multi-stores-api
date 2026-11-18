@@ -81,25 +81,32 @@ describe('email_note privacy (global omit)', () => {
 });
 
 describe('ProductsService.findById email_note', () => {
+  // The caller is creator c1. Owner: c1's own product. Non-owner: a
+  // PUBLISHED provider product the creator may browse to import (any other
+  // non-owner read is a 404 since the supplier-privacy fix).
   function setup(owns: boolean) {
     const findUnique = jest.fn((_args: { include: Row }) =>
       Promise.resolve({
         id: 'p1',
         cost_price: 10,
         external_ref: null,
+        ...(owns
+          ? { provider_id: null, creator_id: 'c1', status: 'DRAFT' }
+          : { provider_id: 'pr1', creator_id: null, status: 'PUBLISHED' }),
         translations: [{ locale: 'sv', title: 'T', email_note: 'Ta med' }],
         videos: [],
         stories: [],
       }),
     );
     const svc = new ProductsService(
-      { product: { findUnique } } as unknown as PrismaService,
+      {
+        product: { findUnique },
+        creator: { findUnique: jest.fn(() => Promise.resolve({ id: 'c1' })) },
+        provider: { findUnique: jest.fn(() => Promise.resolve(null)) },
+      } as unknown as PrismaService,
       {} as never,
       {} as never,
       {} as never,
-    );
-    (svc as unknown as Row).userOwnsProduct = jest.fn(() =>
-      Promise.resolve(owns),
     );
     return { svc, findUnique };
   }

@@ -197,6 +197,18 @@ Behaviour:
 - **After the order**: an order where nothing needed shipping is completed by the owner with "Mark as fulfilled" (stored status `DELIVERED`). The buyer then gets the "order complete" email (`order_fulfilled`) instead of the shipped / delivered emails.
 - A venue-bound service that the buyer collects in person (an event with tickets handed out at the door) can instead stay a physical product with a pickup shipping method; then nothing above applies to it.
 
+### 3.7 What a buyer's order payload carries
+
+**Not deployed yet.** The order payloads a buyer receives (the `POST /orders` response, `GET /orders/my`, `GET /orders/:id` read as the buying customer) carry what a receipt needs and nothing about the sellers' money or the supplier's catalogue:
+
+- No `commission` and no `payouts` on the order; no `provider_base_amount` on the items.
+- `items[].product`: only `{ id, translations, images }`.
+- `items[].variant`: only `{ id, options, images }`; its nested `product` only `{ id, translations, images }`.
+- `items[].custom_product`: only `{ id, translations, mockup_images, product: { id, translations, images } }`.
+- Every other order and item key is unchanged (`unit_price`, `original_unit_price`, `total_price`, `quantity`, `image_url`, `custom_field_values`, `variant_options_snapshot`, tax, shipping and fulfillment fields, ids).
+
+The seller-side catalogue routes (`GET /products`, `GET /products/:id`, `GET /products/:id/variants`, `GET /variants/:id`) are not public: they need a signed-in provider, creator or admin (401 without a token, 403 for a customer account). A custom site reads products through the `/storefront/:slug/...` routes above only.
+
 ## 4. Seats (stock) rules
 
 A course date is **one product**; its stock is the number of seats.

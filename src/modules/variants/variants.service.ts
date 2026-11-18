@@ -5,8 +5,21 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
-import { UserRole } from '@prisma/client';
+import { ProductStatus, UserRole } from '@prisma/client';
 import { CreateVariantDto, UpdateVariantDto } from './dto/variant.dto';
+import {
+  catalogueReadLevel,
+  loadCatalogueViewer,
+} from '../products/catalogue-access';
+
+/** A variant as a non-owner may read it: without the importer identity. */
+function withoutImporterRef<T extends { external_ref?: unknown }>(
+  v: T,
+): Omit<T, 'external_ref'> {
+  const { external_ref: _ref, ...rest } = v;
+  void _ref;
+  return rest;
+}
 
 @Injectable()
 export class VariantsService {
@@ -42,26 +55,65 @@ export class VariantsService {
     return created;
   }
 
-  async findByProduct(productId: string) {
-    return this.prisma.productVariant.findMany({
+  async findByProduct(productId: string, userId: string, userRole: UserRole) {
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+      select: { provider_id: true, creator_id: true, status: true },
+    });
+    const level = product
+      ? await this.readLevel(product, userId, userRole)
+      : null;
+    if (!level)
+      throw new NotFoundException({
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
+    const rows = await this.prisma.productVariant.findMany({
       where: { product_id: productId },
       include: { images: true },
       orderBy: { sku: 'asc' },
     });
+    return level === 'full' ? rows : rows.map(withoutImporterRef);
   }
 
-  async findById(id: string) {
+  async findById(id: string, userId: string, userRole: UserRole) {
     const variant = await this.prisma.productVariant.findUnique({
       where: { id },
-      include: { images: true },
+      include: {
+        images: true,
+        product: {
+          select: { provider_id: true, creator_id: true, status: true },
+        },
+      },
     });
-
-    if (!variant)
+    const level = variant
+      ? await this.readLevel(variant.product, userId, userRole)
+      : null;
+    if (!variant || !level)
       throw new NotFoundException({
         code: 'VARIANT_NOT_FOUND',
         message: 'Variant not found',
       });
-    return variant;
+    // The product relation was loaded for the check only.
+    const { product: _product, ...row } = variant;
+    void _product;
+    return level === 'full' ? row : withoutImporterRef(row);
+  }
+
+  /** catalogueReadLevel of the caller on the variant's product. */
+  private async readLevel(
+    product: {
+      provider_id: string | null;
+      creator_id: string | null;
+      status: ProductStatus;
+    },
+    userId: string,
+    userRole: UserRole,
+  ) {
+    return catalogueReadLevel(
+      product,
+      await loadCatalogueViewer(this.prisma, userId, userRole),
+    );
   }
 
   async update(
