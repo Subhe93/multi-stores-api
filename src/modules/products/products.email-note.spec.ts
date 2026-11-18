@@ -103,6 +103,12 @@ describe('ProductsService.findById email_note', () => {
         product: { findUnique },
         creator: { findUnique: jest.fn(() => Promise.resolve({ id: 'c1' })) },
         provider: { findUnique: jest.fn(() => Promise.resolve(null)) },
+        // No provider approval required: the non-owner read is not gated.
+        platformConfig: {
+          findFirst: jest.fn(() =>
+            Promise.resolve({ require_provider_approval: false }),
+          ),
+        },
       } as unknown as PrismaService,
       {} as never,
       {} as never,

@@ -871,6 +871,15 @@ describe('ProductsService.getImportDetails videos (D5, creator import view)', ()
           }),
         ),
       },
+      // Provider approval required and the provider verified.
+      platformConfig: {
+        findFirst: jest.fn(() =>
+          Promise.resolve({ require_provider_approval: true }),
+        ),
+      },
+      provider: {
+        findUnique: jest.fn(() => Promise.resolve({ verified: true })),
+      },
     };
     const svc = new ProductsService(
       prisma as unknown as PrismaService,
@@ -892,6 +901,43 @@ describe('ProductsService.getImportDetails videos (D5, creator import view)', ()
         url: FILE_A,
       }),
     ]);
+  });
+});
+
+describe('ProductsService.getImportDetails provider approval gate', () => {
+  it('an unverified provider product is not importable while approval is required', async () => {
+    const prisma = {
+      product: {
+        findUnique: jest.fn(() =>
+          Promise.resolve({
+            id: 'base',
+            provider_id: 'prov',
+            status: 'PUBLISHED',
+            shipping_profile: { id: 'sp' },
+            videos: [],
+            stories: [],
+          }),
+        ),
+      },
+      platformConfig: {
+        findFirst: jest.fn(() =>
+          Promise.resolve({ require_provider_approval: true }),
+        ),
+      },
+      provider: {
+        findUnique: jest.fn(() => Promise.resolve({ verified: false })),
+      },
+    };
+    const svc = new ProductsService(
+      prisma as unknown as PrismaService,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    await expect(svc.getImportDetails('base')).rejects.toMatchObject({
+      status: 400,
+      response: { code: 'PRODUCT_NOT_IMPORTABLE' },
+    });
   });
 });
 

@@ -101,6 +101,7 @@ import {
 } from '../custom-products/price-floor';
 import { computeMarketplaceCommission } from './marketplace-commission';
 import { forBuyer } from './buyer-order-view';
+import { forProvider } from './provider-order-view';
 import {
   CUSTOM_LINE_STOCK_ENV,
   customLineHoldsStock,
@@ -552,6 +553,9 @@ function lockedFulfillmentStatuses(
     return [FulfillmentStatus.DELIVERED];
   return [FulfillmentStatus.SHIPPED, FulfillmentStatus.DELIVERED];
 }
+
+/** Product columns no order read returns (see itemsWithProduct). */
+const ORDER_PRODUCT_OMIT = { cost_price: true, external_ref: true } as const;
 
 // Progress ranks used to derive an order's overall status from its items: the
 // order reflects the *slowest* item (it's only SHIPPED once every item ships).
@@ -1010,21 +1014,28 @@ export class OrdersService implements OnModuleInit {
     }
   }
 
-  // Reusable include for order items with full product details
+  // Reusable include for order items with full product details. The
+  // nested product rows never carry the provider's confidential cost_price
+  // or the importer identities (external_ref): a creator reading its orders
+  // gets the provider's base product through its imported lines, and no
+  // order reader needs either column.
   private readonly itemsWithProduct = {
     include: {
       product: {
+        omit: ORDER_PRODUCT_OMIT,
         include: {
           translations: true,
           images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
         },
       },
       variant: {
+        omit: { external_ref: true },
         include: {
           // Images attached to this specific variant, used when resolving the
           // line's display image (see resolveOrderItemImage).
           images: true,
           product: {
+            omit: ORDER_PRODUCT_OMIT,
             include: {
               translations: true,
               images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
@@ -1037,6 +1048,7 @@ export class OrdersService implements OnModuleInit {
           translations: true,
           mockup_images: { take: 1, orderBy: { sort_order: 'asc' as const } },
           product: {
+            omit: ORDER_PRODUCT_OMIT,
             include: {
               translations: true,
               images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
@@ -3789,9 +3801,25 @@ export class OrdersService implements OnModuleInit {
     ]);
 
     return {
-      data: data.map((o) => withoutDeletedBy(this.withItemImages(o))),
+      data: data.map((o) => this.providerView(o, provider.id)),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
+  }
+
+  /**
+   * One order of a provider's list: its own lines in full, the other
+   * fulfillers' lines without catalogue internals or provider amounts, and
+   * its own share of the commission (forProvider).
+   */
+  private providerView<O extends Parameters<typeof providerOrderShare>[0]>(
+    order: O,
+    providerId: string,
+  ) {
+    return forProvider(
+      withoutDeletedBy(this.withItemImages(order)),
+      providerId,
+      providerOrderShare(order, providerId).my_share,
+    );
   }
 
   // Creator sees orders placed through their store
@@ -3925,7 +3953,9 @@ export class OrdersService implements OnModuleInit {
       data: data.map((o) =>
         role === UserRole.ADMIN
           ? this.withItemImages(o)
-          : withoutDeletedBy(this.withItemImages(o)),
+          : role === UserRole.PROVIDER
+            ? this.providerView(o, fulfillerId)
+            : withoutDeletedBy(this.withItemImages(o)),
       ),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
@@ -4041,10 +4071,11 @@ export class OrdersService implements OnModuleInit {
       // Providers: their OWN share of the aggregate provider_amount (the
       // very split the transfers use) and the net shipping, so the earnings
       // breakdown adds up on multi-provider orders.
-      const providerShare =
+      const ownShare =
         role === UserRole.PROVIDER && fulfillerId
           ? providerOrderShare(order, fulfillerId)
-          : {};
+          : null;
+      const providerShare = ownShare ?? {};
       // Customers / providers: reverse-charge evidence without internals.
       const view = this.forCustomer(
         this.withItemImages({
@@ -4055,8 +4086,14 @@ export class OrdersService implements OnModuleInit {
         }),
       );
       // The buyer never gets the commission, the provider amounts or the
-      // catalogue internals of the lines (forBuyer); providers keep them.
-      return role === UserRole.CUSTOMER ? forBuyer(view) : view;
+      // catalogue internals of the lines (forBuyer). A provider keeps them
+      // for its own lines only: other providers' lines and amounts of a
+      // shared order are not its business (forProvider).
+      if (role === UserRole.CUSTOMER) return forBuyer(view);
+      if (role === UserRole.PROVIDER) {
+        return forProvider(view, fulfillerId, ownShare?.my_share ?? null);
+      }
+      return view;
     }
     // The buyer's account email / status go to the store's owner only: a
     // creator reading a foreign store's order as a fulfiller of one of its
@@ -5544,40 +5581,6 @@ export class OrdersService implements OnModuleInit {
       }
     }
     return moves;
-  }
-
-  /**
-   * Inverse of restoreOrderItemsStock, for an order whose payment landed after
-   * it had already been written off. There is no `gte` guard here on purpose:
-   * the goods are sold either way, and letting the count go negative surfaces
-   * the shortfall and stops further sales rather than silently overselling.
-   */
-  private async decrementOrderItemsStock(orderId: string) {
-    const items = await this.prisma.orderItem.findMany({
-      where: { order_id: orderId },
-      select: { product_id: true, variant_id: true, quantity: true },
-    });
-    for (const it of items) {
-      try {
-        if (it.variant_id) {
-          await this.prisma.productVariant.updateMany({
-            where: { id: it.variant_id, stock_quantity: { not: null } },
-            data: { stock_quantity: { decrement: it.quantity } },
-          });
-        } else if (it.product_id) {
-          await this.prisma.product.updateMany({
-            where: {
-              id: it.product_id,
-              track_inventory: true,
-              stock_quantity: { not: null },
-            },
-            data: { stock_quantity: { decrement: it.quantity } },
-          });
-        }
-      } catch (err) {
-        console.error('[StockRestore] order item re-decrement failed', it, err);
-      }
-    }
   }
 
   // ── Order trash (M69, plans/order-trash/SPEC.md) ─────────────────────────

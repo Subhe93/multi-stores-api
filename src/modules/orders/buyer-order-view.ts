@@ -49,7 +49,11 @@ function buyerCustomProduct(cp: unknown): unknown {
   return out;
 }
 
-function buyerItem(item: unknown): unknown {
+/**
+ * One order line as a buyer may read it. Also used for the lines of OTHER
+ * fulfillers in a provider's view of a shared order (provider-order-view).
+ */
+export function buyerOrderItem(item: unknown): unknown {
   if (!isRow(item)) return item;
   const { provider_base_amount: _base, ...line } = item;
   void _base;
@@ -68,6 +72,6 @@ export function forBuyer<T>(order: T): T {
   void _c;
   void _p;
   const out: Row = { ...rest };
-  if (Array.isArray(order.items)) out.items = order.items.map(buyerItem);
+  if (Array.isArray(order.items)) out.items = order.items.map(buyerOrderItem);
   return out as T;
 }

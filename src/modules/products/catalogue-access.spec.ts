@@ -1,7 +1,9 @@
 import { ProductStatus, UserRole } from '@prisma/client';
 import {
   catalogueReadLevel,
+  gatedCatalogueReadLevel,
   loadCatalogueViewer,
+  providerInCatalogue,
   type CatalogueViewer,
 } from './catalogue-access';
 import type { PrismaService } from '../../prisma/prisma.service';
@@ -165,5 +167,90 @@ describe('loadCatalogueViewer', () => {
     expect((await load(l, 'u1', undefined)).role).toBe(UserRole.CUSTOMER);
     expect(l.provider.findUnique).not.toHaveBeenCalled();
     expect(l.creator.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('provider approval gate (providerInCatalogue, gatedCatalogueReadLevel)', () => {
+  function gate(require: boolean | null, verified: boolean | null) {
+    return {
+      platformConfig: {
+        findFirst: jest.fn(() =>
+          Promise.resolve(
+            require === null ? null : { require_provider_approval: require },
+          ),
+        ),
+      },
+      provider: {
+        findUnique: jest.fn(() =>
+          Promise.resolve(verified === null ? null : { verified }),
+        ),
+      },
+    };
+  }
+  const asPrisma = (g: ReturnType<typeof gate>) =>
+    g as unknown as PrismaService;
+
+  it('approval required (or no config row): only a verified provider is in the catalogue', async () => {
+    expect(await providerInCatalogue(asPrisma(gate(true, true)), 'pA')).toBe(
+      true,
+    );
+    expect(await providerInCatalogue(asPrisma(gate(true, false)), 'pA')).toBe(
+      false,
+    );
+    expect(await providerInCatalogue(asPrisma(gate(null, false)), 'pA')).toBe(
+      false,
+    );
+    expect(await providerInCatalogue(asPrisma(gate(true, null)), 'pA')).toBe(
+      false,
+    );
+  });
+
+  it('approval not required: every provider, without a provider lookup', async () => {
+    const g = gate(false, false);
+    expect(await providerInCatalogue(asPrisma(g), 'pA')).toBe(true);
+    expect(g.provider.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('a creator reading an unverified provider product by id gets nothing', async () => {
+    expect(
+      await gatedCatalogueReadLevel(
+        asPrisma(gate(true, false)),
+        providerOf('pB', PUBLISHED),
+        CREATOR_1,
+      ),
+    ).toBeNull();
+    expect(
+      await gatedCatalogueReadLevel(
+        asPrisma(gate(true, true)),
+        providerOf('pB', PUBLISHED),
+        CREATOR_1,
+      ),
+    ).toBe('catalogue');
+  });
+
+  it('owners and admins are never gated (no lookup)', async () => {
+    const g = gate(true, false);
+    expect(
+      await gatedCatalogueReadLevel(
+        asPrisma(g),
+        providerOf('pA', DRAFT),
+        PROV_A,
+      ),
+    ).toBe('full');
+    expect(
+      await gatedCatalogueReadLevel(
+        asPrisma(g),
+        providerOf('pB', PUBLISHED),
+        ADMIN,
+      ),
+    ).toBe('full');
+    expect(
+      await gatedCatalogueReadLevel(
+        asPrisma(g),
+        providerOf('pB', PUBLISHED),
+        CUSTOMER,
+      ),
+    ).toBeNull();
+    expect(g.platformConfig.findFirst).not.toHaveBeenCalled();
   });
 });

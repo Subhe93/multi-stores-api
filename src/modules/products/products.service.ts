@@ -17,7 +17,11 @@ import {
   ProductStoryInputDto,
 } from './dto/product.dto';
 import { parseExternalVideoUrl } from './product-video-url';
-import { catalogueReadLevel, loadCatalogueViewer } from './catalogue-access';
+import {
+  gatedCatalogueReadLevel,
+  loadCatalogueViewer,
+  providerInCatalogue,
+} from './catalogue-access';
 import {
   VIDEO_CONTENT_TYPE,
   VIDEO_POSTER_FOLDER,
@@ -1939,7 +1943,8 @@ export class ProductsService {
     // provider's confidential cost_price; anyone else gets a 404 (customers,
     // competing providers, drafts, other creators' products), so ids
     // cannot be probed.
-    const level = catalogueReadLevel(
+    const level = await gatedCatalogueReadLevel(
+      this.prisma,
       product,
       await loadCatalogueViewer(this.prisma, userId, userRole),
     );
@@ -2763,7 +2768,13 @@ export class ProductsService {
 
     // Only published provider products can be imported into a creator store —
     // drafts, archived items, and creator-own products are not importable.
-    if (!product.provider_id || product.status !== ProductStatus.PUBLISHED) {
+    // An unverified provider's product is not importable while the platform
+    // requires provider approval (the catalogue list hides it too).
+    if (
+      !product.provider_id ||
+      product.status !== ProductStatus.PUBLISHED ||
+      !(await providerInCatalogue(this.prisma, product.provider_id))
+    ) {
       throw new BadRequestException({
         code: 'PRODUCT_NOT_IMPORTABLE',
         message:

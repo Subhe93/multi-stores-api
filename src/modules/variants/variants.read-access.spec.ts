@@ -18,11 +18,14 @@ const variantRow = (id: string) => ({
   images: [],
 });
 
-function setup(product: {
-  provider_id: string | null;
-  creator_id: string | null;
-  status: ProductStatus;
-}) {
+function setup(
+  product: {
+    provider_id: string | null;
+    creator_id: string | null;
+    status: ProductStatus;
+  },
+  providerVerified = true,
+) {
   const prisma = {
     product: { findUnique: jest.fn(() => Promise.resolve(product)) },
     productVariant: {
@@ -34,8 +37,21 @@ function setup(product: {
       ),
     },
     provider: {
-      findUnique: jest.fn(({ where }: { where: { user_id: string } }) =>
-        Promise.resolve(where.user_id === 'u-prov' ? { id: 'pA' } : null),
+      findUnique: jest.fn(
+        ({ where }: { where: { user_id?: string; id?: string } }) =>
+          Promise.resolve(
+            where.id
+              ? { verified: providerVerified }
+              : where.user_id === 'u-prov'
+                ? { id: 'pA' }
+                : null,
+          ),
+      ),
+    },
+    // Provider approval required (the platform default).
+    platformConfig: {
+      findFirst: jest.fn(() =>
+        Promise.resolve({ require_provider_approval: true }),
       ),
     },
     creator: {
@@ -58,6 +74,16 @@ const PUBLISHED_PROVIDER = {
 };
 
 describe('variant reads: visibility', () => {
+  it('a creator on a PUBLISHED product of an unverified provider (approval required): 404', async () => {
+    const { svc } = setup(PUBLISHED_PROVIDER, false);
+    await expect(
+      svc.findByProduct('p1', 'u-creator', UserRole.CREATOR),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      svc.findById('v1', 'u-creator', UserRole.CREATOR),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
   it('the owning provider gets the full rows (list and one)', async () => {
     const { svc } = setup({
       ...PUBLISHED_PROVIDER,

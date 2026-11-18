@@ -49,6 +49,52 @@ export function catalogueReadLevel(
   return null;
 }
 
+/** The lookups of the provider approval gate. */
+export type CatalogueGateLookups = Pick<
+  PrismaService,
+  'platformConfig' | 'provider'
+>;
+
+/**
+ * Whether a provider's published products are in the creator catalogue
+ * (SPEC §4, the same gate as the catalogue list of GET /products): always
+ * while the platform does not require provider approval
+ * (PlatformConfig.require_provider_approval, true when no row exists),
+ * otherwise only once the provider is verified. Every creator-side read or
+ * import of one provider product checks it too, so an unverified provider's
+ * product cannot be read, priced or imported by id.
+ */
+export async function providerInCatalogue(
+  prisma: CatalogueGateLookups,
+  providerId: string,
+): Promise<boolean> {
+  const cfg = await prisma.platformConfig.findFirst({
+    select: { require_provider_approval: true },
+  });
+  if (!(cfg?.require_provider_approval ?? true)) return true;
+  const provider = await prisma.provider.findUnique({
+    where: { id: providerId },
+    select: { verified: true },
+  });
+  return provider?.verified === true;
+}
+
+/**
+ * catalogueReadLevel plus the provider approval gate: a 'catalogue' read of
+ * an unverified provider's product (while approval is required) is null.
+ */
+export async function gatedCatalogueReadLevel(
+  prisma: CatalogueGateLookups,
+  p: Parameters<typeof catalogueReadLevel>[0],
+  v: CatalogueViewer,
+): Promise<'full' | 'catalogue' | null> {
+  const level = catalogueReadLevel(p, v);
+  if (level !== 'catalogue' || p.provider_id === null) return level;
+  return (await providerInCatalogue(prisma, p.provider_id))
+    ? 'catalogue'
+    : null;
+}
+
 /** The two profile lookups catalogue reads need. */
 export type CatalogueViewerLookups = Pick<
   PrismaService,

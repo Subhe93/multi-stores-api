@@ -8,7 +8,7 @@ import { RevalidationService } from '../../common/revalidation/revalidation.serv
 import { ProductStatus, UserRole } from '@prisma/client';
 import { CreateVariantDto, UpdateVariantDto } from './dto/variant.dto';
 import {
-  catalogueReadLevel,
+  gatedCatalogueReadLevel,
   loadCatalogueViewer,
 } from '../products/catalogue-access';
 
@@ -110,7 +110,8 @@ export class VariantsService {
     userId: string,
     userRole: UserRole,
   ) {
-    return catalogueReadLevel(
+    return gatedCatalogueReadLevel(
+      this.prisma,
       product,
       await loadCatalogueViewer(this.prisma, userId, userRole),
     );

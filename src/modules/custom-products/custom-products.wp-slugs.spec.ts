@@ -98,6 +98,15 @@ function setup(opts: { own?: Row[]; custom?: Row[]; existing?: Row } = {}) {
       deleteMany: jest.fn(),
     },
     $transaction: jest.fn((fn: (t: unknown) => Promise<unknown>) => fn(tx)),
+    // The base product's provider is verified (approval gate open).
+    platformConfig: {
+      findFirst: jest.fn(() =>
+        Promise.resolve({ require_provider_approval: true }),
+      ),
+    },
+    provider: {
+      findUnique: jest.fn(() => Promise.resolve({ verified: true })),
+    },
   };
   const redirects = {
     applySlugChangeRedirects: jest.fn(() => Promise.resolve(null)),

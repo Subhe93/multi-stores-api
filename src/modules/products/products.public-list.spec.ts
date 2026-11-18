@@ -243,7 +243,7 @@ describe('GET /products (listForViewer)', () => {
 });
 
 describe('GET /products/:id (findById visibility)', () => {
-  function byIdSetup(row: Record<string, unknown>) {
+  function byIdSetup(row: Record<string, unknown>, providerVerified = true) {
     const findUnique = jest.fn(() =>
       Promise.resolve({
         id: 'p1',
@@ -266,10 +266,21 @@ describe('GET /products/:id (findById visibility)', () => {
         ),
       },
       provider: {
-        findUnique: jest.fn(({ where }: { where: { user_id: string } }) =>
-          Promise.resolve(
-            where.user_id === 'u-provider' ? { id: 'pr1' } : null,
-          ),
+        findUnique: jest.fn(
+          ({ where }: { where: { user_id?: string; id?: string } }) =>
+            Promise.resolve(
+              where.id
+                ? { verified: providerVerified }
+                : where.user_id === 'u-provider'
+                  ? { id: 'pr1' }
+                  : null,
+            ),
+        ),
+      },
+      // Provider approval required (the platform default).
+      platformConfig: {
+        findFirst: jest.fn(() =>
+          Promise.resolve({ require_provider_approval: true }),
         ),
       },
     };
@@ -300,6 +311,16 @@ describe('GET /products/:id (findById visibility)', () => {
     expect(JSON.stringify(p)).not.toContain('woo:');
     // The creator still sees its cost (the provider price) and stock.
     expect(p).toMatchObject({ base_price: 45, stock_quantity: 40 });
+  });
+
+  it('CREATOR on a PUBLISHED product of an unverified provider (approval required): 404', async () => {
+    const { svc } = byIdSetup(providerProduct(ProductStatus.PUBLISHED), false);
+    await expect(
+      svc.findById('p1', 'u-creator', UserRole.CREATOR),
+    ).rejects.toMatchObject({
+      status: 404,
+      response: { code: 'PRODUCT_NOT_FOUND' },
+    });
   });
 
   it.each([

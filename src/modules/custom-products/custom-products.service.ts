@@ -55,6 +55,7 @@ import {
   type PriceFloorVariant,
 } from './price-floor';
 import { PRODUCT_VIDEOS_INCLUDE } from '../products/product-video.mapper';
+import { providerInCatalogue } from '../products/catalogue-access';
 import {
   PRODUCT_STORIES_INCLUDE,
   toProductStoriesOut,
@@ -288,7 +289,8 @@ export class CustomProductsService {
     if (
       !product ||
       !product.provider_id ||
-      product.status !== ProductStatus.PUBLISHED
+      product.status !== ProductStatus.PUBLISHED ||
+      !(await providerInCatalogue(this.prisma, product.provider_id))
     )
       throw new NotFoundException({
         code: 'CUSTOM_PRODUCT_BASE_PRODUCT_NOT_FOUND',
@@ -400,15 +402,19 @@ export class CustomProductsService {
     return cp;
   }
 
+  // The base product reaches the creator (and the provider's own reads)
+  // without the provider's confidential cost_price and without importer
+  // identities (external_ref) on the product or its variants.
   private readonly includes = {
     product: {
+      omit: { cost_price: true, external_ref: true },
       include: {
         translations: true,
         images: { orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
         // Decision D5: the provider's videos this store shows (read-only in the editor).
         videos: PRODUCT_VIDEOS_INCLUDE,
         // Customer stories are detail-only: see `detailIncludes` (loadById).
-        variants: { where: { is_active: true } },
+        variants: { where: { is_active: true }, omit: { external_ref: true } },
         custom_fields: {
           include: { translations: true },
           orderBy: [{ sort_order: 'asc' as const }, { id: 'asc' as const }],
@@ -418,7 +424,9 @@ export class CustomProductsService {
     mockup_images: { orderBy: { sort_order: 'asc' as const } },
     translations: true,
     creator: { select: { display_name: true } },
-    selected_variants: { include: { variant: true } },
+    selected_variants: {
+      include: { variant: { omit: { external_ref: true } } },
+    },
     field_values: { include: { custom_field: true } },
     faqs: {
       include: { translations: true },
@@ -451,6 +459,7 @@ export class CustomProductsService {
   private readonly detailIncludes = {
     ...this.includes,
     product: {
+      omit: this.includes.product.omit,
       include: {
         ...this.includes.product.include,
         stories: PRODUCT_STORIES_INCLUDE,
@@ -721,9 +730,12 @@ export class CustomProductsService {
         code: 'CUSTOM_PRODUCT_BASE_PRODUCT_NOT_FOUND',
         message: 'Product not found',
       });
+    // An unverified provider's product is not importable while the platform
+    // requires provider approval (the creator catalogue hides it too).
     if (
       !baseProduct.provider_id ||
-      baseProduct.status !== ProductStatus.PUBLISHED
+      baseProduct.status !== ProductStatus.PUBLISHED ||
+      !(await providerInCatalogue(this.prisma, baseProduct.provider_id))
     ) {
       throw new BadRequestException({
         code: 'CUSTOM_PRODUCT_BASE_NOT_IMPORTABLE',
