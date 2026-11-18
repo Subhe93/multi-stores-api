@@ -68,8 +68,11 @@ export class StorefrontController {
   getProducts(
     @Viewer() viewer: StorefrontViewer | null,
     @Param('slug') slug: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    // Raw values (typed unknown so the global pipe does not coerce them);
+    // the service normalises them and never answers 400 for them.
+    @Query('page') page?: unknown,
+    @Query('limit') limit?: unknown,
+    @Query('sort') sort?: unknown,
     @Query('category_id') category_id?: string,
     @Query('creator_category') creator_category?: string,
     @Query('creator_category_id') creator_category_id?: string,
@@ -81,8 +84,9 @@ export class StorefrontController {
     return this.storefrontService.getProducts(
       slug,
       {
-        page: page ? +page : undefined,
-        limit: limit ? +limit : undefined,
+        page,
+        limit,
+        sort,
         category_id,
         creator_category,
         creator_category_id,

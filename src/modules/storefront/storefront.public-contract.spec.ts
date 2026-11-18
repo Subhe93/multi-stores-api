@@ -372,6 +372,7 @@ function buildCatalog() {
     product: {
       findMany: jest.fn(() => Promise.resolve([ownProductRow()])),
       findFirst: jest.fn(() => Promise.resolve(ownProductRow())),
+      count: jest.fn(() => Promise.resolve(1)),
     },
     customProduct: {
       findMany: jest.fn(() => Promise.resolve([])),
@@ -469,16 +470,43 @@ function expectProductContract(p: Record<string, unknown>) {
 }
 
 describe('public contract: products', () => {
-  it('GET /storefront/:slug/products is a plain (unpaginated) array of the documented shape', async () => {
+  it('GET /storefront/:slug/products without page is a plain array of the documented shape (full list, or the first N with limit)', async () => {
     const { service } = buildCatalog();
-    const list = (await service.getProducts('prima', {
+    for (const filters of [{}, { limit: 1 }, { limit: 5 }]) {
+      const list = (await service.getProducts('prima', filters)) as Record<
+        string,
+        unknown
+      >[];
+      expect(Array.isArray(list)).toBe(true);
+      expect(list).toHaveLength(1);
+      expectProductContract(list[0]);
+    }
+  });
+
+  it('GET /storefront/:slug/products with page is { items, total, page, limit, has_more }, items of the same shape', async () => {
+    const { service } = buildCatalog();
+    const first = (await service.getProducts('prima', {
+      page: 1,
+      limit: 1,
+    })) as { items: Record<string, unknown>[] };
+    expect(first).toMatchObject({
+      total: 1,
+      page: 1,
+      limit: 1,
+      has_more: false,
+    });
+    expect(first.items).toHaveLength(1);
+    expectProductContract(first.items[0]);
+    // A page beyond the end: no items, the true total.
+    await expect(
+      service.getProducts('prima', { page: 2, limit: 1 }),
+    ).resolves.toEqual({
+      items: [],
+      total: 1,
       page: 2,
       limit: 1,
-    })) as Record<string, unknown>[];
-    expect(Array.isArray(list)).toBe(true);
-    // page / limit are accepted and ignored.
-    expect(list).toHaveLength(1);
-    expectProductContract(list[0]);
+      has_more: false,
+    });
   });
 
   it('GET /storefront/:slug/products/:productSlug carries the same core keys', async () => {

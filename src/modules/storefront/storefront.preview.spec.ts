@@ -302,7 +302,8 @@ describe('every public storefront read honours the owner preview', () => {
       name: 'GET /storefront/:slug/products',
       call: (s, v) => s.getProducts('namez', { page: 1, limit: 12 }, undefined, undefined, v),
       closed: (r) => {
-        expect(r).toEqual([]);
+        // `page` sent: the empty page (a plain [] without `page`).
+        expect(r).toEqual({ items: [], total: 0, page: 1, limit: 12, has_more: false });
         expect(prismaOf(lastBuild).product.findMany).not.toHaveBeenCalled();
       },
       open: () => expect(prismaOf(lastBuild).product.findMany).toHaveBeenCalled(),

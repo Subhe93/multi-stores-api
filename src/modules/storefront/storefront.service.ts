@@ -70,6 +70,22 @@ import {
   type StorefrontViewer,
 } from './storefront-gate.service';
 import { compareManualOrder } from '../creator-categories/product-order';
+import {
+  compareDefault,
+  compareManual,
+  compareName,
+  comparePrice,
+  compareTail,
+  emptyListResult,
+  listLocale,
+  normalizeListQuery,
+  sourceOrderBy,
+  titleFor,
+  toProductsPage,
+  type ListComparator,
+  type ListKey,
+  type WindowQuery,
+} from './product-list-query';
 import { storeSellerDetails } from '../legal/platform-seller';
 import {
   STORE_LEGAL_KIND,
@@ -463,6 +479,62 @@ export function collectionFilterFrom(
     match_rule: cc.match_rule as 'MANUAL' | 'TAGS',
     match_tags: cc.match_tags,
   };
+}
+
+/** Includes of the product list (full and windowed reads alike). */
+const LIST_OWN_INCLUDE = {
+  translations: true,
+  images: {
+    take: 1,
+    orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }],
+  },
+  variants: { where: { is_active: true } },
+  category: { include: { translations: true } },
+} satisfies Prisma.ProductInclude;
+
+const LIST_CUSTOM_INCLUDE = {
+  translations: true,
+  mockup_images: { take: 1, orderBy: { sort_order: 'asc' } },
+  selected_variants: { include: { variant: true } },
+  product: {
+    include: {
+      images: {
+        take: 1,
+        orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }],
+      },
+      variants: { where: { is_active: true } },
+      category: { include: { translations: true } },
+      provider: {
+        select: { id: true, company_name: true, logo_url: true },
+      },
+    },
+  },
+} satisfies Prisma.CustomProductInclude;
+
+type ListedOwnRow = Prisma.ProductGetPayload<{
+  include: typeof LIST_OWN_INCLUDE;
+}>;
+type ListedCustomRow = Prisma.CustomProductGetPayload<{
+  include: typeof LIST_CUSTOM_INCLUDE;
+}>;
+type ListStore = Prisma.StoreGetPayload<{ include: { creator: true } }>;
+/** Light key row of a custom product (titles only for `sort=name`). */
+type LightCustomKeyRow = {
+  id: string;
+  created_at: Date;
+  final_price: Prisma.Decimal;
+  translations?: { locale: string; title: string }[];
+};
+
+/** What the product list resolved before reading rows (any mode). */
+interface ListContext {
+  store: ListStore;
+  market: MarketContext | null;
+  ownWhere: Prisma.ProductWhereInput;
+  customWhere: Prisma.CustomProductWhereInput;
+  isIndependent: boolean;
+  creatorCategory: CollectionFilter | null;
+  locale?: string;
 }
 
 /** A linked collection row as the product queries include it (M6). */
@@ -1147,8 +1219,11 @@ export class StorefrontService {
   async getProducts(
     slug: string,
     filters: {
-      page?: number;
-      limit?: number;
+      // Raw query values, normalised by normalizeListQuery (never a 400).
+      // Without `page` and `limit` the full list is served as before.
+      page?: unknown;
+      limit?: unknown;
+      sort?: unknown;
       category_id?: string;
       creator_category?: string;
       // M6.4: collection id (uuid). Reached only from the builder
@@ -1162,14 +1237,15 @@ export class StorefrontService {
     preview?: boolean,
     viewer?: StorefrontViewer | null,
   ) {
+    const query = normalizeListQuery(filters);
     const store = await this.prisma.store.findUnique({
       where: { slug },
       include: { creator: true },
     });
     if (!store) throw this.storeNotFound();
     // Closed store (SPEC §3): nothing listed unless the owner / admin
-    // previews (same plain-array shape as an empty catalog).
-    if (!(await this.open(store, viewer))) return [];
+    // previews (same shape as an empty catalog).
+    if (!(await this.open(store, viewer))) return emptyListResult(query);
 
     const market = await this.resolveMarket(store.id, marketKey, preview);
 
@@ -1183,7 +1259,7 @@ export class StorefrontService {
       : null;
     // Unknown, inactive or (for the slug filter) INTERNAL collection —
     // return nothing, like an inactive one.
-    if (requested && !creatorCategory) return [];
+    if (requested && !creatorCategory) return emptyListResult(query);
 
     // Creator's own products (creator_id set on Product)
     const ownWhere: Prisma.ProductWhereInput = {
@@ -1200,7 +1276,7 @@ export class StorefrontService {
       if (creatorCategory.match_rule === 'TAGS') {
         // Linked to any of the listed INTERNAL rows (tags); an empty rule
         // lists nothing.
-        if (!creatorCategory.match_tags.length) return [];
+        if (!creatorCategory.match_tags.length) return emptyListResult(query);
         Object.assign(
           ownWhere,
           tagRuleProductWhere(creatorCategory.match_tags),
@@ -1266,45 +1342,66 @@ export class StorefrontService {
     // custom products (provider resells) on their storefront.
     const isIndependent = store.store_type === StoreType.INDEPENDENT;
 
-    const customProductInclude = {
-      translations: true,
-      mockup_images: { take: 1, orderBy: { sort_order: 'asc' } },
-      selected_variants: { include: { variant: true } },
-      product: {
-        include: {
-          images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
-          variants: { where: { is_active: true } },
-          category: { include: { translations: true } },
-          provider: {
-            select: { id: true, company_name: true, logo_url: true },
-          },
-        },
-      },
-    } satisfies Prisma.CustomProductInclude;
-    type ListedCustomProduct = Prisma.CustomProductGetPayload<{
-      include: typeof customProductInclude;
-    }>;
+    const ctx: ListContext = {
+      store,
+      market,
+      ownWhere,
+      customWhere,
+      isIndependent,
+      creatorCategory,
+      locale: filters.locale,
+    };
+    if (query.mode !== 'all') return this.listProductsWindow(query, ctx);
 
     const [ownProducts, customProducts] = await Promise.all([
       this.prisma.product.findMany({
         where: ownWhere,
-        include: {
-          translations: true,
-          images: { take: 1, orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }] },
-          variants: { where: { is_active: true } },
-          category: { include: { translations: true } },
-        },
+        include: LIST_OWN_INCLUDE,
         orderBy: { created_at: 'desc' },
       }),
       isIndependent
-        ? Promise.resolve<ListedCustomProduct[]>([])
+        ? Promise.resolve<ListedCustomRow[]>([])
         : this.prisma.customProduct.findMany({
             where: customWhere,
-            include: customProductInclude,
+            include: LIST_CUSTOM_INCLUDE,
             orderBy: { created_at: 'desc' },
           }),
     ]);
 
+    const listed = await this.shapeListedProducts(
+      store,
+      market,
+      ownProducts,
+      customProducts,
+    );
+
+    // A MANUAL collection lists its products in the creator's drag order
+    // (link sort_order, one index space for own + custom), newest first on
+    // ties. TAGS collections and plain lists keep own-then-custom by date.
+    // The storefront sorts client-side for its explicit sort options.
+    if (creatorCategory?.match_rule === 'MANUAL' && listed.length > 1) {
+      return this.sortByManualOrder(
+        creatorCategory.id,
+        listed,
+        ownProducts,
+        customProducts,
+      );
+    }
+    return listed;
+  }
+
+  /**
+   * Shape loaded list rows for the storefront: own then custom, with
+   * market prices, personalization shaping, promotions and (b2b app)
+   * `tax_rate_bp`. Shared by the full list and the windowed modes, so an
+   * item is the same object whichever mode served it.
+   */
+  private async shapeListedProducts(
+    store: ListStore,
+    market: MarketContext | null,
+    ownProducts: ListedOwnRow[],
+    customProducts: ListedCustomRow[],
+  ) {
     // Vendor (provider) exposure is an opt-in marketplace-only setting.
     const showVendor = this.showVendor(store);
 
@@ -1439,19 +1536,204 @@ export class StorefrontService {
         ]
       : [...ownWithPromos, ...customWithPromos];
 
-    // A MANUAL collection lists its products in the creator's drag order
-    // (link sort_order, one index space for own + custom), newest first on
-    // ties. TAGS collections and plain lists keep own-then-custom by date.
-    // The storefront sorts client-side for its explicit sort options.
-    if (creatorCategory?.match_rule === 'MANUAL' && listed.length > 1) {
-      return this.sortByManualOrder(
-        creatorCategory.id,
-        listed,
-        ownProducts,
-        customProducts,
-      );
-    }
     return listed;
+  }
+
+  /**
+   * `limit` and `page` modes of the product list: one algorithm.
+   *
+   * 1. Light keys per source (`id`, `created_at`, stored price; titles for
+   *    `sort=name`). Orders the database can express read only `offset +
+   *    limit` keys per source; a MANUAL collection's default order and
+   *    `sort=name` scan the matching keys (their order is not a Prisma
+   *    orderBy: one index space across two link tables, a to-many title).
+   * 2. Merge both sources in memory with the order's comparator (total:
+   *    every comparator ends on kind + id) and cut the window.
+   * 3. Hydrate the window ids only (same where, same includes), shape them
+   *    through the shared pipeline and emit them in window order. A row
+   *    that disappeared in between is dropped, never replaced.
+   * `total` (paged only) is the true match count of the same where.
+   */
+  private async listProductsWindow(q: WindowQuery, ctx: ListContext) {
+    const { ownWhere, customWhere, isIndependent } = ctx;
+    const { offset, limit, sort } = q;
+    const take = offset + limit;
+    const manual = !sort && ctx.creatorCategory?.match_rule === 'MANUAL';
+    const byName = sort === 'name';
+    const paged = q.mode === 'paged';
+
+    let keys: ListKey[];
+    let comparator: ListComparator;
+    let total = 0;
+    if (manual || byName) {
+      const locale = listLocale(ctx.locale);
+      const titles = byName
+        ? { translations: { select: { locale: true, title: true } } }
+        : {};
+      const [own, custom] = await Promise.all([
+        this.prisma.product.findMany({
+          where: ownWhere,
+          select: { id: true, created_at: true, base_price: true, ...titles },
+        }),
+        isIndependent
+          ? Promise.resolve<LightCustomKeyRow[]>([])
+          : this.prisma.customProduct.findMany({
+              where: customWhere,
+              select: {
+                id: true,
+                created_at: true,
+                final_price: true,
+                ...titles,
+              },
+            }),
+      ]);
+      const title = (row: object) =>
+        byName
+          ? titleFor(
+              (row as { translations: { locale: string; title: string }[] })
+                .translations,
+              locale,
+            )
+          : undefined;
+      keys = [
+        ...own.map((r) => ({
+          kind: 'p' as const,
+          id: r.id,
+          created_at: r.created_at,
+          price: Number(r.base_price),
+          title: title(r),
+        })),
+        ...custom.map((r) => ({
+          kind: 'cp' as const,
+          id: r.id,
+          created_at: r.created_at,
+          price: Number(r.final_price),
+          title: title(r),
+        })),
+      ];
+      total = keys.length;
+      comparator = manual
+        ? compareManual(
+            await this.manualSortOrders(
+              ctx.creatorCategory!.id,
+              custom.length > 0,
+            ),
+          )
+        : compareName(locale);
+    } else {
+      const [own, custom, ownCount, customCount] = await Promise.all([
+        this.prisma.product.findMany({
+          where: ownWhere,
+          select: { id: true, created_at: true, base_price: true },
+          orderBy: sourceOrderBy(sort, 'base_price'),
+          take,
+        }),
+        isIndependent
+          ? Promise.resolve<LightCustomKeyRow[]>([])
+          : this.prisma.customProduct.findMany({
+              where: customWhere,
+              select: { id: true, created_at: true, final_price: true },
+              orderBy: sourceOrderBy(sort, 'final_price'),
+              take,
+            }),
+        paged ? this.prisma.product.count({ where: ownWhere }) : 0,
+        paged && !isIndependent
+          ? this.prisma.customProduct.count({ where: customWhere })
+          : 0,
+      ]);
+      keys = [
+        ...own.map((r) => ({
+          kind: 'p' as const,
+          id: r.id,
+          created_at: r.created_at,
+          price: Number(r.base_price),
+        })),
+        ...custom.map((r: LightCustomKeyRow) => ({
+          kind: 'cp' as const,
+          id: r.id,
+          created_at: r.created_at,
+          price: Number(r.final_price),
+        })),
+      ];
+      total = ownCount + customCount;
+      comparator =
+        sort === 'newest'
+          ? compareTail
+          : sort === 'price_asc' || sort === 'price_desc'
+            ? comparePrice(sort === 'price_asc' ? 'asc' : 'desc')
+            : compareDefault;
+    }
+
+    keys.sort(comparator);
+    const window = keys.slice(offset, offset + limit);
+    const items = window.length
+      ? await this.hydrateListWindow(window, ctx)
+      : [];
+    return paged ? toProductsPage(q, items, total) : items;
+  }
+
+  /** Full rows of a window, shaped, in window order. */
+  private async hydrateListWindow(window: ListKey[], ctx: ListContext) {
+    const ownIds = window.filter((k) => k.kind === 'p').map((k) => k.id);
+    const customIds = window.filter((k) => k.kind === 'cp').map((k) => k.id);
+    const [ownRows, customRows] = await Promise.all([
+      ownIds.length
+        ? this.prisma.product.findMany({
+            where: { AND: [ctx.ownWhere, { id: { in: ownIds } }] },
+            include: LIST_OWN_INCLUDE,
+          })
+        : Promise.resolve<ListedOwnRow[]>([]),
+      customIds.length
+        ? this.prisma.customProduct.findMany({
+            where: { AND: [ctx.customWhere, { id: { in: customIds } }] },
+            include: LIST_CUSTOM_INCLUDE,
+          })
+        : Promise.resolve<ListedCustomRow[]>([]),
+    ]);
+    const shaped = await this.shapeListedProducts(
+      ctx.store,
+      ctx.market,
+      ownRows,
+      customRows,
+    );
+    const byToken = new Map(
+      shaped.map((p) => [
+        `${'_type' in p && p._type === 'custom_product' ? 'cp' : 'p'}:${p.id}`,
+        p,
+      ]),
+    );
+    return window.flatMap((k) => {
+      const item = byToken.get(`${k.kind}:${k.id}`);
+      return item ? [item] : [];
+    });
+  }
+
+  /**
+   * Link sort_order of a MANUAL collection, keyed by `p:<id>` /
+   * `cp:<id>` (one index space). The custom link table is read only when
+   * custom rows are listed.
+   */
+  private async manualSortOrders(
+    creatorCategoryId: string,
+    withCustom: boolean,
+  ): Promise<Map<string, number>> {
+    const [ownLinks, customLinks] = await Promise.all([
+      this.prisma.productCreatorCategory.findMany({
+        where: { creator_category_id: creatorCategoryId },
+        select: { product_id: true, sort_order: true },
+      }),
+      withCustom
+        ? this.prisma.customProductCreatorCategory.findMany({
+            where: { creator_category_id: creatorCategoryId },
+            select: { custom_product_id: true, sort_order: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const sortOf = new Map<string, number>();
+    for (const l of ownLinks) sortOf.set(`p:${l.product_id}`, l.sort_order);
+    for (const l of customLinks)
+      sortOf.set(`cp:${l.custom_product_id}`, l.sort_order);
+    return sortOf;
   }
 
   /**
@@ -1467,22 +1749,10 @@ export class StorefrontService {
     ownRows: { id: string; created_at: Date }[],
     customRows: { id: string; created_at: Date }[],
   ): Promise<T[]> {
-    const [ownLinks, customLinks] = await Promise.all([
-      this.prisma.productCreatorCategory.findMany({
-        where: { creator_category_id: creatorCategoryId },
-        select: { product_id: true, sort_order: true },
-      }),
-      customRows.length
-        ? this.prisma.customProductCreatorCategory.findMany({
-            where: { creator_category_id: creatorCategoryId },
-            select: { custom_product_id: true, sort_order: true },
-          })
-        : Promise.resolve([]),
-    ]);
-    const sortOf = new Map<string, number>();
-    for (const l of ownLinks) sortOf.set(`p:${l.product_id}`, l.sort_order);
-    for (const l of customLinks)
-      sortOf.set(`cp:${l.custom_product_id}`, l.sort_order);
+    const sortOf = await this.manualSortOrders(
+      creatorCategoryId,
+      customRows.length > 0,
+    );
     const createdOf = new Map<string, Date>();
     for (const r of ownRows) createdOf.set(`p:${r.id}`, r.created_at);
     for (const r of customRows) createdOf.set(`cp:${r.id}`, r.created_at);

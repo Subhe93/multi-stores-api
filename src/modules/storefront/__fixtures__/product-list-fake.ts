@@ -7,6 +7,7 @@ import { MarketPricingService } from '../../markets/market-pricing.service';
 import type { MarketContext } from '../../markets/market-context';
 import { TaxService } from '../../taxes/tax.service';
 import type { PersonalizationService } from '../../personalization/personalization.service';
+import type { StorefrontGateService } from '../storefront-gate.service';
 
 /**
  * A small in-memory Prisma for the storefront product list. It honours what
@@ -80,7 +81,10 @@ export interface CustomSpec extends RowMeta {
 
 export function ownRow(s: OwnSpec) {
   const price = s.price ?? 100;
-  const titles = s.titles ?? { sv: s.title ?? `Titel ${s.id}`, en: s.title ?? `Title ${s.id}` };
+  const titles = s.titles ?? {
+    sv: s.title ?? `Titel ${s.id}`,
+    en: s.title ?? `Title ${s.id}`,
+  };
   return {
     id: s.id,
     provider_id: null,
@@ -164,7 +168,10 @@ export function ownRow(s: OwnSpec) {
 
 export function customRow(s: CustomSpec) {
   const price = s.price ?? 50;
-  const titles = s.titles ?? { sv: s.title ?? `Titel ${s.id}`, en: s.title ?? `Title ${s.id}` };
+  const titles = s.titles ?? {
+    sv: s.title ?? `Titel ${s.id}`,
+    en: s.title ?? `Title ${s.id}`,
+  };
   const pricing = s.pricing ?? 'SINGLE';
   const baseVariant = (n: number, adj: number) => ({
     id: `${s.id}-bv${n}`,
@@ -203,7 +210,14 @@ export function customRow(s: CustomSpec) {
     })),
     mockup_images:
       pricing === 'SINGLE'
-        ? [{ id: `${s.id}-m`, custom_product_id: s.id, url: `/uploads/${s.id}-m.webp`, sort_order: 0 }]
+        ? [
+            {
+              id: `${s.id}-m`,
+              custom_product_id: s.id,
+              url: `/uploads/${s.id}-m.webp`,
+              sort_order: 0,
+            },
+          ]
         : [],
     selected_variants:
       pricing === 'PER_VARIANT'
@@ -242,10 +256,6 @@ export function customRow(s: CustomSpec) {
 
 type Row = { id: string; created_at: Date } & Record<string, unknown>;
 type Where = Record<string, unknown> | undefined;
-
-function str(v: unknown): string {
-  return typeof v === 'string' ? v : '';
-}
 
 function matches(row: Row, meta: RowMeta, where: Where): boolean {
   if (!where) return true;
@@ -535,7 +545,13 @@ export function buildList(fx: ListFixture) {
     loadTaxData: jest.fn(() =>
       Promise.resolve({
         classes: [
-          { id: 'std', store_id: null, key: 'standard', name: {}, is_default: true },
+          {
+            id: 'std',
+            store_id: null,
+            key: 'standard',
+            name: {},
+            is_default: true,
+          },
         ],
         rates: [
           {
@@ -564,6 +580,16 @@ export function buildList(fx: ListFixture) {
       : ({
           isEnabled: jest.fn(() => Promise.resolve(fx.personalization)),
         } as unknown as PersonalizationService);
+  // Public gate: LIVE is open to everyone; a closed store only to the
+  // viewer with id 'owner'.
+  const gate = {
+    allows: jest.fn(
+      (s: { status?: StoreStatus }, viewer?: { id?: string } | null) =>
+        Promise.resolve(
+          s.status === StoreStatus.LIVE || viewer?.id === 'owner',
+        ),
+    ),
+  };
   const service = new StorefrontService(
     prisma as unknown as PrismaService,
     storeApps as unknown as StoreAppsService,
@@ -571,6 +597,8 @@ export function buildList(fx: ListFixture) {
     new MarketPricingService(prisma as unknown as PrismaService),
     taxService as unknown as TaxService,
     personalization,
+    undefined,
+    gate as unknown as StorefrontGateService,
   );
   return { service, prisma, storeApps, taxService };
 }

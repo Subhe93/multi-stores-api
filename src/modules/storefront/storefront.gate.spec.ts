@@ -173,8 +173,18 @@ describe('GET /storefront/:slug gate', () => {
   it('search and sitemap of a non-LIVE store are empty', async () => {
     const { service, prisma } = build(StoreStatus.DRAFT);
     await expect(
-      service.getProducts('namez', { search: 'mug', page: 2, limit: 5 }),
+      service.getProducts('namez', { search: 'mug', limit: 5 }),
     ).resolves.toEqual([]);
+    // Paged form: the empty page of the same request.
+    await expect(
+      service.getProducts('namez', { search: 'mug', page: 2, limit: 5 }),
+    ).resolves.toEqual({
+      items: [],
+      total: 0,
+      page: 2,
+      limit: 5,
+      has_more: false,
+    });
     expect(prisma.product.findMany).not.toHaveBeenCalled();
     await expect(service.getSitemapData('namez')).resolves.toMatchObject({
       indexing: 'noindex',

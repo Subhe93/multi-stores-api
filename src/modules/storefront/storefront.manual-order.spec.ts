@@ -165,14 +165,18 @@ describe('StorefrontService.getProducts manual collection order', () => {
         { custom_product_id: 'cp-old', sort_order: 1 },
       ],
     });
-    const list = await service.getProducts('shop', {
-      creator_category_id: CC,
-      limit: 2,
-    });
-    const all = ids(list);
-    expect(all.slice(0, 2)).toEqual(['p-mid', 'cp-old']);
-    expect(all.slice(2, 4)).toEqual(['p-old', 'cp-new']);
-    expect(all.slice(4, 6)).toEqual(['p-new']);
+    const all = ids(
+      await service.getProducts('shop', { creator_category_id: CC }),
+    );
+    expect(all).toEqual(['p-mid', 'cp-old', 'p-old', 'cp-new', 'p-new']);
+    // `limit` is honoured: exactly the first N of the full manual order.
+    for (const limit of [1, 2, 4, 5, 6]) {
+      const list = await service.getProducts('shop', {
+        creator_category_id: CC,
+        limit,
+      });
+      expect(ids(list)).toEqual(all.slice(0, limit));
+    }
   });
 
   it('TAGS: keeps own-then-custom by date and reads no links', async () => {
