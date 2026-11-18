@@ -14,22 +14,23 @@ import { ProductsService } from './products.service';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
-import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt.guard';
 import { UserRole, ProductStatus } from '@prisma/client';
 
 @Controller('products')
 export class ProductsController {
   constructor(private productsService: ProductsService) {}
 
-  // عام — تصفح المنتجات
-  // Catalogue listing. Anonymous / non-owner callers only get PUBLISHED
-  // provider products (public projection); admins and owners filtering their
-  // own catalogue get the full rows (ProductsService.listForViewer).
+  // Catalogue listing, signed-in sellers and admins only: the provider
+  // catalogue carries cost prices (base_price) and stock, so it is never
+  // public (the storefront reads /storefront/:slug/... instead). Creators
+  // browse the PUBLISHED provider catalogue to import; providers list their
+  // own products only; admins see everything (ProductsService.listForViewer).
   @Get()
-  @UseGuards(OptionalJwtAuthGuard)
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
   findAll(
-    @CurrentUser('id') userId: string | undefined,
-    @CurrentUser('role') userRole: UserRole | undefined,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') userRole: UserRole,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('category_id') category_id?: string,
@@ -100,10 +101,12 @@ export class ProductsController {
     return this.productsService.getImportDetails(id);
   }
 
-  // Authenticated: this returns the seller-facing record. The storefront reads
-  // products through /storefront/:slug/... instead, so nothing public needs it.
+  // Sellers and admins only: this returns the seller-facing record. The
+  // storefront reads products through /storefront/:slug/... instead, so
+  // nothing public needs it. Visibility per product: catalogueReadLevel.
   @Get(':id')
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.PROVIDER, UserRole.CREATOR, UserRole.ADMIN)
   findById(
     @Param('id') id: string,
     @CurrentUser('id') userId: string,
@@ -112,7 +115,7 @@ export class ProductsController {
     return this.productsService.findById(id, userId, userRole);
   }
 
-  // Provider أو Creator — إنشاء منتج
+  // Provider or creator: create a product
   @Post()
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.PROVIDER, UserRole.CREATOR)

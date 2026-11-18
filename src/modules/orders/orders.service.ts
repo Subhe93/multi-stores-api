@@ -7,6 +7,7 @@ import {
   ForbiddenException,
   HttpException,
   Inject,
+  OnModuleInit,
   Optional,
 } from '@nestjs/common';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -99,6 +100,14 @@ import {
   loadPriceFloorSetup,
 } from '../custom-products/price-floor';
 import { computeMarketplaceCommission } from './marketplace-commission';
+import { forBuyer } from './buyer-order-view';
+import { forProvider } from './provider-order-view';
+import {
+  CUSTOM_LINE_STOCK_ENV,
+  customLineHoldsStock,
+  lineStockTarget,
+  parseCustomLineStockSince,
+} from './custom-line-stock';
 import {
   couponBelowProviderCost,
   couponBelowProviderCostError,
@@ -545,6 +554,9 @@ function lockedFulfillmentStatuses(
   return [FulfillmentStatus.SHIPPED, FulfillmentStatus.DELIVERED];
 }
 
+/** Product columns no order read returns (see itemsWithProduct). */
+const ORDER_PRODUCT_OMIT = { cost_price: true, external_ref: true } as const;
+
 // Progress ranks used to derive an order's overall status from its items: the
 // order reflects the *slowest* item (it's only SHIPPED once every item ships).
 const FULFILLMENT_RANK: Record<FulfillmentStatus, number> = {
@@ -618,6 +630,36 @@ const SWEEP_ORDER_SELECT = {
   stripe_payment_id: true,
   stripe_key_fingerprint: true,
 } as const satisfies Prisma.OrderSelect;
+
+/**
+ * Order line fields the stock return / re-take reads, in the one query it
+ * already made: where the line's stock went (lineStockTarget) and the stock
+ * before the move, for the storefront cache refresh only (StockMove.before);
+ * the writes never depend on the loaded stock.
+ */
+const ORDER_ITEM_STOCK_SELECT = {
+  product_id: true,
+  variant_id: true,
+  quantity: true,
+  custom_product_id: true,
+  variant_options_snapshot: true,
+  order: { select: { created_at: true } },
+  custom_product: {
+    select: {
+      product_id: true,
+      product: { select: { stock_quantity: true, track_inventory: true } },
+    },
+  },
+  variant: {
+    select: {
+      stock_quantity: true,
+      product: { select: { creator_id: true } },
+    },
+  },
+  product: {
+    select: { stock_quantity: true, track_inventory: true, creator_id: true },
+  },
+} as const satisfies Prisma.OrderItemSelect;
 
 /** 409 of any status / fulfillment / payment move on a trashed order (M69). */
 function orderDeleted(): ConflictException {
@@ -695,7 +737,7 @@ export function marketOrderLocale(
 }
 
 @Injectable()
-export class OrdersService {
+export class OrdersService implements OnModuleInit {
   private readonly logger = new Logger(OrdersService.name);
   // PaymentsModule imports OrdersModule, so a payment provider cannot be
   // injected here without a circular dependency. Providers that need to react
@@ -749,6 +791,45 @@ export class OrdersService {
     // refresh, the storefront's time-based revalidation catches up.
     @Optional() private readonly revalidation?: RevalidationService,
   ) {}
+
+  /** Boot: read and log the imported-product stock cut-over once. */
+  onModuleInit(): void {
+    void this.customLineStockSince;
+  }
+
+  /** Parsed CUSTOM_LINE_STOCK_SINCE (undefined = not read yet). */
+  private customLineStockSinceCache: Date | null | undefined;
+
+  /**
+   * The cut-over instant from which imported (custom product) lines take
+   * and return the provider's stock (custom-line-stock.ts); null = off.
+   * Read once (at boot, or on first use when the module hook did not run,
+   * as in specs) and logged once.
+   */
+  private get customLineStockSince(): Date | null {
+    if (this.customLineStockSinceCache !== undefined) {
+      return this.customLineStockSinceCache;
+    }
+    let raw: string | undefined;
+    try {
+      const value: unknown = this.config.get<string>(CUSTOM_LINE_STOCK_ENV);
+      raw = typeof value === 'string' ? value : undefined;
+    } catch {
+      raw = undefined;
+    }
+    const since = parseCustomLineStockSince(raw);
+    if (since) {
+      this.logger.log(`CustomLineStock: on since ${since.toISOString()}`);
+    } else if (raw === undefined || raw.trim() === '') {
+      this.logger.log(`CustomLineStock: off (${CUSTOM_LINE_STOCK_ENV} unset)`);
+    } else {
+      this.logger.warn(
+        `CustomLineStock: off (invalid ${CUSTOM_LINE_STOCK_ENV})`,
+      );
+    }
+    this.customLineStockSinceCache = since;
+    return since;
+  }
 
   /**
    * Storefront cache: an order moved stock and the write is COMMITTED (never
@@ -933,21 +1014,28 @@ export class OrdersService {
     }
   }
 
-  // Reusable include for order items with full product details
+  // Reusable include for order items with full product details. The
+  // nested product rows never carry the provider's confidential cost_price
+  // or the importer identities (external_ref): a creator reading its orders
+  // gets the provider's base product through its imported lines, and no
+  // order reader needs either column.
   private readonly itemsWithProduct = {
     include: {
       product: {
+        omit: ORDER_PRODUCT_OMIT,
         include: {
           translations: true,
           images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
         },
       },
       variant: {
+        omit: { external_ref: true },
         include: {
           // Images attached to this specific variant, used when resolving the
           // line's display image (see resolveOrderItemImage).
           images: true,
           product: {
+            omit: ORDER_PRODUCT_OMIT,
             include: {
               translations: true,
               images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
@@ -960,6 +1048,7 @@ export class OrdersService {
           translations: true,
           mockup_images: { take: 1, orderBy: { sort_order: 'asc' as const } },
           product: {
+            omit: ORDER_PRODUCT_OMIT,
             include: {
               translations: true,
               images: { take: 1, orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
@@ -1304,6 +1393,12 @@ export class OrdersService {
     pz: LinePersonalizationInput | null = null,
     /** M5.5: the validated designer line (its add-ons are priced here). */
     designer: DesignerLine | null = null,
+    /**
+     * The moment the order is placed (create() passes the one it writes as
+     * created_at): decides whether an imported line takes the provider's
+     * stock (custom-line-stock.ts). Quotes take no stock either way.
+     */
+    placedAt: Date = new Date(),
   ): Promise<PricedLine> {
     const isIndependentStore = orderStore.store_type === StoreType.INDEPENDENT;
     let unitPrice = 0;
@@ -1358,10 +1453,16 @@ export class OrdersService {
       let variant: { price_adjustment: any } | null = null;
       // A custom product inherits the flag from its base product.
       requiresShipping = lineRequiresShipping(cp.product);
+      let variantStock: number | null = null;
       if (item.variant_id) {
         const variantRow = await this.prisma.productVariant.findUnique({
           where: { id: item.variant_id },
-          select: { price_adjustment: true, product_id: true, options: true },
+          select: {
+            price_adjustment: true,
+            product_id: true,
+            options: true,
+            stock_quantity: true,
+          },
         });
         if (!variantRow) throw new LineUnavailableError();
         // The variant must belong to the custom product's base product,
@@ -1370,6 +1471,7 @@ export class OrdersService {
           throw new LineUnavailableError();
         }
         variant = variantRow;
+        variantStock = variantRow.stock_quantity;
         variantOptions = variantRow.options;
         // The variant row is passed for the later per-variant override.
         requiresShipping = lineRequiresShipping(
@@ -1419,6 +1521,26 @@ export class OrdersService {
       fulfillerType = cp.product.provider_id ? 'PROVIDER' : 'CREATOR';
       taxClassId = cp.product.tax_class_id;
       taxExempt = cp.product.tax_exempt;
+      // From the cut-over on, an imported line takes the stock of the base
+      // variant / product it sells, with the own-product rules: a variant
+      // tracks when its stock is set, a product when it tracks inventory.
+      // The base row is shared by every store reselling it.
+      if (customLineHoldsStock(placedAt, this.customLineStockSince)) {
+        if (item.variant_id) {
+          if (variantStock != null) {
+            stockOp = {
+              kind: 'variant',
+              id: item.variant_id,
+              qty: item.quantity,
+            };
+          }
+        } else if (
+          cp.product.track_inventory &&
+          cp.product.stock_quantity != null
+        ) {
+          stockOp = { kind: 'product', id: cp.product_id, qty: item.quantity };
+        }
+      }
     } else if (item.variant_id) {
       const variant = await this.prisma.productVariant.findUnique({
         where: { id: item.variant_id },
@@ -2728,6 +2850,10 @@ export class OrdersService {
     }[] = [];
     // B2: per-order limits, checked over all lines after the loop.
     const limitLines: { limit: LineLimit | null; quantity: number }[] = [];
+    // One clock for the order: it decides whether imported lines take the
+    // provider's stock and is written as the order's created_at, so a later
+    // return (custom-line-stock.ts) reads the very moment that decided.
+    const placedAt = new Date();
     for (const [index, item] of lines.entries()) {
       // M4.0 (§4): the line's personalization source: the per-item
       // customization of the request when present, else the cart row /
@@ -2761,6 +2887,7 @@ export class OrdersService {
                 activeCache,
               },
           designer,
+          placedAt,
         );
       } catch (err) {
         if (!isLineUnavailable(err)) throw err;
@@ -2831,7 +2958,10 @@ export class OrdersService {
       );
 
       orderItems.push({
-        product_id: item.product_id,
+        // An imported line sells its CustomProduct's base product; a
+        // product_id sent with it is never stored (the stock return would
+        // otherwise credit a product the client chose).
+        product_id: item.custom_product_id ? null : item.product_id,
         variant_id: item.variant_id,
         custom_product_id: item.custom_product_id,
         bundle_offer_id: item.bundle_offer_id || null,
@@ -3219,6 +3349,8 @@ export class OrdersService {
         client.order.create({
           data: {
             ...(orderId ? { id: orderId } : {}),
+            // The moment that decided the imported lines' stock (placedAt).
+            created_at: placedAt,
             order_number: this.generateOrderNumber(),
             // FIXES-1: the owner's pre-live checkout is a test order.
             ...(orderStore.preLiveTest ? { is_test: true } : {}),
@@ -3455,7 +3587,9 @@ export class OrdersService {
     // Kustom push token, which must never reach the customer's browser.
     // b2b app: the `b2b` block travels with the created order only when the
     // app is enabled (same rule as the quote).
-    const shaped = this.forCustomer(this.withItemImages(order));
+    // The buyer never gets the provider amounts or catalogue internals
+    // (forBuyer).
+    const shaped = forBuyer(this.forCustomer(this.withItemImages(order)));
     return orderStore.b2bEnabled
       ? { ...shaped, b2b: this.b2bTotals(tax) }
       : shaped;
@@ -3593,7 +3727,7 @@ export class OrdersService {
     ]);
 
     return {
-      data: data.map((o) => this.forCustomer(this.withItemImages(o))),
+      data: data.map((o) => forBuyer(this.forCustomer(this.withItemImages(o)))),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -3667,9 +3801,25 @@ export class OrdersService {
     ]);
 
     return {
-      data: data.map((o) => withoutDeletedBy(this.withItemImages(o))),
+      data: data.map((o) => this.providerView(o, provider.id)),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
+  }
+
+  /**
+   * One order of a provider's list: its own lines in full, the other
+   * fulfillers' lines without catalogue internals or provider amounts, and
+   * its own share of the commission (forProvider).
+   */
+  private providerView<O extends Parameters<typeof providerOrderShare>[0]>(
+    order: O,
+    providerId: string,
+  ) {
+    return forProvider(
+      withoutDeletedBy(this.withItemImages(order)),
+      providerId,
+      providerOrderShare(order, providerId).my_share,
+    );
   }
 
   // Creator sees orders placed through their store
@@ -3803,7 +3953,9 @@ export class OrdersService {
       data: data.map((o) =>
         role === UserRole.ADMIN
           ? this.withItemImages(o)
-          : withoutDeletedBy(this.withItemImages(o)),
+          : role === UserRole.PROVIDER
+            ? this.providerView(o, fulfillerId)
+            : withoutDeletedBy(this.withItemImages(o)),
       ),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
@@ -3919,12 +4071,13 @@ export class OrdersService {
       // Providers: their OWN share of the aggregate provider_amount (the
       // very split the transfers use) and the net shipping, so the earnings
       // breakdown adds up on multi-provider orders.
-      const providerShare =
+      const ownShare =
         role === UserRole.PROVIDER && fulfillerId
           ? providerOrderShare(order, fulfillerId)
-          : {};
+          : null;
+      const providerShare = ownShare ?? {};
       // Customers / providers: reverse-charge evidence without internals.
-      return this.forCustomer(
+      const view = this.forCustomer(
         this.withItemImages({
           ...customerSafe,
           customer,
@@ -3932,6 +4085,15 @@ export class OrdersService {
           ...providerShare,
         }),
       );
+      // The buyer never gets the commission, the provider amounts or the
+      // catalogue internals of the lines (forBuyer). A provider keeps them
+      // for its own lines only: other providers' lines and amounts of a
+      // shared order are not its business (forProvider).
+      if (role === UserRole.CUSTOMER) return forBuyer(view);
+      if (role === UserRole.PROVIDER) {
+        return forProvider(view, fulfillerId, ownShare?.my_share ?? null);
+      }
+      return view;
     }
     // The buyer's account email / status go to the store's owner only: a
     // creator reading a foreign store's order as a fulfiller of one of its
@@ -4637,27 +4799,31 @@ export class OrdersService {
     const items = await this.prisma.orderItem.findMany({
       where: { order_id: orderId },
       select: {
-        product_id: true,
-        variant_id: true,
-        quantity: true,
-        product: { select: { sku: true } },
+        ...ORDER_ITEM_STOCK_SELECT,
+        product: {
+          select: { ...ORDER_ITEM_STOCK_SELECT.product.select, sku: true },
+        },
       },
     });
+    const since = this.customLineStockSince;
     const short: { name: string; quantity: number }[] = [];
     const moves: StockMove[] = [];
     for (const it of items) {
       try {
-        if (it.variant_id) {
+        // The row the return gave stock back to (lineStockTarget): an
+        // imported line of an order before the cut-over gave none back.
+        const target = lineStockTarget(it, it.order?.created_at, since);
+        if (target?.kind === 'variant') {
           const taken = await this.prisma.productVariant.updateMany({
             where: {
-              id: it.variant_id,
+              id: target.id,
               stock_quantity: { not: null, gte: it.quantity },
             },
             data: { stock_quantity: { decrement: it.quantity } },
           });
           if (taken.count === 0) {
             const v = await this.prisma.productVariant.findUnique({
-              where: { id: it.variant_id },
+              where: { id: target.id },
               select: { stock_quantity: true },
             });
             if (v && v.stock_quantity !== null) {
@@ -4666,14 +4832,14 @@ export class OrdersService {
           } else {
             moves.push({
               kind: 'variant',
-              id: it.variant_id,
+              id: target.id,
               delta: -it.quantity,
             });
           }
-        } else if (it.product_id) {
+        } else if (target?.kind === 'product') {
           const taken = await this.prisma.product.updateMany({
             where: {
-              id: it.product_id,
+              id: target.id,
               track_inventory: true,
               stock_quantity: { not: null, gte: it.quantity },
             },
@@ -4681,7 +4847,7 @@ export class OrdersService {
           });
           if (taken.count === 0) {
             const p = await this.prisma.product.findUnique({
-              where: { id: it.product_id },
+              where: { id: target.id },
               select: { stock_quantity: true, track_inventory: true },
             });
             if (p && p.track_inventory && p.stock_quantity !== null) {
@@ -4690,7 +4856,7 @@ export class OrdersService {
           } else {
             moves.push({
               kind: 'product',
-              id: it.product_id,
+              id: target.id,
               delta: -it.quantity,
             });
           }
@@ -5365,49 +5531,48 @@ export class OrdersService {
   ): Promise<StockMove[]> {
     const items = await db.orderItem.findMany({
       where: { order_id: orderId },
-      select: {
-        product_id: true,
-        variant_id: true,
-        quantity: true,
-        // The stock before the return, for the cache refresh only
-        // (StockMove.before); the writes below never depend on it.
-        variant: { select: { stock_quantity: true } },
-        product: { select: { stock_quantity: true, track_inventory: true } },
-      },
+      select: ORDER_ITEM_STOCK_SELECT,
     });
+    const since = this.customLineStockSince;
     const moves: StockMove[] = [];
     for (const it of items) {
       try {
-        if (it.variant_id) {
+        // Only the row this line really took (imported lines of orders
+        // before the cut-over took none: custom-line-stock.ts).
+        const target = lineStockTarget(it, it.order?.created_at, since);
+        if (target?.kind === 'variant') {
           const res = await db.productVariant.updateMany({
-            where: { id: it.variant_id, stock_quantity: { not: null } },
+            where: { id: target.id, stock_quantity: { not: null } },
             data: { stock_quantity: { increment: it.quantity } },
           });
           if (res.count > 0) {
             moves.push({
               kind: 'variant',
-              id: it.variant_id,
+              id: target.id,
               delta: it.quantity,
               before: it.variant?.stock_quantity,
             });
           }
-        } else if (it.product_id) {
+        } else if (target?.kind === 'product') {
           const res = await db.product.updateMany({
             where: {
-              id: it.product_id,
+              id: target.id,
               track_inventory: true,
               stock_quantity: { not: null },
             },
             data: { stock_quantity: { increment: it.quantity } },
           });
           if (res.count > 0) {
+            // The stock before the return: of the base product for an
+            // imported line, of the line's own product otherwise.
+            const loaded = it.custom_product_id
+              ? it.custom_product?.product
+              : it.product;
             moves.push({
               kind: 'product',
-              id: it.product_id,
+              id: target.id,
               delta: it.quantity,
-              before: it.product?.track_inventory
-                ? it.product.stock_quantity
-                : null,
+              before: loaded?.track_inventory ? loaded.stock_quantity : null,
             });
           }
         }
@@ -5416,40 +5581,6 @@ export class OrdersService {
       }
     }
     return moves;
-  }
-
-  /**
-   * Inverse of restoreOrderItemsStock, for an order whose payment landed after
-   * it had already been written off. There is no `gte` guard here on purpose:
-   * the goods are sold either way, and letting the count go negative surfaces
-   * the shortfall and stops further sales rather than silently overselling.
-   */
-  private async decrementOrderItemsStock(orderId: string) {
-    const items = await this.prisma.orderItem.findMany({
-      where: { order_id: orderId },
-      select: { product_id: true, variant_id: true, quantity: true },
-    });
-    for (const it of items) {
-      try {
-        if (it.variant_id) {
-          await this.prisma.productVariant.updateMany({
-            where: { id: it.variant_id, stock_quantity: { not: null } },
-            data: { stock_quantity: { decrement: it.quantity } },
-          });
-        } else if (it.product_id) {
-          await this.prisma.product.updateMany({
-            where: {
-              id: it.product_id,
-              track_inventory: true,
-              stock_quantity: { not: null },
-            },
-            data: { stock_quantity: { decrement: it.quantity } },
-          });
-        }
-      } catch (err) {
-        console.error('[StockRestore] order item re-decrement failed', it, err);
-      }
-    }
   }
 
   // ── Order trash (M69, plans/order-trash/SPEC.md) ─────────────────────────

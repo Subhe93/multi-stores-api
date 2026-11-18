@@ -10,7 +10,10 @@ import {
 } from './products.service';
 import { ProductsController } from './products.controller';
 import { ProductTranslationDto } from './dto/product.dto';
+import { AuthGuard } from '@nestjs/passport';
 import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { ROLES_KEY } from '../../common/decorators';
 import type { PrismaService } from '../../prisma/prisma.service';
 import {
   publicCreatorCategory,
@@ -21,6 +24,8 @@ import { DirectoryRunDto } from '../importer/dto/run.dto';
 // M4.4 fixer B: GET /products no longer leaks drafts, cost prices or
 // importer identities; non-owner product reads are redacted; storefront
 // payload helpers drop external_ref and collection internals.
+// Supplier privacy: GET /products and GET /products/:id are for signed-in
+// providers (own products), creators (to import) and admins only.
 
 function setup(approvalRequired = false) {
   const findMany = jest.fn((_args: unknown) => Promise.resolve([{ id: 'p1' }]));
@@ -58,19 +63,53 @@ function setup(approvalRequired = false) {
   return { svc, prisma, lastArgs };
 }
 
+const CREATOR = { userId: 'u-creator', role: UserRole.CREATOR };
+const PROVIDER = { userId: 'u-provider', role: UserRole.PROVIDER };
+
 describe('GET /products (listForViewer)', () => {
-  it('uses the optional JWT guard', () => {
-    const fn = (
-      ProductsController.prototype as unknown as Record<string, object>
-    ).findAll;
-    expect(Reflect.getMetadata(GUARDS_METADATA, fn)).toEqual([
-      OptionalJwtAuthGuard,
-    ]);
+  // Supplier privacy: the provider catalogue (cost price = base_price, stock)
+  // is never public; anonymous callers get 401 from the JWT guard, customers
+  // 403 from the roles guard.
+  it.each(['findAll', 'findById'])(
+    '%s requires a signed-in PROVIDER / CREATOR / ADMIN',
+    (name) => {
+      const fn = (
+        ProductsController.prototype as unknown as Record<string, object>
+      )[name];
+      const guards = Reflect.getMetadata(GUARDS_METADATA, fn) as unknown[];
+      expect(guards).toHaveLength(2);
+      expect(guards[0]).toBe(AuthGuard('jwt'));
+      expect(guards[1]).toBe(RolesGuard);
+      expect(guards).not.toContain(OptionalJwtAuthGuard);
+      expect(Reflect.getMetadata(ROLES_KEY, fn)).toEqual([
+        UserRole.PROVIDER,
+        UserRole.CREATOR,
+        UserRole.ADMIN,
+      ]);
+    },
+  );
+
+  it('no viewer or a CUSTOMER: 403 PRODUCT_LIST_FORBIDDEN, nothing read', async () => {
+    const { svc, prisma } = setup();
+    for (const viewer of [
+      undefined,
+      {},
+      { role: UserRole.CREATOR },
+      { userId: 'u-cust', role: UserRole.CUSTOMER },
+    ]) {
+      await expect(
+        svc.listForViewer({ owner_type: 'provider' }, viewer),
+      ).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'PRODUCT_LIST_FORBIDDEN' },
+      });
+    }
+    expect(prisma.product.findMany).not.toHaveBeenCalled();
   });
 
-  it('anonymous: PUBLISHED provider products through the public select', async () => {
+  it('CREATOR browsing: PUBLISHED provider products through the catalogue select', async () => {
     const { svc, lastArgs } = setup();
-    await svc.listForViewer({ owner_type: 'provider', search: 'mug' });
+    await svc.listForViewer({ owner_type: 'provider', search: 'mug' }, CREATOR);
     const args = lastArgs();
     expect(args.select).toBe(PUBLIC_PRODUCT_LIST_SELECT);
     expect(args.include).toBeUndefined();
@@ -81,18 +120,18 @@ describe('GET /products (listForViewer)', () => {
     expect(args.where).not.toHaveProperty('creator_id');
   });
 
-  it('hides unverified providers while the platform requires approval (SPEC §4)', async () => {
+  it('CREATOR browsing: unverified providers stay hidden while approval is required (SPEC §4)', async () => {
     const gated = setup(true);
-    await gated.svc.listForViewer({ owner_type: 'provider' });
+    await gated.svc.listForViewer({ owner_type: 'provider' }, CREATOR);
     expect(gated.lastArgs().where).toMatchObject({
       provider: { verified: true },
     });
     const open = setup(false);
-    await open.svc.listForViewer({ owner_type: 'provider' });
+    await open.svc.listForViewer({ owner_type: 'provider' }, CREATOR);
     expect(open.lastArgs().where).not.toHaveProperty('provider');
   });
 
-  it('the public select has no cost price or importer identity', () => {
+  it('the catalogue select has no cost price or importer identity', () => {
     const sel = PUBLIC_PRODUCT_LIST_SELECT as Record<string, unknown>;
     expect(sel).not.toHaveProperty('cost_price');
     expect(sel).not.toHaveProperty('external_ref');
@@ -100,46 +139,63 @@ describe('GET /products (listForViewer)', () => {
     expect(variants.select).not.toHaveProperty('external_ref');
   });
 
-  it('anonymous: a draft filter or the creator catalogue answers empty', async () => {
+  it('CREATOR browsing: a draft filter or the creator catalogue answers empty', async () => {
     const { svc, prisma } = setup();
     expect(
-      await svc.listForViewer({ status: ProductStatus.DRAFT }),
+      await svc.listForViewer({ status: ProductStatus.DRAFT }, CREATOR),
     ).toMatchObject({ data: [], meta: { total: 0 } });
-    expect(await svc.listForViewer({ owner_type: 'creator' })).toMatchObject({
-      data: [],
-    });
+    expect(
+      await svc.listForViewer({ owner_type: 'creator' }, CREATOR),
+    ).toMatchObject({ data: [] });
     expect(prisma.product.findMany).not.toHaveBeenCalled();
   });
 
-  it("refuses somebody else's creator_id (PRODUCT_LIST_FORBIDDEN)", async () => {
-    const { svc } = setup();
-    await expect(svc.listForViewer({ creator_id: 'c1' })).rejects.toMatchObject(
-      { status: 403, response: { code: 'PRODUCT_LIST_FORBIDDEN' } },
-    );
-    await expect(
-      svc.listForViewer(
-        { creator_id: 'c2' },
-        { userId: 'u-creator', role: UserRole.CREATOR },
-      ),
-    ).rejects.toMatchObject({ status: 403 });
+  it('CREATOR browsing a provider_id: the published catalogue of that provider', async () => {
+    const { svc, lastArgs } = setup();
+    await svc.listForViewer({ provider_id: 'pr1' }, CREATOR);
+    expect(lastArgs().select).toBe(PUBLIC_PRODUCT_LIST_SELECT);
+    expect(lastArgs().where).toMatchObject({
+      provider_id: 'pr1',
+      status: ProductStatus.PUBLISHED,
+    });
   });
 
-  it('the owning creator gets the full rows of their catalogue (dashboard)', async () => {
+  it("CREATOR: somebody else's creator_id is refused (PRODUCT_LIST_FORBIDDEN)", async () => {
+    const { svc } = setup();
+    await expect(
+      svc.listForViewer({ creator_id: 'c2' }, CREATOR),
+    ).rejects.toMatchObject({
+      status: 403,
+      response: { code: 'PRODUCT_LIST_FORBIDDEN' },
+    });
+  });
+
+  it('CREATOR: its own creator_id gives the full rows (dashboard)', async () => {
     const { svc, lastArgs } = setup();
-    await svc.listForViewer(
-      { creator_id: 'c1', limit: 200 },
-      { userId: 'u-creator', role: UserRole.CREATOR },
-    );
+    await svc.listForViewer({ creator_id: 'c1', limit: 200 }, CREATOR);
     const args = lastArgs();
     expect(args.select).toBeUndefined();
     expect(args.where).toEqual({ creator_id: 'c1' });
   });
 
-  it('the owning provider gets full rows for their provider_id', async () => {
+  it('PROVIDER without provider_id: its own catalogue only, in full rows', async () => {
+    const { svc, lastArgs } = setup();
+    await svc.listForViewer(
+      { owner_type: 'provider', status: ProductStatus.DRAFT },
+      PROVIDER,
+    );
+    expect(lastArgs().select).toBeUndefined();
+    expect(lastArgs().where).toEqual({
+      provider_id: 'pr1',
+      status: ProductStatus.DRAFT,
+    });
+  });
+
+  it('PROVIDER with its own provider_id: full rows', async () => {
     const { svc, lastArgs } = setup();
     await svc.listForViewer(
       { provider_id: 'pr1', status: ProductStatus.DRAFT },
-      { userId: 'u-provider', role: UserRole.PROVIDER },
+      PROVIDER,
     );
     expect(lastArgs().where).toEqual({
       provider_id: 'pr1',
@@ -147,17 +203,32 @@ describe('GET /products (listForViewer)', () => {
     });
   });
 
-  it('another provider filtering by provider_id gets the public view', async () => {
-    const { svc, lastArgs } = setup();
-    await svc.listForViewer(
-      { provider_id: 'pr1' },
-      { userId: 'u-creator', role: UserRole.CREATOR },
-    );
-    expect(lastArgs().select).toBe(PUBLIC_PRODUCT_LIST_SELECT);
-    expect(lastArgs().where).toMatchObject({
-      provider_id: 'pr1',
-      status: ProductStatus.PUBLISHED,
+  it("PROVIDER: a competitor's provider_id or any creator_id is refused", async () => {
+    const { svc, prisma } = setup();
+    await expect(
+      svc.listForViewer({ provider_id: 'pr-other' }, PROVIDER),
+    ).rejects.toMatchObject({
+      status: 403,
+      response: { code: 'PRODUCT_LIST_FORBIDDEN' },
     });
+    await expect(
+      svc.listForViewer({ creator_id: 'c1' }, PROVIDER),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(prisma.product.findMany).not.toHaveBeenCalled();
+  });
+
+  it('PROVIDER without a provider profile: an empty page', async () => {
+    const { svc, prisma } = setup();
+    expect(
+      await svc.listForViewer(
+        { page: 2, limit: 5 },
+        { userId: 'u-nobody', role: UserRole.PROVIDER },
+      ),
+    ).toEqual({
+      data: [],
+      meta: { total: 0, page: 2, limit: 5, totalPages: 0 },
+    });
+    expect(prisma.product.findMany).not.toHaveBeenCalled();
   });
 
   it('admins keep the full listing with any filter', async () => {
@@ -168,6 +239,155 @@ describe('GET /products (listForViewer)', () => {
     );
     expect(lastArgs().select).toBeUndefined();
     expect(lastArgs().where).toEqual({ status: ProductStatus.DRAFT });
+  });
+});
+
+describe('GET /products/:id (findById visibility)', () => {
+  function byIdSetup(row: Record<string, unknown>, providerVerified = true) {
+    const findUnique = jest.fn(() =>
+      Promise.resolve({
+        id: 'p1',
+        cost_price: 12,
+        external_ref: 'woo:x',
+        base_price: 45,
+        stock_quantity: 40,
+        translations: [{ locale: 'sv', title: 'T', email_note: 'note' }],
+        variants: [{ id: 'v1', external_ref: 'woo:v', stock_quantity: 4 }],
+        videos: [],
+        stories: [],
+        ...row,
+      }),
+    );
+    const prisma = {
+      product: { findUnique },
+      creator: {
+        findUnique: jest.fn(({ where }: { where: { user_id: string } }) =>
+          Promise.resolve(where.user_id === 'u-creator' ? { id: 'c1' } : null),
+        ),
+      },
+      provider: {
+        findUnique: jest.fn(
+          ({ where }: { where: { user_id?: string; id?: string } }) =>
+            Promise.resolve(
+              where.id
+                ? { verified: providerVerified }
+                : where.user_id === 'u-provider'
+                  ? { id: 'pr1' }
+                  : null,
+            ),
+        ),
+      },
+      // Provider approval required (the platform default).
+      platformConfig: {
+        findFirst: jest.fn(() =>
+          Promise.resolve({ require_provider_approval: true }),
+        ),
+      },
+    };
+    const svc = new ProductsService(
+      prisma as unknown as PrismaService,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    return { svc };
+  }
+  const providerProduct = (status: ProductStatus, provider_id = 'pr1') => ({
+    provider_id,
+    creator_id: null,
+    status,
+  });
+
+  it('CREATOR on a PUBLISHED provider product: the redacted row', async () => {
+    const { svc } = byIdSetup(providerProduct(ProductStatus.PUBLISHED));
+    const p = (await svc.findById(
+      'p1',
+      'u-creator',
+      UserRole.CREATOR,
+    )) as Record<string, unknown>;
+    expect(p).not.toHaveProperty('cost_price');
+    expect(p).not.toHaveProperty('external_ref');
+    expect(JSON.stringify(p)).not.toContain('email_note');
+    expect(JSON.stringify(p)).not.toContain('woo:');
+    // The creator still sees its cost (the provider price) and stock.
+    expect(p).toMatchObject({ base_price: 45, stock_quantity: 40 });
+  });
+
+  it('CREATOR on a PUBLISHED product of an unverified provider (approval required): 404', async () => {
+    const { svc } = byIdSetup(providerProduct(ProductStatus.PUBLISHED), false);
+    await expect(
+      svc.findById('p1', 'u-creator', UserRole.CREATOR),
+    ).rejects.toMatchObject({
+      status: 404,
+      response: { code: 'PRODUCT_NOT_FOUND' },
+    });
+  });
+
+  it.each([
+    [
+      'CREATOR on a DRAFT provider product',
+      providerProduct(ProductStatus.DRAFT),
+      'u-creator',
+      UserRole.CREATOR,
+    ],
+    [
+      'CREATOR on another creator product',
+      { provider_id: null, creator_id: 'c2', status: ProductStatus.PUBLISHED },
+      'u-creator',
+      UserRole.CREATOR,
+    ],
+    [
+      'PROVIDER on a competitor product',
+      providerProduct(ProductStatus.PUBLISHED, 'pr2'),
+      'u-provider',
+      UserRole.PROVIDER,
+    ],
+    [
+      'PROVIDER on a creator product',
+      { provider_id: null, creator_id: 'c1', status: ProductStatus.PUBLISHED },
+      'u-provider',
+      UserRole.PROVIDER,
+    ],
+    [
+      'CUSTOMER on a published provider product',
+      providerProduct(ProductStatus.PUBLISHED),
+      'u-cust',
+      UserRole.CUSTOMER,
+    ],
+  ])('%s: 404 PRODUCT_NOT_FOUND', async (_label, row, userId, role) => {
+    const { svc } = byIdSetup(row);
+    await expect(svc.findById('p1', userId, role)).rejects.toMatchObject({
+      status: 404,
+      response: { code: 'PRODUCT_NOT_FOUND' },
+    });
+  });
+
+  it.each([
+    [
+      'the owning provider',
+      providerProduct(ProductStatus.DRAFT),
+      'u-provider',
+      UserRole.PROVIDER,
+    ],
+    [
+      'the owning creator',
+      { provider_id: null, creator_id: 'c1', status: ProductStatus.DRAFT },
+      'u-creator',
+      UserRole.CREATOR,
+    ],
+    [
+      'an admin',
+      providerProduct(ProductStatus.DRAFT, 'pr9'),
+      'u-admin',
+      UserRole.ADMIN,
+    ],
+  ])('%s gets the full row', async (_label, row, userId, role) => {
+    const { svc } = byIdSetup(row);
+    const p = (await svc.findById('p1', userId, role)) as Record<
+      string,
+      unknown
+    >;
+    expect(p).toMatchObject({ cost_price: 12, external_ref: 'woo:x' });
   });
 });
 

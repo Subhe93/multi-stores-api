@@ -6,6 +6,47 @@ import {
   UserRole,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { splitProviderShares } from '../../common/money/provider-share.util';
+import {
+  fromStripeAmount,
+  toStripeAmount,
+} from '../../common/money/currency.util';
+import { forProvider } from '../orders/provider-order-view';
+
+/** The order lines a provider's commission view needs. */
+type ShareLine = {
+  fulfiller_type: string;
+  fulfiller_id: string;
+  provider_base_amount: unknown;
+};
+
+const SHARE_LINE_SELECT = {
+  fulfiller_type: true,
+  fulfiller_id: true,
+  provider_base_amount: true,
+} as const;
+
+/**
+ * One order's commission as a provider may read it (the rules of
+ * forProvider): provider_amount becomes the provider's own share, split
+ * exactly like the transfers; on an order shared with another provider the
+ * platform and creator amounts are null, since with the order total they
+ * would reveal the other provider's amount.
+ */
+export function providerCommissionView<
+  C extends { provider_amount: unknown; currency: string | null },
+>(commission: C, items: ShareLine[], providerId: string): C {
+  const currency = commission.currency || 'EUR';
+  const pool = toStripeAmount(Number(commission.provider_amount), currency);
+  const providerItems = items.filter(
+    (i) => i.fulfiller_type === FulfillerType.PROVIDER,
+  );
+  const mine = fromStripeAmount(
+    splitProviderShares(pool, providerItems).get(providerId) ?? 0,
+    currency,
+  );
+  return forProvider({ items, commission }, providerId, mine).commission;
+}
 
 @Injectable()
 export class CommissionsService {
@@ -20,7 +61,7 @@ export class CommissionsService {
         select: {
           store_id: true,
           deleted_at: true,
-          items: { select: { fulfiller_id: true } },
+          items: { select: SHARE_LINE_SELECT },
         },
       });
       if (!order) return null;
@@ -47,8 +88,22 @@ export class CommissionsService {
           where: { user_id: userId },
           select: { id: true },
         });
-        allowed =
-          !!provider && order.items.some((i) => i.fulfiller_id === provider.id);
+        if (
+          !provider ||
+          !order.items.some((i) => i.fulfiller_id === provider.id)
+        ) {
+          throw new ForbiddenException({
+            code: 'COMMISSION_FORBIDDEN',
+            message: 'You are not part of this order',
+          });
+        }
+        // A provider reads its own share only (providerCommissionView).
+        const commission = await this.prisma.orderCommission.findUnique({
+          where: { order_id: orderId },
+        });
+        return commission
+          ? providerCommissionView(commission, order.items, provider.id)
+          : null;
       } else if (role === UserRole.CREATOR) {
         const creator = await this.prisma.creator.findUnique({
           where: { user_id: userId },
@@ -78,6 +133,7 @@ export class CommissionsService {
     // are fulfilled by a provider — so we filter by store_id, not by
     // fulfiller_id. Provider only earns on items they actually fulfill.
     let where: { order: any } | null = null;
+    let providerId: string | null = null;
 
     if (role === 'provider') {
       const provider = await this.prisma.provider.findUnique({
@@ -90,6 +146,7 @@ export class CommissionsService {
           pending: 0,
           total_orders: 0,
         };
+      providerId = provider.id;
       where = {
         order: {
           is_test: false,
@@ -116,9 +173,27 @@ export class CommissionsService {
     }
 
     // Test orders (FIXES-1) never count as earnings.
-    const allCommissions = await this.prisma.orderCommission.findMany({
+    const rows = await this.prisma.orderCommission.findMany({
       where,
+      ...(providerId
+        ? {
+            include: {
+              order: { select: { items: { select: SHARE_LINE_SELECT } } },
+            },
+          }
+        : {}),
     });
+    // A provider earns its own share of provider_amount only: on an order
+    // shared with another provider the aggregate would count (and reveal)
+    // the other provider's amount.
+    const allCommissions = providerId
+      ? rows.map((c) => {
+          const items =
+            (c as typeof c & { order?: { items: ShareLine[] } }).order?.items ??
+            [];
+          return providerCommissionView(c, items, providerId);
+        })
+      : rows;
 
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);

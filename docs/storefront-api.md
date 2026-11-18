@@ -150,7 +150,9 @@ Each own product item:
 
 Product-level columns that are never served: `cost_price`, `external_ref`, `gtin`, `mpn`, `google_product_category`, `condition`, `feed_excluded`; variant `external_ref`.
 
-Size: the list carries every product with its translations (HTML descriptions included). Fetch it once per build/revalidation, not per page view, and filter by collection when possible. When you need only a few products, send `limit` (once deployed).
+**Imported products** (`_type: "custom_product"`, MARKETPLACE stores only; a creator resells a supplier's product): `base_price` is the creator's selling price, never the supplier's price. **Not deployed yet:** they also carry `track_inventory` and `stock_quantity`, the supplier's stock of the product, shared by every store that resells it; same meaning as on an own product (section 4). Their `variants[].stock` already was the supplier's variant stock.
+
+Size: the list carries every product with its translations (HTML descriptions included). Fetch it once per build/revalidation, not per page view, and filter by collection when possible. When you need only a few products, send `limit` (live since 2026-11-18).
 
 Trimmed example item:
 
@@ -209,6 +211,18 @@ Behaviour:
 - **After the order**: an order where nothing needed shipping is completed by the owner with "Mark as fulfilled" (stored status `DELIVERED`). The buyer then gets the "order complete" email (`order_fulfilled`) instead of the shipped / delivered emails.
 - A venue-bound service that the buyer collects in person (an event with tickets handed out at the door) can instead stay a physical product with a pickup shipping method; then nothing above applies to it.
 
+### 3.7 What a buyer's order payload carries
+
+**Not deployed yet.** The order payloads a buyer receives (the `POST /orders` response, `GET /orders/my`, `GET /orders/:id` read as the buying customer) carry what a receipt needs and nothing about the sellers' money or the supplier's catalogue:
+
+- No `commission` and no `payouts` on the order; no `provider_base_amount` on the items.
+- `items[].product`: only `{ id, translations, images }`.
+- `items[].variant`: only `{ id, options, images }`; its nested `product` only `{ id, translations, images }`.
+- `items[].custom_product`: only `{ id, translations, mockup_images, product: { id, translations, images } }`.
+- Every other order and item key is unchanged (`unit_price`, `original_unit_price`, `total_price`, `quantity`, `image_url`, `custom_field_values`, `variant_options_snapshot`, tax, shipping and fulfillment fields, ids).
+
+The seller-side catalogue routes (`GET /products`, `GET /products/:id`, `GET /products/:id/variants`, `GET /variants/:id`) are not public: they need a signed-in provider, creator or admin (401 without a token, 403 for a customer account). A custom site reads products through the `/storefront/:slug/...` routes above only.
+
 ## 4. Seats (stock) rules
 
 A course date is **one product**; its stock is the number of seats.
@@ -216,6 +230,7 @@ A course date is **one product**; its stock is the number of seats.
 - Product **without variants**: seats left = `stock_quantity` when `track_inventory` is `true`. `stock_quantity` null = unlimited. Sold out when `track_inventory && stock_quantity <= 0`.
 - Product **with variants** (for example a language option): each `variants[].stock` is that variant's seats; an untracked variant is served as `stock: 999`. The product is sold out only when **every** variant has `stock <= 0`.
 - This is the same rule the store uses (`multi-stores-web/src/lib/productAvailability.ts`) and the rule checkout enforces. Show "N platser kvar" from these numbers and "Fullbokat" when sold out.
+- Imported products (section 3.2) follow the same rules with the supplier's stock. Once the platform switches it on, checkout takes their stock from the supplier and refuses a short line with `ORDER_INSUFFICIENT_STOCK`, like an own product.
 
 **Seat holds by unpaid orders.** Stock is taken when an order is created, before payment. An order that is never paid gives its seats back after **2 hours** (card / Stripe orders) or **6 hours** (Kustom orders created first). The release runs when the next order is placed on the platform (no scheduler), so an unpaid hold can last a little longer than that on a quiet day. With the Kustom session flow (the store creates the order only when Kustom validates the purchase) no seat is held while the visitor is still filling in the Klarna form. Consequence: the count you show can be briefly lower than the real free seats, never higher; overbooking is refused at checkout.
 

@@ -564,6 +564,169 @@ describe('public contract: products', () => {
   });
 });
 
+// Imported (custom) products of a MARKETPLACE store: the SELLING price only
+// (never the provider's cost price) and, since the imported-stock fix, the
+// provider's stock of the base product with the own-product semantics.
+
+/** Keys the docs promise on every imported product (list and detail). */
+const CUSTOM_PRODUCT_DOCUMENTED_KEYS = [
+  'id',
+  'status',
+  'base_price',
+  'track_inventory',
+  'stock_quantity',
+  'translations',
+  'images',
+  'variants',
+  'pricing_type',
+  '_type',
+] as const;
+
+function baseProviderRow() {
+  return {
+    ...ownProductRow(),
+    id: 'base1',
+    provider_id: 'prov1',
+    creator_id: null,
+    base_price: 45,
+    cost_price: 12,
+    compare_at_price: null,
+    track_inventory: true,
+    stock_quantity: 7,
+    external_ref: 'wc-base',
+    variants: [],
+    provider: { id: 'prov1', company_name: 'Newroj', logo_url: null },
+    videos: [],
+    stories: [],
+  };
+}
+
+function customProductRow() {
+  return {
+    id: 'cp1',
+    creator_id: 'c1',
+    product_id: 'base1',
+    status: 'PUBLISHED',
+    pricing_type: 'SINGLE',
+    final_price: 150,
+    margin_amount: null,
+    primary_creator_category_id: null,
+    created_at: new Date('2026-11-01T10:00:00Z'),
+    updated_at: new Date('2026-11-02T10:00:00Z'),
+    translations: [
+      { id: 'ct1', locale: 'sv', title: 'Hoodie', slug: 'hoodie' },
+    ],
+    mockup_images: [{ id: 'm1', url: '/uploads/mockup.webp', sort_order: 0 }],
+    selected_variants: [],
+    field_values: [],
+    faqs: [],
+    creator_categories: [],
+    product: baseProviderRow(),
+  };
+}
+
+function buildCustomCatalog() {
+  const store = {
+    id: 's1',
+    slug: 'shop',
+    creator_id: 'c1',
+    store_type: StoreType.MARKETPLACE,
+    status: StoreStatus.LIVE,
+    show_vendor_name: false,
+    currency: 'SEK',
+    tax_country: 'SE',
+    creator: { id: 'c1' },
+  };
+  const prisma = {
+    store: { findUnique: jest.fn(() => Promise.resolve(store)) },
+    product: {
+      findMany: jest.fn(() => Promise.resolve([])),
+      findFirst: jest.fn(() => Promise.resolve(null)),
+    },
+    customProduct: {
+      findMany: jest.fn(() => Promise.resolve([customProductRow()])),
+      findFirst: jest.fn(() => Promise.resolve(customProductRow())),
+    },
+    shippingProfile: { findFirst: jest.fn(() => Promise.resolve(null)) },
+    promotion: { findMany: jest.fn(() => Promise.resolve([])) },
+    bundle: { findMany: jest.fn(() => Promise.resolve([])) },
+    creatorCategory: { findMany: jest.fn(() => Promise.resolve([])) },
+    platformConfig: {
+      findFirst: jest.fn(() => Promise.resolve({ default_currency: 'SEK' })),
+    },
+  };
+  const service = new StorefrontService(
+    prisma as unknown as PrismaService,
+    {
+      isEnabled: jest.fn(() => Promise.resolve(false)),
+      getSettings: jest.fn(() => Promise.resolve({})),
+    } as unknown as StoreAppsService,
+    {
+      resolve: jest.fn(() => Promise.resolve(null)),
+    } as unknown as MarketsContextService,
+    {} as MarketPricingService,
+    {} as TaxService,
+  );
+  return { service, prisma };
+}
+
+function expectCustomProductContract(p: Record<string, unknown>) {
+  for (const key of CUSTOM_PRODUCT_DOCUMENTED_KEYS) {
+    expect(p).toHaveProperty(key);
+  }
+  expect(p).toMatchObject({
+    id: 'cp1',
+    _type: 'custom_product',
+    // The creator's selling price, never the provider's 45.
+    base_price: 150,
+    // The provider's stock of the base product.
+    track_inventory: true,
+    stock_quantity: 7,
+  });
+  const json = JSON.stringify(p);
+  expect(p).not.toHaveProperty('cost_price');
+  expect(json).not.toContain('cost_price');
+  expect(json).not.toContain('"base_price":45');
+  expect(json).not.toContain('wc-');
+}
+
+describe('public contract: imported (custom) products', () => {
+  it('the list row carries the selling price and the base product stock', async () => {
+    const { service } = buildCustomCatalog();
+    const list = (await service.getProducts('shop', {})) as Record<
+      string,
+      unknown
+    >[];
+    expect(list).toHaveLength(1);
+    expectCustomProductContract(list[0]);
+  });
+
+  it('the detail carries the same keys', async () => {
+    const { service } = buildCustomCatalog();
+    const p = (await service.getProduct('shop', 'hoodie')) as Record<
+      string,
+      unknown
+    >;
+    expectCustomProductContract(p);
+  });
+
+  it('an untracked base product reads as untracked', async () => {
+    const { service, prisma } = buildCustomCatalog();
+    const row = customProductRow();
+    row.product = {
+      ...row.product,
+      track_inventory: false,
+      stock_quantity: null as unknown as number,
+    };
+    prisma.customProduct.findMany.mockResolvedValueOnce([row]);
+    const [p] = (await service.getProducts('shop', {})) as Record<
+      string,
+      unknown
+    >[];
+    expect(p).toMatchObject({ track_inventory: false, stock_quantity: null });
+  });
+});
+
 describe('public contract: envelope', () => {
   it('every success is wrapped as { success: true, data, timestamp }', async () => {
     const out = await lastValueFrom(

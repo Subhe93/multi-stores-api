@@ -999,6 +999,15 @@ describe('ProductsService.getImportDetails stories (S7, creator import view)', (
           }),
         ),
       },
+      // Provider approval required and the provider verified.
+      platformConfig: {
+        findFirst: jest.fn(() =>
+          Promise.resolve({ require_provider_approval: true }),
+        ),
+      },
+      provider: {
+        findUnique: jest.fn(() => Promise.resolve({ verified: true })),
+      },
     };
     const svc = new ProductsService(
       prisma as unknown as PrismaService,

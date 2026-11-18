@@ -31,14 +31,25 @@ export class VariantsController {
     return this.variantsService.create(productId, dto, userId, role);
   }
 
+  // Variant reads carry stock and price adjustments: same visibility as
+  // GET /products/:id (catalogueReadLevel), so a provider never reads a
+  // competitor's variants.
   @Get('products/:productId/variants')
-  findByProduct(@Param('productId') productId: string) {
-    return this.variantsService.findByProduct(productId);
+  findByProduct(
+    @Param('productId') productId: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.variantsService.findByProduct(productId, userId, role);
   }
 
   @Get('variants/:id')
-  findById(@Param('id') id: string) {
-    return this.variantsService.findById(id);
+  findById(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.variantsService.findById(id, userId, role);
   }
 
   @Put('variants/:id')
