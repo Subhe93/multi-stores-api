@@ -37,7 +37,7 @@ Only a store with `status: "LIVE"` serves its catalogue. While the store is bein
 | Route | Answer |
 |---|---|
 | `GET /storefront/:slug` | 200 with a small "closed shell": `{ slug, name, logo_url, status, coming_soon, paused, is_active: false, indexing: "noindex", language_config, theme... }` and no catalogue keys |
-| `GET /storefront/:slug/products` | 200 `[]` |
+| `GET /storefront/:slug/products` | 200 `[]`; with `page` (3.2, not deployed yet): `{ "items": [], "total": 0, "page": <page>, "limit": <limit>, "has_more": false }` |
 | `GET /storefront/:slug/products/:productSlug` | 404 `STOREFRONT_STORE_NOT_FOUND` |
 | `GET /storefront/:slug/creator-categories` | 200 `[]` |
 | `GET /storefront/:slug/sitemap-data` | 200 with empty lists |
@@ -108,11 +108,23 @@ Query parameters:
 | `creator_category=<collection slug>` | Only products in that collection (use one collection per course type, for example `riskettan`). Unknown or internal collections return `[]` |
 | `search=<text>` | Case-insensitive match on any translation title |
 | `category_id=<uuid>` | Platform taxonomy (not the store's collections); not needed |
-| `page`, `limit` | **Accepted and ignored**: the list is **not paginated**; you get every PUBLISHED product of the store (or of the collection) in one array |
+| `limit=<1..100>` | **Not deployed yet** (until then ignored). Without `page`: at most that many products, still a **plain array**: the first N items of the list you get without `limit`, in the same order. Values above 100 count as 100; `0`, negative, decimal or non-numeric values are ignored (full list) |
+| `page=<1..1000>` | **Not deployed yet** (until then ignored). Switches to the paged answer below. Page size = `limit` (1 to 100), default 24. A page above 1000 counts as 1000; `0`, negative or non-numeric values count as page 1 |
+| `sort` | **Not deployed yet.** Only together with `limit` or `page` (ignored otherwise): `newest`, `price_asc`, `price_desc` or `name`. Any other value = the default order. `name` compares the title in the `locale` you pass (else the translation with the smallest locale code), case- and accent-insensitive with numbers in numeric order, empty titles last. `price_asc` / `price_desc` compare the **stored base amount** in the store currency: they ignore market prices, variant price differences ("from" prices), promotions and the tax display, so the order can differ from the prices shown (on a marketplace store, an imported product priced per variant or by margin is sorted by a stored amount that may be 0) |
 
-Order: newest product first (`created_at desc`). A MANUAL collection filtered with `creator_category` is returned in the owner's drag order. Sort course dates yourself (see section 7).
+**Without `page` and `limit` nothing changes:** you get every PUBLISHED product of the store (or of the collection) in one plain array, as before. No value of `page`, `limit` or `sort` ever causes an error.
 
-Payload: a plain JSON array. Each own product item:
+Order: newest product first (`created_at desc`). A MANUAL collection filtered with `creator_category` is returned in the owner's drag order. Sort course dates yourself (see section 7). Products created at the same instant: in the full list their relative order is not defined (and can change when one is edited); with `limit` or `page` they are ordered by `id`, so pages never repeat or skip a product while the catalogue does not change. `sort` overrides the drag order of a MANUAL collection.
+
+Payload: a plain JSON array (also with `limit`). With `page` (**not deployed yet**) the payload is an object instead:
+
+```json
+{ "items": [ ... ], "total": 57, "page": 2, "limit": 24, "has_more": true }
+```
+
+`items` holds list items of the same shape as the array items; `total` is the number of products matching the same filters; `page` and `limit` are the values actually applied; `has_more` = `page * limit < total`. A page past the end returns `"items": []` with the true `total`.
+
+Each own product item:
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -138,7 +150,7 @@ Payload: a plain JSON array. Each own product item:
 
 Product-level columns that are never served: `cost_price`, `external_ref`, `gtin`, `mpn`, `google_product_category`, `condition`, `feed_excluded`; variant `external_ref`.
 
-Size: the list carries every product with its translations (HTML descriptions included). Fetch it once per build/revalidation, not per page view, and filter by collection when possible.
+Size: the list carries every product with its translations (HTML descriptions included). Fetch it once per build/revalidation, not per page view, and filter by collection when possible. When you need only a few products, send `limit` (once deployed).
 
 Trimmed example item:
 
@@ -404,3 +416,4 @@ The only dashboard reader of `GET /storefront/:slug` (`previewSampleProduct.ts` 
 - New keys may be **added** at any time (nullable or optional); clients must ignore unknown keys and treat a missing optional key as "not set".
 - Keys listed as "never in this payload" stay out; `storefront.public-contract.spec.ts` enforces both lists.
 - Additive keys documented so far: `max_per_order` on product list and detail (P1); `requires_shipping` on product list and detail, and the `requires_shipping: false` keys of the cart, quote and shipping answers (3.6: only the literal `false` means "no shipping"); inside the store `checkout` block, `external_site_url`, `return_url`, `return_mode`, `back_label` (P3, present only when the store sets an external site) and `external_focus` (focused storefront, 11.5: present, as `true`, only while it is on); `return_label` (11.2: present only when set, next to an external site) and `no_customer_accounts` (11.2: present, as `true`, only while it is on). `email_note` (P4) is never served by these routes.
+- 2026-11-18, **Not deployed yet**: `GET /storefront/:slug/products` honours `limit` (first N, still a plain array), and `page` switches to the paged object `{ items, total, page, limit, has_more }`; `sort` applies with either (3.2). A request without `page` and `limit` is unchanged (every product, plain array), so existing clients need no change.
