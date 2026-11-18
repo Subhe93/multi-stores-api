@@ -63,6 +63,7 @@ import {
   resolveCookiePageSlug,
 } from './cookie-page';
 import { publicCheckoutSettings } from '../stores/checkout-settings';
+import { effectiveCodEnabled } from '../stores/cod-policy';
 import { sanitizeAuthPagesConfig } from '../stores/theme-config';
 import {
   StorefrontGateService,
@@ -1060,6 +1061,9 @@ export class StorefrontService {
 
     return {
       ...storeRow,
+      // Cash on delivery is only really offered by an independent store
+      // (stores/cod-policy.ts); the raw flag never travels.
+      cod_enabled: effectiveCodEnabled(store),
       // Independent stores may price in their own currency; everyone else
       // shows the platform default.
       currency: resolveStoreCurrency(store, platformConfig?.default_currency),

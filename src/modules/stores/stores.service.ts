@@ -8,6 +8,8 @@ import {
   Optional,
 } from '@nestjs/common';
 import { keepOwnerSettings } from '../themes/keep-owner-css';
+import { STORE_COD_MARKETPLACE_NOT_ALLOWED } from './cod-policy';
+import { resolveStoreCurrency } from '../../common/money/currency.util';
 import { CorsOriginService } from '../../common/cors/cors-origin.service';
 import { Prisma, StoreStatus, StoreType, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -120,6 +122,31 @@ export class StoresService {
     if (!encrypted) throw new Error('CryptoService is not wired');
     return encrypted;
   };
+
+  /**
+   * Owner / admin store payload plus `effective_currency`: the currency the
+   * store's orders are really priced in (resolveStoreCurrency). `currency`
+   * stays the raw row value, which only an INDEPENDENT store edits; a
+   * MARKETPLACE row may hold a stale one while its orders use the platform
+   * currency, so the dashboard formats money in the effective value.
+   */
+  private async withEffectiveCurrency<
+    T extends { store_type?: string | null; currency?: string | null },
+  >(payload: T): Promise<T & { effective_currency: string }> {
+    // Lean unit doubles carry no platformConfig delegate; the real client
+    // always does.
+    const delegate = (this.prisma as Partial<PrismaService>).platformConfig;
+    const platform = await delegate?.findFirst({
+      select: { default_currency: true },
+    });
+    return {
+      ...payload,
+      effective_currency: resolveStoreCurrency(
+        payload,
+        platform?.default_currency,
+      ),
+    };
+  }
 
   private lifecycleOrThrow(): StoreLifecycleService {
     if (!this.lifecycle) {
@@ -311,7 +338,7 @@ export class StoresService {
       : undefined;
     // The token itself never leaves: the owner gets `meta_capi_token_set`.
     return {
-      ...ownerStorePayload(store),
+      ...(await this.withEffectiveCurrency(ownerStorePayload(store))),
       ...(await this.storefrontHostsOf(store)),
       ...(golive_checklist ? { golive_checklist } : {}),
     };
@@ -562,6 +589,18 @@ export class StoresService {
       }
     }
 
+    // Cash on delivery is for independent stores only (cod-policy.ts).
+    // Switching it off is always accepted.
+    if (data.cod_enabled === true) {
+      const current = await this.prisma.store.findUnique({
+        where: { creator_id: creator.id },
+        select: { store_type: true },
+      });
+      if (current?.store_type !== StoreType.INDEPENDENT) {
+        throw new BadRequestException(STORE_COD_MARKETPLACE_NOT_ALLOWED);
+      }
+    }
+
     const own = await this.prisma.store.findUnique({
       where: { creator_id: creator.id },
       select: { id: true, slug: true, custom_domain: true },
@@ -645,7 +684,7 @@ export class StoresService {
       await this.revalidation.revalidateStoreBySlug(own.slug);
     await this.revalidation.revalidateStoreBySlug(store.slug);
 
-    return ownerStorePayload(store);
+    return this.withEffectiveCurrency(ownerStorePayload(store));
   }
 
   /**
@@ -940,7 +979,7 @@ export class StoresService {
         code: 'STORE_NOT_FOUND',
         message: 'Store not found',
       });
-    return ownerStorePayload(store);
+    return this.withEffectiveCurrency(ownerStorePayload(store));
   }
 
   // Admin variant: may also change store_type (creators pick it only at creation).
@@ -1025,6 +1064,17 @@ export class StoresService {
         message:
           'Only independent stores can set their own currency. Marketplace stores use the platform currency.',
       });
+    }
+
+    // Cash on delivery is for independent stores only (cod-policy.ts),
+    // judged against the type the store will have AFTER this update. A move
+    // away from INDEPENDENT also writes the flag off, so a later move back
+    // cannot silently re-activate it.
+    if (effectiveType !== StoreType.INDEPENDENT) {
+      if (data.cod_enabled === true) {
+        throw new BadRequestException(STORE_COD_MARKETPLACE_NOT_ALLOWED);
+      }
+      if (typeChanged) data.cod_enabled = false;
     }
 
     if (
@@ -1132,7 +1182,7 @@ export class StoresService {
       await this.revalidation.revalidateStoreBySlug(store.slug);
     await this.revalidation.revalidateStoreBySlug(updated.slug);
 
-    return ownerStorePayload(updated);
+    return this.withEffectiveCurrency(ownerStorePayload(updated));
   }
 
   async updateTheme(userId: string, dto: UpdateThemeDto) {

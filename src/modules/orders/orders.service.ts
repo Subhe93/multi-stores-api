@@ -73,6 +73,7 @@ import {
   toStripeAmount,
 } from '../../common/money/currency.util';
 import { splitProviderShares } from '../../common/money/provider-share.util';
+import { effectiveCodEnabled } from '../stores/cod-policy';
 import { allocateLargestRemainder } from '../../common/money/tax.util';
 import { MarketsContextService } from '../markets/markets-context.service';
 import {
@@ -2776,11 +2777,12 @@ export class OrdersService implements OnModuleInit {
     const requestedPaymentMethod: PaymentMethod =
       dto.payment_method || PaymentMethod.COD;
 
-    // Cash on delivery is opt-in per store (off by default) — reject COD
-    // orders for stores that haven't enabled it.
+    // Cash on delivery is opt-in per store (off by default) and never
+    // available on a marketplace store (cod-policy.ts): reject COD orders
+    // for stores that do not really offer it.
     if (
       requestedPaymentMethod === PaymentMethod.COD &&
-      !orderStore.cod_enabled
+      !effectiveCodEnabled(orderStore)
     ) {
       throw new BadRequestException({
         code: 'ORDER_COD_DISABLED',

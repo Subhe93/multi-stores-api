@@ -25,6 +25,7 @@ import {
   resolveLegalPage,
 } from '../legal/store-templates/store-legal-resolver';
 import { isDisposableEmail } from '../../common/email/disposable-domains';
+import { effectiveCodEnabled } from './cod-policy';
 import {
   isKustomEnabledForStore,
   kustomCreatorSelect,
@@ -257,7 +258,8 @@ export class StoreLifecycleService {
       trader_details_complete: traderDetailsComplete(store.trader_details),
       has_published_product: ownPublished + customPublished > 0,
       has_published_theme: themeChosen,
-      payments_ready: cardReady || kustomReady || store.cod_enabled,
+      payments_ready:
+        cardReady || kustomReady || effectiveCodEnabled(store),
       legal_pages_published: storeLegalRows
         ? (['privacy', 'terms'] as const).every(
             (slug) =>

@@ -3,6 +3,7 @@ import { Prisma, StoreType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { resolveStoreCurrency } from '../../common/money/currency.util';
+import { effectiveCodEnabled } from '../stores/cod-policy';
 import {
   bucketSql,
   capWithOther,
@@ -216,7 +217,7 @@ export class OverviewService {
       primaryLocale: s.language_config?.primary_locale || 'en',
       logoUrl: s.logo_url,
       customDomain: s.custom_domain,
-      codEnabled: s.cod_enabled,
+      codEnabled: effectiveCodEnabled(s),
       creator: {
         stripe_charges_enabled: creator.stripe_charges_enabled,
         stripe_payouts_enabled: creator.stripe_payouts_enabled,

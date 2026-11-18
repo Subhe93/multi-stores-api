@@ -4,6 +4,11 @@
 // by any endpoint. PrismaService already omits the column from every read;
 // the helpers below are the explicit second line for the payloads that
 // return a Store row, and they add the owner-facing `meta_capi_token_set`.
+//
+// Both payload helpers also carry the EFFECTIVE cash-on-delivery flag
+// (cod-policy.ts): a marketplace store never offers it, whatever the row says.
+
+import { withEffectiveCod } from './cod-policy';
 
 /**
  * Pass as `omit` on an owner / admin Store query so the row carries the
@@ -25,7 +30,7 @@ export function ownerStorePayload<T extends object>(
     meta_capi_token?: string | null;
   };
   return {
-    ...(rest as WithoutToken<T>),
+    ...(withEffectiveCod(rest) as WithoutToken<T>),
     meta_capi_token_set: Boolean(meta_capi_token),
   };
 }
@@ -57,7 +62,7 @@ type PrivateStoreKey = (typeof PRIVATE_STORE_KEYS)[number];
 export function publicStoreRow<T extends object>(
   store: T,
 ): Omit<T, 'meta_capi_token' | 'meta_test_event_code' | PrivateStoreKey> {
-  const rest = { ...store } as Record<string, unknown>;
+  const rest = withEffectiveCod({ ...store }) as Record<string, unknown>;
   delete rest.meta_capi_token;
   delete rest.meta_test_event_code;
   for (const key of PRIVATE_STORE_KEYS) delete rest[key];
