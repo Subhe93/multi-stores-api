@@ -72,7 +72,14 @@ export function buildOrderCreate(opts: {
   config?: Record<string, string | undefined>;
   revalidation?: Pick<RevalidationService, 'revalidateStoresOfProduct'>;
   storeType?: StoreType;
+  /** The store the order is placed in (default s1 of creator c1). */
+  store?: { id: string; creator_id: string; slug: string };
 }) {
+  const store = opts.store ?? {
+    id: HARNESS_STORE_ID,
+    creator_id: HARNESS_CREATOR_ID,
+    slug: 'shop-a',
+  };
   const products = new Map(Object.entries(opts.products ?? {}));
   const variants = new Map(Object.entries(opts.variants ?? {}));
   const customProducts = new Map(Object.entries(opts.customProducts ?? {}));
@@ -121,10 +128,10 @@ export function buildOrderCreate(opts: {
     store: {
       findUnique: jest.fn(() =>
         Promise.resolve({
-          id: HARNESS_STORE_ID,
-          slug: 'shop-a',
+          id: store.id,
+          slug: store.slug,
           store_type: opts.storeType ?? StoreType.MARKETPLACE,
-          creator_id: HARNESS_CREATOR_ID,
+          creator_id: store.creator_id,
           currency: 'SEK',
           cod_enabled: true,
           is_active: true,
@@ -143,7 +150,8 @@ export function buildOrderCreate(opts: {
       ),
       updateMany: jest.fn(({ where, data }: StockWrite) => {
         const p = products.get(where.id);
-        if (!p || p.stock_quantity === null) return Promise.resolve({ count: 0 });
+        if (!p || p.stock_quantity === null)
+          return Promise.resolve({ count: 0 });
         if (where.track_inventory === true && !p.track_inventory) {
           return Promise.resolve({ count: 0 });
         }
@@ -185,7 +193,8 @@ export function buildOrderCreate(opts: {
       ),
       updateMany: jest.fn(({ where, data }: StockWrite) => {
         const v = variants.get(where.id);
-        if (!v || v.stock_quantity === null) return Promise.resolve({ count: 0 });
+        if (!v || v.stock_quantity === null)
+          return Promise.resolve({ count: 0 });
         const gte = where.stock_quantity?.gte;
         if (gte !== undefined && v.stock_quantity < gte) {
           return Promise.resolve({ count: 0 });
@@ -222,7 +231,7 @@ export function buildOrderCreate(opts: {
         return Promise.resolve({
           id: where.id,
           product_id: cp.product_id,
-          creator_id: cp.creator_id ?? HARNESS_CREATOR_ID,
+          creator_id: cp.creator_id ?? store.creator_id,
           status: cp.status ?? 'PUBLISHED',
           pricing_type: cp.pricing_type ?? PricingType.SINGLE,
           final_price: cp.final_price ?? 150,
@@ -375,13 +384,13 @@ export function buildOrderCreate(opts: {
       'u1',
       {
         address_id: 'a1',
-        store_id: HARNESS_STORE_ID,
+        store_id: store.id,
         payment_method: 'STRIPE',
       } as never,
       { lines } as never,
     );
   const quote = (lines: HarnessLine[]) =>
-    service.quoteLines(HARNESS_STORE_ID, lines as never, {
+    service.quoteLines(store.id, lines as never, {
       countryCode: 'SE',
     });
   return { service, prisma, place, quote, products, variants, config };

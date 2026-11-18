@@ -1315,6 +1315,11 @@ export class StorefrontService {
       return {
         id: cp.id,
         base_price: displayPrice,
+        // The provider's stock of the base product (shared by every store
+        // reselling it), with the own-product semantics: counted only when
+        // track_inventory is true; variants carry their own `stock`.
+        track_inventory: cp.product.track_inventory,
+        stock_quantity: cp.product.stock_quantity,
         status: cp.status,
         translations: cp.translations,
         images:
@@ -1922,6 +1927,9 @@ export class StorefrontService {
       compare_at_price: baseProduct.compare_at_price
         ? Number(baseProduct.compare_at_price)
         : undefined,
+      // The provider's stock of the base product, as on the list row.
+      track_inventory: baseProduct.track_inventory,
+      stock_quantity: baseProduct.stock_quantity,
       status: customProduct.status,
       product_type: baseProduct.product_type,
       customization_type: baseProduct.customization_type,

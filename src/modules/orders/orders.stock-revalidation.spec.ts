@@ -1081,8 +1081,31 @@ describe('stock put back by an order: storefront refresh', () => {
         product_id: true,
         variant_id: true,
         quantity: true,
-        variant: { select: { stock_quantity: true } },
-        product: { select: { stock_quantity: true, track_inventory: true } },
+        // Where an imported line's stock went (orders.custom-line-stock.spec).
+        custom_product_id: true,
+        variant_options_snapshot: true,
+        order: { select: { created_at: true } },
+        custom_product: {
+          select: {
+            product_id: true,
+            product: {
+              select: { stock_quantity: true, track_inventory: true },
+            },
+          },
+        },
+        variant: {
+          select: {
+            stock_quantity: true,
+            product: { select: { creator_id: true } },
+          },
+        },
+        product: {
+          select: {
+            stock_quantity: true,
+            track_inventory: true,
+            creator_id: true,
+          },
+        },
       },
     });
   });

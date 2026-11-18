@@ -287,9 +287,12 @@ describe('OrdersService designer lines (M4.2 WP4)', () => {
     );
     const withSvc = build({ designer: realOff });
     await withSvc.service.create('u1', DTO, lines as never);
+    // order_number and created_at (the moment the order is placed) differ
+    // between two orders by construction.
     const strip = (d: Record<string, unknown>) => ({
       ...d,
       order_number: 'x',
+      created_at: 'x',
     });
     expect(strip(createdData(withSvc.prisma) as never)).toEqual(
       strip(createdData(plain.prisma) as never),
