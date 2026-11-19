@@ -511,6 +511,24 @@ describe('computeTaxes: tax_lines', () => {
     expect(r.headline_rate_bp).toBe(1900);
   });
 
+  it('falls back to the platform label for the locale before English', () => {
+    // Stored label predates Kurmanji: only en/sv entries.
+    const stored = { en: 'VAT', sv: 'Moms' };
+    const lines = [{ amount: 125, tax_class_id: 'std', tax_exempt: false }];
+    const run = (locale: string) =>
+      compute(
+        { ctx: { ossRegistered: true }, locale, lines },
+        {
+          classes: CLASSES,
+          rates: [rate('std', 'SE', 2500, { label: stored })],
+        },
+      ).tax_lines[0].label;
+    expect(run('ku')).toBe('Bac');
+    expect(run('sv')).toBe('Moms');
+    // No platform label either: English.
+    expect(run('xx')).toBe('VAT');
+  });
+
   it('Σ tax_lines == tax_total across random mixed orders', () => {
     let s = 7;
     const rnd = () => ((s = (s * 48271) % 2147483647) % 100000) / 100;

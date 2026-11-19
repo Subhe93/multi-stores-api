@@ -15,6 +15,7 @@ import {
   roundSymmetric,
 } from '../../common/money/tax.util';
 import { isEuCountry } from './tax-territory';
+import { TAX_LABEL } from './tax-seed';
 import type {
   BuyerType,
   ReverseChargePricing,
@@ -447,7 +448,17 @@ function taxLineMinor(
   return { net, tax, applied };
 }
 
-function pickLabel(label: unknown, locale: string | null | undefined): string {
+/**
+ * Picks the label in the locale. `platformFallback` (rate labels only) puts
+ * the platform's own label for that locale (TAX_LABEL) ahead of English, so a
+ * stored rate saved before a locale existed ("VAT" only) still reads "Bac" on
+ * a Kurdish page. Fixed texts like the exemption labels leave it off.
+ */
+function pickLabel(
+  label: unknown,
+  locale: string | null | undefined,
+  platformFallback = false,
+): string {
   if (typeof label === 'string') return label;
   if (!label || typeof label !== 'object') return 'Tax';
   const map = label as Record<string, unknown>;
@@ -459,7 +470,13 @@ function pickLabel(label: unknown, locale: string | null | undefined): string {
   const any = Object.values(map).find(
     (v): v is string => typeof v === 'string' && v.trim().length > 0,
   );
-  return pick(lang) ?? pick('en') ?? any ?? 'Tax';
+  return (
+    pick(lang) ??
+    (platformFallback ? (TAX_LABEL[lang] ?? null) : null) ??
+    pick('en') ??
+    any ??
+    'Tax'
+  );
 }
 
 function destinationFor(
@@ -665,7 +682,7 @@ export function computeTaxes(input: TaxComputeInput): TaxComputeResult {
   >();
   const addToGroup = (applied: AppliedRate[]) => {
     for (const a of applied) {
-      const label = pickLabel(a.rate.label, input.locale);
+      const label = pickLabel(a.rate.label, input.locale, true);
       const rateBp = clampRateBp(a.rate.rate_bp);
       const key = `${label}|${rateBp}`;
       const g = groups.get(key) ?? {

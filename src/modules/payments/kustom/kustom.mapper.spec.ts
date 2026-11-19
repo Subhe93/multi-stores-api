@@ -252,6 +252,9 @@ describe('resolveKustomLocale', () => {
     expect(resolveKustomLocale('tr', 'TR')).toBe('tr-TR');
     expect(resolveKustomLocale('ar', 'SA')).toBe('en-GB');
     expect(resolveKustomLocale(null, null)).toBe('en-GB');
+    // Kurdish (Kurmanji) has no Kustom locale: neutral British English.
+    expect(resolveKustomLocale('ku', null)).toBe('en-GB');
+    expect(resolveKustomLocale('ku-TR', 'IQ')).toBe('en-GB');
   });
 });
 
