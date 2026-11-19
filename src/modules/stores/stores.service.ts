@@ -21,6 +21,7 @@ import { MarketsService } from '../markets/markets.service';
 import { MarketsContextService } from '../markets/markets-context.service';
 import { toMarketRoute } from '../markets/market-context';
 import type { StoreByDomainResponse } from '../markets/market.types';
+import { assertNotReviewPrimaryLocale } from '../markets/review-locale';
 import { RedirectsService } from '../redirects/redirects.service';
 import { isReservedDomain } from '../../common/domains/reserved-hosts';
 import { isReservedStoreSlug } from '../../common/slug/reserved-store-slugs';
@@ -1325,6 +1326,9 @@ export class StoresService {
   }
 
   async updateLanguages(userId: string, dto: UpdateLanguageDto) {
+    // A locale in review may be a secondary language only (400 otherwise).
+    assertNotReviewPrimaryLocale(dto.primary_locale);
+
     const creator = await this.prisma.creator.findUnique({
       where: { user_id: userId },
     });

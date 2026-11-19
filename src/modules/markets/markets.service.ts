@@ -35,6 +35,7 @@ import {
   UpsertProductMarketPricesDto,
 } from './dto/market.dto';
 import { resolveMarketPrice, resolveVariantMarketPrice } from './pricing.util';
+import { assertNotReviewPrimaryLocale } from './review-locale';
 
 const DEFAULT_MARKET_KEY = 'default';
 
@@ -751,7 +752,12 @@ export class MarketsService {
       dto.default_locale !== undefined
         ? dto.default_locale.trim().toLowerCase()
         : current?.default_locale;
-    if (dto.default_locale !== undefined) out.default_locale = defaultLocale;
+    if (dto.default_locale !== undefined) {
+      // Only a newly sent default is checked; a review locale in `locales`
+      // is accepted (served under its URL prefix, hidden from the switcher).
+      assertNotReviewPrimaryLocale(defaultLocale);
+      out.default_locale = defaultLocale;
+    }
     const locales =
       dto.locales !== undefined
         ? Array.from(new Set(dto.locales.map((l) => l.trim().toLowerCase())))
