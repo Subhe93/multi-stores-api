@@ -1,5 +1,6 @@
 import type { OrderProductionCheck } from '@prisma/client';
 import { pickTranslation } from '../../common/personalization/pick-translation';
+import { pickLocaleText } from '../../common/personalization/snapshot-label';
 import { isOwnLine } from './production-sources';
 import { summarize } from './production-state';
 import type { ProductionSettings } from './production-settings';
@@ -54,6 +55,11 @@ export interface WorkspaceOrderSource {
       id: string;
       upload_id?: string | null;
       upload?: { id: string; purged_at?: Date | string | null } | null;
+      /** Repeater instance ("Artikel 2") of the value, M4.1. */
+      group_index?: number | null;
+      group_label?: unknown;
+      /** `{ hex?, option_name? }`: colour of a swatch value. */
+      meta?: unknown;
     }[];
   }[];
 }
@@ -85,16 +91,44 @@ export interface WorkspaceCheckView {
    * already holds the line.
    */
   quantity: number | null;
+  /**
+   * Swatch colour of the value (`#rrggbb`) from the order-time value row;
+   * null when the value is not a colour. Workspace reads only: write
+   * responses carry null and the client keeps the value it holds.
+   */
+  hex: string | null;
+  /**
+   * Repeater instance label ("Artikel 2") in the store's primary locale, the
+   * same text that prefixes `label` ("Artikel 2 – Namn"). Null outside a
+   * group and on write responses.
+   */
+  group_label: string | null;
+}
+
+/** Display extras of a value row, keyed by the row id (`fv:<id>`). */
+export interface CheckValueExtras {
+  hex: string | null;
+  group_label: string | null;
+}
+
+const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+/** Swatch colour of a value row's meta, when it is a valid hex colour. */
+export function hexOfMeta(meta: unknown): string | null {
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null;
+  const hex = (meta as Record<string, unknown>).hex;
+  return typeof hex === 'string' && HEX_RE.test(hex) ? hex : null;
 }
 
 export function toCheckView(
   c: OrderProductionCheck,
   uploads?: Map<string, { id: string; purged: boolean }>,
   quantity: number | null = null,
+  extras?: Map<string, CheckValueExtras>,
 ): WorkspaceCheckView {
-  const up = c.source_key.startsWith('fv:')
-    ? uploads?.get(c.source_key.slice(3))
-    : undefined;
+  const rowId = c.source_key.startsWith('fv:') ? c.source_key.slice(3) : null;
+  const up = rowId ? uploads?.get(rowId) : undefined;
+  const extra = rowId ? extras?.get(rowId) : undefined;
   return {
     id: c.id,
     order_item_id: c.order_item_id,
@@ -114,6 +148,8 @@ export function toCheckView(
     stale: c.stale,
     custom: c.source === 'CUSTOM',
     quantity,
+    hex: extra?.hex ?? null,
+    group_label: c.group_index !== null ? (extra?.group_label ?? null) : null,
   };
 }
 
@@ -155,17 +191,32 @@ export function buildWorkspace(input: {
   const { order } = input;
   const locale = order.locale ?? input.primaryLocale;
   const uploads = new Map<string, { id: string; purged: boolean }>();
+  const extras = new Map<string, CheckValueExtras>();
   for (const item of order.items) {
     for (const v of item.custom_field_values ?? []) {
       const id = v.upload?.id ?? v.upload_id ?? null;
       if (id) uploads.set(v.id, { id, purged: !!v.upload?.purged_at });
+      // Same group text as the check label prefix (readValueSnapshot).
+      const grouped = v.group_index !== null && v.group_index !== undefined;
+      extras.set(v.id, {
+        hex: hexOfMeta(v.meta),
+        group_label: grouped
+          ? (pickLocaleText(
+              v.group_label,
+              input.primaryLocale,
+              input.primaryLocale,
+            ) ?? `#${v.group_index}`)
+          : null,
+      });
     }
   }
   const quantities = new Map(order.items.map((i) => [i.id, i.quantity]));
   const byLine = new Map<string, WorkspaceCheckView[]>();
   for (const c of input.checks) {
     const list = byLine.get(c.order_item_id) ?? [];
-    list.push(toCheckView(c, uploads, quantities.get(c.order_item_id) ?? null));
+    list.push(
+      toCheckView(c, uploads, quantities.get(c.order_item_id) ?? null, extras),
+    );
     byLine.set(c.order_item_id, list);
   }
   const customerName = [order.customer?.first_name, order.customer?.last_name]

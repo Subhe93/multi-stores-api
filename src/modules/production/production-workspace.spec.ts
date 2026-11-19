@@ -100,4 +100,75 @@ describe('production workspace view (M4.3 §3.7)', () => {
       'Size: L',
     ]);
   });
+
+  it('value checks carry the swatch colour and the group label of their order row', () => {
+    const withValues: WorkspaceOrderSource = {
+      ...order,
+      items: [
+        {
+          ...order.items[0],
+          custom_field_values: [
+            {
+              id: 'v1',
+              group_index: 2,
+              group_label: { sv: 'Artikel 2', en: 'Item 2' },
+              meta: { hex: '#F4A6C0', option_name: 'Färg' },
+            },
+            { id: 'v2', group_index: 2, group_label: null, meta: null },
+            { id: 'v3', group_index: null, meta: { hex: 'red' } },
+          ],
+        },
+      ],
+    };
+    const ws = buildWorkspace({
+      order: withValues,
+      checks: [
+        check({
+          id: 'c1',
+          source: 'FIELD_VALUE',
+          source_key: 'fv:v1',
+          group_index: 2,
+          label: 'Artikel 2 – Färg',
+          value: 'Rosa',
+        }),
+        check({
+          id: 'c2',
+          source: 'FIELD_VALUE',
+          source_key: 'fv:v2',
+          group_index: 2,
+          label: '#2 – Namn',
+          value: 'Alicia',
+        }),
+        check({
+          id: 'c3',
+          source: 'FIELD_VALUE',
+          source_key: 'fv:v3',
+          label: 'Ton',
+          value: 'red',
+        }),
+        check({ id: 'c4' }),
+      ],
+      summary: { total: 4, done: 0, state: 'NOT_STARTED', completed_at: null },
+      suggestion: null,
+      settings: DEFAULT_PRODUCTION_SETTINGS,
+      creatorId: 'cr1',
+      primaryLocale: 'sv',
+      printFiles: [],
+    });
+    expect(ws.lines[0].checks.map((c) => [c.id, c.hex, c.group_label])).toEqual(
+      [
+        ['c1', '#F4A6C0', 'Artikel 2'],
+        ['c2', null, '#2'],
+        // Not a valid hex colour, not grouped.
+        ['c3', null, null],
+        // Variant option check: no value row.
+        ['c4', null, null],
+      ],
+    );
+    // Write responses carry neither (the client keeps what it holds).
+    expect(toCheckView(check())).toMatchObject({
+      hex: null,
+      group_label: null,
+    });
+  });
 });
