@@ -12,9 +12,9 @@ const data = {
 };
 
 describe('customer_login_link email', () => {
-  it('bundles the six locales with identical keys', () => {
+  it('bundles the seven locales (ku included) with identical keys', () => {
     const locales = Object.keys(CUSTOMER_LOGIN_LINK_TEXT).sort();
-    expect(locales).toEqual(['ar', 'de', 'en', 'fr', 'sv', 'tr']);
+    expect(locales).toEqual(['ar', 'de', 'en', 'fr', 'ku', 'sv', 'tr']);
     const keys = Object.keys(CUSTOMER_LOGIN_LINK_TEXT.en).sort();
     for (const l of locales) {
       expect(Object.keys(CUSTOMER_LOGIN_LINK_TEXT[l]).sort()).toEqual(keys);

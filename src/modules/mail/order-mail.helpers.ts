@@ -179,6 +179,33 @@ const ITEMS_PHRASES = {
     sampleEmailNote:
       "Exempelanteckning för produkten, t.ex. 'Ta med dina glasögon.'",
   },
+  // Kurdish (Kurmanji); pending review by a native speaker.
+  ku: {
+    product: 'Berhem',
+    qty: 'Hejmar',
+    back: 'Rûyê paşîn',
+    price: 'Biha',
+    subtotal: 'Jêrgiştî',
+    shipping: 'Şandin',
+    discount: 'Daxistin',
+    total: 'Giştî',
+    includesVat: 'Bi bacê ve',
+    includes: 'Tê de',
+    tax: 'Bac',
+    variant: 'Cure',
+    tracking: 'Şopandin',
+    cancelReason: 'Sedem',
+    refundAmount: 'Mîqdara vegerandî',
+    paid: 'Dayîna we hat wergirtin.',
+    cod: 'We dayîn di dema gihandinê de hilbijart — ji kerema xwe dema ku siparîş digihîje, pereyan bidin kesê ku wê tîne.',
+    viewOrder: 'Siparîşa xwe bibîne',
+    fileUploaded: 'Pel hat barkirin',
+    // M4.1: label of a personalization item without a stored label.
+    itemN: 'Berhem {i}',
+    // Headless booking E2: per-product note in the template preview.
+    sampleEmailNote:
+      "Têbîniyeke mînak ji bo vê berhemê, wek 'Berçavkên xwe bînin.'",
+  },
 } as const;
 
 export type EmailLocale = keyof typeof ITEMS_PHRASES;
@@ -823,6 +850,7 @@ const TOTALS_PHRASES: Record<
   de: { card: 'Karte', cod: 'Nachnahme', free: 'Kostenlos' },
   fr: { card: 'Carte', cod: 'Paiement à la livraison', free: 'Gratuit' },
   sv: { card: 'Kort', cod: 'Betalning vid leverans', free: 'Gratis' },
+  ku: { card: 'Kart', cod: 'Dayîn di dema gihandinê de', free: 'Belaş' },
 };
 
 // b2b app: labels of the company block and of the net/gross rows a company
@@ -899,6 +927,16 @@ const COMPANY_PHRASES: Record<
     totalInclVat: 'Totalt inkl. moms',
     reverseChargeNote:
       'Omvänd skattskyldighet: köparen redovisar momsen (momsreg.nr {vat})',
+  },
+  ku: {
+    companyLabel: 'Şirket',
+    orgNumber: 'Hejmara şirketê',
+    vatNumber: 'Hejmara bacê',
+    reference: 'Referans',
+    netTotal: 'Giştî bê bac',
+    totalInclVat: 'Giştî bi bacê ve',
+    reverseChargeNote:
+      'Bacdana berevajî: wergir berpirsê ragihandina bacê ye (hejmara bacê {vat})',
   },
 };
 

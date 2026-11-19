@@ -6,7 +6,8 @@
  *
  * No Prisma import: pure data + string building, so it is unit-testable.
  *
- * Every event is defined in the six platform locales. The markup of an event
+ * Every event is defined in the platform locales (onboarding events: all but
+ * `ku`, which is shopper-facing only). The markup of an event
  * is built once and shared by all locales; only the human text differs.
  * Bodies use the {{var}} placeholders the MailService substitutes at send
  * time (allowed variables per event: NotificationTemplatesService
@@ -26,6 +27,10 @@ export const PLATFORM_EMAIL_LOCALES = [
   'de',
   'fr',
   'sv',
+  // Kurdish (Kurmanji, Latin script): core and account emails only; the
+  // seller-facing onboarding events have no `ku` text (buildOnboardingTemplates
+  // skips a missing locale and the mail service falls back to English).
+  'ku',
 ] as const;
 export type PlatformEmailLocale = (typeof PLATFORM_EMAIL_LOCALES)[number];
 
@@ -225,6 +230,15 @@ const CORE_TEXT: Record<CoreEvent, Record<PlatformEmailLocale, CorePhrases>> = {
       note: 'Om du inte har begärt detta kan du bortse från det här mejlet.',
       text: `Återställ ditt lösenord hos ${BRAND}.\n\nÖppna länken för att välja ett nytt lösenord (gäller i 1 timme):\n{{reset_url}}\n\nOm du inte har begärt detta kan du bortse från det här mejlet.`,
     },
+    ku: {
+      subject: `Şîfreya xwe ya ${BRAND} nû bikin`,
+      title: 'Şîfreya xwe nû bikin',
+      intro:
+        'Me daxwazek ji bo nûkirina şîfreya we wergirt. Ji bo ku şîfreyeke nû hilbijêrin, li bişkoka jêrîn bitikînin. Dema vê girêdanê piştî 1 saetê diqede.',
+      button: 'Şîfreyê nû bike',
+      note: 'Heke we ev daxwaz nekiribe, hûn dikarin vê e-nameyê bi ewlehî paşguh bikin.',
+      text: `Şîfreya xwe ya ${BRAND} nû bikin.\n\nJi bo ku şîfreyeke nû hilbijêrin, vê girêdanê vekin (piştî 1 saetê dema wê diqede):\n{{reset_url}}\n\nHeke we ev daxwaz nekiribe, vê e-nameyê paşguh bikin.`,
+    },
   },
   order_confirmation: {
     en: {
@@ -275,6 +289,14 @@ const CORE_TEXT: Record<CoreEvent, Record<PlatformEmailLocale, CorePhrases>> = {
       label: 'Totalt:',
       text: `Tack för din beställning!\n\nVi har tagit emot din beställning {{order_number}}. {{payment_line}}\n{{items_text}}\nTotalt: {{total}}{{order_url_text}}`,
     },
+    ku: {
+      subject: `Siparîşa {{order_number}} hat piştrastkirin`,
+      title: 'Spas ji bo siparîşa we!',
+      intro:
+        'Siparîşa we <strong>{{order_number}}</strong> hat tomarkirin. {{payment_line}}',
+      label: 'Giştî:',
+      text: `Spas ji bo siparîşa we!\n\nSiparîşa we {{order_number}} hat tomarkirin. {{payment_line}}\n{{items_text}}\nGiştî: {{total}}{{order_url_text}}`,
+    },
   },
   order_shipped: {
     en: {
@@ -324,6 +346,14 @@ const CORE_TEXT: Record<CoreEvent, Record<PlatformEmailLocale, CorePhrases>> = {
       label: 'Spårningsnummer:',
       text: `Din beställning {{order_number}} har skickats.\n{{items_text}}\nSpårningsnummer: {{tracking_number}}\n{{tracking_url}}{{order_url_text}}`,
     },
+    ku: {
+      subject: `Siparîşa we {{order_number}} di rê de ye`,
+      title: 'Siparîşa we hat şandin',
+      intro:
+        'Nûçeyeke xweş — siparîşa we <strong>{{order_number}}</strong> hat şandin.',
+      label: 'Hejmara şopandinê:',
+      text: `Siparîşa we {{order_number}} hat şandin.\n{{items_text}}\nHejmara şopandinê: {{tracking_number}}\n{{tracking_url}}{{order_url_text}}`,
+    },
   },
   order_delivered: {
     en: {
@@ -368,6 +398,13 @@ const CORE_TEXT: Record<CoreEvent, Record<PlatformEmailLocale, CorePhrases>> = {
         'Din beställning <strong>{{order_number}}</strong> har markerats som levererad. Vi hoppas att du blir nöjd med ditt köp.',
       text: `Din beställning {{order_number}} har levererats.\n{{items_text}}{{order_url_text}}`,
     },
+    ku: {
+      subject: `Siparîşa we {{order_number}} hat gihandin`,
+      title: 'Hat gihandin!',
+      intro:
+        'Siparîşa we <strong>{{order_number}}</strong> wek gihandî hat nîşankirin. Em hêvîdar in ku hûn jê hez bikin.',
+      text: `Siparîşa we {{order_number}} hat gihandin.\n{{items_text}}{{order_url_text}}`,
+    },
   },
   order_fulfilled: {
     en: {
@@ -411,6 +448,13 @@ const CORE_TEXT: Record<CoreEvent, Record<PlatformEmailLocale, CorePhrases>> = {
       intro:
         'Din beställning <strong>{{order_number}}</strong> är nu klar. Tack för ditt köp.',
       text: `Din beställning {{order_number}} är klar.\n{{items_text}}{{order_url_text}}`,
+    },
+    ku: {
+      subject: `Siparîşa we {{order_number}} temam bû`,
+      title: 'Siparîşa we temam bû',
+      intro:
+        'Siparîşa we <strong>{{order_number}}</strong> hat temamkirin. Spas ji bo kirîna we.',
+      text: `Siparîşa we {{order_number}} temam bû.\n{{items_text}}{{order_url_text}}`,
     },
   },
   order_cancelled: {
@@ -462,6 +506,14 @@ const CORE_TEXT: Record<CoreEvent, Record<PlatformEmailLocale, CorePhrases>> = {
       label: 'Anledning:',
       text: `Din beställning {{order_number}} har makulerats.\nAnledning: {{reason}}\n{{items_text}}{{order_url_text}}`,
     },
+    ku: {
+      subject: `Siparîşa {{order_number}} hat betalkirin`,
+      title: 'Siparîşa we hat betalkirin',
+      intro:
+        'Siparîşa <strong>{{order_number}}</strong> hat betalkirin. Heke pere ji we hatibe birin, vegerandina pereyan tê kirin.',
+      label: 'Sedem:',
+      text: `Siparîşa {{order_number}} hat betalkirin.\nSedem: {{reason}}\n{{items_text}}{{order_url_text}}`,
+    },
   },
   order_refunded: {
     en: {
@@ -511,6 +563,14 @@ const CORE_TEXT: Record<CoreEvent, Record<PlatformEmailLocale, CorePhrases>> = {
         'En återbetalning har gjorts för beställning <strong>{{order_number}}</strong>. Det kan ta några bankdagar innan beloppet syns på ditt konto.',
       label: 'Återbetalat belopp:',
       text: `Återbetalning genomförd för order {{order_number}}.\nBelopp: {{refund_amount}}\n{{items_text}}{{order_url_text}}`,
+    },
+    ku: {
+      subject: `Pere ji bo siparîşa {{order_number}} hatin vegerandin`,
+      title: 'Pere hatin vegerandin',
+      intro:
+        'Ji bo siparîşa <strong>{{order_number}}</strong> pere hatin vegerandin. Dibe ku çend rojên kar bidome heta ku di hesabê we yê bankê de xuya bibe.',
+      label: 'Mîqdara vegerandî:',
+      text: `Pere ji bo siparîşa {{order_number}} hatin vegerandin.\nMîqdar: {{refund_amount}}\n{{items_text}}{{order_url_text}}`,
     },
   },
   new_order_owner: {
@@ -562,6 +622,14 @@ const CORE_TEXT: Record<CoreEvent, Record<PlatformEmailLocale, CorePhrases>> = {
       label: 'Kund:',
       text: `Ny beställning {{order_number}} i {{store_name}}. Totalt: {{total}}.\nKund: {{customer_name}}\n{{items_text}}{{order_url_text}}`,
     },
+    ku: {
+      subject: `Siparîşa nû {{order_number}} — {{store_name}}`,
+      title: 'Siparîşeke nû hat',
+      intro:
+        'Siparîşeke we ya nû heye: <strong>{{order_number}}</strong>, bi giştî <strong>{{total}}</strong>.',
+      label: 'Kirîar:',
+      text: `Siparîşa nû {{order_number}} ji bo {{store_name}}. Giştî: {{total}}.\nKirîar: {{customer_name}}\n{{items_text}}{{order_url_text}}`,
+    },
   },
   welcome: {
     en: {
@@ -612,6 +680,14 @@ const CORE_TEXT: Record<CoreEvent, Record<PlatformEmailLocale, CorePhrases>> = {
       button: 'Logga in',
       text: `Välkommen till ${BRAND}!\n\nHej {{name}}, ditt konto är klart.\n\nLogga in: {{login_url}}`,
     },
+    ku: {
+      subject: `Bi xêr hatin bo ${BRAND}`,
+      title: `Bi xêr hatin bo ${BRAND}`,
+      intro:
+        'Silav {{name}}, em kêfxweş in ku hûn li vir in. Hesabê we amade ye — dest bi keşfkirina firoşgeh û berhemên afirînerên serbixwe bikin.',
+      button: 'Têkeve',
+      text: `Bi xêr hatin bo ${BRAND}!\n\nSilav {{name}}, hesabê we amade ye.\n\nTêkeve: {{login_url}}`,
+    },
   },
 };
 
@@ -634,7 +710,7 @@ function buildCoreTemplates(): PlatformEmailTemplates {
 // ── account_created ─────────────────────────────────────────────────────────
 
 // Same wording as the bundled builder (src/modules/mail/templates.ts →
-// ACCOUNT_CREATED_TEXT), in all six locales so no language silently falls
+// ACCOUNT_CREATED_TEXT), in every platform locale so no language silently falls
 // back to English. Tokens: {store}, {name}, {hours}.
 const ACCOUNT_CREATED: Record<PlatformEmailLocale, Record<string, string>> = {
   en: {
@@ -743,6 +819,24 @@ const ACCOUNT_CREATED: Record<PlatformEmailLocale, Record<string, string>> = {
       'Vi rekommenderar att du byter lösenord när du har loggat in (Konto → Byt lösenord).',
     ignore:
       'Om du inte har lagt någon beställning kan du bortse från det här mejlet.',
+  },
+  ku: {
+    subject: 'Hesabê we li {store}',
+    title: 'Hesabê we amade ye',
+    greeting: 'Silav {name},',
+    greetingNoName: 'Silav,',
+    intro:
+      'Li {store} hesabek ji bo we hat çêkirin. Agahiyên têketina we ev in:',
+    emailLabel: 'E-name',
+    passwordLabel: 'Şîfre',
+    button: 'Bi yek klîkê têkeve',
+    validity:
+      'Ev bişkok {hours} saetan derbasdar e û tenê carekê dikare were bikaranîn.',
+    loginLead: 'An jî bi e-name û şîfreya xwe têkevin:',
+    loginLink: 'Têkeve',
+    changePassword:
+      'Em pêşniyar dikin ku piştî têketinê şîfreya xwe biguherînin (Hesab → Şîfreyê biguherîne).',
+    ignore: 'Heke we siparîş nedabe, hûn dikarin vê e-nameyê paşguh bikin.',
   },
 };
 

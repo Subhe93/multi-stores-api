@@ -15,6 +15,7 @@ export const TAX_LABEL: Record<string, string> = {
   fr: 'TVA',
   tr: 'KDV',
   ar: 'ضريبة القيمة المضافة',
+  ku: 'Bac',
 };
 
 export const SEED_CLASSES: {

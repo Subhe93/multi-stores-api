@@ -118,6 +118,7 @@ const PICKUP_DESCRIPTIONS: Record<string, string> = {
   fr: 'Retrait en magasin',
   tr: 'Mağazadan teslim al',
   ar: 'الاستلام من المتجر',
+  ku: 'Ji firoşgehê wergirtin',
 };
 // Where a store is assumed to ship before Kustom reports an address: the
 // currency's home market, else the store language's country.

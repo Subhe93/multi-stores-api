@@ -328,7 +328,7 @@ describe('computeTaxes with an exemption', () => {
     expect(exemptLabel('CUSTOMER_EXEMPT', 'xx')).toBe('VAT exempt');
     for (const reason of ['REVERSE_CHARGE', 'CUSTOMER_EXEMPT'] as const) {
       expect(Object.keys(EXEMPT_LABELS[reason]).sort()).toEqual(
-        ['ar', 'de', 'en', 'fr', 'sv', 'tr'].sort(),
+        ['ar', 'de', 'en', 'fr', 'ku', 'sv', 'tr'].sort(),
       );
     }
   });

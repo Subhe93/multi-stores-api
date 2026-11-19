@@ -487,6 +487,7 @@ export const EXEMPT_LABELS: Record<TaxExemptReason, Record<string, string>> = {
     fr: 'Autoliquidation',
     ar: 'التكليف العكسي',
     tr: 'Ters ifa (sorumlu sıfatıyla)',
+    ku: 'Bacdana berevajî',
   },
   CUSTOMER_EXEMPT: {
     en: 'VAT exempt',
@@ -495,6 +496,7 @@ export const EXEMPT_LABELS: Record<TaxExemptReason, Record<string, string>> = {
     fr: 'Exonéré de TVA',
     ar: 'معفى من ضريبة القيمة المضافة',
     tr: 'KDV muaf',
+    ku: 'Ji bacê azad',
   },
 };
 

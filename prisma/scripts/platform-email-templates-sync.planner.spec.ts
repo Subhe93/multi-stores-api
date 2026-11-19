@@ -1,6 +1,7 @@
 import {
   PLATFORM_EMAIL_BRAND,
   PLATFORM_EMAIL_LOCALES,
+  buildOnboardingTemplates,
   buildPlatformEmailTemplates,
   toTemplateColumns,
 } from '../platform-email-templates';
@@ -62,7 +63,8 @@ const statuses = (e: EventPlan, locale: string) =>
 // ── The defaults themselves ─────────────────────────────────────────────────
 
 describe('platform default email templates', () => {
-  it('defines every event in the six platform locales, with no empty text', () => {
+  it('defines every event in the platform locales (onboarding: all but ku), with no empty text', () => {
+    const onboarding = new Set(Object.keys(buildOnboardingTemplates()));
     expect(Object.keys(DEFAULTS)).toEqual(
       expect.arrayContaining([
         'password_reset',
@@ -74,10 +76,11 @@ describe('platform default email templates', () => {
       ]),
     );
     for (const [event, perLocale] of Object.entries(DEFAULTS)) {
-      expect([event, Object.keys(perLocale)]).toEqual([
-        event,
-        [...PLATFORM_EMAIL_LOCALES],
-      ]);
+      // Seller-facing onboarding events are not translated into Kurdish.
+      const expected = onboarding.has(event)
+        ? PLATFORM_EMAIL_LOCALES.filter((l) => l !== 'ku')
+        : [...PLATFORM_EMAIL_LOCALES];
+      expect([event, Object.keys(perLocale)]).toEqual([event, expected]);
       for (const t of Object.values(perLocale)) {
         expect(t.subject.trim()).not.toBe('');
         expect(t.body_html.trim()).not.toBe('');
@@ -128,7 +131,7 @@ describe('platform default email templates', () => {
         t.replace(' dir="rtl"', ''),
       );
     for (const [event, perLocale] of Object.entries(DEFAULTS)) {
-      for (const loc of PLATFORM_EMAIL_LOCALES) {
+      for (const loc of Object.keys(perLocale)) {
         for (const field of ['subject', 'body_html', 'body_text'] as const) {
           expect([
             event,
@@ -188,7 +191,7 @@ describe('platform default email templates', () => {
   });
 
   it('backup_offsite_missing substitutes its own variables and has the button', () => {
-    for (const loc of PLATFORM_EMAIL_LOCALES) {
+    for (const loc of Object.keys(DEFAULTS.backup_offsite_missing)) {
       const t = DEFAULTS.backup_offsite_missing[loc];
       expect(t.body_html).not.toMatch(
         /(^|[^{])\{(bucket|last_success|hours_since|checked_at)\}/,
@@ -352,7 +355,7 @@ describe('safe merge', () => {
       oldLabel: KNOWN_OLD[0].label,
       missingPlaceholders: ['items_html'],
     });
-    for (const loc of ['tr', 'de', 'fr', 'sv'])
+    for (const loc of ['tr', 'de', 'fr', 'sv', 'ku'])
       expect(localeOf(e, loc).state).toBe('missing');
     expect(e.next).toEqual(toTemplateColumns(wanted));
     // `enabled` is not part of what is written.
@@ -576,15 +579,15 @@ describe('report', () => {
     );
     expect(report).toContain('welcome: ROW MISSING -> create (enabled)');
     expect(report).toContain(
-      'Summary: rows create 1, update 1, untouched 0; locales add 10, update 2, kept as admin-edited 0',
+      'Summary: rows create 1, update 1, untouched 0; locales add 12, update 2, kept as admin-edited 0',
     );
     expect(report).not.toContain('Kept because');
     expect(countPlan(plan)).toMatchObject({
       rowsCreated: 1,
       rowsUpdated: 1,
-      localesAdded: 10,
+      localesAdded: 12,
       localesUpdated: 2,
-      fieldsWritten: 4 + 30,
+      fieldsWritten: 4 + 36,
     });
   });
 });
