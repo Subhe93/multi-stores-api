@@ -9,9 +9,24 @@ export type MarketStatus = 'DRAFT' | 'LIVE';
 export type MarketIndexing = 'AUTO' | 'ALWAYS' | 'NEVER';
 export type StoreDomainStatus = 'PENDING' | 'VERIFIED' | 'ACTIVE';
 
-/** Locales the storefront can render (its `locales` list). */
-export const SUPPORTED_LOCALES = ['en', 'ar', 'tr', 'de', 'fr', 'sv'] as const;
+/**
+ * Locales the storefront can render (its `locales` list). 'ku' is Kurdish,
+ * Kurmanji (Latin script, left to right); Sorani would be a separate 'ckb'.
+ */
+export const SUPPORTED_LOCALES = ['en', 'ar', 'tr', 'de', 'fr', 'sv', 'ku'] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
+
+/**
+ * Locales in review: a store can enable them and reach them by their URL
+ * prefix, but they stay out of the storefront language switcher, hreflang,
+ * sitemaps and search indexing until a native speaker has reviewed the texts.
+ * Removing a code here (and in the web / dashboard mirrors) makes it public.
+ */
+export const REVIEW_LOCALES: readonly SupportedLocale[] = ['ku'];
+
+export function isReviewLocale(locale: string | null | undefined): boolean {
+  return (REVIEW_LOCALES as readonly string[]).includes(locale ?? '');
+}
 
 export type PriceRounding = {
   /** Round the converted amount to a multiple of this (1, 0.5, 0.1, ...). */
