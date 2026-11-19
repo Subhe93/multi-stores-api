@@ -410,7 +410,12 @@ export class CustomProductsService {
       omit: { cost_price: true, external_ref: true },
       include: {
         translations: true,
-        images: { orderBy: [{ is_featured: 'desc' as const }, { sort_order: 'asc' as const }] },
+        images: {
+          orderBy: [
+            { is_featured: 'desc' as const },
+            { sort_order: 'asc' as const },
+          ],
+        },
         // Decision D5: the provider's videos this store shows (read-only in the editor).
         videos: PRODUCT_VIDEOS_INCLUDE,
         // Customer stories are detail-only: see `detailIncludes` (loadById).
@@ -1897,6 +1902,27 @@ export class CustomProductsService {
     });
     await this.revalidateForCreator(cp.creator_id);
     return updated;
+  }
+
+  /**
+   * New FAQ order of a custom product: `faqIds[i]` gets sort_order i. Ids of
+   * another product's FAQs match nothing (scoped to the product).
+   */
+  async reorderFaqs(customProductId: string, userId: string, faqIds: unknown) {
+    const ids = Array.isArray(faqIds)
+      ? faqIds.filter((v): v is string => typeof v === 'string').slice(0, 500)
+      : [];
+    const cp = await this.assertCreatorOwns(customProductId, userId);
+    await this.prisma.$transaction(
+      ids.map((id, i) =>
+        this.prisma.customProductFaq.updateMany({
+          where: { id, custom_product_id: customProductId },
+          data: { sort_order: i },
+        }),
+      ),
+    );
+    await this.revalidateForCreator(cp.creator_id);
+    return this.findFaqs(customProductId);
   }
 
   async deleteFaq(faqId: string, userId: string) {

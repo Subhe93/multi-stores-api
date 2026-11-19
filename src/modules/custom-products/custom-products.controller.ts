@@ -194,6 +194,15 @@ export class CustomProductsController {
     return this.customProductsService.createFaq(id, userId, dto);
   }
 
+  @Put(':id/faqs/sort')
+  reorderFaqs(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body('faq_ids') faqIds: unknown,
+  ) {
+    return this.customProductsService.reorderFaqs(id, userId, faqIds);
+  }
+
   @Put('faqs/:faqId')
   updateFaq(
     @Param('faqId') faqId: string,

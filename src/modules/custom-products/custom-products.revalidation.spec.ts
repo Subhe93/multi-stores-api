@@ -95,4 +95,39 @@ describe('CustomProductsService storefront revalidation', () => {
     await svc.deleteFaq('f1', 'u1');
     expect(revalidation.revalidateStoreByCreatorId).toHaveBeenCalledTimes(3);
   });
+
+  it('FAQ reorder writes sort_order by position, scoped to the product, and revalidates', async () => {
+    const { svc, prisma, revalidation } = setup();
+    const p = prisma as unknown as {
+      customProductFaq: { updateMany: jest.Mock; findMany: jest.Mock };
+      $transaction: jest.Mock;
+    };
+    p.customProductFaq.updateMany = jest.fn((args: unknown) => args);
+    p.customProductFaq.findMany = jest.fn(() => Promise.resolve([]));
+    p.$transaction = jest.fn((ops: unknown[]) => Promise.resolve(ops));
+    await svc.reorderFaqs('cp1', 'u1', ['f2', 'f1', 7, 'f3']);
+    expect(
+      (p.customProductFaq.updateMany.mock.calls as unknown[][]).map(
+        (c) => c[0],
+      ),
+    ).toEqual([
+      {
+        where: { id: 'f2', custom_product_id: 'cp1' },
+        data: { sort_order: 0 },
+      },
+      {
+        where: { id: 'f1', custom_product_id: 'cp1' },
+        data: { sort_order: 1 },
+      },
+      {
+        where: { id: 'f3', custom_product_id: 'cp1' },
+        data: { sort_order: 2 },
+      },
+    ]);
+    expect(revalidation.revalidateStoreByCreatorId).toHaveBeenCalledWith('c1');
+    // Not an array: nothing written.
+    p.customProductFaq.updateMany.mockClear();
+    await svc.reorderFaqs('cp1', 'u1', 'f1');
+    expect(p.customProductFaq.updateMany).not.toHaveBeenCalled();
+  });
 });
