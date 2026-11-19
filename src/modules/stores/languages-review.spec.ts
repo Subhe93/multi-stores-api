@@ -14,19 +14,46 @@ import type { DomainsService } from '../markets/domains.service';
 import type { MarketPricingService } from '../markets/market-pricing.service';
 import type { PaymentCheckService } from '../markets/payment-check.service';
 import type { CreateMarketDto, UpdateMarketDto } from '../markets/dto/market.dto';
-import { REVIEW_LOCALES } from '../markets/market.types';
+import { REVIEW_LOCALES, isReviewLocale } from '../markets/market.types';
+import type { SupportedLocale } from '../markets/market.types';
 import {
   STORE_LANGUAGE_IN_REVIEW,
   assertNotReviewPrimaryLocale,
 } from '../markets/review-locale';
 
-// Locales in review (REVIEW_LOCALES, today 'ku') may only be a secondary
-// language: a primary / market default locale has no URL prefix and could
-// not be hidden from the storefront switcher.
+// Locales in review (REVIEW_LOCALES) may only be a secondary language: a
+// primary / market default locale has no URL prefix and could not be hidden
+// from the storefront switcher. 'ku' left review (the list is empty now), so
+// the mechanism tests inject 'ku' into the list for their duration and a
+// separate block asserts that 'ku' is a normal locale today.
+
+type ReviewList = SupportedLocale[];
+const injectReviewLocale = () => {
+  beforeAll(() => {
+    (REVIEW_LOCALES as ReviewList).push('ku');
+  });
+  afterAll(() => {
+    (REVIEW_LOCALES as ReviewList).length = 0;
+  });
+};
+
+describe('ku is a normal store locale now (no longer in review)', () => {
+  it('REVIEW_LOCALES is empty and ku is not a review locale', () => {
+    expect(REVIEW_LOCALES).toEqual([]);
+    expect(isReviewLocale('ku')).toBe(false);
+  });
+
+  it.each(['ku', ' KU ', 'Ku'])('accepts %p as a primary locale', (code) => {
+    expect(() => assertNotReviewPrimaryLocale(code)).not.toThrow();
+  });
+});
 
 describe('review locales', () => {
-  it("REVIEW_LOCALES holds 'ku' while Kurmanji is in review", () => {
-    expect(REVIEW_LOCALES).toContain('ku');
+  injectReviewLocale(); // ku injected as a review locale
+
+  it('isReviewLocale reflects the injected list', () => {
+    expect(isReviewLocale('ku')).toBe(true);
+    expect(isReviewLocale('en')).toBe(false);
   });
 
   describe('assertNotReviewPrimaryLocale', () => {
@@ -50,6 +77,8 @@ describe('review locales', () => {
 });
 
 describe('StoresService.updateLanguages with a review locale', () => {
+  injectReviewLocale(); // ku injected as a review locale
+
   function build(existingPrimary = 'en') {
     const prisma = {
       creator: { findUnique: jest.fn(() => Promise.resolve({ id: 'c1' })) },
@@ -132,6 +161,8 @@ describe('StoresService.updateLanguages with a review locale', () => {
 });
 
 describe('MarketsService default locale with a review locale', () => {
+  injectReviewLocale(); // ku injected as a review locale
+
   const marketRow = {
     id: 'm2',
     store_id: 's1',

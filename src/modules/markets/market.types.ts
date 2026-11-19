@@ -22,7 +22,7 @@ export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
  * sitemaps and search indexing until a native speaker has reviewed the texts.
  * Removing a code here (and in the web / dashboard mirrors) makes it public.
  */
-export const REVIEW_LOCALES: readonly SupportedLocale[] = ['ku'];
+export const REVIEW_LOCALES: readonly SupportedLocale[] = [];
 
 export function isReviewLocale(locale: string | null | undefined): boolean {
   return (REVIEW_LOCALES as readonly string[]).includes(locale ?? '');
