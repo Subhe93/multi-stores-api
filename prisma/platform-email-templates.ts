@@ -402,7 +402,7 @@ const CORE_TEXT: Record<CoreEvent, Record<PlatformEmailLocale, CorePhrases>> = {
       subject: `Siparîşa we {{order_number}} hat gihandin`,
       title: 'Hat gihandin!',
       intro:
-        'Siparîşa we <strong>{{order_number}}</strong> wek gihandî hat nîşankirin. Hêvîdar in ku hûn jê hez bikin.',
+        'Siparîşa we <strong>{{order_number}}</strong> wek gihandî hat nîşankirin. Em hêvîdar in ku hûn jê hez bikin.',
       text: `Siparîşa we {{order_number}} hat gihandin.\n{{items_text}}{{order_url_text}}`,
     },
   },

@@ -957,13 +957,13 @@ export const CUSTOMER_LOGIN_LINK_TEXT: Record<
     greeting: 'Silav {name},',
     greetingNoName: 'Silav,',
     intro:
-      'Ji bo ku têkevin hesabê xwe li {store}, bişkoka jêrîn bikar bînin.',
+      'Ji bo ku têkevin hesabê xwe li {store}, bişkoka jêrîn bi kar bînin.',
     button: 'Bi yek klîkê têkeve',
     validity:
       'Ev bişkok {hours} saetan derbasdar e û tenê carekê dikare were bikaranîn.',
     loginLead: 'Hûn dikarin bi e-name û şîfreya xwe jî têkevin:',
     loginLink: 'Têkeve',
-    ignore: 'Heke we li benda vê e-nameyê nebûn, hûn dikarin wê paşguh bikin.',
+    ignore: 'Heke hûn li benda vê e-nameyê nebûn, hûn dikarin wê paşguh bikin.',
   },
 };
 

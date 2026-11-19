@@ -204,7 +204,7 @@ const ITEMS_PHRASES = {
     itemN: 'Berhem {i}',
     // Headless booking E2: per-product note in the template preview.
     sampleEmailNote:
-      "Nîşeyeke mînak ji bo vê berhemê, wek 'Berçavkên xwe bînin.'",
+      "Têbîniyeke mînak ji bo vê berhemê, wek 'Berçavkên xwe bînin.'",
   },
 } as const;
 
@@ -936,7 +936,7 @@ const COMPANY_PHRASES: Record<
     netTotal: 'Giştî bê bac',
     totalInclVat: 'Giştî bi bacê ve',
     reverseChargeNote:
-      'Bacdana berevajî: bac ji aliyê wergir ve tê hesabkirin (hejmara bacê {vat})',
+      'Bacdana berevajî: wergir berpirsê ragihandina bacê ye (hejmara bacê {vat})',
   },
 };
 

@@ -198,7 +198,7 @@ const LABELS: Record<string, Labels> = {
     de: 'Kollektionen',
     fr: 'Collections',
     sv: 'Kollektioner',
-    ku: 'Kolleksiyon',
+    ku: 'Koleksiyon',
   },
   all_products: {
     en: 'All products',
