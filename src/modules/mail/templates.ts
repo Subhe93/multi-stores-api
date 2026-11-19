@@ -84,8 +84,8 @@ export const emailButton = button;
 
 /**
  * Built-in wording of the account emails per locale (the admin DB templates
- * win when they exist). Swedish added for the Namez store (Phase 3.4); other
- * locales fall back to English.
+ * win when they exist). Swedish added for the Namez store (Phase 3.4) and
+ * Kurdish (Kurmanji, `ku`); other locales fall back to English.
  */
 const ACCOUNT_TEXT: Record<
   string,
@@ -141,6 +141,27 @@ const ACCOUNT_TEXT: Record<
     welcomeButton: 'Logga in',
     welcomeText: (name, url) =>
       `Välkommen till ${name}!\n\nDitt konto är klart.${url ? `\n\nLogga in: ${url}` : ''}`,
+  },
+  // Kurdish (Kurmanji); pending review by a native speaker.
+  ku: {
+    resetSubject: (name) => `Şîfreya xwe ya ${name} nû bikin`,
+    resetTitle: 'Şîfreya xwe nû bikin',
+    resetBody:
+      'Me daxwazek ji bo nûkirina şîfreya we wergirt. Ji bo ku şîfreyeke nû hilbijêrin, li bişkoka jêrîn bitikînin. Dema vê girêdanê piştî 1 saetê diqede.',
+    resetButton: 'Şîfreyê nû bike',
+    resetIgnore:
+      'Heke we ev daxwaz nekiribe, hûn dikarin vê e-nameyê bi ewlehî paşguh bikin.',
+    resetText: (name, url) =>
+      `Şîfreya xwe ya ${name} nû bikin.\n\nJi bo ku şîfreyeke nû hilbijêrin, vê girêdanê vekin (piştî 1 saetê dema wê diqede):\n${url}\n\nHeke we ev daxwaz nekiribe, vê e-nameyê paşguh bikin.`,
+    welcomeSubject: (name) => `Bi xêr hatin bo ${name}`,
+    welcomeGreeting: (name) => (name ? `Silav ${esc(name)},` : 'Silav,'),
+    welcomeBody: (store) =>
+      store
+        ? 'em kêfxweş in ku hûn li vir in. Hesabê we amade ye — hûn dikarin her dem siparîşên xwe bişopînin û navnîşanên xwe birêve bibin.'
+        : 'em kêfxweş in ku hûn li vir in. Hesabê we amade ye — dest bi keşfkirina firoşgeh û berhemên afirînerên serbixwe bikin.',
+    welcomeButton: 'Têkeve',
+    welcomeText: (name, url) =>
+      `Bi xêr hatin bo ${name}!\n\nHesabê we amade ye.${url ? `\n\nTêkeve: ${url}` : ''}`,
   },
 };
 
@@ -726,6 +747,24 @@ export const ACCOUNT_CREATED_TEXT: Record<
     ignore:
       'Om du inte har lagt någon beställning kan du bortse från det här mejlet.',
   },
+  ku: {
+    subject: 'Hesabê we li {store}',
+    title: 'Hesabê we amade ye',
+    greeting: 'Silav {name},',
+    greetingNoName: 'Silav,',
+    intro:
+      'Li {store} hesabek ji bo we hat çêkirin. Agahiyên têketina we ev in:',
+    emailLabel: 'E-name',
+    passwordLabel: 'Şîfre',
+    button: 'Bi yek klîkê têkeve',
+    validity:
+      'Ev bişkok {hours} saetan derbasdar e û tenê carekê dikare were bikaranîn.',
+    loginLead: 'An jî bi e-name û şîfreya xwe têkevin:',
+    loginLink: 'Têkeve',
+    changePassword:
+      'Em pêşniyar dikin ku piştî têketinê şîfreya xwe biguherînin (Hesab → Şîfreyê biguherîne).',
+    ignore: 'Heke we siparîş nedabe, hûn dikarin vê e-nameyê paşguh bikin.',
+  },
 };
 
 export interface AccountCreatedData {
@@ -911,6 +950,20 @@ export const CUSTOMER_LOGIN_LINK_TEXT: Record<
     loginLead: 'Du kan också logga in med din e-post och ditt lösenord:',
     loginLink: 'Logga in',
     ignore: 'Om du inte väntade dig det här mejlet kan du bortse från det.',
+  },
+  ku: {
+    subject: 'Girêdana têketinê ya we ji bo {store}',
+    title: 'Têkeve {store}',
+    greeting: 'Silav {name},',
+    greetingNoName: 'Silav,',
+    intro:
+      'Ji bo ku têkevin hesabê xwe li {store}, bişkoka jêrîn bikar bînin.',
+    button: 'Bi yek klîkê têkeve',
+    validity:
+      'Ev bişkok {hours} saetan derbasdar e û tenê carekê dikare were bikaranîn.',
+    loginLead: 'Hûn dikarin bi e-name û şîfreya xwe jî têkevin:',
+    loginLink: 'Têkeve',
+    ignore: 'Heke we li benda vê e-nameyê nebûn, hûn dikarin wê paşguh bikin.',
   },
 };
 

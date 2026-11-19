@@ -173,7 +173,7 @@ function withDisplayName(from: string, name: string): string {
  * SMTP failed). Soft product marketing, Shopify-style — a store sending under
  * its own SMTP stays fully white-label.
  */
-const FOOTER_PHRASES: Record<string, { sentTo: string; powered: string }> = {
+export const FOOTER_PHRASES: Record<string, { sentTo: string; powered: string }> = {
   en: {
     sentTo: 'This email was sent to {email} on behalf of {store}.',
     powered: 'Delivered by {platform}',
@@ -197,6 +197,10 @@ const FOOTER_PHRASES: Record<string, { sentTo: string; powered: string }> = {
   sv: {
     sentTo: 'Det här mejlet skickades till {email} på uppdrag av {store}.',
     powered: 'Levereras av {platform}',
+  },
+  ku: {
+    sentTo: 'Ev e-name li ser navê {store} ji {email} re hat şandin.',
+    powered: 'Bi rêya {platform} hat şandin',
   },
 };
 

@@ -470,6 +470,7 @@ const BUSINESS_DAYS: Record<string, { one: string; other: string }> = {
   fr: { one: 'jour ouvrable', other: 'jours ouvrables' },
   tr: { one: 'iş günü', other: 'iş günü' },
   ar: { one: 'يوم عمل', other: 'أيام عمل' },
+  ku: { one: 'roja kar', other: 'rojên kar' },
 };
 
 function baseLanguage(locale: string | null | undefined): string {
@@ -491,10 +492,10 @@ export function formatEstimatedDays(
 
 // A number (or range) followed by a day word in any storefront language:
 // "2–4 arbetsdagar", "1-3 days", "3 Werktage", "2 à 4 jours", "2-4 iş günü",
-// "٣ أيام". Matching is deliberately loose: a false positive only drops the
+// "٣ أيام", "2–4 rojên kar". Matching is deliberately loose: a false positive only drops the
 // extra estimate line, a false negative shows a second delivery time.
 const DELIVERY_TIME_IN_NAME =
-  /[0-9\u0660-\u0669]+\s*(?:(?:[–—-]|to|till|bis|à|ile)\s*[0-9\u0660-\u0669]+\s*)?(?:business\s+|working\s+|iş\s+)?(?:days?|dag(?:ar)?|arbetsdag(?:ar)?|vardag(?:ar)?|werktag(?:e|en)?|tag(?:e|en)?|jours?|gün|يوم|أيام)/i;
+  /[0-9\u0660-\u0669]+\s*(?:(?:[–—-]|to|till|bis|à|ile)\s*[0-9\u0660-\u0669]+\s*)?(?:business\s+|working\s+|iş\s+)?(?:days?|dag(?:ar)?|arbetsdag(?:ar)?|vardag(?:ar)?|werktag(?:e|en)?|tag(?:e|en)?|jours?|gün|roj(?:a|ên|an)?|يوم|أيام)/i;
 
 /** True when a shipping method's own name already states a delivery time. */
 export function nameStatesDeliveryTime(

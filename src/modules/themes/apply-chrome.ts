@@ -180,6 +180,7 @@ const LABELS: Record<string, Labels> = {
     de: 'Startseite',
     fr: 'Accueil',
     sv: 'Startsida',
+    ku: 'Destpêk',
   },
   products: {
     en: 'Products',
@@ -188,6 +189,7 @@ const LABELS: Record<string, Labels> = {
     de: 'Produkte',
     fr: 'Produits',
     sv: 'Produkter',
+    ku: 'Berhem',
   },
   collections: {
     en: 'Collections',
@@ -196,6 +198,7 @@ const LABELS: Record<string, Labels> = {
     de: 'Kollektionen',
     fr: 'Collections',
     sv: 'Kollektioner',
+    ku: 'Kolleksiyon',
   },
   all_products: {
     en: 'All products',
@@ -204,6 +207,7 @@ const LABELS: Record<string, Labels> = {
     de: 'Alle Produkte',
     fr: 'Tous les produits',
     sv: 'Alla produkter',
+    ku: 'Hemû berhem',
   },
   shop: {
     en: 'Shop',
@@ -212,6 +216,7 @@ const LABELS: Record<string, Labels> = {
     de: 'Einkaufen',
     fr: 'Acheter',
     sv: 'Handla',
+    ku: 'Kirîn',
   },
   help: {
     en: 'Help',
@@ -220,6 +225,7 @@ const LABELS: Record<string, Labels> = {
     de: 'Hilfe',
     fr: 'Aide',
     sv: 'Hjälp',
+    ku: 'Alîkarî',
   },
   shipping: {
     en: 'Shipping',
@@ -228,6 +234,7 @@ const LABELS: Record<string, Labels> = {
     de: 'Versand',
     fr: 'Livraison',
     sv: 'Frakt',
+    ku: 'Şandin',
   },
   returns: {
     en: 'Returns',
@@ -236,6 +243,7 @@ const LABELS: Record<string, Labels> = {
     de: 'Rückgabe',
     fr: 'Retours',
     sv: 'Returer',
+    ku: 'Vegerandin',
   },
   track_order: {
     en: 'Track my order',
@@ -244,6 +252,7 @@ const LABELS: Record<string, Labels> = {
     de: 'Bestellung verfolgen',
     fr: 'Suivre ma commande',
     sv: 'Spåra min order',
+    ku: 'Siparîşa min bişopîne',
   },
   store: {
     en: 'Store',
@@ -252,6 +261,7 @@ const LABELS: Record<string, Labels> = {
     de: 'Shop',
     fr: 'Boutique',
     sv: 'Butiken',
+    ku: 'Firoşgeh',
   },
   terms: {
     en: 'Terms',
@@ -260,6 +270,7 @@ const LABELS: Record<string, Labels> = {
     de: 'AGB',
     fr: 'Conditions',
     sv: 'Villkor',
+    ku: 'Merc û şert',
   },
   privacy: {
     en: 'Privacy',
@@ -268,6 +279,7 @@ const LABELS: Record<string, Labels> = {
     de: 'Datenschutz',
     fr: 'Confidentialité',
     sv: 'Integritet',
+    ku: 'Nepenî',
   },
   copyright: {
     en: '© {year} {store}. All rights reserved.',
@@ -276,6 +288,7 @@ const LABELS: Record<string, Labels> = {
     de: '© {year} {store}. Alle Rechte vorbehalten.',
     fr: '© {year} {store}. Tous droits réservés.',
     sv: '© {year} {store}. Alla rättigheter förbehållna.',
+    ku: '© {year} {store}. Hemû maf parastî ne.',
   },
 };
 
