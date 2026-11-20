@@ -7,7 +7,14 @@ import type { ConfigService } from '@nestjs/config';
 import { Prisma, StoreStatus, StoreType } from '@prisma/client';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { RevalidationService } from '../../common/revalidation/revalidation.service';
-import { StoreLegalService, formatTraderAddress } from './store-legal.service';
+import type { MarketsContextService } from '../markets/markets-context.service';
+import type { MarketContext } from '../markets/market-context';
+import {
+  StoreLegalService,
+  formatTraderAddress,
+  localizedStoreName,
+  marketPublicHost,
+} from './store-legal.service';
 
 const TRADER = {
   legal_name: 'Anna <Shop> AB',
@@ -30,6 +37,14 @@ interface Fixture {
   trader?: Record<string, unknown> | null;
   /** PlatformConfig.support_email (undefined → no config row). */
   platformEmail?: string | null;
+  /** Store.theme_config (localized store names under `translations`). */
+  themeConfig?: unknown;
+  /** MarketsContextService.resolve stand-in (absent → no markets service). */
+  resolveMarket?: (
+    storeId: string,
+    key?: string | null,
+    opts?: { preview?: boolean },
+  ) => Promise<MarketContext | null>;
   /** Published snapshot meta per version id (default: 1 section, live titles). */
   versionMeta?: Record<
     string,
@@ -46,6 +61,7 @@ function build(f: Fixture = {}) {
     store_type: f.storeType ?? StoreType.INDEPENDENT,
     trader_details: f.trader === undefined ? TRADER : f.trader,
     custom_domain: 'anna.se',
+    ...(f.themeConfig === undefined ? {} : { theme_config: f.themeConfig }),
     language_config: {
       primary_locale: 'sv',
       secondary_locales: f.secondary ?? [],
@@ -119,6 +135,12 @@ function build(f: Fixture = {}) {
     prisma as unknown as PrismaService,
     revalidation as unknown as RevalidationService,
     config as unknown as ConfigService,
+    undefined,
+    f.resolveMarket
+      ? ({
+          resolve: jest.fn(f.resolveMarket),
+        } as unknown as MarketsContextService)
+      : undefined,
   );
   return { service, prisma, revalidation, created, sections, tx };
 }
@@ -507,6 +529,248 @@ describe('StoreLegalService.createFromTemplate', () => {
     await expect(
       service.createFromTemplate('u1', 'cookies'),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+function marketCtx(over: Partial<MarketContext> = {}): MarketContext {
+  return {
+    id: 'm-default',
+    key: 'se',
+    name: 'Sweden',
+    countries: ['SE'],
+    defaultLocale: 'sv',
+    locales: [],
+    currency: 'SEK',
+    storeCurrency: 'SEK',
+    rate: 1,
+    priceRule: { mode: 'auto' } as unknown as MarketContext['priceRule'],
+    isDefault: true,
+    status: 'LIVE',
+    indexing: 'AUTO' as MarketContext['indexing'],
+    primaryHostname: 'anna.se',
+    hostnames: ['anna.se'],
+    ...over,
+  };
+}
+
+const EU = marketCtx({
+  id: 'm-eu',
+  key: 'eu',
+  name: 'EU',
+  defaultLocale: 'en',
+  locales: ['de', 'fr', 'ar'],
+  currency: 'EUR',
+  rate: 0.09,
+  isDefault: false,
+  primaryHostname: 'anna.shop',
+  hostnames: ['anna.shop', 'www.anna.shop'],
+});
+
+/** resolve() stand-in: default market without a key, EU for `eu`. */
+const twoMarkets = (storeId: string, key?: string | null) =>
+  Promise.resolve(key === 'eu' ? EU : marketCtx());
+
+const SV_NAME = 'Anna – Personliga presenter';
+const THEME = {
+  translations: {
+    sv: { name: SV_NAME },
+    de: { name: 'Anna – Personalisierte Geschenke' },
+    en: { name: 'Anna – Personalised gifts' },
+  },
+};
+
+const contentOf = (res: unknown) => (res as { content: string }).content;
+
+describe('StoreLegalService: market URL + localized store name', () => {
+  it('secondary market: the URL of the market served, the name in the page locale', async () => {
+    const { service } = build({
+      themeConfig: THEME,
+      resolveMarket: twoMarkets,
+    });
+    const de = contentOf(
+      await service.storefrontPage('anna', 'terms', {
+        locale: 'de',
+        market: 'eu',
+      }),
+    );
+    expect(de).toContain(
+      'bei Anna – Personalisierte Geschenke (https://anna.shop) kaufen',
+    );
+    expect(de).not.toContain('https://anna.se');
+    expect(de).not.toContain(SV_NAME);
+    // The seller line is unchanged: trader.legal_name stays the legal name.
+    expect(de).toContain('wird betrieben von Anna &lt;Shop&gt; AB');
+  });
+
+  it('default market on the same store: unchanged URL, own-locale name', async () => {
+    const { service } = build({
+      themeConfig: THEME,
+      resolveMarket: twoMarkets,
+    });
+    const sv = contentOf(
+      await service.storefrontPage('anna', 'terms', { locale: 'sv' }),
+    );
+    expect(sv).toContain(`${SV_NAME} (https://anna.se)`);
+  });
+
+  it('a locale without a translation falls back to Store.name', async () => {
+    const { service } = build({
+      themeConfig: THEME,
+      resolveMarket: twoMarkets,
+    });
+    const fr = contentOf(
+      await service.storefrontPage('anna', 'terms', {
+        locale: 'fr',
+        market: 'eu',
+      }),
+    );
+    expect(fr).toContain('Anna (https://anna.shop)');
+  });
+
+  it('preview of a market without an ACTIVE host: the store URL as before', async () => {
+    const draft = marketCtx({
+      ...EU,
+      status: 'DRAFT',
+      preview: true,
+      primaryHostname: 'anna.shop',
+      hostnames: [],
+    });
+    const { service } = build({
+      resolveMarket: (_s, key, opts) =>
+        Promise.resolve(key === 'eu' && opts?.preview ? draft : marketCtx()),
+    });
+    const en = contentOf(
+      await service.storefrontPage('anna', 'terms', {
+        locale: 'en',
+        market: 'eu',
+        preview: true,
+      }),
+    );
+    expect(en).toContain('Anna (https://anna.se)');
+  });
+
+  it('preview of a market with an ACTIVE host: that host', async () => {
+    const { service } = build({
+      resolveMarket: (_s, key) =>
+        Promise.resolve(key === 'eu' ? { ...EU, preview: true } : marketCtx()),
+    });
+    const en = contentOf(
+      await service.storefrontPage('anna', 'terms', {
+        locale: 'en',
+        market: 'eu',
+        preview: true,
+      }),
+    );
+    expect(en).toContain('Anna (https://anna.shop)');
+  });
+
+  it('MARKETPLACE: market URL and localized name too, Namez AB stays the seller', async () => {
+    const { service } = build({
+      storeType: StoreType.MARKETPLACE,
+      themeConfig: THEME,
+      resolveMarket: twoMarkets,
+    });
+    const de = contentOf(
+      await service.storefrontPage('anna', 'terms', {
+        locale: 'de',
+        market: 'eu',
+      }),
+    );
+    expect(de).toContain(
+      'Anna – Personalisierte Geschenke (https://anna.shop)',
+    );
+    expect(de).toContain('Namez AB');
+  });
+
+  it('one market / no markets app / no translation: byte-identical output', async () => {
+    // Baseline: the pre-change wiring (no markets service, no theme_config).
+    const base = build();
+    const variants = [
+      build({ resolveMarket: () => Promise.resolve(null) }), // app off
+      build({ resolveMarket: () => Promise.resolve(marketCtx()) }), // one market
+      build({
+        resolveMarket: () => Promise.resolve(marketCtx()),
+        themeConfig: { translations: { tr: { name: 'Anna TR' } } },
+      }),
+      build({ themeConfig: { translations: { sv: { name: '  ' } } } }),
+      build({ themeConfig: 'not-an-object' }),
+    ];
+    for (const storeType of [StoreType.INDEPENDENT, StoreType.MARKETPLACE]) {
+      const baseline = build({ storeType });
+      const typed = [
+        build({ storeType, resolveMarket: () => Promise.resolve(null) }),
+        build({
+          storeType,
+          resolveMarket: () => Promise.resolve(marketCtx()),
+        }),
+      ];
+      for (const slug of ['privacy', 'terms', 'refund', 'shipping']) {
+        for (const locale of ['sv', 'en', 'de', 'fr', 'ar']) {
+          const want = await baseline.service.storefrontPage('anna', slug, {
+            locale,
+          });
+          for (const v of typed) {
+            await expect(
+              v.service.storefrontPage('anna', slug, { locale }),
+            ).resolves.toEqual(want);
+          }
+        }
+      }
+    }
+    for (const slug of ['privacy', 'terms', 'refund', 'shipping']) {
+      for (const locale of ['sv', 'en', 'de', 'fr', 'ar']) {
+        const want = await base.service.storefrontPage('anna', slug, {
+          locale,
+        });
+        if (slug !== 'shipping' && slug !== 'refund') {
+          expect(contentOf(want)).toContain('Anna');
+          expect(contentOf(want)).toContain('https://anna.se');
+        }
+        for (const v of variants) {
+          await expect(
+            v.service.storefrontPage('anna', slug, { locale }),
+          ).resolves.toEqual(want);
+        }
+      }
+    }
+  });
+
+  it('createFromTemplate: per-locale name, the store URL', async () => {
+    const { service, sections } = build({
+      themeConfig: THEME,
+      secondary: ['de'],
+      resolveMarket: twoMarkets,
+    });
+    await service.createFromTemplate('u1', 'terms');
+    const html = JSON.stringify(sections[0]);
+    expect(html).toContain(`${SV_NAME} (https://anna.se)`);
+    expect(html).toContain(
+      'Anna – Personalisierte Geschenke (https://anna.se)',
+    );
+  });
+});
+
+describe('localizedStoreName / marketPublicHost', () => {
+  it('matches the locale exactly, case-insensitively, then by base language', () => {
+    const store = {
+      name: ' Anna ',
+      theme_config: {
+        translations: { 'pt-BR': { name: 'Anna BR' }, de: { name: 'Anna DE' } },
+      },
+    };
+    expect(localizedStoreName(store, 'pt-BR')).toBe('Anna BR');
+    expect(localizedStoreName(store, 'PT-br')).toBe('Anna BR');
+    expect(localizedStoreName(store, 'de-AT')).toBe('Anna DE');
+    expect(localizedStoreName(store, 'sv')).toBe('Anna');
+    expect(localizedStoreName({ name: 'Anna' }, 'de')).toBe('Anna');
+  });
+
+  it('only a non-default market with an ACTIVE primary host', () => {
+    expect(marketPublicHost(null)).toBeNull();
+    expect(marketPublicHost(marketCtx())).toBeNull();
+    expect(marketPublicHost(EU)).toBe('anna.shop');
+    expect(marketPublicHost({ ...EU, hostnames: [] })).toBeNull();
+    expect(marketPublicHost({ ...EU, primaryHostname: null })).toBeNull();
   });
 });
 

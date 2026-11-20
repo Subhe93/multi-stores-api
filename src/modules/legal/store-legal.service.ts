@@ -17,6 +17,7 @@ import {
 } from '../../common/slug/wp-slug';
 import { StoreAppsService } from '../store-apps/store-apps.service';
 import { MarketsContextService } from '../markets/markets-context.service';
+import type { MarketContext } from '../markets/market-context';
 import {
   StorefrontGateService,
   type StorefrontViewer,
@@ -58,6 +59,8 @@ const STORE_SELECT = {
   store_type: true,
   trader_details: true,
   custom_domain: true,
+  // `translations[locale].name`: the localized store name (storefront <title>).
+  theme_config: true,
   // Public tracker ids: the privacy template names a vendor only when set.
   ga4_measurement_id: true,
   meta_pixel_id: true,
@@ -88,6 +91,7 @@ interface LegalStore extends LegalTrackingIds {
   store_type: StoreType;
   trader_details: unknown;
   custom_domain: string | null;
+  theme_config?: unknown;
   language_config: {
     primary_locale: string;
     secondary_locales: string[];
@@ -164,7 +168,7 @@ export class StoreLegalService {
     opts: StorefrontLegalOptions = {},
   ): Promise<StoreLegalListRow[]> {
     const store = await this.publicStore(storeSlug, opts.viewer);
-    const locale = await this.requestLocale(store, opts);
+    const { locale } = await this.requestContext(store, opts);
     if (store.store_type === StoreType.MARKETPLACE) {
       return STORE_LEGAL_SLUGS.map((slug) => ({
         slug,
@@ -206,9 +210,9 @@ export class StoreLegalService {
   ): Promise<StoreLegalPagePayload> {
     if (!isStoreLegalSlug(slug)) throw this.legalNotFound();
     const store = await this.publicStore(storeSlug, opts.viewer);
-    const locale = await this.requestLocale(store, opts);
+    const { locale, market } = await this.requestContext(store, opts);
     if (store.store_type === StoreType.MARKETPLACE) {
-      return this.templatePayload(store, slug, locale);
+      return this.templatePayload(store, slug, locale, market);
     }
     const rows = await loadStoreLegalRows(this.prisma, store.id);
     const resolved = resolveLegalPage(slug, rows);
@@ -231,18 +235,23 @@ export class StoreLegalService {
         updated_at: resolved.page.updated_at,
       };
     }
-    return this.templatePayload(store, slug, locale);
+    return this.templatePayload(store, slug, locale, market);
   }
 
-  /** The filled default template of a slug (INDEPENDENT fallback / MARKETPLACE). */
+  /**
+   * The filled default template of a slug (INDEPENDENT fallback /
+   * MARKETPLACE). `market` is the market the request is served on: its
+   * public host becomes `{{store.url}}`.
+   */
   private async templatePayload(
     store: LegalStore,
     slug: StoreLegalSlug,
     locale: string,
+    market: MarketContext | null,
   ): Promise<StoreLegalPagePayload> {
     const template = pickTemplate(slug, locale);
     if (!template) throw this.legalNotFound();
-    const ctx = await this.templateContext(store, template.locale);
+    const ctx = await this.templateContext(store, template.locale, market);
     return {
       source: 'template',
       title: template.title,
@@ -463,14 +472,15 @@ export class StoreLegalService {
   }
 
   /**
-   * Locale of a public read: `?locale=`, else the market's default locale
-   * (?market= / ?preview=1, same rules as GET /storefront/:slug), else the
-   * store's primary locale.
+   * Market and locale of a public read. Market: `?market=` / `?preview=1`
+   * (same rules as GET /storefront/:slug), else the default market; null
+   * without the markets app. Locale: `?locale=`, else the market's default
+   * locale, else the store's primary locale.
    */
-  private async requestLocale(
+  private async requestContext(
     store: LegalStore,
     opts: StorefrontLegalOptions,
-  ): Promise<string> {
+  ): Promise<{ locale: string; market: MarketContext | null }> {
     const market = this.markets
       ? await (opts.preview && opts.market
           ? this.markets.resolve(store.id, opts.market, { preview: true })
@@ -478,12 +488,12 @@ export class StoreLegalService {
       : null;
     // Kept as sent (e.g. `pt-BR`): every lookup matches case-insensitively.
     const requested = str(opts.locale);
-    return (
+    const locale =
       requested ||
       market?.defaultLocale ||
       store.language_config?.primary_locale ||
-      'en'
-    );
+      'en';
+    return { locale, market };
   }
 
   /** Title lookup order of a store page: request locale, primary, en. */
@@ -498,20 +508,33 @@ export class StoreLegalService {
    * `data-if` in the templates. MARKETPLACE stores get the platform company
    * as the trader (platformSellerContext); `seller.is_independent` /
    * `seller.is_platform` pick the matching sentences.
+   *
+   * `{{store.name}}` is the store's name in `locale` (theme translations, as
+   * the storefront <title>), else Store.name; `{{store.url}}` is the public
+   * origin of `market` (the market the page is served on), else the store's
+   * public origin as before.
    */
   private async templateContext(
     store: Pick<
       LegalStore,
-      'id' | 'slug' | 'name' | 'store_type' | 'trader_details' | 'custom_domain'
+      | 'id'
+      | 'slug'
+      | 'name'
+      | 'store_type'
+      | 'trader_details'
+      | 'custom_domain'
+      | 'theme_config'
     > &
       LegalTrackingIds,
     locale: string,
+    market: MarketContext | null = null,
   ): Promise<StoreTemplateContext> {
-    const storeUrl = await this.storeUrl(store);
+    const storeUrl = await this.storeUrl(store, market);
+    const storeName = localizedStoreName(store, locale);
     if (store.store_type === StoreType.MARKETPLACE) {
       return {
         ...platformSellerContext(
-          { name: str(store.name), url: storeUrl },
+          { name: storeName, url: storeUrl },
           await this.platformContactEmail(),
           locale,
         ),
@@ -528,7 +551,7 @@ export class StoreLegalService {
       'trader.address': formatTraderAddress(t, locale),
       'trader.email': str(t.support_email),
       'trader.phone': str(t.phone),
-      'store.name': str(store.name),
+      'store.name': storeName,
       'store.url': storeUrl,
       'store.slug': str(store.slug),
       'seller.is_independent': '1',
@@ -544,10 +567,18 @@ export class StoreLegalService {
     return str(cfg?.support_email) || PLATFORM_CONTACT_EMAIL;
   }
 
-  /** The store's public origin: its public host, else the slug subdomain. */
+  /**
+   * The public origin of the market being served: a non-default market's
+   * ACTIVE primary host (namez.shop); else (default market, no markets app,
+   * or a preview of a market without an ACTIVE host) the store's public
+   * host, else the slug subdomain.
+   */
   private async storeUrl(
     store: Pick<LegalStore, 'id' | 'slug' | 'custom_domain'>,
+    market: MarketContext | null = null,
   ): Promise<string> {
+    const marketHost = marketPublicHost(market);
+    if (marketHost) return `https://${marketHost}`;
     const host = await loadPublicHost(
       { prisma: this.prisma, storeApps: this.storeApps ?? null },
       store,
@@ -570,6 +601,60 @@ export interface StorefrontLegalOptions {
   market?: string;
   preview?: boolean;
   viewer?: StorefrontViewer | null;
+}
+
+/**
+ * Public host of a non-default market: its primary host when ACTIVE (a
+ * preview context may name a not-yet-active primary, which is skipped).
+ * Null for the default market: the store's public host already is its host.
+ */
+export function marketPublicHost(market: MarketContext | null): string | null {
+  if (!market || market.isDefault) return null;
+  const primary = market.primaryHostname?.trim().toLowerCase();
+  if (!primary) return null;
+  const active = market.hostnames.some(
+    (h) => h.trim().toLowerCase() === primary,
+  );
+  return active ? primary : null;
+}
+
+/**
+ * The store's name in `locale`: `theme_config.translations[locale].name`
+ * (what the storefront layout uses for its <title>; the key is matched
+ * exactly, then case-insensitively, then by base language), else Store.name.
+ */
+export function localizedStoreName(
+  store: { name: string; theme_config?: unknown },
+  locale: string,
+): string {
+  const fallback = str(store.name);
+  const cfg = store.theme_config;
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return fallback;
+  const translations = (cfg as Record<string, unknown>).translations;
+  if (
+    !translations ||
+    typeof translations !== 'object' ||
+    Array.isArray(translations)
+  ) {
+    return fallback;
+  }
+  const map = translations as Record<string, unknown>;
+  const nameOf = (key: string | undefined): string => {
+    const entry = key === undefined ? undefined : map[key];
+    return entry && typeof entry === 'object'
+      ? str((entry as Record<string, unknown>).name)
+      : '';
+  };
+  const wanted = str(locale).toLowerCase();
+  if (!wanted) return fallback;
+  const keys = Object.keys(map);
+  const base = wanted.split('-')[0];
+  return (
+    nameOf(keys.find((k) => k === locale)) ||
+    nameOf(keys.find((k) => k.toLowerCase() === wanted)) ||
+    nameOf(keys.find((k) => k.toLowerCase() === base)) ||
+    fallback
+  );
 }
 
 /**
