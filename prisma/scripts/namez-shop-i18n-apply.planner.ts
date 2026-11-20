@@ -404,7 +404,13 @@ export interface Snapshot {
   menus: Record<string, { id: string; items: MenuNode[] }>;
   designer_templates: Record<
     string,
-    { id: string; current_version_id: string | null; spec: unknown }
+    {
+      id: string;
+      current_version_id: string | null;
+      spec: unknown;
+      /** DRAFT | PUBLISHED | ARCHIVED; absent in offline snapshots (= published). */
+      status?: string;
+    }
   >;
   designer_addons: Record<string, { product_id: string; addons: unknown }>;
   theme_config: Record<string, unknown> | null;
@@ -1091,6 +1097,17 @@ export function buildPlan(
         outcome(r, 'error', { detail: `${g.kind} ${g.id} not found in store ${snap.store.slug}` });
       continue;
     }
+    if (g.kind === 'designer_template') {
+      // A translation is written as a new version and published, which would
+      // also publish a template the owner keeps unpublished (status DRAFT /
+      // ARCHIVED with a version): refused.
+      const status = snap.designer_templates[g.id].status;
+      if (status !== undefined && status !== 'PUBLISHED') {
+        for (const r of g.records)
+          outcome(r, 'blocked', { detail: `designer template ${g.id} is ${status}; publishing a new version would publish it` });
+        continue;
+      }
+    }
     if (g.kind === 'page') {
       const page = snap.pages[g.id];
       if (page.published && page.draft_diff.length && !opts.publishDraftChanges) {
@@ -1165,6 +1182,12 @@ export interface BackupFile {
   entities: BackupEntity[];
   /** Entities whose write completed (in order). */
   applied: string[];
+  /**
+   * Entities whose write threw part-way (at most one: the run stops there).
+   * A service call may have written some of its rows, so the restore treats
+   * it like an applied entity (its `after` is the state read back).
+   */
+  failed?: string[];
 }
 
 export interface RestorePlan {
@@ -1175,6 +1198,12 @@ export interface RestorePlan {
   /** Changed after the apply (skipped unless --force). */
   drifted: string[];
   missing: string[];
+  /**
+   * Pages whose draft has edits that are not published (made after the
+   * apply): a restore publishes the page, which would release them too.
+   * Skipped unless --publish-draft-changes.
+   */
+  blocked: { key: string; diff: string[] }[];
 }
 
 /**
@@ -1186,6 +1215,8 @@ export function buildRestorePlan(
   backup: BackupFile,
   current: (kind: EntityKind, id: string) => EntityState | null,
   force: boolean,
+  pageDraftDiff: (id: string) => string[] = () => [],
+  publishDraftChanges = false,
 ): RestorePlan {
   const out: RestorePlan = {
     store: backup.store,
@@ -1193,8 +1224,9 @@ export function buildRestorePlan(
     unchanged: [],
     drifted: [],
     missing: [],
+    blocked: [],
   };
-  const applied = new Set(backup.applied);
+  const applied = new Set([...backup.applied, ...(backup.failed ?? [])]);
   for (const e of backup.entities) {
     const key = `${e.kind}:${e.id}`;
     const now = current(e.kind, e.id);
@@ -1215,6 +1247,14 @@ export function buildRestorePlan(
       // the `before` state either: treat like a later edit.
       out.drifted.push(key);
       continue;
+    }
+    const publish = e.kind === 'page' ? (e.publish ?? true) : undefined;
+    if (publish && !publishDraftChanges) {
+      const diff = pageDraftDiff(e.id);
+      if (diff.length) {
+        out.blocked.push({ key, diff });
+        continue;
+      }
     }
     out.changes.push({
       kind: e.kind,
@@ -1529,6 +1569,14 @@ export function renderPlan(plan: Plan, verbose = false): string {
   list('error', 'ERRORS (skipped)', false);
   list('conflict', 'CONFLICTS (existing value differs; skipped, --overwrite writes them)', true);
   list('overwrite', 'OVERWRITES (existing value replaced)', true);
+  const blockedTemplates = plan.outcomes.filter(
+    (o) => o.status === 'blocked' && o.type === 'designer_element',
+  );
+  if (blockedTemplates.length) {
+    lines.push('');
+    lines.push(`BLOCKED DESIGNER RECORDS (template not published; skipped) (${blockedTemplates.length}):`);
+    for (const d of new Set(blockedTemplates.map((o) => o.detail))) lines.push(`  ${d}`);
+  }
   if (Object.keys(plan.blocked_pages).length) {
     lines.push('');
     lines.push('BLOCKED PAGES (draft differs from published; --publish-draft-changes releases those edits too):');
@@ -1563,6 +1611,15 @@ export function renderRestorePlan(plan: RestorePlan): string {
   if (plan.missing.length) {
     lines.push(`  missing now: ${plan.missing.length}`);
     for (const k of plan.missing) lines.push(`    ${k}`);
+  }
+  if (plan.blocked.length) {
+    lines.push(
+      `  BLOCKED PAGES (unpublished draft edits; --publish-draft-changes releases them too): ${plan.blocked.length}`,
+    );
+    for (const b of plan.blocked) {
+      lines.push(`    ${b.key}`);
+      for (const d of b.diff) lines.push(`      - ${d}`);
+    }
   }
   return lines.join('\n');
 }

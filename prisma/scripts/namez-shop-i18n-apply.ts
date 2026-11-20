@@ -166,6 +166,23 @@ async function bootstrap(): Promise<Ctx> {
     'DESIGNER_WORKER',
   ])
     process.env[f] = 'off';
+  // BackupsService.onModuleInit marks every PENDING/RUNNING backup row as
+  // FAILED ("the API restarted"), whatever the worker flags say. In this
+  // second process that would break a backup the live API is running, so
+  // the boot is refused while one is in flight (a plain read first).
+  {
+    const { PrismaClient } = await import('@prisma/client');
+    const pre = new PrismaClient();
+    try {
+      const active = await pre.backup.count({ where: { status: { in: ['PENDING', 'RUNNING'] } } });
+      if (active > 0)
+        throw new Error(
+          `${active} in-app backup(s) PENDING/RUNNING: booting the app context now would mark them FAILED. Wait until they finish and run again.`,
+        );
+    } finally {
+      await pre.$disconnect();
+    }
+  }
   // Loaded lazily (CommonJS require) so --merge and --snapshot runs never
   // load the Nest app graph or open a database connection.
   const { NestFactory } = await import('@nestjs/core');
@@ -474,7 +491,7 @@ async function loadSnapshot(ctx: Ctx, store: StoreInfo, w: Wanted): Promise<Snap
 
   const templates = await p.designTemplate.findMany({
     where: { id: { in: [...w.templates] }, store_id: store.id },
-    select: { id: true, current_version_id: true },
+    select: { id: true, current_version_id: true, status: true },
   });
   for (const t of templates) {
     const v = t.current_version_id
@@ -487,6 +504,7 @@ async function loadSnapshot(ctx: Ctx, store: StoreInfo, w: Wanted): Promise<Snap
       id: t.id,
       current_version_id: t.current_version_id,
       spec: v?.spec ?? null,
+      status: t.status,
     };
   }
 
@@ -601,9 +619,17 @@ async function writeEntity(
     case 'custom_field': {
       noRemoval(rowLocaleDiff(from.translations, to.translations).removed, `custom field ${c.id}`);
       const rows = to.translations.map((r: Any) => {
-        // Nulls are left out (Json columns reject a plain null on create).
+        // A null option_labels is left out (a Json column rejects a plain
+        // null on create). Every other null is sent: the service carries an
+        // OMITTED personalization column (display_label, sublabel, note,
+        // help_text, help_image_url, messages) over from the stored row, so
+        // leaving it out would make a restore keep the applied value; an
+        // explicit null clears it.
         const out: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(r)) if (v !== null && v !== undefined) out[k] = v;
+        for (const [k, v] of Object.entries(r)) {
+          if (v === undefined || (k === 'option_labels' && v === null)) continue;
+          out[k] = v;
+        }
         return out;
       });
       await ctx.customFields.update(c.id, { translations: rows }, uid, ctx.CREATOR);
@@ -763,14 +789,19 @@ async function runApplyMode(o: Options): Promise<number> {
         writeBackup(file, backup);
       } catch (err) {
         failed = err;
+        // The service may have written part of this entity (e.g. a page's
+        // translations but not its sections): the restore must cover it.
+        backup.failed = [`${c.kind}:${c.id}`];
+        writeBackup(file, backup);
         console.error(`FAILED at ${c.kind}:${c.id}: ${err instanceof Error ? err.message : String(err)}`);
         break;
       }
     }
     // Record what really is stored now (restore compares against it).
     const after = await loadSnapshot(ctx, store, wanted);
+    const touched = new Set([...backup.applied, ...(backup.failed ?? [])]);
     for (const e of backup.entities) {
-      if (!backup.applied.includes(`${e.kind}:${e.id}`)) continue;
+      if (!touched.has(`${e.kind}:${e.id}`)) continue;
       const now = stateFromSnapshot(after, e.kind, e.id);
       if (now) e.after = now;
     }
@@ -803,7 +834,13 @@ async function runRestoreMode(o: Options): Promise<number> {
     if (store.id !== backup.store.id) throw new Error('store id differs from the backup');
     const wanted = wantedFromEntities(backup.entities);
     const snap = await loadSnapshot(ctx, store, wanted);
-    const plan = buildRestorePlan(backup, (k, id) => stateFromSnapshot(snap, k, id), o.force);
+    const plan = buildRestorePlan(
+      backup,
+      (k, id) => stateFromSnapshot(snap, k, id),
+      o.force,
+      (id) => snap.pages[id]?.draft_diff ?? [],
+      o.publishDraftChanges,
+    );
     console.log(renderRestorePlan(plan));
     const fp = restoreFingerprint(plan);
     console.log(`\nFingerprint: ${fp}`);
@@ -827,6 +864,7 @@ async function runRestoreMode(o: Options): Promise<number> {
       fingerprint: fp,
       entities: plan.changes.map((c) => ({ kind: c.kind, id: c.id, before: c.before, after: c.after, publish: c.publish })),
       applied: [],
+      failed: [],
     };
     writeBackup(file, own);
     console.log(`Pre-restore backup: ${file}`);
@@ -837,11 +875,23 @@ async function runRestoreMode(o: Options): Promise<number> {
         own.applied.push(`${c.kind}:${c.id}`);
         writeBackup(file, own);
       } catch (err) {
+        own.failed = [`${c.kind}:${c.id}`];
+        writeBackup(file, own);
         console.error(`FAILED at ${c.kind}:${c.id}: ${err instanceof Error ? err.message : String(err)}`);
         code = 1;
         break;
       }
     }
+    // Record what really is stored now, so the pre-restore backup can itself
+    // be restored without every entity showing as drifted.
+    const now = await loadSnapshot(ctx, store, wanted);
+    const touched = new Set([...own.applied, ...(own.failed ?? [])]);
+    for (const e of own.entities) {
+      if (!touched.has(`${e.kind}:${e.id}`)) continue;
+      const st = stateFromSnapshot(now, e.kind, e.id);
+      if (st) e.after = st;
+    }
+    writeBackup(file, own);
     console.log(`Restored ${own.applied.length}/${plan.changes.length} entities.`);
     await ctx.revalidation.revalidateStoreBySlug(store.slug);
     await ctx.revalidation.flush();

@@ -338,6 +338,57 @@ describe('buildRestorePlan', () => {
   });
 });
 
+describe('review fixes', () => {
+  it('blocks designer records of a template that is not published', () => {
+    const snap = snapshot();
+    snap.designer_templates.t1.status = 'ARCHIVED';
+    const plan = buildPlan(
+      snap,
+      [rec({ type: 'designer_element', id: 'v1', template_id: 't1', field: 'elements.el1.label', locale: 'de', value: 'Name' })],
+      OPTS,
+    );
+    expect(plan.changes).toHaveLength(0);
+    expect(plan.outcomes[0].status).toBe('blocked');
+    snap.designer_templates.t1.status = 'PUBLISHED';
+    expect(buildPlan(snap, [rec({ type: 'designer_element', id: 'v1', template_id: 't1', field: 'elements.el1.label', locale: 'de', value: 'Name' })], OPTS).changes).toHaveLength(1);
+  });
+
+  it('restores an entity whose write failed part-way', () => {
+    const plan = buildPlan(snapshot(), [rec({ type: 'collection', id: 'c1', field: 'name', locale: 'de', value: 'Schmuck' })], OPTS);
+    const c = plan.changes[0];
+    const backup: BackupFile = {
+      format: 'namez-shop-i18n-backup/1',
+      store: plan.store,
+      created_at: '2026-11-20T00:00:00Z',
+      fingerprint: fingerprint(plan),
+      options: OPTS,
+      entities: [{ kind: c.kind, id: c.id, before: c.before, after: c.after }],
+      applied: [],
+      failed: ['collection:c1'],
+    };
+    expect(buildRestorePlan(backup, () => c.after, false).changes).toHaveLength(1);
+  });
+
+  it('does not publish a page with later unpublished draft edits on restore', () => {
+    const plan = buildPlan(snapshot(), [rec({ type: 'page', id: 'pg1', field: 'title', locale: 'de', value: 'Geschenk für Papa' })], OPTS);
+    const c = plan.changes[0];
+    const backup: BackupFile = {
+      format: 'namez-shop-i18n-backup/1',
+      store: plan.store,
+      created_at: '2026-11-20T00:00:00Z',
+      fingerprint: fingerprint(plan),
+      options: OPTS,
+      entities: [{ kind: c.kind, id: c.id, before: c.before, after: c.after, publish: true }],
+      applied: ['page:pg1'],
+    };
+    const diff = () => ['section rich-text x: settings differ'];
+    const blocked = buildRestorePlan(backup, () => c.after, false, diff);
+    expect(blocked.changes).toHaveLength(0);
+    expect(blocked.blocked.map((b) => b.key)).toEqual(['page:pg1']);
+    expect(buildRestorePlan(backup, () => c.after, false, diff, true).changes).toHaveLength(1);
+  });
+});
+
 describe('draftDiff', () => {
   const live = {
     page: { slug: 'a', seo: {}, translations: [{ id: 'x', page_id: 'p', locale: 'sv', title: 'A' }] },
