@@ -205,7 +205,7 @@ export class MarketsService {
       currency: data.currency as string,
       countries: data.countries as string[],
     });
-    const row = await this.prisma.market.create({
+    const createArgs = {
       data: {
         store_id: store.id,
         key: data.key as string,
@@ -219,18 +219,18 @@ export class MarketsService {
         payment_check: check as unknown as Prisma.InputJsonObject,
         status: MarketStatus.DRAFT,
         indexing: data.indexing ?? MarketIndexing.AUTO,
+        ...(dto.is_x_default === true ? { is_x_default: true } : {}),
       },
       include: marketInclude,
-    });
-    // Created unflagged, then flagged with the one-per-store clearing.
+    } satisfies Prisma.MarketCreateArgs;
+    // A flagged market is created in the same transaction that clears the
+    // flag elsewhere, so a lost race leaves no half-created market behind.
     const created =
       dto.is_x_default === true
-        ? await this.updateAsXDefault(store.id, row.id, {
-            where: { id: row.id },
-            data: { is_x_default: true },
-            include: marketInclude,
-          })
-        : row;
+        ? await this.withXDefault(store.id, null, () =>
+            this.prisma.market.create(createArgs),
+          )
+        : await this.prisma.market.create(createArgs);
     await this.afterMutation(store.id);
     return this.toView(created, store);
   }
@@ -324,7 +324,9 @@ export class MarketsService {
     } satisfies Prisma.MarketUpdateArgs;
     const updated =
       xDefault === true
-        ? await this.updateAsXDefault(store.id, row.id, updateArgs)
+        ? await this.withXDefault(store.id, row.id, () =>
+            this.prisma.market.update(updateArgs),
+          )
         : await this.prisma.market.update(updateArgs);
 
     // The default market IS the store: its currency is Store.currency and
@@ -358,29 +360,45 @@ export class MarketsService {
 
   /**
    * At most one x-default market per store: clearing the flag on the other
-   * markets and setting it on this one happen in one transaction. The
-   * partial unique index "Market_store_x_default_key" backs the rule; a
-   * concurrent request that loses the race gets a 409 instead of a 500.
+   * markets and writing this one happen in one transaction. The partial
+   * unique index "Market_store_x_default_key" backs the rule; a concurrent
+   * request that loses the race gets a 409 instead of a 500. A clash on the
+   * (store_id, key) unique (concurrent rename/create) keeps its own code.
+   * `marketId` null = the market is being created.
    */
-  private async updateAsXDefault(
+  private async withXDefault(
     storeId: string,
-    marketId: string,
-    args: Prisma.MarketUpdateArgs & { include: typeof marketInclude },
+    marketId: string | null,
+    write: () => Prisma.PrismaPromise<MarketRow>,
   ): Promise<MarketRow> {
     try {
-      const [, updated] = await this.prisma.$transaction([
+      const [, written] = await this.prisma.$transaction([
         this.prisma.market.updateMany({
-          where: { store_id: storeId, is_x_default: true, id: { not: marketId } },
+          where: {
+            store_id: storeId,
+            is_x_default: true,
+            ...(marketId ? { id: { not: marketId } } : {}),
+          },
           data: { is_x_default: false },
         }),
-        this.prisma.market.update(args),
+        write(),
       ]);
-      return updated;
+      return written;
     } catch (err) {
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&
         err.code === 'P2002'
       ) {
+        const target = (err.meta as { target?: unknown } | undefined)?.target;
+        const keyClash = Array.isArray(target)
+          ? target.includes('key')
+          : typeof target === 'string' && target.includes('store_id_key');
+        if (keyClash) {
+          throw new ConflictException({
+            code: 'MARKET_KEY_TAKEN',
+            message: 'This market key is already used',
+          });
+        }
         throw new ConflictException({
           code: 'MARKET_X_DEFAULT_CONFLICT',
           message:
