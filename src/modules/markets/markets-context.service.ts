@@ -51,6 +51,7 @@ const marketSelect = {
   is_default: true,
   status: true,
   indexing: true,
+  is_x_default: true,
   price_rule: true,
   // Every status is read; `toContext` serves ACTIVE hosts only, except that
   // a preview context may name a pending primary as its canonical host.
@@ -316,6 +317,7 @@ export class MarketsContextService implements OnModuleInit, OnModuleDestroy {
       isDefault: row.is_default,
       status: row.status,
       indexing: row.indexing,
+      ...(row.is_x_default ? { isXDefault: true } : {}),
       primaryHostname: primary?.hostname ?? null,
       hostnames: active.map((d) => d.hostname),
       ...(preview ? { preview: true as const } : {}),

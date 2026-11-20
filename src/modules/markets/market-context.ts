@@ -28,6 +28,8 @@ export interface MarketContext {
   status: 'DRAFT' | 'LIVE';
   /** M6.1: search indexing mode (the web proxy applies it; still routed). */
   indexing: MarketIndexing;
+  /** The owner's hreflang x-default market (absent/false = not chosen). */
+  isXDefault?: boolean;
   /** The ACTIVE primary StoreDomain host, else null (platform subdomain). */
   primaryHostname: string | null;
   /** Every ACTIVE hostname of the market (what a client may claim to be on). */
@@ -54,6 +56,7 @@ export function toMarketRoute(ctx: MarketContext): MarketRoute {
       primary_hostname: ctx.primaryHostname,
       status: ctx.status,
       indexing: ctx.indexing,
+      ...(ctx.isXDefault ? { is_x_default: true as const } : {}),
       preview: true,
     };
   }
@@ -68,5 +71,6 @@ export function toMarketRoute(ctx: MarketContext): MarketRoute {
     primary_hostname: ctx.primaryHostname,
     status: 'LIVE',
     indexing: ctx.indexing,
+    ...(ctx.isXDefault ? { is_x_default: true as const } : {}),
   };
 }

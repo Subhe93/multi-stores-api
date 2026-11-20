@@ -1650,6 +1650,10 @@ model Market {
   // M6.1: search indexing mode (the web proxy computes the effective
   // noindex / redirect per request). Still routed whatever the value.
   indexing        MarketIndexing @default(AUTO)
+  // hreflang x-default target (unmatched visitors). At most one per store
+  // (partial unique index "Market_store_x_default_key", raw SQL in the
+  // migration). None set = the default market, as before.
+  is_x_default    Boolean        @default(false)
   created_at      DateTime       @default(now())
   updated_at      DateTime       @updatedAt
 

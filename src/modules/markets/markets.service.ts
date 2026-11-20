@@ -222,8 +222,17 @@ export class MarketsService {
       },
       include: marketInclude,
     });
+    // Created unflagged, then flagged with the one-per-store clearing.
+    const created =
+      dto.is_x_default === true
+        ? await this.updateAsXDefault(store.id, row.id, {
+            where: { id: row.id },
+            data: { is_x_default: true },
+            include: marketInclude,
+          })
+        : row;
     await this.afterMutation(store.id);
-    return this.toView(row, store);
+    return this.toView(created, store);
   }
 
   async update(
@@ -287,9 +296,12 @@ export class MarketsService {
       });
     }
 
-    const updated = await this.prisma.market.update({
+    // `@IsOptional()` lets null through; treat it as "unchanged".
+    const xDefault = dto.is_x_default ?? undefined;
+    const updateArgs = {
       where: { id: row.id },
       data: {
+        ...(xDefault !== undefined ? { is_x_default: xDefault } : {}),
         ...(data.key !== undefined ? { key: data.key } : {}),
         ...(data.name !== undefined ? { name: data.name } : {}),
         ...(data.countries !== undefined ? { countries: data.countries } : {}),
@@ -309,7 +321,11 @@ export class MarketsService {
           : {}),
       },
       include: marketInclude,
-    });
+    } satisfies Prisma.MarketUpdateArgs;
+    const updated =
+      xDefault === true
+        ? await this.updateAsXDefault(store.id, row.id, updateArgs)
+        : await this.prisma.market.update(updateArgs);
 
     // The default market IS the store: its currency is Store.currency and
     // its locales are the store's language config, so the legacy readers
@@ -338,6 +354,41 @@ export class MarketsService {
     }
     await this.afterMutation(store.id);
     return this.toView(updated, store);
+  }
+
+  /**
+   * At most one x-default market per store: clearing the flag on the other
+   * markets and setting it on this one happen in one transaction. The
+   * partial unique index "Market_store_x_default_key" backs the rule; a
+   * concurrent request that loses the race gets a 409 instead of a 500.
+   */
+  private async updateAsXDefault(
+    storeId: string,
+    marketId: string,
+    args: Prisma.MarketUpdateArgs & { include: typeof marketInclude },
+  ): Promise<MarketRow> {
+    try {
+      const [, updated] = await this.prisma.$transaction([
+        this.prisma.market.updateMany({
+          where: { store_id: storeId, is_x_default: true, id: { not: marketId } },
+          data: { is_x_default: false },
+        }),
+        this.prisma.market.update(args),
+      ]);
+      return updated;
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException({
+          code: 'MARKET_X_DEFAULT_CONFLICT',
+          message:
+            'Another market was just chosen as the default for unmatched visitors. Reload and try again.',
+        });
+      }
+      throw err;
+    }
   }
 
   /**
@@ -837,6 +888,7 @@ export class MarketsService {
       is_default: row.is_default,
       status: row.status,
       indexing: row.indexing,
+      is_x_default: row.is_x_default,
       price_rule: priceRuleOf(row.price_rule),
       payment_check: (row.payment_check as PaymentCheck | null) ?? null,
       effective_rate: effectiveRate,

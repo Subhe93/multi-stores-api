@@ -104,6 +104,13 @@ export interface MarketRoute {
   status: MarketStatus;
   /** M6.1: search indexing mode; the web proxy derives noindex / redirect. */
   indexing: MarketIndexing;
+  /**
+   * The owner's hreflang x-default market. Present (true) only on that one
+   * market; absent everywhere else, so payloads of stores that never chose
+   * one are unchanged. The web falls back to the default market when the
+   * chosen one is not indexable.
+   */
+  is_x_default?: true;
   preview?: true;
 }
 
@@ -168,6 +175,8 @@ export interface MarketView {
   status: MarketStatus;
   /** M6.1: search indexing mode (AUTO | ALWAYS | NEVER). */
   indexing: MarketIndexing;
+  /** hreflang x-default target; at most one market per store. */
+  is_x_default: boolean;
   price_rule: PriceRule;
   payment_check: PaymentCheck | null;
   /** Base → market rate in effect (null when it cannot be determined). */

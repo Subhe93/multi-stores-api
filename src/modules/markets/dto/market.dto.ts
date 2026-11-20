@@ -93,6 +93,11 @@ export class CreateMarketDto {
   @IsOptional()
   @IsEnum(MarketIndexing)
   indexing?: MarketIndexing;
+
+  // hreflang x-default target (see UpdateMarketDto); default false.
+  @IsOptional()
+  @IsBoolean()
+  is_x_default?: boolean;
 }
 
 export class UpdateMarketDto {
@@ -137,6 +142,12 @@ export class UpdateMarketDto {
   @IsOptional()
   @IsEnum(MarketIndexing)
   indexing?: MarketIndexing;
+
+  // hreflang x-default target. True clears it on every other market of the
+  // store (at most one); false unsets it (back to the default market).
+  @IsOptional()
+  @IsBoolean()
+  is_x_default?: boolean;
 }
 
 export class SetMarketStatusDto {
