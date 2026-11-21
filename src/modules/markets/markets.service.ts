@@ -24,6 +24,7 @@ import {
 } from './payment-check.service';
 import {
   SUPPORTED_LOCALES,
+  type MarketLocalePath,
   type MarketView,
   type PaymentCheck,
   type PriceRule,
@@ -35,6 +36,11 @@ import {
   UpsertProductMarketPricesDto,
 } from './dto/market.dto';
 import { resolveMarketPrice, resolveVariantMarketPrice } from './pricing.util';
+import {
+  localePathViews,
+  normalizeLocalePaths,
+  parseLocalePaths,
+} from './locale-paths';
 import { assertNotReviewPrimaryLocale } from './review-locale';
 
 const DEFAULT_MARKET_KEY = 'default';
@@ -220,6 +226,13 @@ export class MarketsService {
         status: MarketStatus.DRAFT,
         indexing: data.indexing ?? MarketIndexing.AUTO,
         ...(dto.is_x_default === true ? { is_x_default: true } : {}),
+        // Absent / null = the column stays NULL (bare locale folders).
+        ...(data.locale_paths
+          ? {
+              locale_paths:
+                data.locale_paths as unknown as Prisma.InputJsonArray,
+            }
+          : {}),
       },
       include: marketInclude,
     } satisfies Prisma.MarketCreateArgs;
@@ -316,6 +329,15 @@ export class MarketsService {
             }
           : {}),
         ...(data.indexing !== undefined ? { indexing: data.indexing } : {}),
+        // M156: null clears the column (SQL NULL, today's behaviour).
+        ...(data.locale_paths !== undefined
+          ? {
+              locale_paths:
+                data.locale_paths === null
+                  ? Prisma.DbNull
+                  : (data.locale_paths as unknown as Prisma.InputJsonArray),
+            }
+          : {}),
         ...(check
           ? { payment_check: check as unknown as Prisma.InputJsonObject }
           : {}),
@@ -805,6 +827,8 @@ export class MarketsService {
     currency: string;
     price_rule: PriceRule;
     indexing: MarketIndexing;
+    /** M156: null = clear the column; absent = unchanged. */
+    locale_paths: MarketLocalePath[] | null;
   }> {
     const out: ReturnType<MarketsService['normalize']> = {};
     // `@IsOptional()` lets null through; treat it as "unchanged" (the column
@@ -870,6 +894,15 @@ export class MarketsService {
       }
       out.price_rule = rule;
     }
+    // M156: checked only when sent, against the effective default locale
+    // and countries. A later change of countries / locales never fails here:
+    // the row turns inactive instead (locale-paths.ts localePathStatus).
+    if (dto.locale_paths !== undefined) {
+      out.locale_paths = normalizeLocalePaths(dto.locale_paths, {
+        defaultLocale,
+        countries: out.countries ?? current?.countries ?? [],
+      });
+    }
     return out;
   }
 
@@ -907,6 +940,10 @@ export class MarketsService {
       status: row.status,
       indexing: row.indexing,
       is_x_default: row.is_x_default,
+      locale_paths: localePathViews(parseLocalePaths(row.locale_paths), {
+        locales: row.locales.filter((l) => l !== row.default_locale),
+        countries: row.countries,
+      }),
       price_rule: priceRuleOf(row.price_rule),
       payment_check: (row.payment_check as PaymentCheck | null) ?? null,
       effective_rate: effectiveRate,

@@ -52,6 +52,11 @@ import {
   type LocaleSlug,
 } from '../../common/slug/slug-moves';
 import { SUPPORTED_LOCALES } from '../markets/market.types';
+import {
+  COUNTRY_PATH_SEGMENT_RE,
+  activeLocalePaths,
+  parseLocalePaths,
+} from '../markets/locale-paths';
 import type {
   CreateRedirectDto,
   RedirectListQueryDto,
@@ -632,8 +637,15 @@ export class RedirectsService {
     const collections: { path: string; segments: string[] }[] = [];
     const add = (m: Map<string, string[]>, k: string, p: string) =>
       m.set(k, [...(m.get(k) ?? []), p]);
+    // M156: language-country path segments (`/de-at/…`) are read only when
+    // a path could start with one, so every other store costs no query.
+    const extraPrefixes = [...paths].some((p) =>
+      COUNTRY_PATH_SEGMENT_RE.test(p.slice(1).split('/')[0] ?? ''),
+    )
+      ? await this.storeLocalePathSegments(storeId, db)
+      : [];
     for (const p of new Set(paths)) {
-      const c = livePathCandidate(p);
+      const c = livePathCandidate(p, extraPrefixes);
       if (!c) continue;
       if (c.kind === 'product') add(products, c.slug, p);
       else if (c.kind === 'page') add(pages, c.slug, p);
@@ -1010,6 +1022,36 @@ export class RedirectsService {
     db: Prisma.TransactionClient | PrismaService = this.prisma,
   ): Promise<string[]> {
     return (await this.storeLocales(storeId, db)).prefixes;
+  }
+
+  /**
+   * M156: the first URL segments of the ACTIVE language-country paths over
+   * all of the store's markets (`de-at`, `ar`). Stored rows that are
+   * inactive (language not enabled, country removed) are not served, so
+   * they are not listed.
+   */
+  async storeLocalePathSegments(
+    storeId: string,
+    db: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<string[]> {
+    const markets = await db.market.findMany({
+      where: { store_id: storeId },
+      select: {
+        default_locale: true,
+        locales: true,
+        countries: true,
+        locale_paths: true,
+      },
+    });
+    const out = new Set<string>();
+    for (const m of markets ?? []) {
+      const rows = activeLocalePaths(parseLocalePaths(m.locale_paths), {
+        locales: (m.locales ?? []).filter((l) => l !== m.default_locale),
+        countries: m.countries ?? [],
+      });
+      for (const r of rows) out.add(r.path);
+    }
+    return [...out];
   }
 
   /**

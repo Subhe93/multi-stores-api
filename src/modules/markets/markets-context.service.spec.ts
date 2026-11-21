@@ -28,6 +28,8 @@ type MarketSeed = {
   }[];
   locales?: string[];
   default_locale?: string;
+  countries?: string[];
+  locale_paths?: unknown;
 };
 
 function makePrisma(
@@ -38,7 +40,7 @@ function makePrisma(
     id: m.id,
     key: m.key,
     name: m.key.toUpperCase(),
-    countries: [],
+    countries: m.countries ?? [],
     default_locale: m.default_locale ?? 'sv',
     locales: m.locales ?? [],
     currency: m.currency,
@@ -52,6 +54,7 @@ function makePrisma(
       redirect_to: d.redirect_to ?? null,
       status: d.status ?? 'ACTIVE',
     })),
+    locale_paths: m.locale_paths ?? null,
   }));
   return {
     store: {
@@ -187,7 +190,9 @@ describe('MarketsContextService.resolve', () => {
     const live = await service.resolve(STORE_ID, 'default', { preview: true });
     expect(live).toMatchObject({ key: 'default', preview: true });
     // And the preview market is never advertised as a route.
-    expect((await service.listLive(STORE_ID))?.map((r) => r.key)).toEqual(['default']);
+    expect((await service.listLive(STORE_ID))?.map((r) => r.key)).toEqual([
+      'default',
+    ]);
   });
 
   it('preview: an unknown key is still 404, the app off still null, no key = default', async () => {
@@ -195,14 +200,18 @@ describe('MarketsContextService.resolve', () => {
     await expect(
       service.resolve(STORE_ID, 'nope', { preview: true }),
     ).rejects.toMatchObject({ response: { code: 'MARKET_NOT_FOUND' } });
-    expect(await service.resolve(STORE_ID, null, { preview: true })).toMatchObject({
+    expect(
+      await service.resolve(STORE_ID, null, { preview: true }),
+    ).toMatchObject({
       key: 'default',
     });
     expect(
       (await service.resolve(STORE_ID, null, { preview: true }))?.preview,
     ).toBeUndefined();
     const off = build([defaultMarket], { enabled: false });
-    expect(await off.service.resolve(STORE_ID, 'default', { preview: true })).toBeNull();
+    expect(
+      await off.service.resolve(STORE_ID, 'default', { preview: true }),
+    ).toBeNull();
   });
 
   it('non-preview contexts ignore hosts that are not ACTIVE', async () => {
@@ -441,5 +450,109 @@ describe('MarketsContextService.resolve', () => {
     prisma.market.findMany.mockRejectedValueOnce(new Error('connection lost'));
     expect(await service.resolve(STORE_ID)).toBeNull();
     expect((await service.resolve(STORE_ID))?.key).toBe('default');
+  });
+});
+
+// M156: language-country URL paths on the public route.
+describe('MarketsContextService locale_paths (M156)', () => {
+  const EU_PATHS = [
+    { path: 'de-de', locale: 'de', country: 'DE', hreflang: ['de-DE', 'de'] },
+    { path: 'de-at', locale: 'de', country: 'AT', hreflang: ['de-AT'] },
+    { path: 'fr-fr', locale: 'fr', country: 'FR', hreflang: ['fr-FR', 'fr'] },
+    { path: 'fr-be', locale: 'fr', country: 'BE', hreflang: ['fr-BE'] },
+    { path: 'nl-nl', locale: 'nl', country: 'NL', hreflang: ['nl-NL', 'nl'] },
+    { path: 'nl-be', locale: 'nl', country: 'BE', hreflang: ['nl-BE'] },
+    { path: 'ar', locale: 'ar', country: null, hreflang: ['ar'] },
+  ];
+  const eu = (over: Partial<MarketSeed> = {}): MarketSeed => ({
+    id: 'm-eu',
+    key: 'eu',
+    currency: 'SEK',
+    default_locale: 'en',
+    locales: ['de', 'fr', 'ar'],
+    countries: ['DE', 'FI', 'AT', 'NL', 'BE', 'FR', 'ES', 'IT', 'IE', 'PT'],
+    domains: [{ hostname: 'namez.shop', is_primary: true }],
+    locale_paths: EU_PATHS,
+    ...over,
+  });
+
+  it('the route carries the active rows only, in stored order', async () => {
+    const { service } = build([defaultMarket, eu()]);
+    const route = toMarketRoute((await service.resolve(STORE_ID, 'eu'))!);
+    expect(route.locale_paths?.map((r) => r.path)).toEqual([
+      'de-de',
+      'de-at',
+      'fr-fr',
+      'fr-be',
+      'ar',
+    ]);
+    expect(route.locale_paths?.[0]).toEqual(EU_PATHS[0]);
+    const listed = await service.listLive(STORE_ID);
+    expect(listed?.find((r) => r.key === 'eu')?.locale_paths).toHaveLength(5);
+  });
+
+  it('a removed locale or country drops its rows from the route', async () => {
+    const { service } = build([
+      defaultMarket,
+      eu({ locales: ['de', 'fr'], countries: ['DE', 'FR', 'BE'] }),
+    ]);
+    const route = toMarketRoute((await service.resolve(STORE_ID, 'eu'))!);
+    expect(route.locale_paths?.map((r) => r.path)).toEqual([
+      'de-de',
+      'fr-fr',
+      'fr-be',
+    ]);
+  });
+
+  it.each([
+    ['NULL', null],
+    ['[]', []],
+    ['only inactive rows', [EU_PATHS[4], EU_PATHS[5]]],
+    ['malformed JSON', { path: 'de-de' }],
+  ])(
+    'regression: %s → the route has no locale_paths property',
+    async (_label, value) => {
+      const { service } = build([defaultMarket, eu({ locale_paths: value })]);
+      const ctx = (await service.resolve(STORE_ID, 'eu'))!;
+      expect(ctx.localePaths).toEqual([]);
+      expect(toMarketRoute(ctx)).not.toHaveProperty('locale_paths');
+      const preview = (await service.resolve(STORE_ID, 'eu', {
+        preview: true,
+      }))!;
+      expect(toMarketRoute(preview)).not.toHaveProperty('locale_paths');
+      for (const r of (await service.listLive(STORE_ID)) ?? []) {
+        expect(r).not.toHaveProperty('locale_paths');
+      }
+    },
+  );
+
+  it('the preview route carries the active rows as well', async () => {
+    const { service } = build([defaultMarket, eu({ status: 'DRAFT' })]);
+    const route = toMarketRoute(
+      (await service.resolve(STORE_ID, 'eu', { preview: true }))!,
+    );
+    expect(route.preview).toBe(true);
+    expect(route.locale_paths?.map((r) => r.path)).toContain('de-at');
+  });
+
+  it('regression: a hand-built context without localePaths routes as before', () => {
+    const route = toMarketRoute({
+      id: 'm',
+      key: 'k',
+      name: 'K',
+      countries: [],
+      defaultLocale: 'sv',
+      locales: [],
+      currency: 'SEK',
+      storeCurrency: 'SEK',
+      rate: 1,
+      priceRule: { mode: 'convert' },
+      isDefault: true,
+      status: 'LIVE',
+      indexing: 'AUTO',
+      primaryHostname: null,
+      hostnames: [],
+    });
+    expect(route).not.toHaveProperty('locale_paths');
   });
 });

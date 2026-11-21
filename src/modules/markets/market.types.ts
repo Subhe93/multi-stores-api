@@ -13,7 +13,15 @@ export type StoreDomainStatus = 'PENDING' | 'VERIFIED' | 'ACTIVE';
  * Locales the storefront can render (its `locales` list). 'ku' is Kurdish,
  * Kurmanji (Latin script, left to right); Sorani would be a separate 'ckb'.
  */
-export const SUPPORTED_LOCALES = ['en', 'ar', 'tr', 'de', 'fr', 'sv', 'ku'] as const;
+export const SUPPORTED_LOCALES = [
+  'en',
+  'ar',
+  'tr',
+  'de',
+  'fr',
+  'sv',
+  'ku',
+] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 /**
@@ -26,6 +34,35 @@ export const REVIEW_LOCALES: readonly SupportedLocale[] = [];
 
 export function isReviewLocale(locale: string | null | undefined): boolean {
   return (REVIEW_LOCALES as readonly string[]).includes(locale ?? '');
+}
+
+/**
+ * M156: one language-country URL path of a market. `path` is the first URL
+ * segment: `${locale}-${country.toLowerCase()}` for a country row, `locale`
+ * for a language-only row (country null). The root `/` always serves the
+ * market's default_locale and never appears here.
+ */
+export interface MarketLocalePath {
+  /** /^[a-z]{2}(-[a-z]{2})?$/, e.g. 'de-at' or 'ar'. Unique per market. */
+  path: string;
+  /** ISO 639-1, lower case; never the market's default_locale. */
+  locale: string;
+  /** ISO 3166-1 alpha-2, upper case, in market.countries; null = every country. */
+  country: string | null;
+  /** hreflang codes this URL answers for; first = primary ('de-AT'); each code unique per market. */
+  hreflang: string[];
+}
+
+export type MarketLocalePathInactiveReason =
+  | 'locale_unsupported' // not a storefront locale yet (SUPPORTED_LOCALES)
+  | 'locale_not_enabled' // not in market.locales
+  | 'country_not_in_market';
+
+/** Dashboard view of a stored row. */
+export interface MarketLocalePathView extends MarketLocalePath {
+  active: boolean;
+  /** null when active; otherwise the first failing rule, in the order above. */
+  inactive_reason: MarketLocalePathInactiveReason | null;
 }
 
 export type PriceRounding = {
@@ -111,6 +148,12 @@ export interface MarketRoute {
    * chosen one is not indexable.
    */
   is_x_default?: true;
+  /**
+   * M156: ACTIVE language-country paths, stored order. Absent when the
+   * market has no active row, so payloads of every other market stay
+   * byte-identical.
+   */
+  locale_paths?: MarketLocalePath[];
   preview?: true;
 }
 
@@ -177,6 +220,8 @@ export interface MarketView {
   indexing: MarketIndexing;
   /** hreflang x-default target; at most one market per store. */
   is_x_default: boolean;
+  /** M156: every stored language-country path with its status; [] when unset. */
+  locale_paths: MarketLocalePathView[];
   price_rule: PriceRule;
   payment_check: PaymentCheck | null;
   /** Base → market rate in effect (null when it cannot be determined). */

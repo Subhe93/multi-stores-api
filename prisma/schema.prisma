@@ -1654,6 +1654,10 @@ model Market {
   // (partial unique index "Market_store_x_default_key", raw SQL in the
   // migration). None set = the default market, as before.
   is_x_default    Boolean        @default(false)
+  // M156: optional language-country URL paths (MarketLocalePath[]); null =
+  // bare /<locale>/ folders as before. Validated by the DTO; read through
+  // parseLocalePaths, which drops malformed rows.
+  locale_paths    Json?
   created_at      DateTime       @default(now())
   updated_at      DateTime       @updatedAt
 

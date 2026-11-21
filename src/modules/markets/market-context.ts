@@ -1,4 +1,9 @@
-import type { MarketIndexing, MarketRoute, PriceRule } from './market.types';
+import type {
+  MarketIndexing,
+  MarketLocalePath,
+  MarketRoute,
+  PriceRule,
+} from './market.types';
 
 /**
  * The one object every market-aware hook receives (storefront, cart, orders,
@@ -30,6 +35,12 @@ export interface MarketContext {
   indexing: MarketIndexing;
   /** The owner's hreflang x-default market (absent/false = not chosen). */
   isXDefault?: boolean;
+  /**
+   * M156: ACTIVE language-country paths, stored order (activity rule in
+   * locale-paths.ts). `toContext` always sets it ([] = bare locale folders);
+   * optional only so hand-built contexts (tests, fixtures) need not name it.
+   */
+  localePaths?: MarketLocalePath[];
   /** The ACTIVE primary StoreDomain host, else null (platform subdomain). */
   primaryHostname: string | null;
   /** Every ACTIVE hostname of the market (what a client may claim to be on). */
@@ -57,6 +68,7 @@ export function toMarketRoute(ctx: MarketContext): MarketRoute {
       status: ctx.status,
       indexing: ctx.indexing,
       ...(ctx.isXDefault ? { is_x_default: true as const } : {}),
+      ...(ctx.localePaths?.length ? { locale_paths: ctx.localePaths } : {}),
       preview: true,
     };
   }
@@ -72,5 +84,6 @@ export function toMarketRoute(ctx: MarketContext): MarketRoute {
     status: 'LIVE',
     indexing: ctx.indexing,
     ...(ctx.isXDefault ? { is_x_default: true as const } : {}),
+    ...(ctx.localePaths?.length ? { locale_paths: ctx.localePaths } : {}),
   };
 }

@@ -11,6 +11,7 @@ import { StoreAppsService } from '../store-apps/store-apps.service';
 import { resolveStoreCurrency } from '../../common/money/currency.util';
 import { FxService, priceRuleOf } from './fx.service';
 import { MarketContext, toMarketRoute } from './market-context';
+import { activeLocalePaths, parseLocalePaths } from './locale-paths';
 import type { MarketRoute } from './market.types';
 import { PgNotifyListener } from '../../common/ops/pg-listener';
 
@@ -52,6 +53,7 @@ const marketSelect = {
   status: true,
   indexing: true,
   is_x_default: true,
+  locale_paths: true,
   price_rule: true,
   // Every status is read; `toContext` serves ACTIVE hosts only, except that
   // a preview context may name a pending primary as its canonical host.
@@ -303,13 +305,14 @@ export class MarketsContextService implements OnModuleInit, OnModuleDestroy {
     if (!primary && preview) {
       primary = row.domains.find((d) => d.is_primary && !d.redirect_to);
     }
+    const locales = row.locales.filter((l) => l !== row.default_locale);
     return {
       id: row.id,
       key: row.key,
       name: row.name,
       countries: row.countries,
       defaultLocale: row.default_locale,
-      locales: row.locales.filter((l) => l !== row.default_locale),
+      locales,
       currency,
       storeCurrency,
       rate,
@@ -318,6 +321,10 @@ export class MarketsContextService implements OnModuleInit, OnModuleDestroy {
       status: row.status,
       indexing: row.indexing,
       ...(row.is_x_default ? { isXDefault: true } : {}),
+      localePaths: activeLocalePaths(parseLocalePaths(row.locale_paths), {
+        locales,
+        countries: row.countries,
+      }),
       primaryHostname: primary?.hostname ?? null,
       hostnames: active.map((d) => d.hostname),
       ...(preview ? { preview: true as const } : {}),

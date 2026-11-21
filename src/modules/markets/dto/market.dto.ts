@@ -1,5 +1,6 @@
 import {
   ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsBoolean,
   IsEnum,
@@ -11,6 +12,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -56,6 +58,33 @@ export class PriceRuleDto {
   rounding?: PriceRoundingDto;
 }
 
+/**
+ * M156: one language-country URL path. Shape only; the cross-row rules
+ * (path matches its row, country in the market, unique paths and hreflang
+ * codes) live in locale-paths.ts normalizeLocalePaths.
+ */
+export class MarketLocalePathDto {
+  @IsString()
+  @Matches(/^[a-z]{2}(?:-[a-z]{2})?$/)
+  path: string;
+
+  @IsString()
+  @Matches(/^[a-z]{2}$/)
+  locale: string;
+
+  // null (or omitted) = every country of the market (language-only row).
+  @IsOptional()
+  @IsString()
+  @Matches(COUNTRY_REGEX)
+  country?: string | null;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(4)
+  @Matches(/^[a-z]{2}(?:-[a-z]{2})?$/i, { each: true })
+  hreflang: string[];
+}
+
 export class CreateMarketDto {
   @IsString()
   @Matches(KEY_REGEX, { message: KEY_MESSAGE })
@@ -98,6 +127,16 @@ export class CreateMarketDto {
   @IsOptional()
   @IsBoolean()
   is_x_default?: boolean;
+
+  // M156: optional language-country URL paths. Omitted = unchanged; null or
+  // [] = cleared (bare /<locale>/ folders as before).
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => MarketLocalePathDto)
+  locale_paths?: MarketLocalePathDto[] | null;
 }
 
 export class UpdateMarketDto {
@@ -148,6 +187,16 @@ export class UpdateMarketDto {
   @IsOptional()
   @IsBoolean()
   is_x_default?: boolean;
+
+  // M156: optional language-country URL paths. Omitted = unchanged; null or
+  // [] = cleared (bare /<locale>/ folders as before).
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => MarketLocalePathDto)
+  locale_paths?: MarketLocalePathDto[] | null;
 }
 
 export class SetMarketStatusDto {

@@ -25,14 +25,23 @@ const LOCALE_PREFIXES = new Set<string>(SUPPORTED_LOCALES);
  * The content a normalised `from_path` could address, or null when no
  * product, collection or page lives at that shape (home `/`, shortlinks,
  * `/legal/…`, deeper paths). Pure; the service checks the candidate exists.
+ * `extraPrefixes` are further first segments the storefront serves as a
+ * locale (M156 language-country paths such as `de-at`); they are stripped
+ * like a locale prefix. Without them the result is the pre-M156 one.
  */
 export function livePathCandidate(
   normalized: string,
+  extraPrefixes: readonly string[] = [],
 ): LivePathCandidate | null {
   if (!normalized.startsWith('/') || normalized.startsWith('/?')) return null;
   let segs = normalized.slice(1).split('/');
   if (segs.some((s) => s === '')) return null;
-  if (segs.length > 1 && LOCALE_PREFIXES.has(segs[0])) segs = segs.slice(1);
+  if (
+    segs.length > 1 &&
+    (LOCALE_PREFIXES.has(segs[0]) || extraPrefixes.includes(segs[0]))
+  ) {
+    segs = segs.slice(1);
+  }
   if (segs[0] === 'products') {
     return segs.length === 2 ? { kind: 'product', slug: segs[1] } : null;
   }
