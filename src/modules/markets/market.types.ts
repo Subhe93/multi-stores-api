@@ -65,6 +65,45 @@ export interface MarketLocalePathView extends MarketLocalePath {
   inactive_reason: MarketLocalePathInactiveReason | null;
 }
 
+// ── M157: payment methods per market ─────────────────────────────────────
+
+/** Payment methods a market can restrict to. Stored and sent in this order. */
+export const MARKET_PAYMENT_METHODS = ['card', 'kustom', 'cod'] as const;
+export type MarketPaymentMethod = (typeof MARKET_PAYMENT_METHODS)[number];
+
+/** Why the store cannot offer a method at all (GET /markets/payment-methods). */
+export type StorePaymentMethodUnavailableReason =
+  | 'card_not_connected'
+  | 'kustom_not_configured'
+  | 'cod_disabled'
+  | 'not_independent';
+
+export interface StorePaymentMethodStatus {
+  method: MarketPaymentMethod;
+  /** The store offers the method (currency-agnostic; the market check covers currencies). */
+  available: boolean;
+  /** null when available. */
+  reason: StorePaymentMethodUnavailableReason | null;
+  /** card only: the only card route is an ACTIVE TEST own key. */
+  test_mode?: true;
+}
+
+/** GET /markets/payment-methods: always three rows, in MARKET_PAYMENT_METHODS order. */
+export interface StorePaymentMethodsView {
+  methods: StorePaymentMethodStatus[];
+}
+
+/** Error codes (HTTP 400, body { code, message, ... }). */
+export type MarketPaymentMethodsErrorCode =
+  | 'MARKET_PAYMENT_METHODS_INVALID' // + reason: 'unknown' | 'duplicate' | 'empty', value?: string
+  | 'MARKET_PAYMENT_METHODS_NOT_READY';
+export type PaymentMethodRuntimeErrorCode =
+  | 'MARKET_PAYMENT_METHOD_NOT_ALLOWED' // + method: MarketPaymentMethod
+  | 'KUSTOM_CURRENCY_NOT_ENABLED'; // + currency?: string
+
+/** Kustom validation redirect reason (…/checkout?error=kustom_validation&reason=…). */
+export type KustomValidationReasonM157 = 'payment_method_unavailable';
+
 export type PriceRounding = {
   /** Round the converted amount to a multiple of this (1, 0.5, 0.1, ...). */
   increment?: number;
@@ -222,6 +261,8 @@ export interface MarketView {
   is_x_default: boolean;
   /** M156: every stored language-country path with its status; [] when unset. */
   locale_paths: MarketLocalePathView[];
+  /** M157: null = the store's methods (default); otherwise the allowed subset, non-empty, sorted. */
+  payment_methods: MarketPaymentMethod[] | null;
   price_rule: PriceRule;
   payment_check: PaymentCheck | null;
   /** Base → market rate in effect (null when it cannot be determined). */

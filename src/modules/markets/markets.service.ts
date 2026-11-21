@@ -18,14 +18,15 @@ import { MARKET_FX_RATE_MISSING } from './market-pricing.service';
 import { FxService, priceRuleOf } from './fx.service';
 import { MarketsContextService } from './markets-context.service';
 import { MarketPricingService } from './market-pricing.service';
+import { PaymentCheckService } from './payment-check.service';
 import {
-  PaymentCheckService,
-  paymentCheckPasses,
-} from './payment-check.service';
-import {
+  MARKET_PAYMENT_METHODS,
   SUPPORTED_LOCALES,
   type MarketLocalePath,
+  type MarketPaymentMethod,
   type MarketView,
+  type StorePaymentMethodStatus,
+  type StorePaymentMethodsView,
   type PaymentCheck,
   type PriceRule,
   type ProductMarketPricesView,
@@ -42,6 +43,19 @@ import {
   parseLocalePaths,
 } from './locale-paths';
 import { assertNotReviewPrimaryLocale } from './review-locale';
+import {
+  MARKET_PAYMENT_METHODS_NOT_READY,
+  normalizePaymentMethods,
+  parsePaymentMethods,
+  paymentCheckPassesFor,
+  samePaymentMethods,
+} from './payment-methods';
+import {
+  isKustomCreatorReady,
+  kustomCreatorSelect,
+} from '../payments/kustom/kustom.eligibility';
+import { isOwnKeyCardReady, isOwnKeyTestMode } from '../payments/payment-route';
+import { effectiveCodEnabled } from '../stores/cod-policy';
 
 const DEFAULT_MARKET_KEY = 'default';
 
@@ -233,6 +247,14 @@ export class MarketsService {
                 data.locale_paths as unknown as Prisma.InputJsonArray,
             }
           : {}),
+        // M157: absent / null = the column stays NULL (the store's methods).
+        // A new market is DRAFT: the go-live gate runs on setStatus(LIVE).
+        ...(data.payment_methods
+          ? {
+              payment_methods:
+                data.payment_methods as unknown as Prisma.InputJsonArray,
+            }
+          : {}),
       },
       include: marketInclude,
     } satisfies Prisma.MarketCreateArgs;
@@ -281,8 +303,20 @@ export class MarketsService {
         await this.storeCurrencyOf(store),
       );
     }
+    // M157: the methods in effect after this update, and whether the
+    // restriction itself changes (which re-runs the gate on a LIVE market).
+    // The raw column is compared too, so a malformed stored value that is
+    // rewritten counts as a change.
+    const storedMethods = parsePaymentMethods(row.payment_methods);
+    const effectiveMethods =
+      data.payment_methods !== undefined ? data.payment_methods : storedMethods;
+    const methodsChanged =
+      data.payment_methods !== undefined &&
+      (!samePaymentMethods(storedMethods, data.payment_methods) ||
+        JSON.stringify(row.payment_methods ?? null) !==
+          JSON.stringify(data.payment_methods));
     const check =
-      currencyChanged || data.countries
+      currencyChanged || data.countries || methodsChanged
         ? await this.paymentCheck.checkMarket(store.id, {
             id: row.id,
             currency: (data.currency as string) ?? row.currency,
@@ -295,18 +329,26 @@ export class MarketsService {
     if (
       check &&
       row.status === MarketStatus.LIVE &&
-      !paymentCheckPasses(check)
+      !paymentCheckPassesFor(check, effectiveMethods)
     ) {
       await this.prisma.market.update({
         where: { id: row.id },
         data: { payment_check: check as unknown as Prisma.InputJsonObject },
       });
       await this.afterMutation(store.id);
-      throw new BadRequestException({
-        code: 'MARKET_PAYMENT_CHECK_FAILED',
-        message:
-          'No payment provider can charge this currency for these countries. The market keeps its current settings.',
-      });
+      throw new BadRequestException(
+        effectiveMethods === null
+          ? {
+              code: 'MARKET_PAYMENT_CHECK_FAILED',
+              message:
+                'No payment provider can charge this currency for these countries. The market keeps its current settings.',
+            }
+          : {
+              code: MARKET_PAYMENT_METHODS_NOT_READY,
+              message:
+                'None of the payment methods chosen for this market can take payments in its currency yet. The market keeps its current settings.',
+            },
+      );
     }
 
     // `@IsOptional()` lets null through; treat it as "unchanged".
@@ -336,6 +378,15 @@ export class MarketsService {
                 data.locale_paths === null
                   ? Prisma.DbNull
                   : (data.locale_paths as unknown as Prisma.InputJsonArray),
+            }
+          : {}),
+        // M157: null clears the column (SQL NULL = the store's methods).
+        ...(data.payment_methods !== undefined
+          ? {
+              payment_methods:
+                data.payment_methods === null
+                  ? Prisma.DbNull
+                  : (data.payment_methods as unknown as Prisma.InputJsonArray),
             }
           : {}),
         ...(check
@@ -474,16 +525,25 @@ export class MarketsService {
         currency: row.currency,
         countries: row.countries,
       });
-      if (!paymentCheckPasses(check)) {
+      const methods = parsePaymentMethods(row.payment_methods);
+      if (!paymentCheckPassesFor(check, methods)) {
         await this.prisma.market.update({
           where: { id: row.id },
           data: { payment_check: check as unknown as Prisma.InputJsonObject },
         });
-        throw new BadRequestException({
-          code: 'MARKET_PAYMENT_CHECK_FAILED',
-          message:
-            'No payment provider can charge this currency yet. Fix the payment setup and re-run the check.',
-        });
+        throw new BadRequestException(
+          methods === null
+            ? {
+                code: 'MARKET_PAYMENT_CHECK_FAILED',
+                message:
+                  'No payment provider can charge this currency yet. Fix the payment setup and re-run the check.',
+              }
+            : {
+                code: MARKET_PAYMENT_METHODS_NOT_READY,
+                message:
+                  'None of the payment methods chosen for this market can take payments in its currency yet. Fix the payment setup or the market payment methods and re-run the check.',
+              },
+        );
       }
     }
     const updated = await this.prisma.market.update({
@@ -513,6 +573,65 @@ export class MarketsService {
     await this.prisma.market.delete({ where: { id: row.id } });
     await this.afterMutation(store.id);
     return { deleted: true };
+  }
+
+  /**
+   * M157: which payment methods the store offers at all (currency-agnostic;
+   * the per-market currency side is the payment check). Feeds the market
+   * form so an owner can only pick methods the store has. Only booleans and
+   * reason codes leave this method: never ids, keys or secrets.
+   */
+  async storePaymentMethods(userId: string): Promise<StorePaymentMethodsView> {
+    const owner = await this.storeOf(userId);
+    const store = await this.prisma.store.findUnique({
+      where: { id: owner.id },
+      select: {
+        store_type: true,
+        cod_enabled: true,
+        stripe_keys: { select: { status: true, livemode: true } },
+        creator: {
+          select: {
+            stripe_account_type: true,
+            stripe_charges_enabled: true,
+            ...kustomCreatorSelect,
+          },
+        },
+      },
+    });
+    const rows: StorePaymentMethodStatus[] = [];
+    if (!store || store.store_type !== 'INDEPENDENT') {
+      for (const method of MARKET_PAYMENT_METHODS) {
+        rows.push({ method, available: false, reason: 'not_independent' });
+      }
+      return { methods: rows };
+    }
+    const ownKeyLive = isOwnKeyCardReady(store);
+    const ownKeyTest = isOwnKeyTestMode(store);
+    const connect =
+      store.creator?.stripe_account_type === 'standard' &&
+      store.creator?.stripe_charges_enabled === true;
+    const card = ownKeyLive || ownKeyTest || connect;
+    rows.push({
+      method: 'card',
+      available: card,
+      reason: card ? null : 'card_not_connected',
+      ...(ownKeyTest && !ownKeyLive && !connect
+        ? { test_mode: true as const }
+        : {}),
+    });
+    const kustom = isKustomCreatorReady(store.creator);
+    rows.push({
+      method: 'kustom',
+      available: kustom,
+      reason: kustom ? null : 'kustom_not_configured',
+    });
+    const cod = effectiveCodEnabled(store);
+    rows.push({
+      method: 'cod',
+      available: cod,
+      reason: cod ? null : 'cod_disabled',
+    });
+    return { methods: rows };
   }
 
   async runPaymentCheck(
@@ -829,6 +948,8 @@ export class MarketsService {
     indexing: MarketIndexing;
     /** M156: null = clear the column; absent = unchanged. */
     locale_paths: MarketLocalePath[] | null;
+    /** M157: null = clear the column; absent = unchanged. */
+    payment_methods: MarketPaymentMethod[] | null;
   }> {
     const out: ReturnType<MarketsService['normalize']> = {};
     // `@IsOptional()` lets null through; treat it as "unchanged" (the column
@@ -903,6 +1024,12 @@ export class MarketsService {
         countries: out.countries ?? current?.countries ?? [],
       });
     }
+    // M157: coded 400 on an unknown, duplicate or empty list. Store
+    // readiness is not checked here (volatile); it is applied at request
+    // time as "store rule AND market rule".
+    if (dto.payment_methods !== undefined) {
+      out.payment_methods = normalizePaymentMethods(dto.payment_methods);
+    }
     return out;
   }
 
@@ -944,6 +1071,7 @@ export class MarketsService {
         locales: row.locales.filter((l) => l !== row.default_locale),
         countries: row.countries,
       }),
+      payment_methods: parsePaymentMethods(row.payment_methods),
       price_rule: priceRuleOf(row.price_rule),
       payment_check: (row.payment_check as PaymentCheck | null) ?? null,
       effective_rate: effectiveRate,

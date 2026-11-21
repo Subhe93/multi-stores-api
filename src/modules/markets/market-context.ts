@@ -1,6 +1,7 @@
 import type {
   MarketIndexing,
   MarketLocalePath,
+  MarketPaymentMethod,
   MarketRoute,
   PriceRule,
 } from './market.types';
@@ -41,6 +42,14 @@ export interface MarketContext {
    * optional only so hand-built contexts (tests, fixtures) need not name it.
    */
   localePaths?: MarketLocalePath[];
+  /**
+   * M157: the payment methods this market allows (a subset of the store's),
+   * or null = the store's methods. `toContext` always sets it (parsed
+   * fail-closed: a malformed stored value reads as []); optional only so
+   * hand-built contexts need not name it (undefined = unrestricted). Read
+   * through marketAllowsMethod (payment-methods.ts). Never on MarketRoute.
+   */
+  paymentMethods?: MarketPaymentMethod[] | null;
   /** The ACTIVE primary StoreDomain host, else null (platform subdomain). */
   primaryHostname: string | null;
   /** Every ACTIVE hostname of the market (what a client may claim to be on). */

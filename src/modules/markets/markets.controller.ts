@@ -50,6 +50,13 @@ export class MarketsController {
     return this.domains.dnsTargetForUser(userId);
   }
 
+  // M157: which payment methods the store offers (market form). Declared
+  // before `:id` so "payment-methods" is never taken as a market id.
+  @Get('payment-methods')
+  storePaymentMethods(@CurrentUser('id') userId: string) {
+    return this.markets.storePaymentMethods(userId);
+  }
+
   @Get('fx-preview')
   fxPreview(@Query('from') from = '', @Query('to') to = '') {
     return this.markets.fxPreview(from, to);

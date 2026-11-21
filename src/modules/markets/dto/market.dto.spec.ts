@@ -31,3 +31,39 @@ describe('Market DTO indexing (M6.1)', () => {
     },
   );
 });
+
+describe('Market DTO payment_methods (M157)', () => {
+  it.each([CreateMarketDto, UpdateMarketDto])(
+    '%p checks the shape only (values are coded in the service)',
+    async (cls) => {
+      // Omitted, null (clear) and any array up to the abuse cap pass; unknown
+      // or non-string values, duplicates and [] are refused later with the
+      // coded MARKET_PAYMENT_METHODS_INVALID (not a generic message).
+      for (const ok of [
+        undefined,
+        null,
+        ['card'],
+        ['kustom', 'cod'],
+        [],
+        ['x'],
+        [1],
+        ['card', 'kustom', 'cod', 'card'],
+        ['card', 'card', 'kustom', 'cod'],
+      ]) {
+        expect(
+          await errorsFor(cls, ok === undefined ? {} : { payment_methods: ok }),
+        ).toEqual([]);
+      }
+      for (const bad of [
+        'card',
+        1,
+        {},
+        Array.from({ length: 21 }, () => 'card'),
+      ]) {
+        expect(await errorsFor(cls, { payment_methods: bad })).toEqual([
+          'payment_methods',
+        ]);
+      }
+    },
+  );
+});

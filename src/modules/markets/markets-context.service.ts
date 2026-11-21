@@ -12,6 +12,7 @@ import { resolveStoreCurrency } from '../../common/money/currency.util';
 import { FxService, priceRuleOf } from './fx.service';
 import { MarketContext, toMarketRoute } from './market-context';
 import { activeLocalePaths, parseLocalePaths } from './locale-paths';
+import { parsePaymentMethods } from './payment-methods';
 import type { MarketRoute } from './market.types';
 import { PgNotifyListener } from '../../common/ops/pg-listener';
 
@@ -54,6 +55,8 @@ const marketSelect = {
   indexing: true,
   is_x_default: true,
   locale_paths: true,
+  // M157: optional payment-method restriction (parsed fail-closed).
+  payment_methods: true,
   price_rule: true,
   // Every status is read; `toContext` serves ACTIVE hosts only, except that
   // a preview context may name a pending primary as its canonical host.
@@ -325,6 +328,8 @@ export class MarketsContextService implements OnModuleInit, OnModuleDestroy {
         locales,
         countries: row.countries,
       }),
+      // M157: always set (null = the store's methods); never on MarketRoute.
+      paymentMethods: parsePaymentMethods(row.payment_methods),
       primaryHostname: primary?.hostname ?? null,
       hostnames: active.map((d) => d.hostname),
       ...(preview ? { preview: true as const } : {}),

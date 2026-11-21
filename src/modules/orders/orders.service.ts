@@ -87,6 +87,11 @@ import {
 } from '../markets/market-pricing.service';
 import type { MarketContext } from '../markets/market-context';
 import type { QuoteMarketInfo } from '../markets/market.types';
+import {
+  marketAllowsMethod,
+  marketPaymentMethodNotAllowed,
+  paymentMethodOfOrder,
+} from '../markets/payment-methods';
 import { normalizeHostname } from '../../common/domains/reserved-hosts';
 import {
   TaxService,
@@ -2847,6 +2852,14 @@ export class OrdersService implements OnModuleInit {
         message:
           'Kustom Checkout is not available for this store. Please choose another payment method.',
       });
+    }
+
+    // M157: the request market may narrow the store's methods. A pure check
+    // on loaded data, before any stock or coupon work. Covers cart orders,
+    // guest orders and the Kustom session order (all come through here).
+    const marketMethod = paymentMethodOfOrder(requestedPaymentMethod);
+    if (!marketAllowsMethod(orderStore.market, marketMethod)) {
+      throw marketPaymentMethodNotAllowed(marketMethod);
     }
 
     const marketRows = orderStore.market

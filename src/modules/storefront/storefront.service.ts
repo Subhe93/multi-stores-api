@@ -22,6 +22,7 @@ import { MarketsContextService } from '../markets/markets-context.service';
 import { MarketPricingService } from '../markets/market-pricing.service';
 import { marketizeBundles, marketizePromotions } from './market-offers';
 import { toMarketRoute, type MarketContext } from '../markets/market-context';
+import { marketAllowsMethod } from '../markets/payment-methods';
 import {
   PricingType,
   Prisma,
@@ -1110,6 +1111,22 @@ export class StorefrontService {
       ...storeRow
     } = store;
     const checkout = publicCheckoutSettings(rawCheckoutSettings);
+    // Card checkout availability. Marketplace stores need the creator able
+    // to receive payout transfers (Express onboarding complete); independent
+    // stores charge directly, so they need a Standard account that can take
+    // charges — or their own Stripe key (OWN_KEY) being ACTIVE. Note:
+    // checkout still re-checks the recipients at payment time. Computed once
+    // so the M157 market narrowing below uses the same expression.
+    const cardPaymentsEnabled =
+      store.store_type === StoreType.INDEPENDENT
+        ? isOwnKeyCardReady(store, { allowTest: ownerView }) ||
+          (store.creator.stripe_account_type === 'standard' &&
+            store.creator.stripe_charges_enabled)
+        : // Marketplace needs an account that can receive transfers — a
+          // Standard account left over from an independent phase cannot,
+          // so the card option must not be offered.
+          store.creator.stripe_account_type !== 'standard' &&
+          store.creator.stripe_payouts_enabled;
 
     return {
       ...storeRow,
@@ -1134,21 +1151,8 @@ export class StorefrontService {
       // structured data): the platform operator for MARKETPLACE stores,
       // the store's own trader details for INDEPENDENT ones.
       seller_details: storeSellerDetails(store, platformConfig?.support_email),
-      // Card checkout availability. Marketplace stores need the creator able
-      // to receive payout transfers (Express onboarding complete); independent
-      // stores charge directly, so they need a Standard account that can take
-      // charges — or their own Stripe key (OWN_KEY) being ACTIVE. Note:
-      // checkout still re-checks the recipients at payment time.
-      card_payments_enabled:
-        store.store_type === StoreType.INDEPENDENT
-          ? isOwnKeyCardReady(store, { allowTest: ownerView }) ||
-            (store.creator.stripe_account_type === 'standard' &&
-              store.creator.stripe_charges_enabled)
-          : // Marketplace needs an account that can receive transfers — a
-            // Standard account left over from an independent phase cannot,
-            // so the card option must not be offered.
-            store.creator.stripe_account_type !== 'standard' &&
-            store.creator.stripe_payouts_enabled,
+      // Card checkout availability (see cardPaymentsEnabled above).
+      card_payments_enabled: cardPaymentsEnabled,
       // Kustom Checkout availability: independent stores only, creator setup
       // complete. Same rule as GET /payments/config's kustomEnabled.
       kustom_enabled: isKustomEnabledForStore({
@@ -1215,12 +1219,25 @@ export class StorefrontService {
               primary_locale: market.defaultLocale,
               secondary_locales: market.locales,
             },
-            kustom_enabled: isKustomEnabledForStore({
-              store_type: store.store_type,
-              is_active: store.is_active,
-              creator: kustomCreator,
-              currency: market.currency,
-            }),
+            kustom_enabled:
+              isKustomEnabledForStore({
+                store_type: store.store_type,
+                is_active: store.is_active,
+                creator: kustomCreator,
+                currency: market.currency,
+              }) && marketAllowsMethod(market, 'kustom'),
+            // M157: a market may narrow the store's methods. Re-stated only
+            // when the market has the setting, so every other payload stays
+            // byte-identical (a re-stated key keeps its original position).
+            ...(market.paymentMethods != null
+              ? {
+                  card_payments_enabled:
+                    cardPaymentsEnabled && marketAllowsMethod(market, 'card'),
+                  cod_enabled:
+                    effectiveCodEnabled(store) &&
+                    marketAllowsMethod(market, 'cod'),
+                }
+              : {}),
             market: toMarketRoute(market),
             markets,
           }

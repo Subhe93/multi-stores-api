@@ -31,6 +31,10 @@ import {
 import { splitProviderShares } from '../../common/money/provider-share.util';
 import { MarketsContextService } from '../markets/markets-context.service';
 import {
+  marketAllowsMethod,
+  marketPaymentMethodNotAllowed,
+} from '../markets/payment-methods';
+import {
   OrdersService,
   type AbandonedPaymentCheckOptions,
   type AbandonedPaymentDecision,
@@ -536,12 +540,21 @@ export class PaymentsService implements OnModuleInit {
       };
     }
 
+    // The request market, resolved once (same call and 404 behaviour for a
+    // bad key as before). M157: it may also narrow the store's methods.
+    const market =
+      preview && marketKey
+        ? await this.markets.resolve(store.id, marketKey, { preview: true })
+        : await this.markets.resolve(store.id, marketKey);
+    const cardAllowed = marketAllowsMethod(market, 'card');
+
     // Kustom also needs a currency it can process: the market's when the
     // markets app applies, else the store's.
     // FIXES-1 item 4: an owner previewing a store that is not LIVE can only
     // test Stripe (TEST own key); Kustom would answer STORE_NOT_LIVE.
     const kustomEnabled = async () =>
       store.is_active !== false &&
+      marketAllowsMethod(market, 'kustom') &&
       isKustomEnabledForStore({
         ...store,
         currency: resolveOrderCurrency(
@@ -551,11 +564,7 @@ export class PaymentsService implements OnModuleInit {
               select: { default_currency: true },
             })
           )?.default_currency,
-          preview && marketKey
-            ? await this.markets.resolve(store.id, marketKey, {
-                preview: true,
-              })
-            : await this.markets.resolve(store.id, marketKey),
+          market,
         ),
       });
 
@@ -565,6 +574,16 @@ export class PaymentsService implements OnModuleInit {
       allowTest: ownerPreview,
     });
     if (route === 'OWN_KEY') {
+      // M157: card excluded in this market: Stripe.js must not even load.
+      if (!cardAllowed) {
+        return {
+          stripeConfigured: false,
+          publishableKey: null,
+          stripeAccount: null,
+          route,
+          kustomEnabled: await kustomEnabled(),
+        };
+      }
       const ownPublishableKey =
         (await this.ownKey?.getPublishableKey(store.id)) ?? null;
       // Only reached with a test key when the viewer may preview.
@@ -580,6 +599,16 @@ export class PaymentsService implements OnModuleInit {
     }
 
     const creator = store.creator;
+    // M157: card excluded in this market: no key, no account, not configured.
+    if (!cardAllowed) {
+      return {
+        stripeConfigured: false,
+        publishableKey: null,
+        stripeAccount: null,
+        route,
+        kustomEnabled: await kustomEnabled(),
+      };
+    }
     const stripeAccount =
       creator.stripe_account_type === 'standard' &&
       creator.stripe_charges_enabled
@@ -1171,6 +1200,18 @@ export class PaymentsService implements OnModuleInit {
         );
       }
       throw cartItemsUnavailable(unavailable);
+    }
+
+    // M157: the order's own market (any status) may exclude card payments.
+    // Checked before any charge is created or an open intent is reused, so
+    // no new or resumed card charge happens on an excluded method. Null
+    // when the app is off or the market is gone: the store rule as before.
+    const orderMarket =
+      order.store_id && order.market_id
+        ? await this.markets.byId(order.store_id, order.market_id)
+        : null;
+    if (!marketAllowsMethod(orderMarket, 'card')) {
+      throw marketPaymentMethodNotAllowed('card');
     }
 
     // FIXES-1 item 4: a store that is not LIVE only takes the payment of a

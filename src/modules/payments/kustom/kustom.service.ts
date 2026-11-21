@@ -48,6 +48,10 @@ import {
 import { UpdateKustomSettingsDto } from './dto/kustom.dto';
 import { MarketsContextService } from '../../markets/markets-context.service';
 import type { MarketContext } from '../../markets/market-context';
+import {
+  marketAllowsMethod,
+  marketPaymentMethodNotAllowed,
+} from '../../markets/payment-methods';
 import { B2bService } from '../../b2b/b2b.service';
 import {
   TaxService,
@@ -116,6 +120,30 @@ type SessionOrder = Prisma.OrderGetPayload<{
 interface Actor {
   userId: string;
   role: UserRole;
+}
+
+/** M157: Kustom refused the currency (not enabled on the merchant account). */
+export const KUSTOM_CURRENCY_NOT_ENABLED = 'KUSTOM_CURRENCY_NOT_ENABLED';
+
+/** What toHttpException may log about the request (never credentials). */
+export interface KustomErrorContext {
+  storeId?: string;
+  currency?: string;
+  country?: string;
+}
+
+/**
+ * Kustom answers `400 BAD_VALUE` with a message naming `purchase_currency`
+ * when the merchant account has no contract for the currency, e.g.
+ * "Bad value: purchase_currency (no configured currencies for order billing
+ * country: DE)".
+ */
+export function isKustomCurrencyNotEnabled(err: KustomApiError): boolean {
+  return (
+    err.status === 400 &&
+    err.errorCode === 'BAD_VALUE' &&
+    err.errorMessages.some((m) => /purchase_currency/i.test(m))
+  );
 }
 
 export interface StoreContext {
@@ -412,8 +440,28 @@ export class KustomService implements OnModuleInit {
    * Turn a Kustom failure into the HTTP error the caller should see: 4xx from
    * Kustom is a request/config problem (400 with Kustom's message), anything
    * else (network, timeout, 5xx) is an upstream outage (502).
+   * M157: a 400 BAD_VALUE on purchase_currency (the currency is not enabled
+   * on the merchant account) gets its own code and a warn log with the
+   * context, so it can be found in the server log and the storefront can
+   * offer another method.
    */
-  toHttpException(err: unknown, action: string): Error {
+  toHttpException(
+    err: unknown,
+    action: string,
+    context?: KustomErrorContext,
+  ): Error {
+    if (err instanceof KustomApiError && isKustomCurrencyNotEnabled(err)) {
+      this.logger.warn(
+        `Kustom refused purchase_currency (currency not enabled on the merchant account) while trying to ${action}` +
+          ` [store=${context?.storeId ?? '?'} currency=${context?.currency ?? '?'} country=${context?.country ?? '?'}]`,
+      );
+      return new BadRequestException({
+        code: KUSTOM_CURRENCY_NOT_ENABLED,
+        message:
+          'Kustom is not set up for this currency yet. Please choose another payment method.',
+        ...(context?.currency ? { currency: context.currency } : {}),
+      });
+    }
     if (err instanceof KustomApiError) {
       this.logger.error(
         `Kustom error while trying to ${action}: ${err.message}`,
@@ -511,6 +559,12 @@ export class KustomService implements OnModuleInit {
         message: 'Kustom Checkout is not available for this store.',
       });
     }
+    // M157: the order's own market (any status) may exclude Kustom. Refused
+    // before any session is created or updated; an already completed
+    // checkout is still finalised by the push callback (not gated).
+    if (!marketAllowsMethod(ctx.market, 'kustom')) {
+      throw marketPaymentMethodNotAllowed('kustom');
+    }
 
     // Orders created before the token column existed (or by another path)
     // still need the callback secret before any URL is handed to Kustom.
@@ -552,10 +606,16 @@ export class KustomService implements OnModuleInit {
     });
     const client = new KustomClient(creds);
 
+    const errorContext: KustomErrorContext = {
+      storeId: ctx.id,
+      currency: order.currency,
+      country: payload.purchase_country,
+    };
     const existingSession = await this.loadExistingSession(
       order,
       client,
       payload,
+      errorContext,
     );
     if (existingSession) return existingSession;
 
@@ -563,7 +623,11 @@ export class KustomService implements OnModuleInit {
     try {
       created = await client.createCheckout(payload);
     } catch (err) {
-      throw this.toHttpException(err, 'create the checkout session');
+      throw this.toHttpException(
+        err,
+        'create the checkout session',
+        errorContext,
+      );
     }
 
     // Claim the session slot atomically. Two concurrent session requests for
@@ -601,6 +665,7 @@ export class KustomService implements OnModuleInit {
           { ...order, kustom_order_id: winner.kustom_order_id },
           client,
           payload,
+          errorContext,
         );
         if (stored) return stored;
       }
@@ -705,6 +770,7 @@ export class KustomService implements OnModuleInit {
     },
     client: KustomClient,
     payload: KustomCheckoutPayload,
+    errorContext?: KustomErrorContext,
   ): Promise<{
     kustom_order_id: string;
     html_snippet: string;
@@ -748,7 +814,11 @@ export class KustomService implements OnModuleInit {
       try {
         updated = await client.updateCheckout(kustomOrderId, payload);
       } catch (err) {
-        throw this.toHttpException(err, 'update the checkout session');
+        throw this.toHttpException(
+          err,
+          'update the checkout session',
+          errorContext,
+        );
       }
       return {
         kustom_order_id: kustomOrderId,
@@ -976,6 +1046,7 @@ export class KustomService implements OnModuleInit {
         kustom_push_token: true,
         store_id: true,
         hostname: true,
+        market_id: true,
       },
     });
     if (
@@ -1000,6 +1071,17 @@ export class KustomService implements OnModuleInit {
     if (!store?.is_active) return reject(store, order.hostname);
     if (order.payment_status !== 'awaiting_payment')
       return reject(store, order.hostname);
+    // M157: the order's market (any status; cached read) no longer allows
+    // Kustom. Push, confirmation, capture and refund are not gated.
+    if (order.market_id) {
+      const market = await this.markets.byId(store.id, order.market_id);
+      if (!marketAllowsMethod(market, 'kustom')) {
+        this.logger.warn(
+          `Kustom validation rejected for order ${order.id}: its market no longer allows Kustom`,
+        );
+        return reject(store, order.hostname);
+      }
+    }
 
     const b = (body && typeof body === 'object' ? body : {}) as {
       order_id?: unknown;

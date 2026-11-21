@@ -30,6 +30,7 @@ type MarketSeed = {
   default_locale?: string;
   countries?: string[];
   locale_paths?: unknown;
+  payment_methods?: unknown;
 };
 
 function makePrisma(
@@ -55,6 +56,7 @@ function makePrisma(
       status: d.status ?? 'ACTIVE',
     })),
     locale_paths: m.locale_paths ?? null,
+    payment_methods: m.payment_methods ?? null,
   }));
   return {
     store: {
@@ -555,4 +557,66 @@ describe('MarketsContextService locale_paths (M156)', () => {
     });
     expect(route).not.toHaveProperty('locale_paths');
   });
+});
+
+describe('MarketsContextService payment_methods (M157)', () => {
+  const eu = (over: Partial<MarketSeed> = {}): MarketSeed => ({
+    id: 'm-eu',
+    key: 'eu',
+    currency: 'SEK',
+    domains: [{ hostname: 'namez.shop', is_primary: true }],
+    ...over,
+  });
+
+  it('the context carries the parsed setting (sorted); null when unset', async () => {
+    const { service } = build([
+      { ...defaultMarket, payment_methods: ['kustom'] },
+      eu({ payment_methods: ['kustom', 'card'] }),
+    ]);
+    expect((await service.resolve(STORE_ID))!.paymentMethods).toEqual([
+      'kustom',
+    ]);
+    expect((await service.resolve(STORE_ID, 'eu'))!.paymentMethods).toEqual([
+      'card',
+      'kustom',
+    ]);
+    expect((await service.byId(STORE_ID, 'm-eu'))!.paymentMethods).toEqual([
+      'card',
+      'kustom',
+    ]);
+    const unset = build([defaultMarket]).service;
+    expect((await unset.resolve(STORE_ID))!.paymentMethods).toBeNull();
+  });
+
+  it('a malformed stored value is fail-closed ([] = nothing allowed)', async () => {
+    const { service } = build([defaultMarket, eu({ payment_methods: 'card' })]);
+    expect((await service.resolve(STORE_ID, 'eu'))!.paymentMethods).toEqual([]);
+  });
+
+  it.each([
+    ['unset', null],
+    ['card only', ['card']],
+    ['kustom only', ['kustom']],
+  ])(
+    'regression: %s → MarketRoute never carries payment methods',
+    async (_label, value) => {
+      const { service } = build([
+        { ...defaultMarket, payment_methods: value },
+        eu({ payment_methods: value }),
+      ]);
+      const plain = build([defaultMarket, eu()]).service;
+      const route = toMarketRoute((await service.resolve(STORE_ID, 'eu'))!);
+      const before = toMarketRoute((await plain.resolve(STORE_ID, 'eu'))!);
+      expect(JSON.stringify(route)).toBe(JSON.stringify(before));
+      expect(route).not.toHaveProperty('payment_methods');
+      expect(route).not.toHaveProperty('paymentMethods');
+      expect(JSON.stringify(await service.listLive(STORE_ID))).toBe(
+        JSON.stringify(await plain.listLive(STORE_ID)),
+      );
+      const preview = toMarketRoute(
+        (await service.resolve(STORE_ID, 'eu', { preview: true }))!,
+      );
+      expect(preview).not.toHaveProperty('payment_methods');
+    },
+  );
 });

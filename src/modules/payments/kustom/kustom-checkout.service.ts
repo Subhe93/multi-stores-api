@@ -30,6 +30,11 @@ import { normalizeEmail } from '../../../common/email/email.util';
 import { generateAccountPassword } from '../../../common/security/account-password';
 import { AccountCredentialsService } from '../../auth/account-credentials.service';
 import { KustomService, withMarket, type StoreContext } from './kustom.service';
+import {
+  MARKET_PAYMENT_METHOD_NOT_ALLOWED,
+  marketAllowsMethod,
+  marketPaymentMethodNotAllowed,
+} from '../../markets/payment-methods';
 import { MarketsContextService } from '../../markets/markets-context.service';
 import { B2B_COMPANY_NOT_ALLOWED, B2bService } from '../../b2b/b2b.service';
 import { CART_MAX_PER_ORDER } from '../../cart/max-per-order';
@@ -74,6 +79,9 @@ import {
   orderLineRequiresShipping,
   orderRequiresShipping,
 } from '../../../common/shipping/requires-shipping';
+
+/** M157: Kustom validation reason when the market excludes Kustom. */
+const PAYMENT_METHOD_UNAVAILABLE_REASON = 'payment_method_unavailable';
 
 // Kustom keeps a checkout alive for 48 h; so do we.
 const SESSION_TTL_MS = 48 * 60 * 60 * 1000;
@@ -420,8 +428,15 @@ export class KustomCheckoutService {
     });
   }
 
-  /** The store must still be eligible and the creator's credentials present. */
+  /**
+   * The store must still be eligible and the creator's credentials present.
+   * M157: the session's market must allow Kustom; one chokepoint for create
+   * AND update, checked before anything is written or sent to Kustom.
+   */
   private async clientFor(ctx: StoreContext): Promise<KustomClient> {
+    if (!marketAllowsMethod(ctx.market, 'kustom')) {
+      throw marketPaymentMethodNotAllowed('kustom');
+    }
     const creds = isKustomEnabledForStore({ ...ctx, currency: ctx.currency })
       ? await this.kustom.credentialsFor(ctx.creator)
       : null;
@@ -1102,7 +1117,11 @@ export class KustomCheckoutService {
       try {
         created = await client.createCheckout(payload);
       } catch (err) {
-        throw this.kustom.toHttpException(err, 'create the checkout session');
+        throw this.kustom.toHttpException(err, 'create the checkout session', {
+          storeId: ctx.id,
+          currency: ctx.currency,
+          country: payload.purchase_country,
+        });
       }
       const stored = await this.prisma.kustomCheckoutSession.update({
         where: { id: session.id },
@@ -1316,7 +1335,11 @@ export class KustomCheckoutService {
     try {
       updated = await client.updateCheckout(session.kustom_order_id, payload);
     } catch (err) {
-      throw this.kustom.toHttpException(err, 'update the checkout session');
+      throw this.kustom.toHttpException(err, 'update the checkout session', {
+        storeId: ctx.id,
+        currency: ctx.currency,
+        country: payload.purchase_country,
+      });
     }
 
     // A pending order that no longer matches what the shopper is buying is
@@ -1641,6 +1664,11 @@ export class KustomCheckoutService {
     }
     if (this.isExpired(session)) return reject('session_expired');
     if (!ctx.is_active) return reject('unavailable');
+    // M157: the session's market no longer allows Kustom (setting changed
+    // mid-checkout): refuse before the claim, so no order is created.
+    if (!marketAllowsMethod(ctx.market, 'kustom')) {
+      return reject(PAYMENT_METHOD_UNAVAILABLE_REASON);
+    }
 
     const claim = await this.prisma.kustomCheckoutSession.updateMany({
       where: {
@@ -2005,6 +2033,10 @@ export class KustomCheckoutService {
     if (code === 'ORDER_DISCOUNT_BELOW_PROVIDER_COST') return 'coupon_invalid';
     // Headless booking B4: per-order limit and participant identity number.
     if (code === CART_MAX_PER_ORDER) return 'max_per_order';
+    // M157 backstop: orders.create refuses a method the market excludes.
+    if (code === MARKET_PAYMENT_METHOD_NOT_ALLOWED) {
+      return PAYMENT_METHOD_UNAVAILABLE_REASON;
+    }
     if (this.isInvalidPersonnummer(err, code)) return 'invalid_participant';
     return 'unavailable';
   }

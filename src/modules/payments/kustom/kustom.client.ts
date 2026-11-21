@@ -305,6 +305,15 @@ export class KustomApiError extends Error {
       ? b.error_code
       : null;
   }
+
+  /** `error_messages` as sent by Kustom (strings only); [] otherwise. */
+  get errorMessages(): string[] {
+    const b = this.body as { error_messages?: unknown } | null;
+    if (!b || typeof b !== 'object' || !Array.isArray(b.error_messages)) {
+      return [];
+    }
+    return b.error_messages.filter((m): m is string => typeof m === 'string');
+  }
 }
 
 interface KustomResponse<T> {

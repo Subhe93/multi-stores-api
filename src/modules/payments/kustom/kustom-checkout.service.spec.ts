@@ -1461,3 +1461,111 @@ describe('KustomCheckoutService booking refusals (B4)', () => {
     expect(updateCheckout).not.toHaveBeenCalled();
   });
 });
+
+// M157: a market may exclude Kustom. clientFor is the chokepoint for create
+// and update; validation rejects before the claim; a failure of
+// orders.create with the market code maps to the same reason.
+describe('KustomCheckoutService per market payment methods (M157)', () => {
+  const cardOnlyEu: MarketContext = { ...euMarket, paymentMethods: ['card'] };
+  const body = {
+    order_id: 'k-1',
+    order_amount: 29900,
+    purchase_currency: 'SEK',
+    billing_address: kustomAddress,
+    shipping_address: kustomAddress,
+  };
+
+  it('create with market_key of a card-only market -> 400, no session row, no Kustom call', async () => {
+    const { service, prisma, createCheckout } = build(cardOnlyEu);
+    const clientsBefore = (KustomClient as unknown as jest.Mock).mock.calls
+      .length;
+    await expect(
+      service.createSession(null, { ...dto, market_key: 'eu' }),
+    ).rejects.toMatchObject({
+      response: { code: 'MARKET_PAYMENT_METHOD_NOT_ALLOWED', method: 'kustom' },
+    });
+    expect(prisma.kustomCheckoutSession.create).not.toHaveBeenCalled();
+    expect(createCheckout).not.toHaveBeenCalled();
+    expect((KustomClient as unknown as jest.Mock).mock.calls.length).toBe(
+      clientsBefore,
+    );
+  });
+
+  it('create in a kustom-only market works as before', async () => {
+    const { service, createCheckout } = build({
+      ...euMarket,
+      paymentMethods: ['kustom'],
+    });
+    await service.createSession(null, { ...dto, market_key: 'eu' });
+    expect(createCheckout).toHaveBeenCalledTimes(1);
+  });
+
+  it('regression: unset market setting creates as before', async () => {
+    const { service, createCheckout } = build({
+      ...euMarket,
+      paymentMethods: null,
+    });
+    await service.createSession(null, { ...dto, market_key: 'eu' });
+    expect(createCheckout).toHaveBeenCalledTimes(1);
+  });
+
+  it('update of an open session after the market excluded Kustom -> 400, nothing sent', async () => {
+    const { service, updateCheckout, prisma } = build(cardOnlyEu, {
+      session: sessionRow({ market_id: 'm-eu' }),
+    });
+    await expect(
+      service.updateSession('sess-1', { token: 'sf-token' }),
+    ).rejects.toMatchObject({
+      response: { code: 'MARKET_PAYMENT_METHOD_NOT_ALLOWED' },
+    });
+    expect(updateCheckout).not.toHaveBeenCalled();
+    expect(prisma.kustomCheckoutSession.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('validation in a market that excludes Kustom -> reject payment_method_unavailable, no claim, no order', async () => {
+    const { service, prisma, orders } = build(cardOnlyEu, {
+      session: sessionRow({ market_id: 'm-eu' }),
+      customer: loggedIn,
+    });
+    const res = await service.handleValidation('sess-1', 'cb-token', body);
+    expect(res.ok).toBe(false);
+    expect((res as { redirectUrl: string }).redirectUrl).toContain(
+      'reason=payment_method_unavailable',
+    );
+    expect(prisma.kustomCheckoutSession.updateMany).not.toHaveBeenCalled();
+    expect(orders.create).not.toHaveBeenCalled();
+  });
+
+  it('validation: orders.create refusing with the market code maps to payment_method_unavailable', async () => {
+    const { service, orders } = build(null, {
+      session: sessionRow(),
+      customer: loggedIn,
+    });
+    orders.create.mockRejectedValueOnce(
+      new BadRequestException({
+        code: 'MARKET_PAYMENT_METHOD_NOT_ALLOWED',
+        method: 'kustom',
+      }),
+    );
+    const res = await service.handleValidation('sess-1', 'cb-token', body);
+    expect(res.ok).toBe(false);
+    expect((res as { redirectUrl: string }).redirectUrl).toContain(
+      'reason=payment_method_unavailable',
+    );
+  });
+
+  it('create passes the store / currency / country context to the error mapping', async () => {
+    const { service, createCheckout } = build(null);
+    const kustomErr = new Error('boom');
+    createCheckout.mockRejectedValueOnce(kustomErr);
+    const internals = service as unknown as {
+      kustom: { toHttpException: jest.Mock };
+    };
+    await expect(service.createSession(null, dto)).rejects.toBe(kustomErr);
+    expect(internals.kustom.toHttpException).toHaveBeenCalledWith(
+      kustomErr,
+      'create the checkout session',
+      { storeId: STORE_ID, currency: 'SEK', country: 'SE' },
+    );
+  });
+});

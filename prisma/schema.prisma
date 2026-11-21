@@ -1658,6 +1658,12 @@ model Market {
   // bare /<locale>/ folders as before. Validated by the DTO; read through
   // parseLocalePaths, which drops malformed rows.
   locale_paths    Json?
+  // M157: optional subset of the store's payment methods offered in this
+  // market (MarketPaymentMethod[]: 'card' | 'kustom' | 'cod'); null = every
+  // method the store offers (as before). Only ever narrows. CHECK constraint
+  // "Market_payment_methods_check" (raw SQL in the migration). Read through
+  // parsePaymentMethods (fail-closed on a malformed value).
+  payment_methods Json?
   created_at      DateTime       @default(now())
   updated_at      DateTime       @updatedAt
 

@@ -9,6 +9,7 @@ import { MailService } from '../../mail/mail.service';
 import { TaxService } from '../../taxes/tax.service';
 import { MarketsContextService } from '../../markets/markets-context.service';
 import { MarketPricingService } from '../../markets/market-pricing.service';
+import type { MarketContext } from '../../markets/market-context';
 import { B2bService } from '../../b2b/b2b.service';
 import { StoreAppsService } from '../../store-apps/store-apps.service';
 import { RevalidationService } from '../../../common/revalidation/revalidation.service';
@@ -74,6 +75,10 @@ export function buildOrderCreate(opts: {
   storeType?: StoreType;
   /** The store the order is placed in (default s1 of creator c1). */
   store?: { id: string; creator_id: string; slug: string };
+  /** Markets app: the context resolve() answers (default null = app off). */
+  market?: MarketContext | null;
+  /** The creator finished the Kustom setup (default false). */
+  kustomReady?: boolean;
 }) {
   const store = opts.store ?? {
     id: HARNESS_STORE_ID,
@@ -136,11 +141,17 @@ export function buildOrderCreate(opts: {
           cod_enabled: true,
           is_active: true,
           language_config: { primary_locale: 'sv' },
-          creator: {
-            kustom_enabled: false,
-            kustom_merchant_id: null,
-            kustom_shared_secret: null,
-          },
+          creator: opts.kustomReady
+            ? {
+                kustom_enabled: true,
+                kustom_merchant_id: 'M1',
+                kustom_shared_secret: 'enc',
+              }
+            : {
+                kustom_enabled: false,
+                kustom_merchant_id: null,
+                kustom_shared_secret: null,
+              },
         }),
       ),
     },
@@ -363,7 +374,7 @@ export function buildOrderCreate(opts: {
     mail as unknown as MailService,
     tax as unknown as TaxService,
     {
-      resolve: jest.fn(() => Promise.resolve(null)),
+      resolve: jest.fn(() => Promise.resolve(opts.market ?? null)),
     } as unknown as MarketsContextService,
     new MarketPricingService(prisma as unknown as PrismaService),
     config as unknown as ConfigService,

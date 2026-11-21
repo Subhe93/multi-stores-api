@@ -13,11 +13,9 @@ import {
   checkKustomCountries,
   isKustomMarketCurrency,
 } from '../payments/kustom/kustom.markets';
-import {
-  isOwnKeyCardReady,
-  isOwnKeyTestMode,
-} from '../payments/payment-route';
+import { isOwnKeyCardReady, isOwnKeyTestMode } from '../payments/payment-route';
 import type { PaymentCheck, PaymentProviderCheck } from './market.types';
+import { paymentCheckPassesFor } from './payment-methods';
 
 /** What the check needs to know about a market. */
 export interface PaymentCheckMarket {
@@ -327,9 +325,13 @@ export class PaymentCheckService {
   }
 }
 
-/** The LIVE gate: at least one provider can charge the market currency. */
+/**
+ * The LIVE gate without a market restriction: at least one provider can
+ * charge the market currency. M157: a market with `payment_methods` uses
+ * paymentCheckPassesFor(check, methods) instead.
+ */
 export function paymentCheckPasses(
   check: PaymentCheck | null | undefined,
 ): boolean {
-  return check?.stripe === 'ok' || check?.kustom === 'ok';
+  return paymentCheckPassesFor(check, null);
 }

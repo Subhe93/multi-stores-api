@@ -25,6 +25,9 @@ const KEY_MESSAGE =
   'key must be 1-16 lowercase letters, digits or hyphens (no leading/trailing or doubled hyphen)';
 const COUNTRY_REGEX = /^[A-Za-z]{2}$/;
 const LOCALE_REGEX = /^[a-z]{2}(?:-[A-Za-z]{2})?$/;
+// Abuse cap of the payment_methods input (the real limit, 3 unique known
+// methods, is enforced with coded errors by normalizePaymentMethods).
+const PAYMENT_METHODS_INPUT_MAX = 20;
 const HOSTNAME_REGEX =
   /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
 
@@ -137,6 +140,18 @@ export class CreateMarketDto {
   @ValidateNested({ each: true })
   @Type(() => MarketLocalePathDto)
   locale_paths?: MarketLocalePathDto[] | null;
+
+  // M157: optional payment-method restriction. Omitted = unchanged; null =
+  // cleared (the store's methods, as before). Shape only (an array, with an
+  // abuse cap well above the 3 methods): entries are checked with coded
+  // errors in normalizePaymentMethods (known, unique, non-empty), so a
+  // duplicate or non-string entry gets MARKET_PAYMENT_METHODS_INVALID, not
+  // a generic validation message.
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsArray()
+  @ArrayMaxSize(PAYMENT_METHODS_INPUT_MAX)
+  payment_methods?: unknown[] | null;
 }
 
 export class UpdateMarketDto {
@@ -197,6 +212,18 @@ export class UpdateMarketDto {
   @ValidateNested({ each: true })
   @Type(() => MarketLocalePathDto)
   locale_paths?: MarketLocalePathDto[] | null;
+
+  // M157: optional payment-method restriction. Omitted = unchanged; null =
+  // cleared (the store's methods, as before). Shape only (an array, with an
+  // abuse cap well above the 3 methods): entries are checked with coded
+  // errors in normalizePaymentMethods (known, unique, non-empty), so a
+  // duplicate or non-string entry gets MARKET_PAYMENT_METHODS_INVALID, not
+  // a generic validation message.
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsArray()
+  @ArrayMaxSize(PAYMENT_METHODS_INPUT_MAX)
+  payment_methods?: unknown[] | null;
 }
 
 export class SetMarketStatusDto {
