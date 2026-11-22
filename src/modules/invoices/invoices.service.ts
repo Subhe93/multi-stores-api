@@ -88,6 +88,9 @@ function providerMatchItemSelect(locales?: string[]) {
       },
     },
     variant: { select: { sku: true, options: true } },
+    // M159: the detail rows print the buyer-language options when the
+    // document locale matches; the matching must read the same column.
+    variant_options_display: true,
     custom_product: {
       select: {
         translations: { where, select: { locale: true, title: true } },

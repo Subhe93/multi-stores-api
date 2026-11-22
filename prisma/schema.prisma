@@ -608,6 +608,12 @@ model ProductTranslation {
   // globally omitted in PrismaService, opted in by the mail include and the
   // owner product reads/writes.
   email_note        String?
+  // M159: display labels of the variant option names / values in this locale:
+  // `{names: {name: label}, values: {name: {value: label}}}`. Canonical keys
+  // (variant options, carts, orders, image maps) stay the primary-locale
+  // strings; this is a display layer only. Null = no labels (canonical text).
+  // Never set on the store primary locale row.
+  variant_option_labels Json?
 
   product Product @relation(fields: [product_id], references: [id], onDelete: Cascade)
 
@@ -1043,6 +1049,10 @@ model OrderItem {
   // so the checklist never follows a later edit / deletion of the variant.
   // Null on orders placed before the column existed (no backfill).
   variant_options_snapshot Json?
+  // M159: display snapshot of the sold option map in the buyer's locale
+  // (`{locale, entries: [{name, value, name_label, value_label}]}`), next to
+  // the canonical snapshot above. Null when no label differed (or before M159).
+  variant_options_display  Json?
   // Snapshot of the line's value at purchase time (Shopify
   // line_item.requires_shipping). Never re-derived from the product.
   requires_shipping        Boolean  @default(true)

@@ -1,4 +1,5 @@
 import { currencyDecimals } from '../../common/money/currency.util';
+import { snapshotEntriesFor } from '../../common/catalog/variant-option-labels';
 import {
   isSnapshotFileRow,
   snapshotLabel,
@@ -59,6 +60,8 @@ export interface SnapshotOrderItem {
     translations?: TitleTranslation[];
   } | null;
   variant?: { sku?: string | null; options?: unknown } | null;
+  /** M159: the sold options in the buyer's language (null = none). */
+  variant_options_display?: unknown;
   custom_product?: {
     translations?: TitleTranslation[];
     product?: { sku?: string | null } | null;
@@ -253,7 +256,22 @@ export function itemDetails(
 ): InvoiceLineDetail[] {
   const details: InvoiceLineDetail[] = [];
   const options = item.variant?.options;
-  if (options && typeof options === 'object' && !Array.isArray(options)) {
+  // M159: an invoice in the order's language prints the options as the
+  // buyer saw them; any other locale prints the canonical names.
+  const translated =
+    options && typeof options === 'object' && !Array.isArray(options)
+      ? snapshotEntriesFor(item.variant_options_display, locale)
+      : null;
+  if (translated) {
+    for (const e of translated) {
+      if (e.value === '') continue;
+      details.push({ label: e.name_label, value: e.value_label });
+    }
+  } else if (
+    options &&
+    typeof options === 'object' &&
+    !Array.isArray(options)
+  ) {
     for (const [k, v] of Object.entries(options as Record<string, unknown>)) {
       if (v === null || v === undefined || v === '') continue;
       details.push({

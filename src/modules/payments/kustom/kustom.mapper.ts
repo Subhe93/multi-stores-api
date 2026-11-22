@@ -1,5 +1,11 @@
 import { toStripeAmount } from '../../../common/money/currency.util';
 import {
+  formatOptionValues,
+  optionDisplayEntries,
+  snapshotEntriesFor,
+  type VariantOptionLabels,
+} from '../../../common/catalog/variant-option-labels';
+import {
   addedTaxMinor,
   allocateLargestRemainder,
   clampRateBp,
@@ -53,6 +59,16 @@ export interface KustomOrderItemInput {
   product?: { translations?: Translation[] } | null;
   custom_product?: { translations?: Translation[] } | null;
   variant?: { sku?: string | null; options?: unknown } | null;
+  /**
+   * M159: the order line's options in the buyer's language (OrderItem
+   * column); used when its locale matches the session locale.
+   */
+  variant_options_display?: unknown;
+  /**
+   * M159: live option labels of the session locale (a quote item, which
+   * has no order snapshot yet). Null / absent = canonical text.
+   */
+  option_labels?: VariantOptionLabels | null;
   /**
    * Designer app (M5.5): the line's add-ons, already inside `unit_price`;
    * named in the line name. A quote item carries them directly, an order
@@ -214,6 +230,27 @@ function variantLabel(options: unknown): string {
     .join(' / ');
 }
 
+/**
+ * M159: the chosen options in the line's language: the order snapshot when
+ * it was taken in `locale`, else the live labels of a quote item, else the
+ * canonical values (exactly today's text).
+ */
+function translatedVariantLabel(
+  item: KustomOrderItemInput,
+  locale: string,
+): string {
+  const options = item.variant?.options;
+  if (!options || typeof options !== 'object') return '';
+  const snap = snapshotEntriesFor(item.variant_options_display, locale);
+  const entries =
+    snap ??
+    (item.option_labels
+      ? optionDisplayEntries(options, item.option_labels)
+      : null);
+  if (!entries) return variantLabel(options);
+  return formatOptionValues(entries.filter((e) => e.value !== ''));
+}
+
 /** Display name of a line: translated title plus the chosen variant, if any. */
 export function resolveItemName(
   item: KustomOrderItemInput,
@@ -223,7 +260,7 @@ export function resolveItemName(
     pickTitle(item.custom_product?.translations, locale) ||
     pickTitle(item.product?.translations, locale) ||
     'Item';
-  const variant = variantLabel(item.variant?.options);
+  const variant = translatedVariantLabel(item, locale);
   const base = variant ? `${title} (${variant})` : title;
   // M5.5: "Poster (A3) + Dubbelsidig, Poster × 2" for designed lines with
   // add-ons; every other line keeps its name.

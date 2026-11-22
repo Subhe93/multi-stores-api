@@ -1,4 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  labelsForLocale,
+  optionValueLabel,
+  type VariantOptionLabels,
+} from '../../common/catalog/variant-option-labels';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, TaxPricingMode } from '@prisma/client';
 import { createHash, timingSafeEqual } from 'crypto';
@@ -106,7 +111,14 @@ const feedProductSelect = {
   google_product_category: true,
   condition: true,
   translations: {
-    select: { locale: true, title: true, description: true, slug: true },
+    select: {
+      locale: true,
+      title: true,
+      description: true,
+      slug: true,
+      // M159: colour / size of variant items in the feed language.
+      variant_option_labels: true,
+    },
   },
   images: {
     select: {
@@ -604,7 +616,10 @@ export class FeedsService {
             ...v.images.map((i) => i.url),
             ...orderedImages.map((i) => i.url),
           ];
-          const opts = optionsOf(v.options);
+          const opts = optionsOf(
+            v.options,
+            labelsForLocale(p.translations, locale),
+          );
           items.push({
             ...base,
             id: v.id,
@@ -824,8 +839,15 @@ export function availabilityOf(
   return stock > 0 ? 'in_stock' : 'out_of_stock';
 }
 
-/** Colour / size from a variant's `options` by option name. */
-export function optionsOf(options: unknown): {
+/**
+ * Colour / size from a variant's `options` by option name. The option is
+ * detected on the canonical name; the value is the label of the feed
+ * language when `labels` has one (M159).
+ */
+export function optionsOf(
+  options: unknown,
+  labels?: VariantOptionLabels | null,
+): {
   color: string | null;
   size: string | null;
 } {
@@ -838,10 +860,14 @@ export function optionsOf(options: unknown): {
   )) {
     if (typeof value !== 'string' || !value.trim()) continue;
     const key = name.trim().toLowerCase();
+    const shown = () => {
+      const label = optionValueLabel(labels, name, value);
+      return label === value ? value.trim() : label;
+    };
     if (out.color == null && COLOR_OPTION_NAMES.includes(key)) {
-      out.color = value.trim();
+      out.color = shown();
     } else if (out.size == null && SIZE_OPTION_NAMES.includes(key)) {
-      out.size = value.trim();
+      out.size = shown();
     }
   }
   return out;

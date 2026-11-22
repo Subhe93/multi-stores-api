@@ -15,6 +15,7 @@ import {
   ProductTranslationDto,
   ProductVideoInputDto,
   ProductStoryInputDto,
+  type VariantOptionLabelsInput,
 } from './dto/product.dto';
 import { parseExternalVideoUrl } from './product-video-url';
 import {
@@ -101,6 +102,16 @@ import {
   resolvePrimaryCreatorCategory,
 } from '../creator-categories/primary-collection';
 import { nextCollectionSortOrders } from '../creator-categories/product-order';
+import {
+  normalizeVariantOptionLabels,
+  productOptionSet,
+  pruneVariantOptionLabels,
+  sameVariantOptionLabels,
+  type LabelIssue,
+  type OptionSet,
+  type VariantOptionLabels,
+} from '../../common/catalog/variant-option-labels';
+import { labelsColumn } from '../../common/catalog/variant-option-labels.prisma';
 
 /** Business limit of videos per product (files and links together, D2). */
 export const PRODUCT_VIDEO_MAX_PER_PRODUCT = 3;
@@ -245,6 +256,108 @@ function sanitizeTranslationHtml<
     }),
   };
 }
+
+/** Base language of a locale code (`de-AT` -> `de`). */
+const baseLang = (locale: string) => locale.split(/[-_]/)[0].toLowerCase();
+
+/**
+ * M159: validated display labels of the variant options, one entry per
+ * translation locale of the save (`null` = no labels for that locale).
+ */
+export type PreparedOptionLabels = Map<string, VariantOptionLabels | null>;
+
+/** Per-locale issue of an option-labels save (`path` e.g. `values.Färg.Lila`). */
+export interface OptionLabelsIssue {
+  locale: string;
+  path: string;
+  reason: LabelIssue['reason'] | 'primary_locale';
+}
+
+function optionLabelsError(issues: OptionLabelsIssue[]): never {
+  const unknownOnly = issues.every((i) => i.reason === 'unknown_option');
+  throw new BadRequestException(
+    unknownOnly
+      ? {
+          code: 'PRODUCT_OPTION_LABELS_UNKNOWN_OPTION',
+          message:
+            'An option label names an option or value the product does not have.',
+          issues,
+        }
+      : {
+          code: 'PRODUCT_OPTION_LABELS_INVALID',
+          message: 'The option labels are invalid.',
+          issues,
+        },
+  );
+}
+
+/**
+ * M159 rules for the `variant_option_labels` of a save, before any write:
+ * - sent object: normalized against `optionSet`; unknown keys / bad shape -> 400;
+ * - sent `null`: cleared;
+ * - not sent (`undefined`): the stored labels of that locale, silently pruned
+ *   against `optionSet` (a renamed value never fails a later save);
+ * - the store primary locale never carries labels: sent ones -> 400,
+ *   carried ones are dropped.
+ */
+export function prepareVariantOptionLabels(
+  rows: { locale: string; variant_option_labels?: unknown }[],
+  stored: { locale: string; variant_option_labels?: unknown }[],
+  optionSet: OptionSet,
+  primaryLocale: string,
+): PreparedOptionLabels {
+  const out: PreparedOptionLabels = new Map();
+  const issues: OptionLabelsIssue[] = [];
+  const storedByLocale = new Map(stored.map((r) => [r.locale, r]));
+  const isPrimary = (locale: string) =>
+    baseLang(locale) === baseLang(primaryLocale);
+  for (const t of rows) {
+    const sent = t.variant_option_labels;
+    if (sent === undefined) {
+      out.set(
+        t.locale,
+        isPrimary(t.locale)
+          ? null
+          : pruneVariantOptionLabels(
+              storedByLocale.get(t.locale)?.variant_option_labels,
+              optionSet,
+            ),
+      );
+      continue;
+    }
+    if (sent === null) {
+      out.set(t.locale, null);
+      continue;
+    }
+    const { labels, issues: rowIssues } = normalizeVariantOptionLabels(
+      sent,
+      optionSet,
+    );
+    issues.push(...rowIssues.map((i) => ({ ...i, locale: t.locale })));
+    if (labels && isPrimary(t.locale)) {
+      issues.push({ locale: t.locale, path: '', reason: 'primary_locale' });
+    }
+    out.set(t.locale, isPrimary(t.locale) ? null : labels);
+  }
+  if (issues.some((i) => i.reason === 'primary_locale')) {
+    throw new BadRequestException({
+      code: 'PRODUCT_OPTION_LABELS_PRIMARY_LOCALE',
+      message:
+        'Option labels cannot be set on the store primary language; the option names are already in that language.',
+      issues: issues.filter((i) => i.reason === 'primary_locale'),
+    });
+  }
+  if (issues.length > 0) optionLabelsError(issues);
+  return out;
+}
+
+/** True when a save or the stored rows carry option labels (else no work). */
+const touchesOptionLabels = (
+  rows: { variant_option_labels?: unknown }[],
+  stored: { variant_option_labels?: unknown }[],
+) =>
+  rows.some((t) => t.variant_option_labels != null) ||
+  stored.some((r) => r.variant_option_labels != null);
 
 /** Plain-text email note: trimmed, empty or null = no note (null). */
 export function normalizeEmailNote(
@@ -1474,8 +1587,24 @@ export class ProductsService {
       translations,
       { owner: productSlugOwner(productData), locale: slugCtx.locale },
     );
+    // M159: option labels validated against the payload's variants / option
+    // config before anything is written.
+    const createLabels = touchesOptionLabels(slugged, [])
+      ? prepareVariantOptionLabels(
+          slugged,
+          [],
+          productOptionSet(
+            (variants ?? []).map((v) => v.options),
+            data.variant_option_config,
+          ),
+          slugCtx.locale,
+        )
+      : null;
     productData.translations = {
-      create: slugged.map(sanitizeTranslationHtml),
+      create: slugged.map((t) => ({
+        ...sanitizeTranslationHtml(t),
+        variant_option_labels: labelsColumn(createLabels?.get(t.locale)),
+      })),
     };
 
     // M6: a requested primary that is not among the sent links fails before
@@ -2043,6 +2172,31 @@ export class ProductsService {
       );
     }
 
+    // M159: option labels are validated before any write (nothing
+    // half-saved); the result feeds the translation rewrite below.
+    // One read serves the slug rule, the X19 carry-over and the labels.
+    const storedSlugs = translations
+      ? await this.prisma.productTranslation.findMany({
+          where: { product_id: id },
+          select: {
+            locale: true,
+            slug: true,
+            short_description: true,
+            email_note: true,
+            variant_option_labels: true,
+          },
+        })
+      : [];
+    const preparedLabels = translations
+      ? await this.prepareOptionLabelsForUpdate(
+          product,
+          translations,
+          storedSlugs,
+          variants,
+          data.variant_option_config,
+        )
+      : null;
+
     // Update the product
     await this.prisma.product.update({
       where: { id },
@@ -2119,16 +2273,7 @@ export class ProductsService {
     if (translations) {
       // WP slugs: an unchanged slug is kept as stored; the rest are
       // sanitized and made unique (the product itself excluded).
-      // One read serves the slug rule and the X19 carry-over below.
-      const storedSlugs = await this.prisma.productTranslation.findMany({
-        where: { product_id: id },
-        select: {
-          locale: true,
-          slug: true,
-          short_description: true,
-          email_note: true,
-        },
-      });
+      // `storedSlugs` (read before any write) serves the slug rule and the X19 carry-over.
       const slugCtx = await productSlugContext(this.prisma, product.creator_id);
       const slugged = await resolveProductTranslationSlugs(
         this.prisma,
@@ -2156,6 +2301,7 @@ export class ProductsService {
       await this.prisma.productTranslation.createMany({
         data: rows.map((t) => ({
           ...sanitizeTranslationHtml(t),
+          variant_option_labels: labelsColumn(preparedLabels?.get(t.locale)),
           product_id: id,
         })),
       });
@@ -2221,6 +2367,131 @@ export class ProductsService {
     await this.revalidation.revalidateStoreSlugs(resellerSlugs);
 
     return deleted;
+  }
+
+  /**
+   * M159: option labels of an update's translation rows. The option set is
+   * the payload's variants / option config when sent, else the stored ones.
+   * Returns null (all rows without labels) when neither the payload nor the
+   * stored rows carry labels.
+   */
+  private async prepareOptionLabelsForUpdate(
+    product: {
+      id: string;
+      creator_id: string | null;
+      variant_option_config: unknown;
+    },
+    translations: ProductTranslationDto[],
+    stored: { locale: string; variant_option_labels: unknown }[],
+    variants: ProductVariantSyncDto[] | undefined,
+    optionConfig: unknown,
+  ): Promise<PreparedOptionLabels | null> {
+    if (!touchesOptionLabels(translations, stored)) return null;
+    const optionSet = await this.optionSetFor(product, variants, optionConfig);
+    const { locale: primaryLocale } = await productSlugContext(
+      this.prisma,
+      product.creator_id,
+    );
+    return prepareVariantOptionLabels(
+      translations,
+      stored,
+      optionSet,
+      primaryLocale,
+    );
+  }
+
+  /** Option names -> values of a product (every variant plus the option config). */
+  private async optionSetFor(
+    product: { id: string; variant_option_config: unknown },
+    variants?: { options: unknown }[],
+    optionConfig?: unknown,
+  ): Promise<OptionSet> {
+    const maps =
+      variants !== undefined
+        ? variants.map((v) => v.options)
+        : (
+            await this.prisma.productVariant.findMany({
+              where: { product_id: product.id },
+              select: { options: true },
+            })
+          ).map((v) => v.options);
+    return productOptionSet(
+      maps,
+      optionConfig !== undefined ? optionConfig : product.variant_option_config,
+    );
+  }
+
+  /**
+   * M159: sets ONLY the `variant_option_labels` column of existing
+   * translation rows (used by the Namez apply script; the dashboard saves
+   * through the normal update). Same ownership check and validation as
+   * update(); never creates rows. `null` clears a locale. Locales without a
+   * translation row are reported in `missingRow`, rows that already hold the
+   * same labels in `unchanged` (a second run writes nothing).
+   */
+  async setVariantOptionLabels(
+    productId: string,
+    userId: string,
+    userRole: UserRole,
+    byLocale: Record<string, VariantOptionLabelsInput | null>,
+  ): Promise<{ updated: string[]; unchanged: string[]; missingRow: string[] }> {
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+    });
+    if (!product)
+      throw new NotFoundException({
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
+    await this.checkOwnership(product, userId, userRole);
+
+    const stored = await this.prisma.productTranslation.findMany({
+      where: { product_id: productId },
+      select: { id: true, locale: true, variant_option_labels: true },
+    });
+    const rowByLocale = new Map(stored.map((r) => [r.locale, r]));
+    const locales = Object.keys(byLocale);
+    const missingRow = locales.filter((l) => !rowByLocale.has(l));
+    const present = locales.filter((l) => rowByLocale.has(l));
+
+    const optionSet = await this.optionSetFor(product);
+    const { locale: primaryLocale } = await productSlugContext(
+      this.prisma,
+      product.creator_id,
+    );
+    const prepared = prepareVariantOptionLabels(
+      present.map((locale) => ({
+        locale,
+        variant_option_labels: byLocale[locale],
+      })),
+      stored,
+      optionSet,
+      primaryLocale,
+    );
+
+    const updated: string[] = [];
+    const unchanged: string[] = [];
+    const writes: Prisma.PrismaPromise<unknown>[] = [];
+    for (const locale of present) {
+      const row = rowByLocale.get(locale)!;
+      const next = prepared.get(locale) ?? null;
+      if (sameVariantOptionLabels(row.variant_option_labels, next)) {
+        unchanged.push(locale);
+        continue;
+      }
+      updated.push(locale);
+      writes.push(
+        this.prisma.productTranslation.update({
+          where: { id: row.id },
+          data: { variant_option_labels: labelsColumn(next) },
+        }),
+      );
+    }
+    if (writes.length > 0) {
+      await this.prisma.$transaction(writes);
+      await this.revalidateForProduct(product);
+    }
+    return { updated, unchanged, missingRow };
   }
 
   /**
@@ -2381,6 +2652,8 @@ export class ProductsService {
             short_description: t.short_description,
             // Headless booking E2: the confirmation email note is copied.
             email_note: t.email_note,
+            // M159: option labels are copied with the variants.
+            variant_option_labels: t.variant_option_labels ?? Prisma.DbNull,
           })),
         });
       }

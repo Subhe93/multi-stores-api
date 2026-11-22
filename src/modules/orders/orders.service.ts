@@ -10,6 +10,11 @@ import {
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
+import {
+  buildOptionsDisplaySnapshot,
+  labelsForLocale,
+  type VariantOptionLabels,
+} from '../../common/catalog/variant-option-labels';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -325,6 +330,12 @@ interface PricedLine {
    */
   variantOptions: Prisma.JsonValue | null;
   /**
+   * M159: the product whose translation rows hold the option display labels
+   * of `variantOptions` (own product, or a custom product's base product);
+   * null for lines without a variant.
+   */
+  labelsProductId: string | null;
+  /**
    * Headless booking B2: the own product's per-order limit (summed over
    * every line of that product after the loop); null without one and on
    * custom-product lines.
@@ -348,7 +359,12 @@ interface LinePersonalizationInput {
   ref: { line_id?: string; line_index?: number };
   /** Active variants per product, shared by every line of the quote / order. */
   activeCache?: ActiveVariantsCache;
+  /** M159: option labels per product, shared by every line of the order. */
+  labelsCache?: OptionLabelsCache;
 }
+
+/** M159: option display labels per `productId|locale` (one read each). */
+type OptionLabelsCache = Map<string, Promise<VariantOptionLabels | null>>;
 
 type CouponValidation = {
   promotion_id: string;
@@ -1464,6 +1480,7 @@ export class OrdersService implements OnModuleInit {
     } | null = null;
     let appVariantOptions: unknown = {};
     let variantOptions: Prisma.JsonValue | null = null;
+    let labelsProductId: string | null = null;
     let limit: LineLimit | null = null;
     let requiresShipping = true;
 
@@ -1513,6 +1530,7 @@ export class OrdersService implements OnModuleInit {
         variant = variantRow;
         variantStock = variantRow.stock_quantity;
         variantOptions = variantRow.options;
+        labelsProductId = cp.product_id;
         // The variant row is passed for the later per-variant override.
         requiresShipping = lineRequiresShipping(
           cp.product,
@@ -1614,6 +1632,7 @@ export class OrdersService implements OnModuleInit {
       );
       appVariantOptions = variant.options;
       variantOptions = variant.options;
+      labelsProductId = variant.product_id;
       marketInput = {
         product_id: variant.product_id,
         variant_id: variant.id,
@@ -1744,6 +1763,16 @@ export class OrdersService implements OnModuleInit {
           locale: pz.locale,
           primaryLocale: orderStore.primary_locale,
           activeCache: pz.activeCache,
+          // M159: OPTION lines in the buyer's language (snapshot rows keep
+          // the canonical primary-locale texts for staff / production).
+          optionLabels: pz.labelsCache
+            ? await this.optionLabelsFor(
+                appProduct.id,
+                pz.locale,
+                orderStore.primary_locale,
+                pz.labelsCache,
+              )
+            : null,
         });
         assertPriceEvaluated(personalization);
         if (!personalization.ok) {
@@ -1901,9 +1930,41 @@ export class OrdersService implements OnModuleInit {
       designerAddons,
       designerAddonsAmount,
       variantOptions,
+      labelsProductId,
       limit,
       requiresShipping,
     };
+  }
+
+  /**
+   * M159: option display labels of a product in `locale` (exact row, else
+   * its base language). No read for the primary locale or without one.
+   */
+  private optionLabelsFor(
+    productId: string | null,
+    locale: string | null | undefined,
+    primaryLocale: string | null | undefined,
+    cache: OptionLabelsCache,
+  ): Promise<VariantOptionLabels | null> {
+    if (!productId || !locale || locale === primaryLocale) {
+      return Promise.resolve(null);
+    }
+    const key = `${productId}|${locale}`;
+    let hit = cache.get(key);
+    if (!hit) {
+      const base = locale.split(/[-_]/)[0];
+      hit = this.prisma.productTranslation
+        .findMany({
+          where: {
+            product_id: productId,
+            locale: { in: [...new Set([locale, base])] },
+          },
+          select: { locale: true, variant_option_labels: true },
+        })
+        .then((rows) => labelsForLocale(rows, locale));
+      cache.set(key, hit);
+    }
+    return hit;
   }
 
   /**
@@ -2886,6 +2947,7 @@ export class OrdersService implements OnModuleInit {
     );
     // M4.1: active variants per product, one query per product per order.
     const activeCache: ActiveVariantsCache = new Map();
+    const labelsCache: OptionLabelsCache = new Map();
     const unavailable: UnavailableCartItem[] = [];
     const designerAddonsAt = new Map<
       number,
@@ -2934,6 +2996,7 @@ export class OrdersService implements OnModuleInit {
                 locale: dto.locale,
                 ref: lineRef,
                 activeCache,
+                labelsCache,
               },
           designer,
           placedAt,
@@ -2950,6 +3013,19 @@ export class OrdersService implements OnModuleInit {
         fulfillerId,
         fulfillerType,
       } = priced;
+      // M159: buyer-language display snapshot of the sold options.
+      const optionDisplay = isOptionMap(priced.variantOptions)
+        ? buildOptionsDisplaySnapshot(
+            priced.variantOptions,
+            await this.optionLabelsFor(
+              priced.labelsProductId,
+              dto.locale,
+              orderStore.primary_locale,
+              labelsCache,
+            ),
+            dto.locale,
+          )
+        : null;
       if (priced.stockOp) stockOps.push(priced.stockOp);
       limitLines.push({ limit: priced.limit, quantity: item.quantity });
       // M5.5: the add-ons priced into the line (order currency), frozen
@@ -3031,6 +3107,14 @@ export class OrdersService implements OnModuleInit {
         // never the live variant). Absent (null) for lines without one.
         ...(isOptionMap(priced.variantOptions)
           ? { variant_options_snapshot: priced.variantOptions }
+          : {}),
+        // M159: the same options in the buyer's language; absent (null)
+        // when no label differs, so orders without labels are unchanged.
+        ...(optionDisplay
+          ? {
+              variant_options_display:
+                optionDisplay as unknown as Prisma.InputJsonValue,
+            }
           : {}),
         // Snapshot as sold; the key is absent (column default true) on a
         // line that requires shipping.

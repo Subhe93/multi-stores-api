@@ -19,6 +19,11 @@
  * OTHER active filter, so ticking a second colour shows what it adds.
  */
 
+import {
+  optionValueLabel,
+  type VariantOptionLabels,
+} from '../../common/catalog/variant-option-labels';
+
 const MAX_VALUES = 30;
 const MAX_VALUE_LENGTH = 80;
 const PRICE_RE = /^\d{1,9}(\.\d{1,2})?$/;
@@ -191,6 +196,12 @@ export interface FacetRow {
   /** Display label per colour key, as the seller typed it. */
   colorLabels: Map<string, string>;
   sizeLabels: Map<string, string>;
+  /**
+   * M159: keys whose label above is a translation (not the canonical
+   * value). When rows are merged a translated label wins over a canonical one.
+   */
+  colorTranslated?: Set<string>;
+  sizeTranslated?: Set<string>;
   /** Seller-set swatch colours per colour key. */
   swatches: Map<string, [string] | [string, string]>;
 }
@@ -213,6 +224,11 @@ export interface RawFacetSource {
     is_active?: boolean | null;
   }[];
   variant_option_config: unknown;
+  /**
+   * M159: option display labels of the request locale. Only the facet
+   * labels change; facet values (keys, URLs) stay canonical.
+   */
+  optionLabels?: VariantOptionLabels | null;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -268,10 +284,32 @@ export function toFacetRow(src: RawFacetSource): FacetRow {
   const names = optionNames(active, configs);
   const colorLabels = new Map<string, string>();
   const sizeLabels = new Map<string, string>();
+  const colorTranslated = new Set<string>();
+  const sizeTranslated = new Set<string>();
   const swatches = new Map<string, [string] | [string, string]>();
   const colorConfig = names.color
     ? configs.find((c) => c.name === names.color)
     : undefined;
+  // Translated label of a value, else the value as the seller typed it.
+  const labelOf = (name: string, value: string) => {
+    const label = optionValueLabel(src.optionLabels, name, value);
+    return label === value ? value.trim() : label;
+  };
+  const isTranslated = (name: string, value: string) =>
+    optionValueLabel(src.optionLabels, name, value) !== value;
+  // First label per key; a later translated label replaces a canonical one.
+  const putLabel = (
+    labels: Map<string, string>,
+    translated: Set<string>,
+    key: string,
+    name: string,
+    value: string,
+  ) => {
+    const tr = isTranslated(name, value);
+    if (labels.has(key) && (translated.has(key) || !tr)) return;
+    labels.set(key, labelOf(name, value));
+    if (tr) translated.add(key);
+  };
 
   const variants: FacetVariant[] = active.map((v) => {
     const opts = isRecord(v.options) ? v.options : {};
@@ -282,7 +320,7 @@ export function toFacetRow(src: RawFacetSource): FacetRow {
     if (typeof c === 'string' && c.trim()) {
       const key = facetKey(c);
       out.color = key;
-      if (!colorLabels.has(key)) colorLabels.set(key, c.trim());
+      putLabel(colorLabels, colorTranslated, key, names.color!, c);
       if (!swatches.has(key) && colorConfig) {
         const dual = isRecord(colorConfig.dualColorMap)
           ? colorConfig.dualColorMap[c]
@@ -305,7 +343,7 @@ export function toFacetRow(src: RawFacetSource): FacetRow {
     if (typeof s === 'string' && s.trim()) {
       const key = facetKey(s);
       out.size = key;
-      if (!sizeLabels.has(key)) sizeLabels.set(key, s.trim());
+      putLabel(sizeLabels, sizeTranslated, key, names.size!, s);
     }
     return out;
   });
@@ -333,6 +371,8 @@ export function toFacetRow(src: RawFacetSource): FacetRow {
     variants,
     colorLabels,
     sizeLabels,
+    colorTranslated,
+    sizeTranslated,
     swatches,
   };
 }
@@ -501,10 +541,19 @@ export function runFacets(
   const optionFacet = (dim: 'color' | 'size') => {
     const counts = new Map<string, number>();
     const labels = new Map<string, string>();
+    // Keys whose stored label is a translation; a translated label from a
+    // later row replaces a canonical one, so list order cannot decide.
+    const translated = new Set<string>();
     const swatches = new Map<string, [string] | [string, string]>();
     for (const r of rows) {
       const ls = dim === 'color' ? r.colorLabels : r.sizeLabels;
-      for (const [k, l] of ls) if (!labels.has(k)) labels.set(k, l);
+      const tr = dim === 'color' ? r.colorTranslated : r.sizeTranslated;
+      for (const [k, l] of ls) {
+        const isTr = tr?.has(k) === true;
+        if (labels.has(k) && (translated.has(k) || !isTr)) continue;
+        labels.set(k, l);
+        if (isTr) translated.add(k);
+      }
       if (dim === 'color') {
         for (const [k, s] of r.swatches)
           if (!swatches.has(k)) swatches.set(k, s);

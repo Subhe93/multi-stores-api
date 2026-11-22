@@ -70,6 +70,8 @@ function build(
         ),
       ),
     },
+    // M159: option labels of the request locale (none here).
+    productTranslation: { findMany: jest.fn(() => Promise.resolve([])) },
     productVariant: {
       findFirst: jest.fn(() =>
         Promise.resolve(opts.variant === undefined ? VARIANT : opts.variant),
@@ -247,6 +249,40 @@ describe('PersonalizationService (M4.1 WP-C)', () => {
       expect(res.currency).toBe('EUR');
       expect(res.price_delta).toBe(5); // 50 SEK × 0.1
       expect(res.unit_price).toBe(54.9); // 499 × 0.1 + 5
+    });
+
+    it('M159: the OPTION line is shown in the request language; values stay canonical', async () => {
+      const { service, prisma } = build();
+      prisma.productTranslation.findMany.mockImplementation(() =>
+        Promise.resolve([
+          {
+            locale: 'de',
+            variant_option_labels: {
+              names: { Färg: 'Farbe' },
+              values: { Färg: { Röd: 'Rot' } },
+            },
+          },
+        ] as never),
+      );
+      const res = await service.validateForStorefront('s1', {
+        product_id: PRODUCT_ID,
+        variant_id: VARIANT.id,
+        custom_fields: validValues(),
+        locale: 'de',
+        market: null,
+        quantity: 2,
+      });
+      const option = res.display.find((d) => d.source === 'OPTION');
+      expect(option).toMatchObject({
+        label: 'Farbe',
+        value: 'Röd',
+        display: 'Rot',
+      });
+      // A FIELD line with the same option name is untouched.
+      expect(res.display.find((d) => d.id === `${C_COLOR}#2`)).toMatchObject({
+        label: 'Färg',
+        value: 'Blå',
+      });
     });
 
     it('a product of another creator (or unpublished) is a 404', async () => {

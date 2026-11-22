@@ -35,6 +35,11 @@ import {
 } from './personalization-runtime';
 import type { ValidatePersonalizationDto } from './dto/validate-personalization.dto';
 import {
+  labelsForLocale,
+  relabelOptionLines,
+  type VariantOptionLabels,
+} from '../../common/catalog/variant-option-labels';
+import {
   MAX_MONEY_AMOUNT,
   PERSONALIZATION_PRICE_TOO_HIGH,
   personalizationUnavailable,
@@ -270,9 +275,27 @@ export class PersonalizationService {
     locale?: string | null;
     primaryLocale?: string | null;
     activeCache?: ActiveVariantsCache;
+    /**
+     * M159: option display labels of `locale`; OPTION lines (and palette
+     * FIELD lines whose palette is a product option) are relabelled
+     * after evaluation (values, field names and primary-locale texts stay
+     * canonical). Omitted = canonical lines, exactly as before.
+     */
+    optionLabels?: VariantOptionLabels | null;
   }): Promise<PResult> {
     const ctx = await this.contextFor(input);
-    return evaluatePersonalization(input.defs, input.raw, ctx);
+    const result = evaluatePersonalization(input.defs, input.raw, ctx);
+    if (!input.optionLabels) return result;
+    return {
+      ...result,
+      lines: relabelOptionLines(
+        result.lines,
+        input.optionLabels,
+        ctx.locale,
+        ctx.primaryLocale,
+        input.defs,
+      ),
+    };
   }
 
   /**
@@ -372,6 +395,18 @@ export class PersonalizationService {
     );
     const defs = (await this.loadDefs(product.id)) as unknown as PFieldDef[];
     const activeCache: ActiveVariantsCache = new Map();
+    const primaryLocale = store.language_config?.primary_locale ?? null;
+    // M159: option labels of the request locale (no read for the primary).
+    const optionLabels =
+      variant && body.locale && body.locale !== primaryLocale
+        ? labelsForLocale(
+            await this.prisma.productTranslation.findMany({
+              where: { product_id: product.id },
+              select: { locale: true, variant_option_labels: true },
+            }),
+            body.locale,
+          )
+        : null;
     const result = await this.evaluateLine({
       activeCache,
       product,
@@ -379,7 +414,8 @@ export class PersonalizationService {
       defs,
       raw: body.custom_fields ?? {},
       locale: body.locale ?? null,
-      primaryLocale: store.language_config?.primary_locale ?? null,
+      primaryLocale,
+      optionLabels,
     });
     assertPriceEvaluated(result);
 

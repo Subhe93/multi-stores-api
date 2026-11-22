@@ -87,6 +87,12 @@ import {
   type WindowQuery,
 } from './product-list-query';
 import {
+  labelRowsForLocale,
+  labelsForLocale,
+  trimLabelRows,
+  type LabelRow,
+} from '../../common/catalog/variant-option-labels';
+import {
   normalizeFacetQuery,
   runFacets,
   toFacetRow,
@@ -536,7 +542,9 @@ const LIST_CUSTOM_INCLUDE = {
 /**
  * `card=1` variants: the same rows with up to two images (the product card
  * shows the second one on hover). Only the image `take` differs, so the row
- * types are the ones of the default includes.
+ * types are the ones of the default includes. M159: the custom row also reads
+ * the base product's option label rows (card swatch / size names); the row
+ * type does not list them, read them through `customLabelRows`.
  */
 const LIST_OWN_INCLUDE_CARD = {
   ...LIST_OWN_INCLUDE,
@@ -550,9 +558,14 @@ const LIST_CUSTOM_INCLUDE_CARD = {
     include: {
       ...LIST_CUSTOM_INCLUDE.product.include,
       images: { ...LIST_CUSTOM_INCLUDE.product.include.images, take: 2 },
+      translations: { select: { locale: true, variant_option_labels: true } },
     },
   },
 } satisfies Prisma.CustomProductInclude;
+
+/** Base-product label rows of a `card=1` custom row (absent otherwise). */
+const customLabelRows = (cp: ListedCustomRow): LabelRow[] | undefined =>
+  (cp.product as { translations?: LabelRow[] }).translations;
 
 const listOwnInclude = (card: boolean): typeof LIST_OWN_INCLUDE =>
   card ? LIST_OWN_INCLUDE_CARD : LIST_OWN_INCLUDE;
@@ -1466,6 +1479,7 @@ export class StorefrontService {
       ownProducts,
       customProducts,
       ctx.card,
+      ctx.locale,
     );
 
     // A MANUAL collection lists its products in the creator's drag order
@@ -1495,6 +1509,8 @@ export class StorefrontService {
     ownProducts: ListedOwnRow[],
     customProducts: ListedCustomRow[],
     card = false,
+    /** M159: request locale; option labels of other locales are dropped. */
+    locale?: string,
   ) {
     // Vendor (provider) exposure is an opt-in marketplace-only setting.
     const showVendor = this.showVendor(store);
@@ -1502,6 +1518,9 @@ export class StorefrontService {
     const mappedCustom = customProducts.map((cp) => {
       const variants = this.computeVariants(cp);
       const displayPrice = this.computeDisplayPrice(cp, variants);
+      const optionLabelRows = card
+        ? labelRowsForLocale(customLabelRows(cp), locale)
+        : [];
 
       return {
         id: cp.id,
@@ -1543,6 +1562,11 @@ export class StorefrontService {
                 : undefined,
             }
           : {}),
+        // M159 (`card=1`, only when the base product has labels for the
+        // locale): the base product's label rows for the card model.
+        ...(optionLabelRows.length > 0
+          ? { option_label_translations: optionLabelRows }
+          : {}),
       };
     });
 
@@ -1551,6 +1575,8 @@ export class StorefrontService {
     const mappedOwn = ownProducts.map(
       ({ cost_price: _costPrice, external_ref: _externalRef, ...p }) => ({
         ...withoutFeedFields(p),
+        // M159: only the request locale's option labels.
+        translations: trimLabelRows(p.translations, locale),
         // Variant sales never touch the product row: serve the sum of the
         // variants when they all carry a number (effective-stock).
         stock_quantity: effectiveProductStock(p, p.variants),
@@ -1827,6 +1853,26 @@ export class StorefrontService {
     } as const;
     const links = { select: { creator_category_id: true } } as const;
     const titles = { select: { locale: true, title: true } } as const;
+    // M159: facet labels in the shopper's language (only when facets are
+    // answered); values stay canonical.
+    const withLabels = !!locale && fq.facets && q.mode === 'paged';
+    const labelLocales: string[] = locale
+      ? [...new Set([locale, locale.split(/[-_]/)[0]])]
+      : [];
+    const labelRows = {
+      where: { locale: { in: labelLocales } },
+      select: { locale: true, variant_option_labels: true },
+    } satisfies Prisma.ProductTranslationFindManyArgs;
+    const ownTranslations =
+      byName && withLabels
+        ? {
+            select: { locale: true, title: true, variant_option_labels: true },
+          }
+        : byName
+          ? titles
+          : withLabels
+            ? labelRows
+            : null;
 
     const [own, custom] = await Promise.all([
       this.prisma.product.findMany({
@@ -1842,7 +1888,7 @@ export class StorefrontService {
           variant_option_config: true,
           variants: { where: { is_active: true }, select: variantSelect },
           creator_categories: links,
-          ...(byName ? { translations: titles } : {}),
+          ...(ownTranslations ? { translations: ownTranslations } : {}),
         },
       }),
       isIndependent
@@ -1873,6 +1919,7 @@ export class StorefrontService {
                     where: { is_active: true },
                     select: variantSelect,
                   },
+                  ...(withLabels ? { translations: labelRows } : {}),
                 },
               },
               creator_categories: links,
@@ -1889,6 +1936,12 @@ export class StorefrontService {
             locale,
           )
         : undefined;
+
+    const labelsOf = (row: object) =>
+      labelsForLocale(
+        (row as { translations?: LabelRow[] }).translations ?? [],
+        locale,
+      );
 
     // Own products: market price (one read); hidden ones are dropped as in
     // applyMarketPrices.
@@ -1936,6 +1989,7 @@ export class StorefrontService {
           stock_quantity: p.stock_quantity,
           variants: p.variants,
           variant_option_config: p.variant_option_config,
+          optionLabels: withLabels ? labelsOf(p) : null,
         }),
       );
     }
@@ -1959,6 +2013,7 @@ export class StorefrontService {
           stock_quantity: effectiveProductStock(cp.product, variants),
           variants,
           variant_option_config: cp.product.variant_option_config,
+          optionLabels: withLabels ? labelsOf(cp.product) : null,
         }),
       );
     }
@@ -2092,6 +2147,7 @@ export class StorefrontService {
       ownRows,
       customRows,
       ctx.card,
+      ctx.locale,
     );
     const byToken = new Map(
       shaped.map((p) => [

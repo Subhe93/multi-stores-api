@@ -27,6 +27,12 @@ import {
 } from '@prisma/client';
 import { UploadUrl } from '../../../common/uploads/upload-url.transform';
 
+/** Client shape of `variant_option_labels` (validated in ProductsService). */
+export type VariantOptionLabelsInput = {
+  names?: Record<string, string>;
+  values?: Record<string, Record<string, string>>;
+};
+
 /** Allowed `condition` values of a product (feeds app); null = new. */
 export const PRODUCT_CONDITIONS = ['new', 'refurbished', 'used'] as const;
 
@@ -68,6 +74,14 @@ export class ProductTranslationDto {
   @IsString()
   @MaxLength(500)
   email_note?: string | null;
+
+  // Display labels of the variant option names / values in this locale (M159):
+  // `{ names?: {name: label}, values?: {name: {value: label}} }`. On update
+  // `undefined` keeps the stored labels (X19 carry-over), `null` clears them.
+  // Deep validation (dynamic keys) runs in ProductsService.
+  @IsOptional()
+  @IsObject()
+  variant_option_labels?: VariantOptionLabelsInput | null;
 }
 
 export class ProductAttributeValueDto {

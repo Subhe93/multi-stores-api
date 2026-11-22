@@ -9,6 +9,10 @@ import {
   Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import {
+  labelsForLocale,
+  type VariantOptionLabels,
+} from '../../../common/catalog/variant-option-labels';
 import { PaymentMethod, Prisma, UserRole } from '@prisma/client';
 import type { KustomCheckoutSession } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
@@ -587,7 +591,11 @@ export class KustomCheckoutService {
       tax_pricing_mode: quote.tax_pricing_mode,
       shipping_tax_amount: quote.shipping_tax_amount,
       shipping_tax_rate_bp: quote.shipping_tax_rate_bp,
-      items: await this.describeItems(quote),
+      items: await this.describeItems(
+        quote,
+        this.sessionLocale(session, ctx),
+        ctx.primaryLocale,
+      ),
       purchaseCountry:
         opts.purchaseCountry ??
         opts.countryCode ??
@@ -625,6 +633,9 @@ export class KustomCheckoutService {
   /** Titles, SKUs and option labels for the quoted lines, in three queries. */
   private async describeItems(
     quote: OrderQuote,
+    /** M159: the session locale (option labels of the line names). */
+    locale?: string | null,
+    primaryLocale?: string | null,
   ): Promise<KustomOrderItemInput[]> {
     const ids = (pick: (i: OrderQuote['items'][number]) => string | null) =>
       Array.from(new Set(quote.items.map(pick).filter(Boolean) as string[]));
@@ -649,7 +660,7 @@ export class KustomCheckoutService {
       variantIds.length
         ? this.prisma.productVariant.findMany({
             where: { id: { in: variantIds } },
-            select: { id: true, sku: true, options: true },
+            select: { id: true, sku: true, options: true, product_id: true },
           })
         : [],
     ]);
@@ -658,6 +669,40 @@ export class KustomCheckoutService {
     const productMap = byId(products);
     const customMap = byId(customProducts);
     const variantMap = byId(variants);
+
+    // M159: option labels of the session locale, per variant product (own
+    // or a custom product's base product). No read for the primary locale.
+    const labelProductIds = Array.from(
+      new Set((variants as { product_id: string }[]).map((v) => v.product_id)),
+    );
+    const labelRows =
+      locale && locale !== primaryLocale && labelProductIds.length
+        ? await this.prisma.productTranslation.findMany({
+            where: {
+              product_id: { in: labelProductIds },
+              locale: { in: [...new Set([locale, locale.split(/[-_]/)[0]])] },
+            },
+            select: {
+              product_id: true,
+              locale: true,
+              variant_option_labels: true,
+            },
+          })
+        : [];
+    const labelsByProduct = new Map<string, VariantOptionLabels | null>();
+    for (const id of labelProductIds) {
+      labelsByProduct.set(
+        id,
+        labelsForLocale(
+          labelRows.filter((r) => r.product_id === id),
+          locale,
+        ),
+      );
+    }
+    const labelsOf = (variantId: string | null) => {
+      const v = variantId ? variantMap.get(variantId) : undefined;
+      return v ? (labelsByProduct.get(v.product_id) ?? null) : null;
+    };
 
     return quote.items.map((item, index) => ({
       id:
@@ -679,6 +724,10 @@ export class KustomCheckoutService {
       variant: item.variant_id
         ? (variantMap.get(item.variant_id) ?? null)
         : null,
+      // M159: key only when the line has labels in the session locale.
+      ...(labelsOf(item.variant_id)
+        ? { option_labels: labelsOf(item.variant_id) }
+        : {}),
       // M5.5: designed lines name their add-ons (key absent otherwise).
       ...(item.designer_addons?.length
         ? { designer_addons: item.designer_addons }

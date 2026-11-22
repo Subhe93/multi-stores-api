@@ -1,4 +1,8 @@
 import { Prisma, PrismaClient } from '@prisma/client';
+import {
+  formatOptionPairs,
+  snapshotEntriesFor,
+} from '../../common/catalog/variant-option-labels';
 import sharp from 'sharp';
 import {
   PublicStorage,
@@ -395,6 +399,8 @@ interface OrderItemForEmail {
   } | null;
   /** M4.0: personalization values (snapshot columns + live fallback). */
   custom_field_values?: (SnapshotValueRow & PersonalizationGroupColumns)[];
+  /** M159: the sold options in the buyer's language (null = none). */
+  variant_options_display?: unknown;
 }
 
 /** M4.1 snapshot columns (C1) the grouped rendering reads. */
@@ -524,6 +530,20 @@ function variantLabel(options: unknown): string {
   return Object.entries(options as Record<string, string>)
     .map(([k, v]) => `${k}: ${v}`)
     .join(' / ');
+}
+
+/**
+ * M159: the line's options in the email locale: the order's display
+ * snapshot when it was taken in that language (buyer emails), else the
+ * canonical live text (staff / store-locale emails, orders without labels).
+ */
+export function lineVariantLabel(
+  item: Pick<OrderItemForEmail, 'variant' | 'variant_options_display'>,
+  locale: string | undefined,
+): string {
+  const entries = snapshotEntriesFor(item.variant_options_display, locale);
+  if (entries && item.variant?.options) return formatOptionPairs(entries);
+  return variantLabel(item.variant?.options);
 }
 
 /**
@@ -662,7 +682,7 @@ export function renderOrderItems(
         : imgPath
           ? absoluteUrl(imgPath, publicBase)
           : '';
-      const vLabel = variantLabel(item.variant?.options);
+      const vLabel = lineVariantLabel(item, locale);
       const unit = Number(item.unit_price ?? 0);
       const line = unit * item.quantity;
       // Appended to the variant line, so a line without values renders
@@ -720,7 +740,7 @@ export function renderOrderItems(
         pickTitle(item.custom_product?.translations, lang) ||
         pickTitle(item.product?.translations, lang) ||
         phrases.product;
-      const vLabel = variantLabel(item.variant?.options);
+      const vLabel = lineVariantLabel(item, locale);
       const unit = Number(item.unit_price ?? 0);
       const line = unit * item.quantity;
       const valuesText = personalizationLines(item, locale, primaryLocale)

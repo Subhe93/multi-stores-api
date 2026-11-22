@@ -79,6 +79,8 @@ export function buildOrderCreate(opts: {
   market?: MarketContext | null;
   /** The creator finished the Kustom setup (default false). */
   kustomReady?: boolean;
+  /** M159: ProductTranslation.variant_option_labels per product and locale. */
+  optionLabels?: Record<string, Record<string, unknown>>;
 }) {
   const store = opts.store ?? {
     id: HARNESS_STORE_ID,
@@ -302,6 +304,24 @@ export function buildOrderCreate(opts: {
       ),
     },
     orderCommission: { create: jest.fn(() => Promise.resolve({})) },
+    // M159: option display labels (order line display snapshot).
+    productTranslation: {
+      findMany: jest.fn(
+        ({
+          where,
+        }: {
+          where: { product_id: string; locale: { in: string[] } };
+        }) =>
+          Promise.resolve(
+            Object.entries(opts.optionLabels?.[where.product_id] ?? {})
+              .filter(([locale]) => where.locale.in.includes(locale))
+              .map(([locale, labels]) => ({
+                locale,
+                variant_option_labels: labels,
+              })),
+          ),
+      ),
+    },
     productCustomField: { findMany: jest.fn(() => Promise.resolve([])) },
   };
   const shipping = {
@@ -390,13 +410,14 @@ export function buildOrderCreate(opts: {
     undefined,
     opts.revalidation as unknown as RevalidationService | undefined,
   );
-  const place = (lines: HarnessLine[]) =>
+  const place = (lines: HarnessLine[], dto: Record<string, unknown> = {}) =>
     service.create(
       'u1',
       {
         address_id: 'a1',
         store_id: store.id,
         payment_method: 'STRIPE',
+        ...dto,
       } as never,
       { lines } as never,
     );

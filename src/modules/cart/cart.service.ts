@@ -42,6 +42,12 @@ import {
 } from '../../common/shipping/requires-shipping';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
 import {
+  formatOptionPairs,
+  labelsForLocale,
+  optionDisplayEntries,
+  type LabelRow,
+} from '../../common/catalog/variant-option-labels';
+import {
   resolveStoreCurrency,
   roundMoney,
 } from '../../common/money/currency.util';
@@ -804,6 +810,8 @@ export class CartService {
         variant_option_config: unknown;
       } | null = null;
       let variantOptions: unknown = null;
+      // M159: translation rows of the line's product (labels of the options).
+      let labelRows: LabelRow[] | null = null;
       // B2: the own product's per-order limit (null = none).
       let lineMaxPerOrder: number | null = null;
       // The product (a custom product's base product) and variant behind the
@@ -867,6 +875,7 @@ export class CartService {
             this.pickTranslation(cp.translations, locale)?.title ||
             this.pickTranslation(cp.product.translations, locale)?.title ||
             null;
+          labelRows = cp.product.translations;
           // The creator's own mockup is their design of this product and wins
           // over a per-colour photo of the blank; the colour image only stands
           // in when there is no mockup.
@@ -949,6 +958,7 @@ export class CartService {
           customFieldDefs = product.custom_fields;
           title =
             this.pickTranslation(product.translations, locale)?.title || null;
+          labelRows = product.translations;
           price = Number(product.base_price);
           ownBasePrice = price;
           productOptionConfig = product.variant_option_config;
@@ -999,10 +1009,14 @@ export class CartService {
           }
           variantOptions = variant.options;
           if (variant.options && typeof variant.options === 'object') {
-            const opts = variant.options as Record<string, string>;
-            variantLabel = Object.entries(opts)
-              .map(([k, v]) => `${k}: ${v}`)
-              .join(' / ');
+            // M159: option names / values in the cart locale (canonical
+            // text when the product has no labels for it).
+            variantLabel = formatOptionPairs(
+              optionDisplayEntries(
+                variant.options,
+                labelsForLocale(labelRows, locale),
+              ),
+            );
           }
         }
       }
@@ -1062,6 +1076,7 @@ export class CartService {
             locale,
             primaryLocale: store.primary_locale,
             activeCache,
+            optionLabels: labelsForLocale(labelRows, locale),
           });
           appDisplay = linesToDisplay(res.lines);
           personalizationInvalidLine = !res.ok;
