@@ -68,6 +68,7 @@ import { resolveVariantMarketPrice } from '../markets/pricing.util';
 import { B2bService } from '../b2b/b2b.service';
 import type { B2bTotals } from '../b2b/b2b.types';
 import { pickTranslation } from '../../common/personalization/pick-translation';
+import { pickTitleTranslation } from '../../common/catalog/pick-title-translation';
 import {
   PersonalizationCoreService,
   PRODUCT_VARIANT_MISMATCH,
@@ -716,12 +717,15 @@ export class CartService {
 
   /**
    * Enrich raw cart items with product data (title, price, image, variant info).
-   * `locale` selects which translation to surface for the item title.
+   * `locale` selects which translation to surface for the item title;
+   * `canonicalLocale` (the store's own language, M160) is the title fallback
+   * before English.
    */
   private async enrichCartItems(
     items: CartItem[],
     locale?: string,
     market: MarketContext | null = null,
+    canonicalLocale?: string | null,
   ) {
     const enriched: EnrichedCartItem[] = [];
     const stockRows = new Map<string, { ref: StockRowRef; stock: number }>();
@@ -872,8 +876,13 @@ export class CartService {
             };
           }
           title =
-            this.pickTranslation(cp.translations, locale)?.title ||
-            this.pickTranslation(cp.product.translations, locale)?.title ||
+            pickTitleTranslation(cp.translations, locale, canonicalLocale)
+              ?.title ||
+            pickTitleTranslation(
+              cp.product.translations,
+              locale,
+              canonicalLocale,
+            )?.title ||
             null;
           labelRows = cp.product.translations;
           // The creator's own mockup is their design of this product and wins
@@ -957,7 +966,8 @@ export class CartService {
           lineMaxPerOrder = readMaxPerOrder(product.max_per_order);
           customFieldDefs = product.custom_fields;
           title =
-            this.pickTranslation(product.translations, locale)?.title || null;
+            pickTitleTranslation(product.translations, locale, canonicalLocale)
+              ?.title || null;
           labelRows = product.translations;
           price = Number(product.base_price);
           ownBasePrice = price;
@@ -1482,10 +1492,23 @@ export class CartService {
       preview,
     );
 
+    // M160: titles fall back to the store's canonical language (never the
+    // market default locale) before English.
+    const storeId = cartWithItems?.store_id ?? cart.store_id ?? null;
+    const canonicalLocale = storeId
+      ? ((
+          await this.prisma.store.findUnique({
+            where: { id: storeId },
+            select: { language_config: { select: { primary_locale: true } } },
+          })
+        )?.language_config?.primary_locale ?? null)
+      : null;
+
     const enrichedItems = await this.enrichCartItems(
       cartWithItems?.items || [],
       locale,
       market,
+      canonicalLocale,
     );
 
     // Tax estimate shown in the cart: the coupon-free, shipping-free lines

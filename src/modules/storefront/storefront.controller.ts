@@ -1,5 +1,15 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
+import { CartDisplayDto } from './dto/cart-display.dto';
 import { StorefrontService } from './storefront.service';
 import { isPreview } from '../markets/preview-query';
 import {
@@ -56,6 +66,21 @@ export class StorefrontController {
     @Query('market') market?: string,
   ) {
     return this.storefrontService.ownerPreview(slug, viewer, market);
+  }
+
+  // M160: guest cart titles / variant labels in the page locale. Called by
+  // the browser (not the Next server), so it is throttled per visitor IP
+  // despite the controller-wide skip.
+  @Post(':slug/cart-display')
+  @HttpCode(200)
+  @SkipThrottle({ default: false })
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  getCartDisplay(
+    @Viewer() viewer: StorefrontViewer | null,
+    @Param('slug') slug: string,
+    @Body() dto: CartDisplayDto,
+  ) {
+    return this.storefrontService.getCartDisplay(slug, dto, viewer);
   }
 
   // Tiny endpoint the storefront reads to decide whether to cache this store.

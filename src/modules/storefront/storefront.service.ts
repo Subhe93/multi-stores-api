@@ -119,6 +119,12 @@ import {
   storefrontStoriesField,
 } from '../products/product-story.mapper';
 import { lineRequiresShipping } from '../../common/shipping/requires-shipping';
+import {
+  resolveCartDisplay,
+  type CartDisplayEntry,
+  type CartDisplayLine,
+} from './cart-display';
+import { CART_DISPLAY_MAX_LINES } from './dto/cart-display.dto';
 
 /** The legacy freeform Store.theme_config JSON as getStore() reads it. */
 interface LegacyThemeConfig {
@@ -902,6 +908,103 @@ export class StorefrontService {
       select: { platform_name: true },
     });
     return { platform_name: cfg?.platform_name?.trim() || 'ShopsDoor' };
+  }
+
+  /**
+   * M160: guest cart line titles / variant labels in the page locale. Ids
+   * in, display text out (same order and length); no prices, stock or
+   * market data. Only published products of the store's creator answer;
+   * anything else is null. Title fallback: request locale → base language
+   * → the STORE canonical language (not a market default) → en → first row.
+   */
+  async getCartDisplay(
+    slug: string,
+    dto: { locale?: string; lines: CartDisplayLine[] },
+    viewer?: StorefrontViewer | null,
+  ): Promise<{ items: (CartDisplayEntry | null)[] }> {
+    const lines = (dto.lines ?? []).slice(0, CART_DISPLAY_MAX_LINES);
+    const store = await this.prisma.store.findUnique({
+      where: { slug },
+      include: {
+        creator: true,
+        language_config: { select: { primary_locale: true } },
+      },
+    });
+    if (!store) throw this.storeNotFound();
+    if (!(await this.open(store, viewer)) || !store.creator) {
+      return { items: lines.map(() => null) };
+    }
+    const creatorId = store.creator.id;
+    const uniq = (ids: (string | null | undefined)[]) => [
+      ...new Set(ids.filter((id): id is string => !!id)),
+    ];
+    const productIds = uniq(
+      lines.filter((l) => !l.custom_product_id).map((l) => l.product_id),
+    );
+    const customIds = uniq(lines.map((l) => l.custom_product_id));
+    const variantIds = uniq(lines.map((l) => l.variant_id));
+    // Three small indexed reads; an empty id list skips its query.
+    const products = productIds.length
+      ? await this.prisma.product.findMany({
+          where: {
+            id: { in: productIds },
+            creator_id: creatorId,
+            status: 'PUBLISHED',
+          },
+          select: {
+            id: true,
+            translations: {
+              select: {
+                locale: true,
+                title: true,
+                variant_option_labels: true,
+              },
+            },
+          },
+        })
+      : [];
+    const customProducts = customIds.length
+      ? await this.prisma.customProduct.findMany({
+          where: {
+            id: { in: customIds },
+            creator_id: creatorId,
+            status: 'PUBLISHED',
+          },
+          select: {
+            id: true,
+            product_id: true,
+            translations: { select: { locale: true, title: true } },
+            product: {
+              select: {
+                translations: {
+                  select: {
+                    locale: true,
+                    title: true,
+                    variant_option_labels: true,
+                  },
+                },
+              },
+            },
+          },
+        })
+      : [];
+    const variants = variantIds.length
+      ? await this.prisma.productVariant.findMany({
+          where: { id: { in: variantIds } },
+          select: { id: true, product_id: true, options: true },
+        })
+      : [];
+    const items = resolveCartDisplay(
+      lines,
+      {
+        products: new Map(products.map((p) => [p.id, p] as const)),
+        customProducts: new Map(customProducts.map((c) => [c.id, c] as const)),
+        variants: new Map(variants.map((v) => [v.id, v] as const)),
+      },
+      dto.locale ?? null,
+      store.language_config?.primary_locale ?? null,
+    );
+    return { items };
   }
 
   // Lightweight read so the storefront can decide caching without pulling the
