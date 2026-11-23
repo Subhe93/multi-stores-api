@@ -27,6 +27,7 @@ import {
   PricingType,
   Prisma,
   ProductVariant,
+  ShippingMethodType,
   StoreStatus,
   StoreType,
   UserRole,
@@ -45,6 +46,7 @@ import {
 } from '../payments/kustom/kustom.eligibility';
 import { isOwnKeyCardReady, isOwnKeyTestMode } from '../payments/payment-route';
 import { PersonalizationService } from '../personalization/personalization.service';
+import { ShippingService } from '../shipping/shipping.service';
 import {
   legacyRow,
   shapeFieldsForStorefront,
@@ -300,6 +302,39 @@ export function productBySlugQuery(
     },
     orderBy: { updated_at: 'desc' as const },
   };
+}
+
+/** One destination's cheapest delivery rate (M161 B6). */
+export interface ProductShippingRate {
+  country: string;
+  cost: number;
+  min_days: number | null;
+  max_days: number | null;
+}
+
+export interface ProductShippingRates {
+  requires_shipping: boolean;
+  currency: string;
+  rates: ProductShippingRate[];
+}
+
+/** At most this many destination countries per shipping-rates request. */
+export const MAX_RATE_COUNTRIES = 10;
+
+/**
+ * `?countries=DE,at,XYZ` → ['DE', 'AT']: upper-cased ISO alpha-2 codes,
+ * de-duplicated, invalid ones dropped, capped at MAX_RATE_COUNTRIES.
+ */
+export function parseRateCountries(raw: unknown): string[] {
+  if (typeof raw !== 'string') return [];
+  const out: string[] = [];
+  for (const part of raw.split(',')) {
+    const code = part.trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(code) || out.includes(code)) continue;
+    out.push(code);
+    if (out.length >= MAX_RATE_COUNTRIES) break;
+  }
+  return out;
 }
 
 /** Product statuses the product page may serve (never ARCHIVED). */
@@ -658,6 +693,9 @@ export class StorefrontService {
     // Public gate / owner preview (SPEC §3): optional and trailing. Absent
     // = status alone decides (LIVE or no status column = open).
     @Optional() private readonly gate?: StorefrontGateService,
+    // M161 B6: product shipping rates for JSON-LD; optional and trailing.
+    // Absent = the shipping-rates route returns no rates.
+    @Optional() private readonly shipping?: ShippingService,
   ) {}
 
   /**
@@ -3111,6 +3149,150 @@ export class StorefrontService {
   }
 
   /**
+   * M161 B6: the cheapest DELIVERY rate per destination country for one
+   * product, for the product page's JSON-LD `shippingDetails`. Read-only and
+   * cacheable (GET). A closed store, an unknown or hidden product, or a
+   * missing shipping service gives no rates, never an error page.
+   * Price basis: the product's base price (market-priced with a market).
+   */
+  async getProductShippingRates(
+    slug: string,
+    productSlug: string,
+    countriesRaw?: string,
+    marketKey?: string,
+    preview?: boolean,
+    viewer?: StorefrontViewer | null,
+  ): Promise<ProductShippingRates> {
+    const store = await this.prisma.store.findUnique({
+      where: { slug },
+      include: { creator: true },
+    });
+    if (!store) throw this.storeNotFound();
+    const market = await this.resolveMarket(store.id, marketKey, preview);
+    let currency: string;
+    if (market) {
+      currency = market.currency;
+    } else {
+      const config = await this.prisma.platformConfig.findFirst({
+        select: { default_currency: true },
+      });
+      currency = resolveStoreCurrency(store, config?.default_currency);
+    }
+    const none: ProductShippingRates = {
+      requires_shipping: true,
+      currency,
+      rates: [],
+    };
+    if (!(await this.open(store, viewer))) return none;
+    const countries = parseRateCountries(countriesRaw);
+    if (countries.length === 0 || !this.shipping) return none;
+    // Shipping costs are priced in the base currency; a market without a
+    // rate cannot convert them.
+    if (market && market.rate == null) return none;
+
+    const statuses =
+      viewer && this.gate && (await this.gate.isOwnerOrAdmin(store.id, viewer))
+        ? OWNER_PRODUCT_STATUSES
+        : PUBLIC_PRODUCT_STATUSES;
+
+    // Same tolerant lookup order as getProduct: own exact, custom exact,
+    // own case-insensitive, custom case-insensitive.
+    const findOwn = (insensitive: boolean) =>
+      this.prisma.product.findFirst({
+        ...productBySlugQuery(
+          store.creator.id,
+          productSlug,
+          insensitive,
+          statuses,
+        ),
+        select: { id: true, base_price: true },
+      });
+    const findCustom = (insensitive: boolean) =>
+      store.store_type === StoreType.INDEPENDENT
+        ? Promise.resolve(null)
+        : this.prisma.customProduct.findFirst({
+            ...productBySlugQuery(
+              store.creator.id,
+              productSlug,
+              insensitive,
+              statuses,
+            ),
+            select: { id: true, final_price: true },
+          });
+
+    let productId: string | null = null;
+    // Subtotal in the market currency when a market is set, else base.
+    let subtotal = 0;
+    const own = (await findOwn(false)) ?? null;
+    const custom = own ? null : await findCustom(false);
+    const ownCi = own || custom ? null : await findOwn(true);
+    const customCi = own || custom || ownCi ? null : await findCustom(true);
+    const ownRow = own ?? ownCi;
+    const customRow = custom ?? customCi;
+    if (ownRow) {
+      productId = ownRow.id;
+      const base = Number(ownRow.base_price);
+      if (market) {
+        const [priced] = await this.applyMarketPrices(market, [
+          { id: ownRow.id, base_price: base, variants: [] },
+        ]);
+        // Hidden in this market: no product page, so no rates.
+        if (!priced) return none;
+        subtotal = priced.base_price;
+      } else {
+        subtotal = base;
+      }
+    } else if (customRow) {
+      productId = customRow.id;
+      const base = Number(customRow.final_price) || 0;
+      subtotal = market ? this.marketPricing.convertMoney(market, base) : base;
+    }
+    if (!productId) return none;
+
+    const money = market
+      ? {
+          toBase: (a: number) => this.marketPricing.toBaseMoney(market, a),
+          fromBase: (a: number) => this.marketPricing.convertMoney(market, a),
+        }
+      : null;
+    const rates: ProductShippingRate[] = [];
+    for (const country of countries) {
+      const quote = await this.shipping.estimate(
+        {
+          product_ids: [productId],
+          country_code: country,
+          item_count: 1,
+          subtotal,
+          store_id: store.id,
+          ...(market ? { market_key: market.key } : {}),
+        },
+        money,
+      );
+      if (quote.requires_shipping === false) {
+        return { requires_shipping: false, currency, rates: [] };
+      }
+      if (!quote.available) continue;
+      const delivery = quote.methods.filter(
+        (m) => m.type === ShippingMethodType.DELIVERY,
+      );
+      // No method rows at all (no profile): the product ships free.
+      if (quote.methods.length === 0) {
+        rates.push({ country, cost: 0, min_days: null, max_days: null });
+        continue;
+      }
+      if (delivery.length === 0) continue;
+      const cheapest = delivery.reduce((a, b) => (b.cost < a.cost ? b : a));
+      rates.push({
+        country,
+        cost: cheapest.cost,
+        min_days: cheapest.estimated_days?.min ?? null,
+        max_days: cheapest.estimated_days?.max ?? null,
+      });
+    }
+    return { requires_shipping: true, currency, rates };
+  }
+
+  /**
    * Return any published product the storefront can use as a sample to render
    * a PRODUCT_TEMPLATE in the dashboard's preview iframe. Falls back to a
    * minimal stub (used by the placeholder magic sections) if the store has no
@@ -3300,11 +3482,11 @@ export class StorefrontService {
           if (!market) return { slug: t.slug, lastmod: p.updated_at };
           // Per-locale slugs so the sitemap can emit one <url> per locale
           // with translated product paths (only with a market, D9/L12).
+          // Every translation, because alternates point at other markets'
+          // locales too (M161 A); the web ignores locales no market serves.
           const slugs: Record<string, string> = {};
           for (const tr of p.translations) {
-            if (tr.slug && locales.includes(tr.locale)) {
-              slugs[tr.locale] = tr.slug;
-            }
+            if (tr.slug) slugs[tr.locale] = tr.slug;
           }
           return { slug: t.slug, slugs, lastmod: p.updated_at };
         })

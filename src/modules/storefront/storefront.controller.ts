@@ -146,6 +146,27 @@ export class StorefrontController {
     );
   }
 
+  // M161 B6: cheapest delivery rate per country for the product JSON-LD.
+  // `countries` = comma list of ISO alpha-2 codes (max 10, others dropped).
+  @Get(':slug/products/:productSlug/shipping-rates')
+  getProductShippingRates(
+    @Viewer() viewer: StorefrontViewer | null,
+    @Param('slug') slug: string,
+    @Param('productSlug') productSlug: string,
+    @Query('countries') countries?: string,
+    @Query('market') market?: string,
+    @Query('preview') preview?: string,
+  ) {
+    return this.storefrontService.getProductShippingRates(
+      slug,
+      productSlug,
+      countries,
+      market,
+      isPreview(preview),
+      viewer,
+    );
+  }
+
   @Get(':slug/products/:productSlug')
   getProduct(
     @Viewer() viewer: StorefrontViewer | null,
