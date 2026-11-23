@@ -7,6 +7,7 @@ import {
   clampLimit,
   collectionWhere,
   orderByFor,
+  parseIdList,
   parseSort,
   parseStock,
   searchWhere,
@@ -246,5 +247,54 @@ describe('ProductsService.findMine', () => {
     });
     // 'b' was filtered out by the mock: the remaining order still follows the sort.
     expect(res.data.map((p) => p.id)).toEqual(['c']);
+  });
+
+  // M165: dashboard link labels ask for products by id.
+  const U1 = '0f8b2c4e-1a2b-4c3d-8e9f-a0b1c2d3e4f5';
+  const U2 = '1f8b2c4e-1a2b-4c3d-8e9f-a0b1c2d3e4f5';
+
+  it('ids filter: owner scope ANDed, malformed ignored, all statuses, limit raised', async () => {
+    const { prisma, service } = build();
+    prisma.product.findMany.mockResolvedValue([product(U1, 'A')]);
+    const many = Array.from(
+      { length: 30 },
+      (_, i) => `${String(i).padStart(8, '0')}-1a2b-4c3d-8e9f-a0b1c2d3e4f5`,
+    );
+    await service.findMine('u1', UserRole.CREATOR, {
+      ids: [U1.toUpperCase(), 'nope', U2, U1, ...many].join(','),
+      limit: 20,
+      search: 'mug',
+    });
+    const args = findManyArg(prisma.product.findMany, 0);
+    expect(args.where.AND[0]).toEqual({ creator_id: 'cr1' });
+    expect(args.where.AND[1].status).toBeUndefined();
+    const idCond = args.where.AND[2] as { id: { in: string[] } };
+    expect(idCond.id.in.slice(0, 2)).toEqual([U1, U2]);
+    expect(idCond.id.in).toHaveLength(32);
+    // search still applies
+    expect(args.where.AND).toHaveLength(4);
+    expect(args.take).toBe(32);
+  });
+
+  it('ids filter with no valid id returns an empty page without a query', async () => {
+    const { prisma, service } = build();
+    const res = await service.findMine('u1', UserRole.CREATOR, {
+      ids: 'x,y',
+    });
+    expect(res.data).toEqual([]);
+    expect(prisma.product.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseIdList (M165)', () => {
+  it('keeps at most 50 unique lowercase uuids', () => {
+    const ids = Array.from(
+      { length: 60 },
+      (_, i) => `${String(i).padStart(8, '0')}-1a2b-4c3d-8e9f-a0b1c2d3e4f5`,
+    );
+    expect(parseIdList(ids.join(','))).toHaveLength(50);
+    expect(parseIdList(undefined)).toBeUndefined();
+    expect(parseIdList(['a'] as unknown)).toBeUndefined();
+    expect(parseIdList(' ')).toEqual([]);
   });
 });

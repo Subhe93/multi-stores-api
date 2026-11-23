@@ -59,6 +59,7 @@ import {
   clampLimit,
   collectionWhere,
   orderByFor,
+  parseIdList,
   parseSort,
   parseStock,
   searchWhere,
@@ -1907,6 +1908,8 @@ export class ProductsService {
       collection?: string;
       stock?: string;
       sort?: string;
+      // M165: comma-separated product ids (dashboard link labels).
+      ids?: string;
     },
   ) {
     let owner: Prisma.ProductWhereInput;
@@ -1938,7 +1941,12 @@ export class ProductsService {
       filters.page && Number.isFinite(filters.page) && filters.page >= 1
         ? Math.floor(filters.page)
         : 1;
-    const limit = clampLimit(filters.limit);
+    // M165: an `ids` filter (ANDed with the owner scope, so a foreign id
+    // is simply absent) returns every listed id on one page.
+    const ids = parseIdList(filters.ids);
+    const limit = ids
+      ? Math.max(clampLimit(filters.limit), ids.length)
+      : clampLimit(filters.limit);
     const sort = parseSort(single(filters.sort));
     const empty = () =>
       this.withSlug({
@@ -1962,6 +1970,10 @@ export class ProductsService {
         is_featured: filters.is_featured,
       }),
     ];
+    if (ids) {
+      if (ids.length === 0) return empty();
+      and.push({ id: { in: ids } });
+    }
     const rawSearch = single(filters.search);
     const search = rawSearch ? searchWhere(rawSearch) : undefined;
     if (search) and.push(search);

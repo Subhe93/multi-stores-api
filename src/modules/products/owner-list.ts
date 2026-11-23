@@ -23,6 +23,26 @@ export const NO_COLLECTION = 'none';
 
 export const OWNER_LIST_MAX_LIMIT = 100;
 
+/** Most ids one `ids` filter accepts (M165 dashboard link labels). */
+export const OWNER_LIST_MAX_IDS = 50;
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * M165: `ids` query value (comma separated) to a list of lowercase uuids.
+ * Malformed entries are dropped, duplicates removed, at most
+ * OWNER_LIST_MAX_IDS kept. Undefined when the param is absent or not a string.
+ */
+export function parseIdList(raw: unknown): string[] | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const ids = raw
+    .split(',')
+    .map((v) => v.trim().toLowerCase())
+    .filter((v) => UUID_RE.test(v));
+  return [...new Set(ids)].slice(0, OWNER_LIST_MAX_IDS);
+}
+
 export function parseSort(raw?: string): OwnerListSort {
   return (OWNER_LIST_SORTS as readonly string[]).includes(raw ?? '')
     ? (raw as OwnerListSort)

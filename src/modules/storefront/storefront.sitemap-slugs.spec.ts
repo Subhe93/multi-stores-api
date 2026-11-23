@@ -8,7 +8,8 @@ import type { TaxService } from '../taxes/tax.service';
 
 // M161 A: with a market, the sitemap product row carries the slug of EVERY
 // translation (alternates point at the locales of other markets too), not
-// only the requested market's locales. Without a market there is no `slugs`.
+// only the requested market's locales. M165: `id` and `slugs` are sent with
+// and without a market (product link references).
 
 const UPDATED = new Date('2026-11-01T00:00:00Z');
 
@@ -57,7 +58,7 @@ function build(market: unknown) {
     {} as MarketPricingService,
     {} as TaxService,
   );
-  return { service };
+  return { service, prisma };
 }
 
 describe('StorefrontService.getSitemapData product slugs (M161 A)', () => {
@@ -95,14 +96,36 @@ describe('StorefrontService.getSitemapData product slugs (M161 A)', () => {
     expect(Object.keys(row.slugs ?? {}).sort()).toEqual(['de', 'en', 'sv']);
   });
 
-  it('no market: no slugs key (unchanged)', async () => {
+  it('no market (M165): id and slugs on every product', async () => {
     const { service } = build(null);
     const data = await service.getSitemapData('namez-se');
     const [row] = data.products as Record<string, unknown>[];
     expect(row).toEqual({
+      id: 'p1',
       slug: 'studentskylt-med-guldtext',
+      slugs: {
+        sv: 'studentskylt-med-guldtext',
+        en: 'student-sign-with-gold-text',
+        de: 'abschlussschild-mit-goldschrift',
+      },
       lastmod: UPDATED,
     });
-    expect('slugs' in row).toBe(false);
+  });
+
+  it('market (M165): id on every product, hidden products still left out', async () => {
+    const { service, prisma } = build({
+      id: 'm-eu',
+      key: 'eu',
+      countries: ['DE'],
+      defaultLocale: 'en',
+      locales: [],
+    });
+    const data = await service.getSitemapData('namez-se', 'eu');
+    expect((data.products[0] as { id: string }).id).toBe('p1');
+    prisma.productMarketPrice.findMany.mockImplementation(
+      () => Promise.resolve([{ product_id: 'p1' }]) as never,
+    );
+    const hidden = await service.getSitemapData('namez-se', 'eu');
+    expect(hidden.products).toEqual([]);
   });
 });

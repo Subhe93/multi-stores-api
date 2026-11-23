@@ -171,4 +171,38 @@ describe('sanitizeCreatorHtml', () => {
       sanitizeCreatorHtml('<div class="x" data-foo="1" id="y">t</div>'),
     ).toBe('<div class="x">t</div>');
   });
+
+  // M165: product link references
+  const REF = 'product:0f8b2c4e-1a2b-4c3d-8e9f-a0b1c2d3e4f5';
+
+  it('default profile drops a product: href', () => {
+    expect(sanitizeCreatorHtml(`<a href="${REF}">x</a>`)).toBe('<a>x</a>');
+  });
+
+  it('linkRefs profile keeps a valid reference (with tail)', () => {
+    expect(
+      sanitizeCreatorHtml(`<a href="${REF}#reviews">x</a>`, { linkRefs: true }),
+    ).toBe(`<a href="${REF}#reviews">x</a>`);
+    expect(
+      sanitizeCreatorHtml('<a href="/products/a" target="_blank">x</a>', {
+        linkRefs: true,
+      }),
+    ).toBe(
+      '<a href="/products/a" target="_blank" rel="noopener noreferrer">x</a>',
+    );
+  });
+
+  it('linkRefs profile drops malformed product: hrefs and other schemes', () => {
+    const o = { linkRefs: true };
+    expect(
+      sanitizeCreatorHtml('<a href="product:javascript:alert(1)">x</a>', o),
+    ).toBe('<a>x</a>');
+    expect(sanitizeCreatorHtml('<a href="product:abc">x</a>', o)).toBe(
+      '<a>x</a>',
+    );
+    expect(sanitizeCreatorHtml('<a href="javascript:alert(1)">x</a>', o)).toBe(
+      '<a>x</a>',
+    );
+    expect(sanitizeCreatorHtml(`<img src="${REF}" />`, o)).toBeNull();
+  });
 });

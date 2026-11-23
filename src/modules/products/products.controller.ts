@@ -79,6 +79,8 @@ export class ProductsController {
     @Query('stock') stock?: string,
     // newest | oldest | updated | title_asc | title_desc | price_asc | price_desc
     @Query('sort') sort?: string,
+    // M165: comma-separated product ids (at most 50, malformed ignored).
+    @Query('ids') ids?: string,
   ) {
     return this.productsService.findMine(userId, userRole, {
       page: page ? +page : undefined,
@@ -91,6 +93,7 @@ export class ProductsController {
       collection,
       stock,
       sort,
+      ids,
     });
   }
 

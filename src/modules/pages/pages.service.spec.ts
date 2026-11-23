@@ -73,6 +73,28 @@ describe('PagesService HTML sanitizing on write', () => {
     );
     expect(contents(update.mock.calls[0][0].data)).toEqual(['<p>c</p>']);
   });
+
+  it('keeps a product link reference href (M165)', async () => {
+    const { svc, update } = setup();
+    const ref = 'product:0f8b2c4e-1a2b-4c3d-8e9f-a0b1c2d3e4f5';
+    await svc.update(
+      'pg1',
+      {
+        translations: [
+          {
+            locale: 'en',
+            title: 'T',
+            content: `<p><a href="${ref}">x</a><a href="product:abc">y</a></p>`,
+          },
+        ],
+      },
+      'admin',
+      UserRole.ADMIN,
+    );
+    expect(contents(update.mock.calls[0][0].data)).toEqual([
+      `<p><a href="${ref}">x</a><a>y</a></p>`,
+    ]);
+  });
 });
 
 // Legacy pages are served from the store cache of the storefront: a deleted

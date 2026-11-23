@@ -3479,18 +3479,28 @@ export class StorefrontService {
               (tr) => tr.locale === primaryLocale && !!tr.slug,
             ) || p.translations.find((tr) => !!tr.slug);
           if (!t) return null;
-          if (!market) return { slug: t.slug, lastmod: p.updated_at };
-          // Per-locale slugs so the sitemap can emit one <url> per locale
-          // with translated product paths (only with a market, D9/L12).
-          // Every translation, because alternates point at other markets'
-          // locales too (M161 A); the web ignores locales no market serves.
+          // Per-locale slugs: the market sitemap emits one <url> per locale
+          // with translated product paths (D9/L12). Every translation is
+          // listed, because alternates point at other markets' locales too
+          // (M161 A). M165: `id` and `slugs` are sent with and without a
+          // market so the storefront can resolve `product:<id>` link
+          // references; the legacy (no-market) sitemap XML reads `slug` only.
           const slugs: Record<string, string> = {};
           for (const tr of p.translations) {
             if (tr.slug) slugs[tr.locale] = tr.slug;
           }
-          return { slug: t.slug, slugs, lastmod: p.updated_at };
+          return { id: p.id, slug: t.slug, slugs, lastmod: p.updated_at };
         })
-        .filter((p): p is { slug: string; lastmod: Date } => !!p),
+        .filter(
+          (
+            p,
+          ): p is {
+            id: string;
+            slug: string;
+            slugs: Record<string, string>;
+            lastmod: Date;
+          } => !!p,
+        ),
       // M6.7: `path` is the hierarchical URL; a collection under an
       // unserved ancestor (not in this active PUBLIC set) is left out.
       collections: collections

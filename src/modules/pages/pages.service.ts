@@ -25,11 +25,18 @@ import { sanitizeCreatorHtml } from '../../common/html/creator-html';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
 import { relinkPageMenuItems } from '../menus/page-menu-links';
 
-/** Legacy page content is rendered as HTML on the storefront. */
+/**
+ * Legacy page content is rendered as HTML on the storefront, through the
+ * link rewriter, so `product:<id>` link references are kept (M165).
+ */
 function sanitizeTranslation(t: PageTranslationDto): PageTranslationDto {
   return t.content === undefined
     ? t
-    : { ...t, content: sanitizeCreatorHtml(t.content) ?? undefined };
+    : {
+        ...t,
+        content:
+          sanitizeCreatorHtml(t.content, { linkRefs: true }) ?? undefined,
+      };
 }
 
 @Injectable()

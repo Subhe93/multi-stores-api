@@ -1,4 +1,5 @@
 import sanitizeHtml from 'sanitize-html';
+import { PRODUCT_REF_RE } from '@multi-stores/core/link-ref';
 
 /**
  * Write-time sanitizer for creator-authored HTML that the storefront renders
@@ -140,24 +141,7 @@ const OPTIONS: sanitizeHtml.IOptions = {
     'source',
   ],
   transformTags: {
-    a: (tagName, attribs) => {
-      const kept: Record<string, string> = { ...attribs };
-      const blank = attribs.target === '_blank';
-      if (attribs.target !== undefined && !blank) delete kept.target;
-      const rel = new Set(
-        (attribs.rel ?? '')
-          .toLowerCase()
-          .split(/\s+/)
-          .filter((t) => /^(nofollow|noopener|noreferrer)$/.test(t)),
-      );
-      if (blank) {
-        rel.add('noopener');
-        rel.add('noreferrer');
-      }
-      if (rel.size) kept.rel = [...rel].sort().join(' ');
-      else delete kept.rel;
-      return { tagName, attribs: kept };
-    },
+    a: (tagName, attribs) => anchorAttribs(tagName, attribs),
   },
   // An <iframe> / <img> / <source> whose URL was rejected is dropped as a
   // whole instead of being kept as an empty element.
@@ -166,15 +150,71 @@ const OPTIONS: sanitizeHtml.IOptions = {
     !frame.attribs.src,
 };
 
+/** Normalises target / rel on links (shared by both profiles). */
+function anchorAttribs(
+  tagName: string,
+  attribs: sanitizeHtml.Attributes,
+): sanitizeHtml.Tag {
+  const kept: Record<string, string> = { ...attribs };
+  const blank = attribs.target === '_blank';
+  if (attribs.target !== undefined && !blank) delete kept.target;
+  const rel = new Set(
+    (attribs.rel ?? '')
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((t) => /^(nofollow|noopener|noreferrer)$/.test(t)),
+  );
+  if (blank) {
+    rel.add('noopener');
+    rel.add('noreferrer');
+  }
+  if (rel.size) kept.rel = [...rel].sort().join(' ');
+  else delete kept.rel;
+  return { tagName, attribs: kept };
+}
+
 /**
- * Sanitizes creator HTML for storage. `null` / `undefined` / whitespace-only
- * input, and input that is empty after sanitizing, give `null`.
+ * M165 link-reference profile (legacy static page content only, rendered
+ * through the storefront link rewriter): `href="product:<uuid>"` is kept.
+ * The scheme is allowed on <a href> only, and a `product:` href that does
+ * not match the strict grammar (e.g. `product:javascript:...`) is dropped.
+ */
+const LINK_REF_OPTIONS: sanitizeHtml.IOptions = {
+  ...OPTIONS,
+  allowedSchemesByTag: {
+    ...(OPTIONS.allowedSchemesByTag as Record<string, string[]>),
+    a: [...(OPTIONS.allowedSchemes as string[]), 'product'],
+  },
+  transformTags: {
+    a: (tagName, attribs) => {
+      const out = anchorAttribs(tagName, attribs);
+      const href = out.attribs.href;
+      if (href !== undefined && /^\s*product:/i.test(href)) {
+        if (PRODUCT_REF_RE.test(href.trim())) {
+          out.attribs.href = href.trim();
+        } else {
+          delete out.attribs.href;
+        }
+      }
+      return out;
+    },
+  },
+};
+
+/**
+ * Sanitizes creator HTML for storage. `linkRefs` keeps valid
+ * `product:<uuid>` hrefs (M165, legacy static pages only). `null` /
+ * `undefined` / whitespace-only input, and input that is empty after sanitizing, give `null`.
  */
 export function sanitizeCreatorHtml(
   html: string | null | undefined,
+  opts?: { linkRefs?: boolean },
 ): string | null {
   if (html == null) return null;
   if (html.trim() === '') return null;
-  const out = sanitizeHtml(html, OPTIONS).trim();
+  const out = sanitizeHtml(
+    html,
+    opts?.linkRefs ? LINK_REF_OPTIONS : OPTIONS,
+  ).trim();
   return out === '' ? null : out;
 }
