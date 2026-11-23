@@ -127,6 +127,7 @@ import {
   type CartDisplayLine,
 } from './cart-display';
 import { CART_DISPLAY_MAX_LINES } from './dto/cart-display.dto';
+import { sanitizeThemeSeo } from './theme-seo';
 
 /** The legacy freeform Store.theme_config JSON as getStore() reads it. */
 interface LegacyThemeConfig {
@@ -1352,7 +1353,8 @@ export class StorefrontService {
         templateId: themeConfig.templateId || 'default',
         socials: themeConfig.socials || {},
         contact: themeConfig.contact || {},
-        seo: themeConfig.seo || {},
+        // M166 F: other keys unchanged; `brandName` trimmed, capped, string only.
+        seo: sanitizeThemeSeo(themeConfig.seo),
         translations: themeConfig.translations || {},
         // Per-page hero/banner settings for the products listing and collection
         // pages. Freeform config — the storefront reads `products` / `collections`
