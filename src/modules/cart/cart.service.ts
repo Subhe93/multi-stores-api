@@ -777,7 +777,11 @@ export class CartService {
       .filter((id): id is string => !!id);
     const designViews =
       this.designerCart && designIds.length
-        ? await this.designerCart.cartDesigns(designIds, locale)
+        ? await this.designerCart.cartDesigns(designIds, locale, [
+            // M164: product link fallback = the storefront canonical rule.
+            market?.defaultLocale,
+            canonicalLocale,
+          ])
         : null;
     // Markets app: override rows of every own product in the cart, one query.
     const marketRows: MarketPriceMap | null = market

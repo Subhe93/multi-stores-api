@@ -18,6 +18,7 @@
  *   photo files, which is how a customer re-orders or edits an ordered one.
  */
 import { BadRequestException, Injectable, Optional } from '@nestjs/common';
+import { productLinkSlug } from '../../common/slug/product-link-slug';
 import { randomBytes } from 'crypto';
 import {
   DesignAssetKind,
@@ -320,24 +321,36 @@ export class DesignsService {
 
   // ── Views ─────────────────────────────────────────────────────────────────
 
-  /** Product slug in `locale`, else the same language, else any. */
+  /**
+   * Product slug of the canonical product URL (M164, the storefront rule):
+   * the slug of `locale`, else of `fallbackLocale` (store primary / market
+   * default), else the first usable one in locale order.
+   */
   async productSlug(
     productId: string,
     locale?: string | null,
+    fallbackLocale?: string | readonly (string | null | undefined)[] | null,
   ): Promise<string | null> {
     if (!isUuid(productId)) return null;
     const rows = await this.prisma.productTranslation.findMany({
       where: { product_id: productId },
       select: { locale: true, slug: true },
+      orderBy: [{ locale: 'asc' }],
     });
-    const want = (locale ?? '').trim().toLowerCase();
-    const lang = want.split(/[-_]/)[0];
-    const usable = rows.filter((r) => r.slug);
-    const pick =
-      usable.find((r) => r.locale.toLowerCase() === want) ??
-      usable.find((r) => r.locale.toLowerCase().split(/[-_]/)[0] === lang) ??
-      usable[0];
-    return pick?.slug ?? null;
+    return productLinkSlug(rows, (locale ?? '').trim(), fallbackLocale);
+  }
+
+  /** Store primary content locale (the product link fallback), or null. */
+  private async storePrimaryLocale(storeId: string): Promise<string | null> {
+    try {
+      const store = await this.prisma.store.findUnique({
+        where: { id: storeId },
+        select: { language_config: { select: { primary_locale: true } } },
+      });
+      return store?.language_config?.primary_locale ?? null;
+    } catch {
+      return null;
+    }
   }
 
   async view(
@@ -386,7 +399,11 @@ export class DesignsService {
     return {
       id: design.id,
       product_id: design.product_id,
-      product_slug: await this.productSlug(design.product_id, locale),
+      product_slug: await this.productSlug(
+        design.product_id,
+        locale,
+        await this.storePrimaryLocale(design.store_id),
+      ),
       template_version_id: design.template_version_id,
       status: design.status,
       state,

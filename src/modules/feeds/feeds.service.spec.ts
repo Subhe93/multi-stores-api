@@ -550,6 +550,46 @@ describe('FeedsService.publicFeed (M5.6)', () => {
     expect(feed.body).not.toContain('resumely.net');
   });
 
+  it('M164: the link uses the canonical slug of the feed locale (fallbacks, degenerate slugs, lowercase encoding)', async () => {
+    const { service } = build({
+      markets: [SE_MARKET, EU_MARKET],
+      products: [
+        // No en row: EU (en) falls back to the store primary (sv), not to
+        // whatever row comes first.
+        product({
+          id: 'p1',
+          translations: [
+            { locale: 'de', title: 'Buchstabe', description: '', slug: '3d-buchstabe' },
+            { locale: 'sv', title: 'Bokstav', description: '', slug: '3d-bokstav' },
+          ],
+        }),
+        // Degenerate en slug: never a broken `/products/-` link.
+        product({
+          id: 'p2',
+          translations: [
+            { locale: 'en', title: 'Sign', description: '', slug: '-' },
+            { locale: 'sv', title: 'Skylt', description: '', slug: 'skylt' },
+          ],
+        }),
+        // Non-ASCII slug: lowercase percent-encoding like the page canonical.
+        product({
+          id: 'p3',
+          translations: [{ locale: 'en', title: 'Doors', description: '', slug: 'dörr' }],
+        }),
+      ],
+    });
+    const eu = await service.publicFeed('namz', TOKEN, 'google', 'eu');
+    expect(eu.body).toContain('<g:link>https://namz.shop/products/3d-bokstav</g:link>');
+    expect(eu.body).toContain('<g:link>https://namz.shop/products/skylt</g:link>');
+    expect(eu.body).toContain('<g:link>https://namz.shop/products/d%c3%b6rr</g:link>');
+    expect(eu.body).not.toContain('/products/-<');
+    // Title stays the feed-locale translation logic (unchanged).
+    expect(eu.body).toContain('<g:title>Sign</g:title>');
+    const se = await service.publicFeed('namz', TOKEN, 'google');
+    expect(se.body).toContain('<g:link>https://namz.se/products/3d-bokstav</g:link>');
+    expect(se.body).toContain('<g:link>https://namz.se/products/skylt</g:link>');
+  });
+
   it('prices through the market helper, links the market domain, hides market-hidden products', async () => {
     const { service, prisma } = build({
       markets: [SE_MARKET, EU_MARKET],

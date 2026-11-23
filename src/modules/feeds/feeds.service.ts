@@ -1,4 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { encodeSlugForUrl } from '@multi-stores/core/slug';
+import { productLinkSlug } from '../../common/slug/product-link-slug';
 import {
   labelsForLocale,
   optionValueLabel,
@@ -572,6 +574,10 @@ export class FeedsService {
       products.push(p);
       const tr = pickTranslation(p.translations, locale);
       if (!tr) continue;
+      // M164: the canonical slug of the feed locale (same fallback chain as
+      // the storefront canonical), so Merchant Center never sees a redirect.
+      const linkSlug =
+        productLinkSlug(p.translations, locale, store.language_config?.primary_locale) ?? tr.slug;
       const gross = (amount: number) => this.grossOf(tax, p, amount, currency);
       const productImages = p.images.filter((i) => !i.variant_id);
       const featured = productImages.find((i) => i.is_featured);
@@ -587,7 +593,7 @@ export class FeedsService {
       const base = {
         title: tr.title,
         description: tr.description || '',
-        link: `${baseUrl}/products/${encodeURIComponent(tr.slug)}`,
+        link: `${baseUrl}/products/${encodeSlugForUrl(linkSlug)}`,
         currency,
         brand: p.brand || settings.default_brand,
         gtin: p.gtin,

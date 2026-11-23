@@ -35,6 +35,7 @@
  * duplicates it (`POST …/designs/:id/duplicate`).
  */
 import { HttpException, Injectable, Logger, Optional } from '@nestjs/common';
+import { productLinkSlug } from '../../common/slug/product-link-slug';
 import {
   DesignAssetKind,
   DesignStatus,
@@ -1104,6 +1105,8 @@ export class DesignerCartService {
   async cartDesigns(
     designIds: string[],
     locale?: string | null,
+    /** Product link fallback (M164): market default, then store primary. */
+    fallbackLocale?: readonly (string | null | undefined)[] | string | null,
   ): Promise<Map<string, CartDesignView>> {
     const ids = [...new Set(designIds.filter(isUuid))];
     const out = new Map<string, CartDesignView>();
@@ -1143,7 +1146,7 @@ export class DesignerCartService {
           template: LINK_TEMPLATE_SELECT,
         },
       }),
-      this.productSlugs(productIds, locale),
+      this.productSlugs(productIds, locale, fallbackLocale),
       photoIds.filter(isUuid).length
         ? this.prisma.designAsset.findMany({
             where: { id: { in: [...new Set(photoIds.filter(isUuid))] } },
@@ -1290,12 +1293,15 @@ export class DesignerCartService {
   }
 
   /**
-   * Product slug per product id in `locale` (else the same language,
-   * else any translation). One query for all products.
+   * Product slug per product id (M164, the storefront canonical rule): the
+   * slug of `locale`, else of `fallbackLocale` (market default, then store
+   * primary), else the first usable one in locale order. One query for all
+   * products.
    */
   async productSlugs(
     productIds: string[],
     locale?: string | null,
+    fallbackLocale?: string | readonly (string | null | undefined)[] | null,
   ): Promise<Map<string, string>> {
     const ids = [...new Set(productIds.filter(isUuid))];
     const out = new Map<string, string>();
@@ -1303,16 +1309,16 @@ export class DesignerCartService {
     const rows = await this.prisma.productTranslation.findMany({
       where: { product_id: { in: ids } },
       select: { product_id: true, locale: true, slug: true },
+      orderBy: [{ locale: 'asc' }],
     });
-    const want = (locale ?? '').trim().toLowerCase();
-    const lang = want.split(/[-_]/)[0];
+    const want = (locale ?? '').trim();
     for (const id of ids) {
-      const mine = rows.filter((r) => r.product_id === id && r.slug);
-      const pick =
-        mine.find((r) => r.locale.toLowerCase() === want) ??
-        mine.find((r) => r.locale.toLowerCase().split(/[-_]/)[0] === lang) ??
-        mine[0];
-      if (pick) out.set(id, pick.slug);
+      const pick = productLinkSlug(
+        rows.filter((r) => r.product_id === id),
+        want,
+        fallbackLocale,
+      );
+      if (pick) out.set(id, pick);
     }
     return out;
   }

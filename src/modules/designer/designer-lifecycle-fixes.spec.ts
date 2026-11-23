@@ -142,6 +142,24 @@ describe('Cart design block (invalid, product_slug, freshness)', () => {
     expect(v).not.toHaveProperty('invalid');
   });
 
+  it('M164: product_slug falls back like the storefront canonical (fallback list, usable slugs, locale order)', async () => {
+    const b = build();
+    b.db.productTranslation.push(
+      { product_id: PRODUCT, locale: 'sv', slug: 'namnskylt' },
+      { product_id: PRODUCT, locale: 'de', slug: 'namensschild' },
+      { product_id: PRODUCT, locale: 'en', slug: '-' },
+    );
+    const d = await completeDesign(b, CUSTOMER);
+    // en is degenerate: market default (sv) wins over the store primary (de).
+    expect((await b.cart.cartDesigns([d.id], 'en', ['sv', 'de'])).get(d.id)!.product_slug).toBe('namnskylt');
+    expect((await b.cart.cartDesigns([d.id], 'en', [null, 'de'])).get(d.id)!.product_slug).toBe('namensschild');
+    // No fallback hit: the first usable slug in locale order (de < sv).
+    expect((await b.cart.cartDesigns([d.id], 'fr')).get(d.id)!.product_slug).toBe('namensschild');
+    expect(await b.cart.productSlugs([PRODUCT], 'fr', 'sv')).toEqual(new Map([[PRODUCT, 'namnskylt']]));
+    expect(await b.designs.productSlug(PRODUCT, 'en', 'de')).toBe('namensschild');
+    expect(await b.designs.productSlug(PRODUCT, 'fr')).toBe('namensschild');
+  });
+
   it.each([
     ['archived template', 'DESIGNER_TEMPLATE_MISMATCH'],
     ['ordered design', 'DESIGNER_DESIGN_LOCKED'],
