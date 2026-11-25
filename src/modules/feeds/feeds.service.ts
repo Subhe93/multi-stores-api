@@ -628,6 +628,11 @@ export class FeedsService {
           );
           items.push({
             ...base,
+            // M170 B: the variant's own landing URL. `base.link` is already
+            // the canonical market slug (M164), so the storefront answers it
+            // without a redirect and preselects this variant (price, image
+            // and availability in the HTML match this item).
+            link: `${base.link}?variant=${v.id}`,
             id: v.id,
             item_group_id: p.id,
             ...prices(pv.price, pv.compare_at_price),

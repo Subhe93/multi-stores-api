@@ -10,6 +10,7 @@ import {
   type ImportEntity,
   type PrismaClient,
 } from '@prisma/client';
+import { prepareImageAltTranslations } from '../../../common/catalog/image-alt-translations';
 import type { PrivateStorage } from '../../../common/storage/private-file-storage';
 import type {
   DesignerImportPort,
@@ -1217,20 +1218,39 @@ async function restoreProduct(
       },
     });
   }
+  // M170 A: localized alts are not part of the `before` image (they are
+  // merchant content, not an importer-managed field). The current maps are
+  // carried over by url so a rollback never wipes them.
+  const storedAlts = await tx.productImage.findMany({
+    where: { product_id: id, variant_id: null },
+    orderBy: { sort_order: 'asc' },
+    select: {
+      url: true,
+      alt_translations: true,
+    } satisfies Prisma.ProductImageSelect,
+  });
   await tx.productImage.deleteMany({
     where: { product_id: id, variant_id: null },
   });
   const images = s.images.filter((i) => !i.variant_id);
-  if (images.length)
+  if (images.length) {
+    const alts = prepareImageAltTranslations(
+      images.map((i) => ({ url: i.url })),
+      storedAlts,
+      locale,
+    );
     await tx.productImage.createMany({
-      data: images.map((i) => ({
+      data: images.map((i, n) => ({
         product_id: id,
         url: i.url,
         alt_text: i.alt_text,
         sort_order: i.sort_order,
         is_featured: i.is_featured,
+        // Left out when there is none: the column default is NULL.
+        ...(alts[n] ? { alt_translations: alts[n] } : {}),
       })),
     });
+  }
   await tx.productTag.deleteMany({ where: { product_id: id } });
   if (s.tags.length)
     await tx.productTag.createMany({

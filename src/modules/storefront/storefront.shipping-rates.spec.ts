@@ -37,6 +37,8 @@ function build(opts: {
   market?: unknown;
   quotes?: Record<string, Partial<Quote>>;
   own?: unknown;
+  /** M170 C: stored Store.merchant_policies (absent = column NULL). */
+  policies?: unknown;
 }) {
   const prisma = {
     store: {
@@ -47,6 +49,9 @@ function build(opts: {
           status: opts.status ?? 'LIVE',
           store_type: StoreType.INDEPENDENT,
           creator: { id: 'c1' },
+          ...(opts.policies !== undefined
+            ? { merchant_policies: opts.policies }
+            : {}),
         }),
       ),
     },
@@ -248,5 +253,210 @@ describe('StorefrontService.getProductShippingRates', () => {
     const res = await service.getProductShippingRates('namez-se', 'x', 'SE');
     expect(res.rates).toEqual([]);
     expect(shipping.estimate).not.toHaveBeenCalled();
+  });
+});
+
+// M170 C: handling time + return policies ride on the same read.
+describe('StorefrontService.getProductShippingRates: merchant policies', () => {
+  const seQuote = {
+    SE: {
+      available: true,
+      methods: [method('standard', ShippingMethodType.DELIVERY, 49, 2, 5)],
+    },
+  };
+  const policies = {
+    handling: { min_days: 1, max_days: 2 },
+    returns: [
+      {
+        countries: ['SE', 'NO'],
+        category: 'finite',
+        days: 14,
+        methods: ['mail'],
+        fees: 'fixed',
+        fee_amount: 49,
+      },
+      { countries: ['DE', 'AT'], category: 'unlimited', fees: 'free' },
+    ],
+  };
+
+  it('not configured (NULL, absent or malformed): exactly the M161 response', async () => {
+    const expected = {
+      requires_shipping: true,
+      currency: 'SEK',
+      rates: [{ country: 'SE', cost: 49, min_days: 2, max_days: 5 }],
+    };
+    for (const stored of [
+      undefined,
+      null,
+      {},
+      'broken',
+      { handling: { min_days: 9, max_days: 1 } },
+      { returns: [{ countries: ['SE'], category: 'finite' }] },
+    ]) {
+      const { service } = build({ quotes: seQuote, policies: stored });
+      const res = await service.getProductShippingRates('namez-se', 'x', 'SE');
+      expect(res).toEqual(expected);
+      expect(Object.keys(res)).toEqual([
+        'requires_shipping',
+        'currency',
+        'rates',
+      ]);
+    }
+  });
+
+  it('handling only: handling_days, no return_policies key', async () => {
+    const { service } = build({
+      quotes: seQuote,
+      policies: { handling: { min_days: 1, max_days: 2 } },
+    });
+    const res = await service.getProductShippingRates('namez-se', 'x', 'SE');
+    expect(res).toEqual({
+      requires_shipping: true,
+      currency: 'SEK',
+      rates: [{ country: 'SE', cost: 49, min_days: 2, max_days: 5 }],
+      handling_days: { min: 1, max: 2 },
+    });
+    expect(res).not.toHaveProperty('return_policies');
+  });
+
+  it('return policies are narrowed to the requested countries', async () => {
+    const { service } = build({ quotes: seQuote, policies });
+    const res = await service.getProductShippingRates(
+      'namez-se',
+      'x',
+      'AT,SE,US',
+    );
+    expect(res.return_policies).toEqual([
+      {
+        countries: ['SE'],
+        category: 'finite',
+        days: 14,
+        methods: ['mail'],
+        fees: 'fixed',
+        fee_amount: 49,
+      },
+      { countries: ['AT'], category: 'unlimited', fees: 'free' },
+    ]);
+    // The rates themselves are computed as before.
+    expect(res.rates).toEqual([
+      { country: 'SE', cost: 49, min_days: 2, max_days: 5 },
+    ]);
+  });
+
+  it('no policy covers the request: no return_policies key', async () => {
+    const { service } = build({ quotes: seQuote, policies });
+    const res = await service.getProductShippingRates('namez-se', 'x', 'US');
+    expect(res).toEqual({
+      requires_shipping: true,
+      currency: 'SEK',
+      rates: [],
+      handling_days: { min: 1, max: 2 },
+    });
+    expect(res).not.toHaveProperty('return_policies');
+  });
+
+  it('market: the fixed return fee is converted like shipping costs', async () => {
+    const { service, marketPricing } = build({
+      market: { id: 'm-eu', key: 'eu', currency: 'EUR', rate: 0.1 },
+      quotes: {
+        AT: {
+          available: true,
+          methods: [method('dhl', ShippingMethodType.DELIVERY, 9.9)],
+        },
+      },
+      policies: {
+        returns: [
+          {
+            countries: ['AT'],
+            category: 'finite',
+            days: 30,
+            fees: 'fixed',
+            fee_amount: 49,
+          },
+        ],
+      },
+    });
+    const res = await service.getProductShippingRates(
+      'namez-se',
+      'x',
+      'AT',
+      'eu',
+    );
+    expect(res.currency).toBe('EUR');
+    expect(res.return_policies?.[0].fee_amount).toBeCloseTo(4.9);
+    expect(marketPricing.convertMoney).toHaveBeenCalledWith(
+      expect.anything(),
+      49,
+    );
+  });
+
+  it('every early return and requires_shipping false carry neither key', async () => {
+    const cases: Array<{
+      opts: Parameters<typeof build>[0];
+      countries: string;
+      market?: string;
+    }> = [
+      // Closed store.
+      { opts: { status: 'DRAFT' }, countries: 'SE' },
+      // No destination countries.
+      { opts: {}, countries: '' },
+      // Market without an FX rate.
+      {
+        opts: { market: { id: 'm', key: 'x', currency: 'EUR', rate: null } },
+        countries: 'SE',
+        market: 'x',
+      },
+      // Unknown product.
+      { opts: { own: null }, countries: 'SE' },
+      // Product that does not ship (service / digital).
+      {
+        opts: {
+          quotes: {
+            SE: { available: true, methods: [], requires_shipping: false },
+          },
+        },
+        countries: 'SE',
+      },
+    ];
+    for (const c of cases) {
+      const { service } = build({ ...c.opts, policies });
+      const res = await service.getProductShippingRates(
+        'namez-se',
+        'x',
+        c.countries,
+        c.market,
+      );
+      expect(res.rates).toEqual([]);
+      expect(Object.keys(res)).toEqual([
+        'requires_shipping',
+        'currency',
+        'rates',
+      ]);
+    }
+  });
+
+  it('hidden in the market: neither key', async () => {
+    const { service, marketPricing } = build({
+      market: { id: 'm-eu', key: 'eu', currency: 'EUR', rate: 0.1 },
+      policies,
+    });
+    marketPricing.priceProduct.mockReturnValue({
+      hidden: true,
+      base_price: 0,
+      compare_at_price: null,
+      variants: [],
+    });
+    const res = await service.getProductShippingRates(
+      'namez-se',
+      'x',
+      'SE',
+      'eu',
+    );
+    expect(Object.keys(res)).toEqual([
+      'requires_shipping',
+      'currency',
+      'rates',
+    ]);
+    expect(res.rates).toEqual([]);
   });
 });

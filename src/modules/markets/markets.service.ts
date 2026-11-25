@@ -1,3 +1,4 @@
+import { swapStoreImageAltsForPrimary } from '../../common/catalog/image-alt-translations';
 import {
   BadRequestException,
   ConflictException,
@@ -425,6 +426,16 @@ export class MarketsService {
             secondary_locales: updated.locales,
           },
         });
+        // M170 A: image alts follow the primary language (see
+        // swapPrimaryAlt). `row` is the default market before the update.
+        if (row.default_locale !== updated.default_locale) {
+          await swapStoreImageAltsForPrimary(
+            this.prisma,
+            store.id,
+            row.default_locale,
+            updated.default_locale,
+          );
+        }
       }
     }
     await this.afterMutation(store.id);

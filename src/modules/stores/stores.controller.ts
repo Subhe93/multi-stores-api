@@ -22,6 +22,7 @@ import {
   UpdateThemeSelectionDto,
   UpdateLanguageDto,
   TraderDetailsDto,
+  MerchantPoliciesDto,
   AdminStoreStatusDto,
   AdminStoresQueryDto,
 } from './dto/store.dto';
@@ -174,6 +175,18 @@ export class StoresController {
       userId,
       dto as Record<string, unknown>,
     );
+  }
+
+  // Creator — Merchant policies for structured data (M170 C): handling time
+  // and return policies. An empty body clears them (nothing is published).
+  @Put('my/merchant-policies')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.CREATOR)
+  updateMerchantPolicies(
+    @CurrentUser('id') userId: string,
+    @Body() dto: MerchantPoliciesDto,
+  ) {
+    return this.storesService.updateMerchantPolicies(userId, dto);
   }
 
   // Creator — Request go-live (auto-approved when the platform allows it)

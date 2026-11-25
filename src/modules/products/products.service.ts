@@ -113,6 +113,12 @@ import {
   type VariantOptionLabels,
 } from '../../common/catalog/variant-option-labels';
 import { labelsColumn } from '../../common/catalog/variant-option-labels.prisma';
+import {
+  altTranslationsColumn,
+  prepareImageAltTranslations,
+  readAltTranslations,
+  type ImageAltTranslations,
+} from '../../common/catalog/image-alt-translations';
 
 /** Business limit of videos per product (files and links together, D2). */
 export const PRODUCT_VIDEO_MAX_PER_PRODUCT = 3;
@@ -367,6 +373,14 @@ export function normalizeEmailNote(
   const v = typeof note === 'string' ? note.trim() : '';
   return v ? v : null;
 }
+
+/**
+ * Product images with the globally omitted `alt_translations` (M170 A):
+ * only the owner product read / create / update result and duplicate use it.
+ */
+export const OWNER_PRODUCT_IMAGES = {
+  omit: { alt_translations: false },
+} satisfies Prisma.ProductImageDefaultArgs;
 
 /**
  * Product translations with the globally omitted `email_note` (headless
@@ -747,7 +761,12 @@ export class ProductsService {
     // Owner editor shape: includes the confirmation email note; non-owners
     // get it stripped by redactProductForNonOwner.
     translations: OWNER_PRODUCT_TRANSLATIONS,
-    images: { orderBy: { sort_order: 'asc' as const } },
+    // Owner editor shape: includes the localized alt texts (M170 A; public
+    // text, so redactProductForNonOwner leaves it).
+    images: {
+      ...OWNER_PRODUCT_IMAGES,
+      orderBy: { sort_order: 'asc' as const },
+    },
     videos: PRODUCT_VIDEOS_INCLUDE,
     stories: PRODUCT_STORIES_INCLUDE,
     attributes: {
@@ -943,6 +962,9 @@ export class ProductsService {
     images?: ProductImageSyncDto[],
     videos?: PreparedProductVideo[],
     stories?: PreparedProductStory[],
+    // M170 A: the validated alt map per entry of `images` (same order);
+    // see prepareImageAlts. Absent = no localized alts are written.
+    imageAlts?: (ImageAltTranslations | null)[],
   ) {
     if (
       variants === undefined &&
@@ -1007,6 +1029,7 @@ export class ProductsService {
               product_id: productId,
               url: img.url,
               alt_text: img.alt_text ?? null,
+              alt_translations: altTranslationsColumn(imageAlts?.[i]),
               sort_order: i,
               is_featured: img.is_featured ?? false,
             })),
@@ -1656,6 +1679,10 @@ export class ProductsService {
       { userId, role: userRole },
     );
 
+    // M170 A: localized image alts are validated before the product row
+    // exists (a rejected map never leaves a half-created product behind).
+    const imageAlts = await this.prepareImageAlts(null, images, slugCtx.locale);
+
     // Create the product
     const product = await this.prisma.product.create({
       data: productData,
@@ -1724,6 +1751,7 @@ export class ProductsService {
       images,
       preparedVideos,
       preparedStories,
+      imageAlts,
     );
 
     await releaseLiveProductPaths(this.prisma, this.redirects, {
@@ -2209,6 +2237,13 @@ export class ProductsService {
         )
       : null;
 
+    // M170 A: localized image alts are validated (and the stored ones read
+    // for the carry-over) before any write.
+    const imageAlts = await this.prepareImageAlts(
+      { id, creator_id: product.creator_id },
+      images,
+    );
+
     // Update the product
     await this.prisma.product.update({
       where: { id },
@@ -2221,6 +2256,7 @@ export class ProductsService {
       images,
       preparedVideos,
       preparedStories,
+      imageAlts,
     );
 
     // Replace creator-collection attachments (creator-owned products only);
@@ -2379,6 +2415,42 @@ export class ProductsService {
     await this.revalidation.revalidateStoreSlugs(resellerSlugs);
 
     return deleted;
+  }
+
+  /**
+   * M170 A: the alt map to store per image of a save, aligned with `images`
+   * (undefined when the payload carries no images). On an update the stored
+   * maps of the product-level rows are read first: an image sent without
+   * `alt_translations` keeps the map stored for the same url (older
+   * dashboards), null / {} clears it. Throws PRODUCT_IMAGE_ALT_INVALID.
+   */
+  private async prepareImageAlts(
+    product: { id: string; creator_id: string | null } | null,
+    images: ProductImageSyncDto[] | undefined,
+    primaryLocale?: string,
+  ): Promise<(ImageAltTranslations | null)[] | undefined> {
+    if (images === undefined) return undefined;
+    if (images.length === 0) return [];
+    const needsStored =
+      !!product && images.some((img) => img.alt_translations === undefined);
+    const stored = needsStored
+      ? await this.prisma.productImage.findMany({
+          where: { product_id: product.id, variant_id: null },
+          orderBy: { sort_order: 'asc' },
+          select: {
+            url: true,
+            alt_translations: true,
+          } satisfies Prisma.ProductImageSelect,
+        })
+      : [];
+    // The primary locale is only needed to normalise a sent map.
+    const needsLocale = images.some((img) => img.alt_translations != null);
+    const locale =
+      primaryLocale ??
+      (needsLocale
+        ? (await productSlugContext(this.prisma, product?.creator_id)).locale
+        : 'en');
+    return prepareImageAltTranslations(images, stored, locale);
   }
 
   /**
@@ -2564,7 +2636,8 @@ export class ProductsService {
       where: { id },
       include: {
         translations: OWNER_PRODUCT_TRANSLATIONS,
-        images: true,
+        // M170 A: the localized alts are copied with the images.
+        images: OWNER_PRODUCT_IMAGES,
         videos: true,
         attributes: true,
         variants: true,
@@ -2724,6 +2797,10 @@ export class ProductsService {
               : null,
             url: img.url,
             alt_text: img.alt_text,
+            // Product-level rows only carry a map; variant rows hold null.
+            alt_translations: altTranslationsColumn(
+              readAltTranslations(img.alt_translations),
+            ),
             sort_order: img.sort_order,
             is_featured: img.is_featured,
           })),

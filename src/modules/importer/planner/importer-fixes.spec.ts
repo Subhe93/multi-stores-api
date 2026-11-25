@@ -296,6 +296,49 @@ describe('fix 5/6 — rollback restores what the run updated', () => {
     expect(planItem(h, again.id, REF(4256)).action).toBe('UNCHANGED');
   });
 
+  it('M170: a re-run and its rollback keep the localized alts the merchant entered (carried over by url)', async () => {
+    const h = await makeHarness();
+    await h.apply((await h.dryRun()).id);
+    const p = productByRef(h.db, 4256);
+    const imagesOf = () =>
+      h.db.productImage.rows
+        .filter((i: any) => i.product_id === p.id && !i.variant_id)
+        .sort((a: any, b: any) => a.sort_order - b.sort_order);
+    const before = imagesOf();
+    expect(before.length).toBeGreaterThan(0);
+    // The merchant adds a German alt to the first image in the dashboard.
+    before[0].alt_translations = { de: 'Dalapferd aus Holz' };
+    const firstUrl = before[0].url;
+    const ids = before.map((i: any) => i.id);
+
+    const dir = sliceEdit('posts.tsv', (c) => {
+      if (c[0] === '4256' && c[20] === 'product') c[5] = 'Ny dalahäst';
+    });
+    const second = await h.dryRun(NAMEZ_OPTIONS, dir);
+    expect(planItem(h, second.id, REF(4256)).action).toBe('UPDATE');
+    await h.apply(second.id);
+    const after = imagesOf();
+    // The rows were really replaced, and the map travelled with the url.
+    expect(after.map((i: any) => i.id)).not.toEqual(ids);
+    expect(after.find((i: any) => i.url === firstUrl).alt_translations).toEqual(
+      { de: 'Dalapferd aus Holz' },
+    );
+    for (const img of after.filter((i: any) => i.url !== firstUrl))
+      expect(img.alt_translations ?? null).toBeNull();
+
+    await h.runs.rollback(STORE_ID, USER_ID, second.id);
+    await h.worker.tick();
+    expect((await h.runs.detail(STORE_ID, second.id)).status).toBe(
+      'ROLLED_BACK',
+    );
+    expect(
+      imagesOf().find((i: any) => i.url === firstUrl).alt_translations,
+    ).toEqual({ de: 'Dalapferd aus Holz' });
+    // Localized alts are not a managed field: the source re-plans UNCHANGED.
+    const again = await h.dryRun();
+    expect(planItem(h, again.id, REF(4256)).action).toBe('UNCHANGED');
+  });
+
   it('merchant-edited entities: created product archived, created collection kept, both reported', async () => {
     const h = await makeHarness();
     const run = await h.dryRun();

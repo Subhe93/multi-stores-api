@@ -6,6 +6,7 @@ import {
   Prisma,
   ProductStatus,
 } from '@prisma/client';
+import { prepareImageAltTranslations } from '../../../common/catalog/image-alt-translations';
 import { lockProductFields } from '../../personalization/personalization-field-writer';
 import {
   productMediaRefs,
@@ -389,11 +390,24 @@ async function writeProductRows(
     .filter((u) => !publicUrlOf(ctx, u));
   const keepImages =
     !creating && !ctx.options.scopes.media && resolved.some((i) => !i.url);
+  // M170 A: localized alts are merchant content the importer does not
+  // manage. They are read before the rows are replaced and carried over by
+  // url (the rule a product save uses for a client that does not send them).
+  let storedAlts: { url: string; alt_translations: unknown }[] = [];
   if (!creating) {
-    if (!keepImages)
+    if (!keepImages) {
+      storedAlts = await tx.productImage.findMany({
+        where: { product_id: productId, variant_id: null },
+        orderBy: { sort_order: 'asc' },
+        select: {
+          url: true,
+          alt_translations: true,
+        } satisfies Prisma.ProductImageSelect,
+      });
       await tx.productImage.deleteMany({
         where: { product_id: productId, variant_id: null },
       });
+    }
     // Legacy ProductTag rows are retired: neither written nor deleted here
     // (an old run's rows stay until the DB cleanup step).
     const faqs = await tx.productFaq.findMany({
@@ -411,6 +425,11 @@ async function writeProductRows(
     (i): i is { url: string; alt: string | null; source: string } => !!i.url,
   );
   if (images.length && !keepImages) {
+    const alts = prepareImageAltTranslations(
+      images.map((img) => ({ url: img.url })),
+      storedAlts,
+      ctx.primaryLocale,
+    );
     await tx.productImage.createMany({
       data: images.map((img, i) => ({
         product_id: productId,
@@ -418,6 +437,8 @@ async function writeProductRows(
         alt_text: img.alt,
         sort_order: i,
         is_featured: i === 0,
+        // Left out when there is none: the column default is NULL.
+        ...(alts[i] ? { alt_translations: alts[i] } : {}),
       })),
     });
   }

@@ -64,6 +64,11 @@ import {
 } from './cookie-page';
 import { publicCheckoutSettings } from '../stores/checkout-settings';
 import { effectiveCodEnabled } from '../stores/cod-policy';
+import {
+  parseMerchantPolicies,
+  publicMerchantPolicies,
+  type PublicReturnPolicy,
+} from '../stores/merchant-policies';
 import { effectiveProductStock } from '../products/effective-stock';
 import { sanitizeAuthPagesConfig } from '../stores/theme-config';
 import {
@@ -94,6 +99,7 @@ import {
   trimLabelRows,
   type LabelRow,
 } from '../../common/catalog/variant-option-labels';
+import { publicImage } from '../../common/catalog/image-alt-translations';
 import {
   normalizeFacetQuery,
   runFacets,
@@ -305,6 +311,8 @@ export function productBySlugQuery(
   };
 }
 
+export type { PublicReturnPolicy };
+
 /** One destination's cheapest delivery rate (M161 B6). */
 export interface ProductShippingRate {
   country: string;
@@ -317,6 +325,10 @@ export interface ProductShippingRates {
   requires_shipping: boolean;
   currency: string;
   rates: ProductShippingRate[];
+  /** M170 C: only when the store configured a handling time. */
+  handling_days?: { min: number; max: number };
+  /** M170 C: return policies that cover at least one requested country. */
+  return_policies?: PublicReturnPolicy[];
 }
 
 /** At most this many destination countries per shipping-rates request. */
@@ -1263,6 +1275,8 @@ export class StorefrontService {
       cache_enabled: _cacheEnabled,
       oss_registered: _ossRegistered,
       shipping_tax_class_id: _shippingTaxClassId,
+      // M170 C: published only through the product shipping-rates read.
+      merchant_policies: _merchantPolicies,
       ...storeRow
     } = store;
     const checkout = publicCheckoutSettings(rawCheckoutSettings);
@@ -2454,6 +2468,8 @@ export class StorefrontService {
           images: {
             where: { variant_id: null },
             orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }],
+            // M170 A: the product page opts in to the localized alt texts.
+            omit: { alt_translations: false },
           },
           // Gallery videos; served only when there is at least one.
           videos: PRODUCT_VIDEOS_INCLUDE,
@@ -2583,6 +2599,9 @@ export class StorefrontService {
       );
       const shaped = {
         ...publicProduct,
+        // M170 A: `alt_translations` only on images that have a map (an
+        // image without one serializes exactly as before).
+        images: product.images.map(publicImage),
         // As on the list row: the sum of the variants when all are numbered.
         stock_quantity: effectiveProductStock(product, product.variants),
         custom_fields: shapeFieldsForStorefront(product.custom_fields, appOn),
@@ -2685,6 +2704,8 @@ export class StorefrontService {
             images: {
               where: { variant_id: null },
               orderBy: [{ is_featured: 'desc' }, { sort_order: 'asc' }],
+              // M170 A: as on the creator-product include above.
+              omit: { alt_translations: false },
             },
             // Custom products show the base product's videos (D5), also when
             // mockups replace the images.
@@ -2806,7 +2827,7 @@ export class StorefrontService {
               alt_text: null,
               sort_order: img.sort_order,
             }))
-          : baseProduct.images,
+          : baseProduct.images.map(publicImage),
       ...storefrontVideosField(baseProduct.videos),
       ...storefrontStoriesField(baseProduct.stories),
       attributes: baseProduct.attributes,
@@ -3291,7 +3312,19 @@ export class StorefrontService {
         max_days: cheapest.estimated_days?.max ?? null,
       });
     }
-    return { requires_shipping: true, currency, rates };
+    // M170 C: handling time + return policies, only on this final return of
+    // a shippable product. Every early return above stays as it was, and a
+    // store without the setting adds no key at all.
+    return {
+      requires_shipping: true,
+      currency,
+      rates,
+      ...publicMerchantPolicies(
+        parseMerchantPolicies(store.merchant_policies),
+        countries,
+        money ? money.fromBase : null,
+      ),
+    };
   }
 
   /**

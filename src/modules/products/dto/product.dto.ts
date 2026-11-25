@@ -143,6 +143,12 @@ export class ProductImageSyncDto {
   @IsString()
   alt_text?: string;
 
+  // M170 A: {"de": "..."}; undefined keeps the stored map of the image with
+  // the same url, null or {} clears it. Deep validation in ProductsService.
+  @IsOptional()
+  @IsObject()
+  alt_translations?: Record<string, string> | null;
+
   @IsOptional()
   @IsBoolean()
   is_featured?: boolean;

@@ -107,6 +107,11 @@ const PRIVATE_VALUES = {
   cache_enabled: false,
   oss_registered: true,
   shipping_tax_class_id: 'tax-class-private',
+  // M170 C: the raw policies stay with the owner.
+  merchant_policies: {
+    handling: { min_days: 1, max_days: 2 },
+    returns: [{ countries: ['SE'], category: 'finite', days: 14 }],
+  },
 };
 
 function storeRow(status: StoreStatus) {

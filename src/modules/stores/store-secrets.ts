@@ -50,6 +50,9 @@ export const PRIVATE_STORE_KEYS = [
   'cache_enabled',
   'oss_registered',
   'shipping_tax_class_id',
+  // M170 C: raw merchant policies; the public projection travels only in
+  // the product shipping-rates read.
+  'merchant_policies',
 ] as const;
 
 type PrivateStoreKey = (typeof PRIVATE_STORE_KEYS)[number];

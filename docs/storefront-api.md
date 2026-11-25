@@ -78,7 +78,7 @@ Documented keys (LIVE store):
 
 Other keys may appear (for example `trader_details`, `went_live_at`, `created_at`, `creator`, `checkout` when the store overrides checkout defaults). Ignore keys you do not use.
 
-**Never in this payload** (removed 2026-11, task D3; the contract spec fails if they come back): `notification_email`, `status_reason`, `golive_requested_at`, `stripe_key_lock_until`, `cache_enabled`, `oss_registered`, `shipping_tax_class_id`, `checkout_settings` (raw), `meta_capi_token`, `meta_test_event_code`. The store owner reads them through the owner endpoints (`/stores/my/store`, `/taxes/my/settings`, `/mail/store/notifications`), and the web reads the cache switch through `/storefront/:slug/cache-config`.
+**Never in this payload** (removed 2026-11, task D3; the contract spec fails if they come back): `notification_email`, `status_reason`, `golive_requested_at`, `stripe_key_lock_until`, `cache_enabled`, `oss_registered`, `shipping_tax_class_id`, `merchant_policies`, `checkout_settings` (raw), `meta_capi_token`, `meta_test_event_code`. `merchant_policies` (M170) was never public: its raw value stays with the owner, and only its projection travels in the shipping-rates read (3.5). The store owner reads them through the owner endpoints (`/stores/my/store`, `/taxes/my/settings`, `/mail/store/notifications`), and the web reads the cache switch through `/storefront/:slug/cache-config`.
 
 The older public route `GET /stores/:slug` (not used by the web or the dashboard) drops the same columns plus the Meta token and test code (`publicStoreRow`, list `PRIVATE_STORE_KEYS` in `src/modules/stores/store-secrets.ts`; spec `stores.capi-token.spec.ts`). External sites should read `GET /storefront/:slug`.
 
@@ -200,6 +200,8 @@ Trimmed example item:
 
 `:productSlug` is any locale's `translations[].slug` (URL-encode it). Same core keys as the list item, plus: the full product gallery in `images` (product-level images, featured first), `variants[].images`, `custom_fields` (participant fields the booking page asks for), `faqs`, `attributes`, `creator_categories`, `primary_collection` keys, `shipping_profile` (always `null` for a product with `requires_shipping: false`: it has no shipping table and inherits no default profile), `bundles`, and optional `videos` / `stories` (absent when empty). 404 `STOREFRONT_PRODUCT_NOT_FOUND` for an unknown or unpublished slug.
 
+`images[].alt_translations` (optional, product detail only): alt text per locale, `{ "de": "...", "en": "..." }`. `alt_text` is the default alt in the store's primary language (the map never holds that locale). The key is **absent** on an image without localized alt text, and no list, card, cart or feed row ever carries it. To render an image in a locale use, in this order: `alt_translations[locale]`, `alt_translations[<base language>]` (`de` for `de-AT`), `alt_text`, then the product title.
+
 You normally do not need this route on the custom site: the list has everything for a course table. Use it for a course detail page if the site has one.
 
 ### 3.4 `GET /storefront/:slug/creator-categories`: collections
@@ -213,6 +215,7 @@ The store's active PUBLIC collections as a tree: `[{ id, slug, parent_id, thumbn
 | `GET /storefront/:slug/sitemap-data` | Product slugs + `lastmod`, collections, pages, locales (for redirect maps or your own sitemap) |
 | `GET /storefront/:slug/legal` and `/storefront/:slug/legal/:slug?locale=sv` | The store's legal pages (terms, privacy, refund, shipping). Link to them on the store host rather than copying them |
 | `GET /storefront/:slug/cache-config` | `{ enabled: boolean }`: whether the store wants caching (section 8) |
+| `GET /storefront/:slug/products/:productSlug/shipping-rates?countries=SE,NO` | Cheapest delivery rate per destination country (max 10) for one product, the source of the product page's structured data: `{ requires_shipping, currency, rates: [{ country, cost, min_days, max_days }] }`. Two optional keys (M170), present only when the store owner configured them and only for a product that ships: `handling_days: { min, max }` (business days before hand-over to the carrier) and `return_policies: [{ countries, category: "finite" | "unlimited" | "none", days?, methods?: ("mail" | "store" | "kiosk")[], fees?: "free" | "customer" | "fixed", fee_amount? }]` (`countries` = the policy's countries among the requested ones; `fee_amount` in the response `currency`). A missing key means "not stated": never assume a default |
 
 Everything else under `/storefront/:slug/...` (menus, v2 page snapshots, templates) is internal to the ShopsDoor storefront; do not depend on it.
 

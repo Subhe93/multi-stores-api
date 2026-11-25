@@ -3,6 +3,7 @@ import {
   IsOptional,
   IsBoolean,
   IsArray,
+  ArrayMaxSize,
   IsEnum,
   IsIn,
   IsObject,
@@ -152,6 +153,22 @@ export class TraderDetailsDto {
   @IsString()
   @MaxLength(254)
   support_email?: string;
+}
+
+/**
+ * PUT /stores/my/merchant-policies (M170 C). Shape guard only: the real
+ * rules live in merchant-policies.ts and answer 400
+ * MERCHANT_POLICIES_INVALID with the offending `fields`.
+ */
+export class MerchantPoliciesDto {
+  @IsOptional()
+  @IsObject()
+  handling?: Record<string, unknown> | null;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  returns?: unknown[] | null;
 }
 
 /** PUT /admin/stores/:id/status */

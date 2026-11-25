@@ -14,6 +14,11 @@ import { PrismaClient } from '@prisma/client';
  *     `translations: true` by the storefront, cart, page builder and more,
  *     so the note is kept out of all of them; only the mail include and the
  *     owner product read / update / duplicate opt in.
+ *   - ProductImage.alt_translations: alt text per locale (M170 A). Image
+ *     rows are returned whole by lists, cards, the cart, feeds and the
+ *     importer, so the column is kept out of all of them; only the owner
+ *     product read / update / duplicate and the storefront product page
+ *     opt in.
  * The generated types still list these columns, so treat them as absent
  * unless the query opted in.
  */
@@ -21,6 +26,7 @@ export const PRISMA_GLOBAL_OMIT = {
   store: { meta_capi_token: true },
   order: { tracking_context: true },
   productTranslation: { email_note: true },
+  productImage: { alt_translations: true },
 } as const;
 
 @Injectable()

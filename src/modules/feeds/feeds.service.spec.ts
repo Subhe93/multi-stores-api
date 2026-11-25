@@ -518,6 +518,98 @@ describe('FeedsService.publicFeed (M5.6)', () => {
     ).toHaveLength(2);
   });
 
+  it('M170 B: a variant item links <canonical market slug>?variant=<id>; product items keep the base link', async () => {
+    const RED = '3f6c1c1e-0b7e-4a57-9a53-2f1a8f1d2c11';
+    const BLUE = '9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d';
+    const variants = [
+      {
+        id: RED,
+        price_adjustment: 0,
+        compare_at_price: null,
+        stock_quantity: 3,
+        options: { Color: 'Red' },
+        images: [],
+      },
+      {
+        id: BLUE,
+        price_adjustment: 20,
+        compare_at_price: null,
+        stock_quantity: 0,
+        options: { Color: 'Blue' },
+        images: [],
+      },
+    ];
+    const world = () => ({
+      markets: [SE_MARKET, EU_MARKET],
+      products: [
+        product({ variants }),
+        // No variants: the product-level item, base link.
+        product({
+          id: 'p2',
+          translations: [
+            { locale: 'en', title: 'Sign', description: '', slug: 'sign' },
+            { locale: 'sv', title: 'Skylt', description: '', slug: 'skylt' },
+          ],
+        }),
+      ],
+    });
+    const links = (body: string) =>
+      [...body.matchAll(/<g:link>([^<]*)<\/g:link>/g)].map((m) => m[1]);
+
+    // Market feed: the slug is the market locale's canonical one (M164) and
+    // each variant item carries its own id, the same value as g:id.
+    const eu = await build(world()).service.publicFeed(
+      'namz',
+      TOKEN,
+      'google',
+      'eu',
+    );
+    expect(eu.items).toBe(3);
+    expect(links(eu.body)).toEqual([
+      `https://namz.shop/products/tee?variant=${RED}`,
+      `https://namz.shop/products/tee?variant=${BLUE}`,
+      'https://namz.shop/products/sign',
+    ]);
+    expect(eu.body).toContain(`<g:id>${RED}</g:id>`);
+    expect(eu.body).toContain(`<g:id>${BLUE}</g:id>`);
+    expect(eu.body).toContain('<g:item_group_id>p1</g:item_group_id>');
+
+    // Default market: its own host and slug.
+    const se = await build(world()).service.publicFeed('namz', TOKEN, 'google');
+    expect(links(se.body)).toEqual([
+      `https://namz.se/products/troja?variant=${RED}`,
+      `https://namz.se/products/troja?variant=${BLUE}`,
+      'https://namz.se/products/skylt',
+    ]);
+
+    // The Meta CSV shares FeedItem.link.
+    const csv = (
+      await build(world()).service.publicFeed('namz', TOKEN, 'facebook')
+    ).body;
+    expect(csv).toContain(`https://namz.se/products/troja?variant=${RED}`);
+    expect(csv).toContain(`https://namz.se/products/troja?variant=${BLUE}`);
+    expect(csv).toContain('https://namz.se/products/skylt,');
+
+    // include_variants off: one product item, base link, no parameter.
+    const collapsed = await build({
+      ...world(),
+      settings: { token: TOKEN, include_variants: false },
+    }).service.publicFeed('namz', TOKEN, 'google');
+    expect(links(collapsed.body)).toEqual([
+      'https://namz.se/products/troja',
+      'https://namz.se/products/skylt',
+    ]);
+    expect(collapsed.body).not.toContain('?variant=');
+  });
+
+  it('M170 B: a product without variants never gets the parameter (feed body unchanged)', async () => {
+    const feed = await build().service.publicFeed('namz', TOKEN, 'google');
+    expect(feed.body).toContain(
+      '<g:link>https://shop.example.com/store/namz/products/troja</g:link>',
+    );
+    expect(feed.body).not.toContain('variant=');
+  });
+
   it('links the legacy custom domain without the markets app', async () => {
     const { service } = build({
       store: store({ custom_domain: 'mybrand.se' }),

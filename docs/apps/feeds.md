@@ -102,7 +102,7 @@ Creator (JWT, `CREATOR`, `@RequireApp('feeds')`):
 | `id` | variant id (variants mode) or product id |
 | `item_group_id` | product id (variants mode only) |
 | `title` / `description` | translation of the market's default locale (fallback: store primary locale → `en` → first); description HTML → plain text, ≤ 5000 chars |
-| `link` | `https://<market primary hostname>/products/<slug>`; without a market: the store's `custom_domain` or `STOREFRONT_URL/store/<slug>` |
+| `link` | `https://<market primary hostname>/products/<slug>`; without a market: the store's `custom_domain` or `STOREFRONT_URL/store/<slug>`; a variant item (variants mode) appends `?variant=<variant id>` (M170: the storefront preselects that variant, the page canonical stays the base URL) |
 | `image_link` / `additional_image_link` | variant images first, then product images (featured first, up to 10 additional) |
 | `availability` | `in_stock` unless `track_inventory` and stock ≤ 0 (variant stock, else product stock) |
 | `price` / `sale_price` | market price through `MarketPricingService.priceProduct` (overrides, FX, rounding); when a compare-at price is higher, `price` = compare-at and `sale_price` = current. Tax: INCLUSIVE stores keep their prices; EXCLUSIVE stores add the product class rate of the market's first country (`resolveRatesForLine`) |

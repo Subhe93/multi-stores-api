@@ -627,6 +627,11 @@ model ProductImage {
   variant_id  String?
   url         String
   alt_text    String?
+  // M170 A: alt text per locale, {"de": "...", "en": "..."}; alt_text stays the
+  // default (store primary language). Null = none. Globally omitted in
+  // PrismaService; only the owner product read/write, duplicate and the
+  // storefront product page opt in.
+  alt_translations Json?
   sort_order  Int     @default(0)
   is_featured Boolean @default(false)
 
@@ -1356,6 +1361,11 @@ model Store {
   // Null = the platform defaults (today's behaviour); see
   // modules/stores/checkout-settings.ts for the shape.
   checkout_settings       Json?
+  // M170 C: merchant policies for structured data (Google merchant listings):
+  // { handling?: {min_days, max_days}, returns?: ReturnPolicy[] }. Null = not
+  // configured = nothing is emitted. Owner-only column (PRIVATE_STORE_KEYS);
+  // see modules/stores/merchant-policies.ts for the shape.
+  merchant_policies       Json?
   // Tracking + cookie consent (Namez go-live 3.9). Public ids only — the
   // storefront loads the vendor scripts; no secrets live here.
   ga4_measurement_id      String?        @db.VarChar(32)

@@ -38,10 +38,7 @@ import {
   publicStoreRow,
 } from './store-secrets';
 import { stripBrandFromThemeConfig } from './theme-config';
-import {
-  loadStorefrontHosts,
-  type StorefrontHosts,
-} from './storefront-hosts';
+import { loadStorefrontHosts, type StorefrontHosts } from './storefront-hosts';
 import {
   assertExternalSiteNotPlatformHost,
   assertExternalSiteNotStoreHost,
@@ -53,6 +50,8 @@ import {
   readStoredCheckoutSettings,
   withStoredCheckoutSettings,
 } from './checkout-settings';
+import { validateMerchantPolicies } from './merchant-policies';
+import { swapStoreImageAltsForPrimary } from '../../common/catalog/image-alt-translations';
 import { ReauthService } from '../security/reauth.service';
 import { SecurityAuditService } from '../security/security-audit.service';
 import type { RequestMeta } from '../security/request-meta';
@@ -171,7 +170,8 @@ export class StoresService {
       where: { slug: normalized },
       select: { id: true },
     });
-    if (existing) return { slug, normalized, available: false, reason: 'taken' };
+    if (existing)
+      return { slug, normalized, available: false, reason: 'taken' };
     return { slug, normalized, available: true };
   }
 
@@ -1325,6 +1325,29 @@ export class StoresService {
     }
   }
 
+  /**
+   * PUT /stores/my/merchant-policies (M170 C): handling time + return
+   * policies of the caller's own store, validated by merchant-policies.ts
+   * (400 MERCHANT_POLICIES_INVALID with `fields`). Nothing configured is
+   * stored as SQL NULL. The product shipping-rates read (structured data) is
+   * cached on the store tag, hence the revalidation.
+   */
+  async updateMerchantPolicies(userId: string, body: unknown) {
+    const storeId = await this.findStoreIdByCreatorUser(userId);
+    const value = validateMerchantPolicies(body);
+    const updated = await this.prisma.store.update({
+      where: { id: storeId },
+      data: {
+        merchant_policies: value
+          ? (value as unknown as Prisma.InputJsonObject)
+          : Prisma.DbNull,
+      },
+      select: { id: true, merchant_policies: true },
+    });
+    await this.revalidation.revalidateStoreById(storeId);
+    return updated;
+  }
+
   async updateLanguages(userId: string, dto: UpdateLanguageDto) {
     // A locale in review may be a secondary language only (400 otherwise).
     assertNotReviewPrimaryLocale(dto.primary_locale);
@@ -1376,6 +1399,20 @@ export class StoresService {
       update: normalized,
       create: { store_id: store.id, ...normalized },
     });
+
+    // M170 A: `ProductImage.alt_text` is the alt of the primary language.
+    // When that language changes, an image with an alt for the new primary
+    // language swaps the two, so no text is lost or shown under the wrong
+    // language. A store without a config row was on the 'en' default.
+    const previousPrimary = existing?.primary_locale || 'en';
+    if (previousPrimary !== config.primary_locale) {
+      await swapStoreImageAltsForPrimary(
+        this.prisma,
+        store.id,
+        previousPrimary,
+        config.primary_locale,
+      );
+    }
 
     // The default market mirrors the store's locales only while the markets
     // app is off; once it is on, the Markets page owns them (L8).

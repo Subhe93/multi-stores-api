@@ -100,6 +100,7 @@ describe('global Prisma omit', () => {
       store: { meta_capi_token: true },
       order: { tracking_context: true },
       productTranslation: { email_note: true },
+      productImage: { alt_translations: true },
     });
   });
 });
