@@ -183,6 +183,15 @@ describe('MerchantPoliciesDto (shape guard)', () => {
       'returns',
     ]);
   });
+
+  it('M172: personalized_no_returns is an optional boolean', async () => {
+    for (const value of [true, false, null, undefined]) {
+      expect(await errorsOf({ personalized_no_returns: value })).toEqual([]);
+    }
+    expect(await errorsOf({ personalized_no_returns: 'true' })).toEqual([
+      'personalized_no_returns',
+    ]);
+  });
 });
 
 describe('merchant_policies visibility', () => {

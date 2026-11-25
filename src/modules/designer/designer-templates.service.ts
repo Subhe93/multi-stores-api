@@ -961,6 +961,37 @@ export class DesignerTemplatesService {
   // ── Storefront ────────────────────────────────────────────────────────────
 
   /**
+   * M172: whether the product page offers the designer, by the same gate as
+   * `storefrontBlock` below (app on, link enabled, template PUBLISHED with
+   * an existing current version) without loading the block itself.
+   */
+  async storefrontLive(storeId: string, productId: string): Promise<boolean> {
+    if (!(await this.storeApps.isEnabled(storeId, 'designer'))) return false;
+    const link = await this.prisma.productDesigner.findUnique({
+      where: { product_id: productId },
+      include: {
+        template: {
+          select: { id: true, status: true, current_version_id: true },
+        },
+      },
+    });
+    if (
+      !link ||
+      !link.enabled ||
+      link.store_id !== storeId ||
+      link.template.status !== DesignTemplateStatus.PUBLISHED ||
+      !link.template.current_version_id
+    ) {
+      return false;
+    }
+    const version = await this.prisma.designTemplateVersion.findUnique({
+      where: { id: link.template.current_version_id },
+      select: { id: true },
+    });
+    return !!version;
+  }
+
+  /**
    * The `designer` block of `GET storefront/:slug/products/:id`: present
    * only when the app is on, the product's link is enabled and its template
    * is PUBLISHED with a current version; null otherwise (the caller then

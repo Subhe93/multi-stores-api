@@ -360,3 +360,124 @@ describe('publicMerchantPolicies', () => {
     );
   });
 });
+
+// M172: the personalised-products exception.
+describe('personalized_no_returns (M172)', () => {
+  it('true is kept next to a return policy, as the last key', () => {
+    const out = validateMerchantPolicies({
+      personalized_no_returns: true,
+      returns: [finite],
+      handling: { min_days: 1, max_days: 2 },
+    });
+    expect(out).toEqual({
+      handling: { min_days: 1, max_days: 2 },
+      returns: [finite],
+      personalized_no_returns: true,
+    });
+    expect(Object.keys(out ?? {})).toEqual([
+      'handling',
+      'returns',
+      'personalized_no_returns',
+    ]);
+  });
+
+  it('false, null and absent all store no key (same record as before M172)', () => {
+    const plain = validateMerchantPolicies({ returns: [finite] });
+    for (const value of [false, null, undefined]) {
+      const out = validateMerchantPolicies({
+        returns: [finite],
+        personalized_no_returns: value,
+      });
+      expect(JSON.stringify(out)).toBe(JSON.stringify(plain));
+    }
+  });
+
+  it('is dropped without a return policy', () => {
+    expect(validateMerchantPolicies({ personalized_no_returns: true })).toBe(
+      null,
+    );
+    expect(
+      validateMerchantPolicies({
+        handling: { min_days: 1, max_days: 2 },
+        returns: [],
+        personalized_no_returns: true,
+      }),
+    ).toEqual({ handling: { min_days: 1, max_days: 2 } });
+  });
+
+  it('is strictly a boolean', () => {
+    for (const value of ['true', 'false', 1, 0, {}, []]) {
+      expect(
+        fieldsOf({ returns: [finite], personalized_no_returns: value }),
+      ).toEqual(['personalized_no_returns']);
+    }
+  });
+
+  it('survives the validate / parse round trip; a malformed flag closes the value', () => {
+    const stored = validateMerchantPolicies({
+      returns: [finite],
+      personalized_no_returns: true,
+    });
+    expect(parseMerchantPolicies(stored)).toEqual(stored);
+    expect(validateMerchantPolicies(parseMerchantPolicies(stored))).toEqual(
+      stored,
+    );
+    expect(
+      parseMerchantPolicies({
+        returns: [finite],
+        personalized_no_returns: 'yes',
+      }),
+    ).toBeNull();
+  });
+
+  describe('publicMerchantPolicies', () => {
+    const base = {
+      handling: { min_days: 1, max_days: 2 },
+      returns: [
+        {
+          countries: ['SE', 'NO', 'DK'],
+          category: 'finite' as const,
+          days: 14,
+          methods: ['mail' as const],
+          fees: 'fixed' as const,
+          fee_amount: 49,
+        },
+        { countries: ['DE', 'AT'], category: 'unlimited' as const },
+      ],
+    };
+    const on = { ...base, personalized_no_returns: true as const };
+    const request = ['AT', 'SE', 'US', 'NO'];
+
+    it('flag on + personalised: one "none" policy for the covered countries, in request order', () => {
+      const out = publicMerchantPolicies(on, request, (a) => a / 10, true);
+      expect(out).toEqual({
+        handling_days: { min: 1, max: 2 },
+        return_policies: [{ countries: ['AT', 'SE', 'NO'], category: 'none' }],
+      });
+      expect(Object.keys(out.return_policies?.[0] ?? {})).toEqual([
+        'countries',
+        'category',
+      ]);
+    });
+
+    it('flag on + personalised, nothing covered: no return_policies key', () => {
+      const out = publicMerchantPolicies(on, ['US'], null, true);
+      expect(out).toEqual({ handling_days: { min: 1, max: 2 } });
+    });
+
+    it('flag on + plain product: the store policies, unchanged', () => {
+      expect(JSON.stringify(publicMerchantPolicies(on, request, null))).toBe(
+        JSON.stringify(publicMerchantPolicies(base, request, null)),
+      );
+      expect(
+        JSON.stringify(publicMerchantPolicies(on, request, null, false)),
+      ).toBe(JSON.stringify(publicMerchantPolicies(base, request, null)));
+    });
+
+    it('flag off + personalised: the store policies, unchanged', () => {
+      expect(
+        JSON.stringify(publicMerchantPolicies(base, request, null, true)),
+      ).toBe(JSON.stringify(publicMerchantPolicies(base, request, null)));
+    });
+  });
+});

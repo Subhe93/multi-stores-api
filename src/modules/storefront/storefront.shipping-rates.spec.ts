@@ -10,6 +10,8 @@ import type { MarketsContextService } from '../markets/markets-context.service';
 import type { MarketPricingService } from '../markets/market-pricing.service';
 import type { TaxService } from '../taxes/tax.service';
 import type { ShippingService } from '../shipping/shipping.service';
+import type { PersonalizationService } from '../personalization/personalization.service';
+import type { DesignerTemplatesService } from '../designer/designer-templates.service';
 
 // M161 B6: GET /storefront/:slug/products/:productSlug/shipping-rates.
 
@@ -39,6 +41,15 @@ function build(opts: {
   own?: unknown;
   /** M170 C: stored Store.merchant_policies (absent = column NULL). */
   policies?: unknown;
+  /** M172: custom fields of the own product (detail read). */
+  fields?: unknown[];
+  /** M172: the slug resolves to this custom product (marketplace store). */
+  custom?: unknown;
+  /** M172: detail read of that custom product. */
+  customDetail?: unknown;
+  /** M172: designer link is live / personalization app is on. */
+  designerLive?: boolean;
+  personalizationApp?: boolean;
 }) {
   const prisma = {
     store: {
@@ -47,7 +58,9 @@ function build(opts: {
           id: 's1',
           slug: 'namez-se',
           status: opts.status ?? 'LIVE',
-          store_type: StoreType.INDEPENDENT,
+          store_type: opts.custom
+            ? StoreType.MARKETPLACE
+            : StoreType.INDEPENDENT,
           creator: { id: 'c1' },
           ...(opts.policies !== undefined
             ? { merchant_policies: opts.policies }
@@ -64,8 +77,23 @@ function build(opts: {
           opts.own === undefined ? { id: 'p1', base_price: 390 } : opts.own,
         ),
       ),
+      findUnique: jest.fn(() =>
+        Promise.resolve({
+          variant_option_config: null,
+          custom_fields: opts.fields ?? [],
+        }),
+      ),
     },
-    customProduct: { findFirst: jest.fn(() => Promise.resolve(null)) },
+    customProduct: {
+      findFirst: jest.fn(() => Promise.resolve(opts.custom ?? null)),
+      findUnique: jest.fn(() => Promise.resolve(opts.customDetail ?? null)),
+    },
+  };
+  const personalization = {
+    isEnabled: jest.fn(() => Promise.resolve(opts.personalizationApp === true)),
+  };
+  const designer = {
+    storefrontLive: jest.fn(() => Promise.resolve(opts.designerLive === true)),
   };
   const markets = {
     resolve: jest.fn(() => Promise.resolve(opts.market ?? null)),
@@ -99,12 +127,12 @@ function build(opts: {
     markets as unknown as MarketsContextService,
     marketPricing as unknown as MarketPricingService,
     {} as TaxService,
-    undefined,
-    undefined,
+    personalization as unknown as PersonalizationService,
+    designer as unknown as DesignerTemplatesService,
     undefined,
     shipping as unknown as ShippingService,
   );
-  return { service, shipping, prisma, marketPricing };
+  return { service, shipping, prisma, marketPricing, designer };
 }
 
 describe('parseRateCountries', () => {
@@ -458,5 +486,155 @@ describe('StorefrontService.getProductShippingRates: merchant policies', () => {
       'rates',
     ]);
     expect(res.rates).toEqual([]);
+  });
+});
+
+// M172: personalised products are published as not returnable when the
+// store switched the exception on.
+describe('StorefrontService.getProductShippingRates: personalised exception', () => {
+  const quotes = {
+    SE: {
+      available: true,
+      methods: [method('dhl', ShippingMethodType.DELIVERY, 49, 2, 5)],
+    },
+  };
+  const returns = [
+    {
+      countries: ['SE', 'NO'],
+      category: 'finite',
+      days: 14,
+      methods: ['mail'],
+      fees: 'fixed',
+      fee_amount: 49,
+    },
+    { countries: ['DE', 'AT'], category: 'unlimited', fees: 'free' },
+  ];
+  const off = { handling: { min_days: 1, max_days: 2 }, returns };
+  const on = { ...off, personalized_no_returns: true };
+  const field = (
+    id: string,
+    type: string,
+    parent_id: string | null = null,
+  ) => ({
+    id,
+    type,
+    parent_id,
+    name: id,
+    is_required: false,
+  });
+  const nameField = field('f1', 'TEXT');
+  const read = (opts: Parameters<typeof build>[0], countries = 'AT,SE,US') => {
+    const built = build({ quotes, ...opts });
+    return {
+      ...built,
+      res: built.service.getProductShippingRates('namez-se', 'x', countries),
+    };
+  };
+
+  it('flag off (false, absent): unchanged and the product is never looked at', async () => {
+    const plain = await read({ policies: off }).res;
+    for (const policies of [off, { ...off, personalized_no_returns: false }]) {
+      const r = read({ policies, fields: [nameField], designerLive: true });
+      expect(JSON.stringify(await r.res)).toBe(JSON.stringify(plain));
+      expect(r.prisma.product.findUnique).not.toHaveBeenCalled();
+      expect(r.prisma.customProduct.findUnique).not.toHaveBeenCalled();
+      expect(r.designer.storefrontLive).not.toHaveBeenCalled();
+    }
+  });
+
+  it('flag on + personalised: "none" for the covered countries, rates and handling as before', async () => {
+    const res = await read({ policies: on, fields: [nameField] }).res;
+    expect(res).toEqual({
+      requires_shipping: true,
+      currency: 'SEK',
+      rates: [{ country: 'SE', cost: 49, min_days: 2, max_days: 5 }],
+      handling_days: { min: 1, max: 2 },
+      return_policies: [{ countries: ['AT', 'SE'], category: 'none' }],
+    });
+  });
+
+  it('flag on + plain product: the store policies, unchanged', async () => {
+    const plain = await read({ policies: off }).res;
+    for (const fields of [
+      [],
+      [field('f1', 'SELECT'), field('f2', 'NUMBER'), field('f3', 'DATE')],
+    ]) {
+      const res = await read({ policies: on, fields }).res;
+      expect(JSON.stringify(res)).toBe(JSON.stringify(plain));
+    }
+  });
+
+  it('flag on + personalised, no policy covers the request: no return_policies key', async () => {
+    const res = await read({ policies: on, fields: [nameField] }, 'US').res;
+    expect(res).not.toHaveProperty('return_policies');
+  });
+
+  it('a live designer link makes the product personalised', async () => {
+    const r = read({ policies: on, designerLive: true });
+    expect((await r.res).return_policies).toEqual([
+      { countries: ['AT', 'SE'], category: 'none' },
+    ]);
+    expect(r.designer.storefrontLive).toHaveBeenCalledWith('s1', 'p1');
+  });
+
+  it('a personnummer text field is not buyer content: the store policies stay', async () => {
+    const idField = {
+      ...field('f1', 'TEXT'),
+      validation_rules: { format: 'personnummer' },
+    };
+    const plain = await read({ policies: off }).res;
+    for (const personalizationApp of [false, true]) {
+      const res = await read({
+        policies: on,
+        fields: [idField],
+        personalizationApp,
+      }).res;
+      expect(res.return_policies).toEqual(plain.return_policies);
+    }
+    // With a real name field next to it the product is personalised again.
+    const both = await read({ policies: on, fields: [idField, nameField] }).res;
+    expect(both.return_policies?.[0].category).toBe('none');
+  });
+
+  it('repeater children count only while the personalization app is on', async () => {
+    const fields = [field('rep', 'REPEATER'), field('c1', 'TEXT', 'rep')];
+    const appOn = await read({ policies: on, fields, personalizationApp: true })
+      .res;
+    expect(appOn.return_policies?.[0].category).toBe('none');
+    // App off: the storefront does not publish the repeater at all.
+    const appOff = await read({ policies: on, fields }).res;
+    expect(appOff.return_policies?.[0].category).toBe('finite');
+  });
+
+  it('custom product: only fields its creator left open for the buyer count', async () => {
+    const custom = { id: 'cp1', final_price: 300 };
+    const detail = (prefilled: string[]) => ({
+      field_values: prefilled.map((id) => ({ custom_field_id: id })),
+      product: { custom_fields: [nameField] },
+    });
+    const open = read({
+      policies: on,
+      own: null,
+      custom,
+      customDetail: detail([]),
+      designerLive: true,
+    });
+    expect((await open.res).return_policies).toEqual([
+      { countries: ['AT', 'SE'], category: 'none' },
+    ]);
+    expect(open.prisma.customProduct.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'cp1' } }),
+    );
+    // The creator filled the text in: a finished design, not buyer content.
+    // The designer is never consulted for a custom product.
+    const filled = read({
+      policies: on,
+      own: null,
+      custom,
+      customDetail: detail(['f1']),
+      designerLive: true,
+    });
+    expect((await filled.res).return_policies?.[0].category).toBe('finite');
+    expect(filled.designer.storefrontLive).not.toHaveBeenCalled();
   });
 });

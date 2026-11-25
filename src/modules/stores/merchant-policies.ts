@@ -32,6 +32,14 @@ export interface MerchantPolicies {
   /** Business days between the order and the hand-over to the carrier. */
   handling?: { min_days: number; max_days: number };
   returns?: ReturnPolicy[];
+  /**
+   * M172: personalised products (the buyer enters a text, uploads an image
+   * or designs the item, see storefront/personalised-product.ts) are
+   * published as not returnable instead of with the policies above. Stored
+   * only as `true` and only next to at least one return policy; absent =
+   * off, so a store that never set it reads exactly as before.
+   */
+  personalized_no_returns?: true;
 }
 
 export const HANDLING_MAX_DAYS = 30;
@@ -82,7 +90,8 @@ function invalid(fields: string[]): BadRequestException {
  * policy), which the caller stores as SQL NULL.
  *
  * Throws 400 MERCHANT_POLICIES_INVALID with `fields`: paths such as
- * `handling.max_days`, `returns`, `returns.0.days`, `returns.1.countries`.
+ * `handling.max_days`, `returns`, `returns.0.days`, `returns.1.countries`,
+ * `personalized_no_returns`.
  */
 export function validateMerchantPolicies(
   body: unknown,
@@ -222,11 +231,26 @@ export function validateMerchantPolicies(
     }
   }
 
+  // M172: strictly a boolean. `false` is the default and is not stored; the
+  // flag says nothing without a return policy, so it is dropped (not
+  // refused) when the list is empty.
+  let personalizedNoReturns = false;
+  if (given(body.personalized_no_returns)) {
+    if (typeof body.personalized_no_returns !== 'boolean') {
+      fields.push('personalized_no_returns');
+    } else {
+      personalizedNoReturns = body.personalized_no_returns;
+    }
+  }
+
   if (fields.length) throw invalid(fields);
   if (!handling && returns.length === 0) return null;
   return {
     ...(handling ? { handling } : {}),
     ...(returns.length ? { returns } : {}),
+    ...(personalizedNoReturns && returns.length
+      ? { personalized_no_returns: true as const }
+      : {}),
   };
 }
 
@@ -268,11 +292,19 @@ export interface PublicMerchantPolicies {
  * there is nothing to say, so an unconfigured store answers exactly as before.
  * `fromBase` converts a base-currency amount into the response currency;
  * null = no market, the amount is already in the response currency.
+ *
+ * M172: `personalised` says the product is made to the buyer's specification
+ * (decided by the caller, storefront/personalised-product.ts). Together with
+ * the store's `personalized_no_returns` flag, the covered countries are then
+ * published as ONE policy of category 'none' (no days, methods or fees), in
+ * request order. With the flag off, or for any other product, the output is
+ * exactly the one above.
  */
 export function publicMerchantPolicies(
   policies: MerchantPolicies | null,
   countries: readonly string[],
   fromBase: ((amount: number) => number) | null,
+  personalised = false,
 ): PublicMerchantPolicies {
   if (!policies) return {};
   const out: PublicMerchantPolicies = {};
@@ -281,6 +313,15 @@ export function publicMerchantPolicies(
       min: policies.handling.min_days,
       max: policies.handling.max_days,
     };
+  }
+  if (personalised && policies.personalized_no_returns === true) {
+    const covered = countries.filter((c) =>
+      (policies.returns ?? []).some((p) => p.countries.includes(c)),
+    );
+    if (covered.length) {
+      out.return_policies = [{ countries: covered, category: 'none' }];
+    }
+    return out;
   }
   const list: PublicReturnPolicy[] = [];
   for (const policy of policies.returns ?? []) {

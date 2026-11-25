@@ -56,6 +56,7 @@ import {
 } from '../personalization/personalization-runtime';
 import type { PFieldDef } from '@multi-stores/core/personalization/types';
 import { DesignerTemplatesService } from '../designer/designer-templates.service';
+import { isBuyerPersonalisedProduct } from './personalised-product';
 import { countPublishedInCollections } from './collection-counts';
 import {
   cookiePageSelect,
@@ -3374,16 +3375,82 @@ export class StorefrontService {
     // M170 C: handling time + return policies, only on this final return of
     // a shippable product. Every early return above stays as it was, and a
     // store without the setting adds no key at all.
+    const policies = parseMerchantPolicies(store.merchant_policies);
+    // M172: the personalised-product exception. The product is only looked
+    // at when the store switched the exception on (no extra query otherwise).
+    const personalised =
+      policies?.personalized_no_returns === true
+        ? await this.isPersonalisedForReturns(
+            store.id,
+            ownRow ? { own: ownRow.id } : { custom: productId },
+          )
+        : false;
     return {
       requires_shipping: true,
       currency,
       rates,
       ...publicMerchantPolicies(
-        parseMerchantPolicies(store.merchant_policies),
+        policies,
         countries,
         money ? money.fromBase : null,
+        personalised,
       ),
     };
+  }
+
+  /**
+   * M172: whether the buyer supplies own content for this product (rule in
+   * personalised-product.ts), judged on the same buyer-facing data as the
+   * product read: an own product's fields as `getProduct` shapes them plus a
+   * live designer link; a custom product's base fields its creator did not
+   * pre-fill (always the legacy shape, no designer). A product that cannot
+   * be loaded is not personalised.
+   */
+  private async isPersonalisedForReturns(
+    storeId: string,
+    target: { own: string } | { custom: string },
+  ): Promise<boolean> {
+    if ('custom' in target) {
+      const row = await this.prisma.customProduct.findUnique({
+        where: { id: target.custom },
+        select: {
+          field_values: { select: { custom_field_id: true } },
+          product: { select: { custom_fields: true } },
+        },
+      });
+      if (!row) return false;
+      const prefilled = new Set(
+        row.field_values.map((fv) => fv.custom_field_id),
+      );
+      return isBuyerPersonalisedProduct({
+        fields: shapeFieldsForStorefront(
+          row.product.custom_fields.filter((cf) => !prefilled.has(cf.id)),
+          false,
+        ),
+      });
+    }
+    const row = await this.prisma.product.findUnique({
+      where: { id: target.own },
+      select: { variant_option_config: true, custom_fields: true },
+    });
+    if (!row) return false;
+    const appOn = await this.personalizationOn(
+      storeId,
+      row.custom_fields as unknown as PFieldDef[],
+      row.variant_option_config,
+    );
+    if (
+      isBuyerPersonalisedProduct({
+        fields: shapeFieldsForStorefront(row.custom_fields, appOn),
+      })
+    ) {
+      return true;
+    }
+    return isBuyerPersonalisedProduct({
+      designer: this.designerTemplates
+        ? await this.designerTemplates.storefrontLive(storeId, target.own)
+        : false,
+    });
   }
 
   /**

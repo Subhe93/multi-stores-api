@@ -169,6 +169,11 @@ export class MerchantPoliciesDto {
   @IsArray()
   @ArrayMaxSize(10)
   returns?: unknown[] | null;
+
+  // M172: personalised products are published as not returnable.
+  @IsOptional()
+  @IsBoolean()
+  personalized_no_returns?: boolean | null;
 }
 
 /** PUT /admin/stores/:id/status */
