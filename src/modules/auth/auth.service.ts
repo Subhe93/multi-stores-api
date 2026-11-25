@@ -45,6 +45,7 @@ import { TwoFactorService } from '../security/two-factor.service';
 import type { RequestMeta } from '../security/request-meta';
 import { TurnstileService } from '../../common/security/turnstile.service';
 import { platformHosts } from '../../common/domains/platform-hosts';
+import { storeCaptchaHosts } from '../../common/security/store-captcha-hosts';
 
 /** Bcrypt cost of every password hash written by the auth flows. */
 const PASSWORD_BCRYPT_COST = 12;
@@ -186,21 +187,7 @@ export class AuthService {
    */
   private async storeCaptchaHosts(storeId: string): Promise<string[]> {
     if (!this.turnstile?.customersEnabled) return [];
-    const [domains, store] = await Promise.all([
-      this.prisma.storeDomain.findMany({
-        where: { store_id: storeId, status: 'ACTIVE' },
-        select: { hostname: true },
-      }),
-      this.prisma.store.findUnique({
-        where: { id: storeId },
-        select: { custom_domain: true },
-      }),
-    ]);
-    return [
-      ...platformHosts().map((h) => `.${h}`),
-      ...domains.map((d) => d.hostname),
-      ...(store?.custom_domain ? [store.custom_domain] : []),
-    ];
+    return storeCaptchaHosts(this.prisma, storeId);
   }
 
   private storeRequired(): BadRequestException {

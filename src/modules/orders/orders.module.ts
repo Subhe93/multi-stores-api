@@ -19,6 +19,7 @@ import { ProductionCoreModule } from '../production/production-core.module';
 import { DesignerCoreModule } from '../designer/designer-core.module';
 import { StorefrontGateModule } from '../storefront/storefront-gate.service';
 import { MetaCapiModule } from '../meta-capi/meta-capi.module';
+import { ReviewsModule } from '../reviews/reviews.module';
 
 @Module({
   imports: [
@@ -49,6 +50,9 @@ import { MetaCapiModule } from '../meta-capi/meta-capi.module';
     // the order-bound token from GuestOrderTokenModule.
     AuthModule,
     GuestOrderTokenModule,
+    // M171: reviews of a trashed / test-flagged order are hidden (imports
+    // only globals + JwtModule, no cycle).
+    ReviewsModule,
   ],
   // The guest controller first: its fixed `guest` segment must never be
   // read as an order id by a route of OrdersController.

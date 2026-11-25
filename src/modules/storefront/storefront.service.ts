@@ -311,6 +311,65 @@ export function productBySlugQuery(
   };
 }
 
+/** A storefront product resolved to its id (own or custom product). */
+export interface StorefrontProductTarget {
+  kind: 'product' | 'custom_product';
+  id: string;
+}
+
+/**
+ * Id-only twin of the product page lookup (M171 reviews read): resolves a
+ * product slug in the SAME order as `getProduct` — own exact, custom exact,
+ * then the case-insensitive fallbacks (own, custom); custom products only on
+ * a non-INDEPENDENT store — so a legacy-case slug can never resolve to
+ * another product than the page shows. Public statuses by default. Keep in
+ * step with `getProduct` when its lookup order changes.
+ */
+export async function resolveProductTargetBySlug(
+  prisma: Pick<PrismaService, 'product' | 'customProduct'>,
+  store: { creator_id: string; store_type: StoreType },
+  productSlug: string,
+  statuses: readonly ProductPreviewStatus[] = PUBLIC_PRODUCT_STATUSES,
+): Promise<StorefrontProductTarget | null> {
+  const servesCustom = store.store_type !== StoreType.INDEPENDENT;
+  const own = (insensitive: boolean) =>
+    prisma.product.findFirst({
+      ...productBySlugQuery(
+        store.creator_id,
+        productSlug,
+        insensitive,
+        statuses,
+      ),
+      select: { id: true },
+    });
+  const custom = (insensitive: boolean) =>
+    prisma.customProduct.findFirst({
+      ...productBySlugQuery(
+        store.creator_id,
+        productSlug,
+        insensitive,
+        statuses,
+      ),
+      select: { id: true },
+    });
+
+  const ownExact = await own(false);
+  if (ownExact) return { kind: 'product', id: ownExact.id };
+  if (servesCustom) {
+    const customExact = await custom(false);
+    if (customExact) return { kind: 'custom_product', id: customExact.id };
+  }
+  const ownInsensitive = await own(true);
+  if (ownInsensitive) return { kind: 'product', id: ownInsensitive.id };
+  if (servesCustom) {
+    const customInsensitive = await custom(true);
+    if (customInsensitive) {
+      return { kind: 'custom_product', id: customInsensitive.id };
+    }
+  }
+  return null;
+}
+
 export type { PublicReturnPolicy };
 
 /** One destination's cheapest delivery rate (M161 B6). */

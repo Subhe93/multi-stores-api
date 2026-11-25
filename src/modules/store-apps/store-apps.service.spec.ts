@@ -193,6 +193,7 @@ describe('StoreAppsService', () => {
         'feeds',
         'zoho_mail',
         'product_layout',
+        'reviews',
       ]);
       for (const app of list) {
         expect(app).toMatchObject({
@@ -326,6 +327,7 @@ describe('StoreAppsService', () => {
         'feeds',
         'zoho_mail',
         'product_layout',
+        'reviews',
       ]);
       const markets = list.find((a) => a.key === 'markets');
       expect(markets).toMatchObject({
@@ -520,6 +522,7 @@ describe('StoreAppsService', () => {
         ['feeds', false],
         ['zoho_mail', false],
         ['product_layout', false],
+        ['reviews', false],
       ]);
       expect(list[3]).toMatchObject({
         requires_independent: true,

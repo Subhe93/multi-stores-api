@@ -68,6 +68,7 @@ import { InvoiceTriggersService } from '../invoices/invoice-triggers.service';
 import { MetaConversionsService } from '../meta-capi/meta-conversions.service';
 import type { TrackingContext } from '../meta-capi/tracking-context';
 import { RevalidationService } from '../../common/revalidation/revalidation.service';
+import { ReviewsService } from '../reviews/reviews.service';
 import {
   isStockMoveVisible,
   loadedStockBefore,
@@ -828,7 +829,28 @@ export class OrdersService implements OnModuleInit {
     // global): optional and trailing for the same reason. Absent = no
     // refresh, the storefront's time-based revalidation catches up.
     @Optional() private readonly revalidation?: RevalidationService,
+    // M171 reviews app: optional and trailing for the same reason. Absent =
+    // no review is hidden when an order is trashed / flagged test.
+    @Optional() private readonly reviews?: ReviewsService,
   ) {}
+
+  /**
+   * M171: an order that stopped being a real purchase (trashed, flagged
+   * test) hides its reviews. Best effort, after the order write committed:
+   * a failure is logged and never fails the order action.
+   */
+  private async hideOrderReviews(orderId: string): Promise<void> {
+    if (!this.reviews) return;
+    try {
+      await this.reviews.hideForOrders([orderId]);
+    } catch (err) {
+      this.logger.warn(
+        `Hiding the reviews of order ${orderId} failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
 
   /** Boot: read and log the imported-product stock cut-over once. */
   onModuleInit(): void {
@@ -6229,6 +6251,7 @@ export class OrdersService implements OnModuleInit {
     if (!order.coupon_released_at) {
       await this.releaseFailedOrderCoupon(order.id);
     }
+    await this.hideOrderReviews(order.id);
     await this.audit?.record({
       actor: { id: actor.id, email: actor.email, role: actor.role },
       action: 'order.deleted',
@@ -6350,6 +6373,7 @@ export class OrdersService implements OnModuleInit {
           actor: trashActorLabel(actor),
         },
       });
+      if (isTest) await this.hideOrderReviews(id);
       await this.audit?.record({
         actor: { id: actor.id, email: actor.email, role: actor.role },
         action: 'order.test_flag',

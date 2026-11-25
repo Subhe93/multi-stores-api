@@ -276,6 +276,8 @@ model Customer {
   orders         Order[]
   cart           Cart?
   tax_exemptions StoreCustomerTaxExemption[]
+  reviews        ProductReview[]
+  review_holds   ProductReviewHold[]
 }
 
 model Address {
@@ -545,6 +547,8 @@ model Product {
   market_prices            ProductMarketPrice[]
   designer                 ProductDesigner?
   archived_order_lines     ArchivedOrderLine[]
+  reviews                  ProductReview[]
+  review_holds             ProductReviewHold[]
 
   @@unique([creator_id, external_ref])
   @@index([primary_creator_category_id])
@@ -968,6 +972,7 @@ model Order {
   production_checks  OrderProductionCheck[]
   production_summary OrderProductionSummary?
   production_events  OrderProductionEvent[]
+  reviews            ProductReview[]
 
   @@index([customer_id])
   @@index([order_number])
@@ -1070,6 +1075,7 @@ model OrderItem {
   custom_field_values OrderCustomFieldValue[]
   production_checks   OrderProductionCheck[]
   design              OrderItemDesign?
+  reviews             ProductReview[]
 
   @@index([order_id])
   @@index([fulfiller_id])
@@ -1415,6 +1421,8 @@ model Store {
   uploaded_files            UploadedFile[]
   archived_orders           ArchivedOrder[]
   consent_logs              ConsentLog[]
+  reviews                   ProductReview[]
+  review_holds              ProductReviewHold[]
 
   @@index([slug])
   @@index([status])
@@ -2178,6 +2186,8 @@ model CustomProduct {
   order_items              OrderItem[]
   bundles                  BundleCustomProduct[]
   creator_categories       CustomProductCreatorCategory[]
+  reviews                  ProductReview[]
+  review_holds             ProductReviewHold[]
 
   @@index([primary_creator_category_id])
 }
@@ -2588,6 +2598,89 @@ model ProductStoryTranslation {
   story ProductStory @relation(fields: [story_id], references: [id], onDelete: Cascade)
 
   @@unique([story_id, locale])
+}
+
+enum ProductReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// M171: verified-buyer product review. Target is product_id XOR
+// custom_product_id (raw-SQL CHECK "ProductReview_target_chk"); rating 1..5
+// (CHECK "ProductReview_rating_chk"). One review per customer per target.
+// Raw SQL (prisma/RAW-SQL.md): never drop the two CHECKs when a generated
+// diff lists them.
+model ProductReview {
+  id                String              @id @default(uuid())
+  store_id          String
+  product_id        String?
+  custom_product_id String?
+  customer_id       String
+  // Verified purchase: the order line the review was written for.
+  order_id          String?
+  order_item_id     String?
+  verified_purchase Boolean             @default(true)
+  rating            Int                 @db.SmallInt
+  title             String?             @db.VarChar(120)
+  // Plain text, never HTML.
+  body              String
+  // Public name chosen by the customer; never the email.
+  display_name      String              @db.VarChar(60)
+  // Locale the review was written in.
+  locale            String              @db.VarChar(10)
+  status            ProductReviewStatus @default(PENDING)
+  // ACCOUNT (logged-in customer) | LINK (signed review link).
+  source            String              @default("ACCOUNT") @db.VarChar(16)
+  // First approval; kept across later edits (stable order, no "bump" by editing).
+  published_at      DateTime?
+  moderated_at      DateTime?
+  // User.id of the moderator (not a relation on purpose).
+  moderated_by      String?
+  // Owner reply, plain text.
+  reply_body        String?
+  replied_at        DateTime?
+  created_at        DateTime            @default(now())
+  updated_at        DateTime            @updatedAt
+
+  store          Store          @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  product        Product?       @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  custom_product CustomProduct? @relation(fields: [custom_product_id], references: [id], onDelete: Cascade)
+  customer       Customer       @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  order          Order?         @relation(fields: [order_id], references: [id], onDelete: SetNull)
+  order_item     OrderItem?     @relation(fields: [order_item_id], references: [id], onDelete: SetNull)
+
+  // NULLs are distinct in Postgres, so each constraint only binds its own target kind.
+  @@unique([customer_id, product_id])
+  @@unique([customer_id, custom_product_id])
+  @@index([store_id, status, created_at])
+  @@index([product_id, status, published_at])
+  @@index([custom_product_id, status, published_at])
+  @@index([order_id])
+}
+
+// M171: "moderation required" marker of one customer + product. Written when
+// a review is removed after (or instead of) a moderator decision, so a new
+// review of the same customer and product waits for the owner even while the
+// store publishes automatically. Cleared when the owner approves a review of
+// that customer and product. Holds no review content.
+model ProductReviewHold {
+  id                String   @id @default(uuid())
+  store_id          String
+  customer_id       String
+  product_id        String?
+  custom_product_id String?
+  created_at        DateTime @default(now())
+
+  store          Store          @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  customer       Customer       @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  product        Product?       @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  custom_product CustomProduct? @relation(fields: [custom_product_id], references: [id], onDelete: Cascade)
+
+  // NULLs are distinct in Postgres, so each constraint only binds its own target kind.
+  @@unique([customer_id, product_id])
+  @@unique([customer_id, custom_product_id])
+  @@index([store_id])
 }
 
 // ==========================================

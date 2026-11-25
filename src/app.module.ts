@@ -59,6 +59,7 @@ import { ProductionModule } from './modules/production/production.module';
 import { DesignerModule } from './modules/designer/designer.module';
 import { OpsModule } from './modules/ops/ops.module';
 import { FeedsModule } from './modules/feeds/feeds.module';
+import { ReviewsModule } from './modules/reviews/reviews.module';
 import { ZohoMailModule } from './modules/zoho-mail/zoho-mail.module';
 import { OverviewModule } from './modules/overview/overview.module';
 import { StoreCustomersModule } from './modules/store-customers/store-customers.module';
@@ -149,6 +150,8 @@ import { ConsentLogModule } from './modules/consent-log/consent-log.module';
     CspReportModule,
     // Consent v2: cookie consent log (POST /storefront/:slug/consent + owner reads).
     ConsentLogModule,
+    // M171 reviews app: verified-buyer product reviews (storefront + owner).
+    ReviewsModule,
   ],
   providers: [
     // ThrottlerModule alone throttles nothing — only routes that explicitly

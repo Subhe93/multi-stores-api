@@ -16,6 +16,7 @@ export const STORE_APP_KEYS = [
   'feeds',
   'zoho_mail',
   'product_layout',
+  'reviews',
 ] as const;
 
 export type StoreAppKey = (typeof STORE_APP_KEYS)[number];
@@ -157,6 +158,18 @@ export const STORE_APPS: Record<StoreAppKey, StoreAppDefinition> = {
     key: 'product_layout',
     name_key: 'product_layout.name',
     description_key: 'product_layout.description',
+    requires_independent: false,
+    depends_on: [],
+    expose_settings_to_storefront: false,
+  },
+  // M171: verified-buyer product reviews (moderated in the dashboard, shown on
+  // the product page, aggregateRating in the product JSON-LD). Any store
+  // type. The only setting (auto_publish) is read on the server at submit
+  // time and never reaches the storefront payload.
+  reviews: {
+    key: 'reviews',
+    name_key: 'reviews.name',
+    description_key: 'reviews.description',
     requires_independent: false,
     depends_on: [],
     expose_settings_to_storefront: false,

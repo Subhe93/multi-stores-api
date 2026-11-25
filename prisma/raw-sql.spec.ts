@@ -29,6 +29,8 @@ export const RAW_SQL_ALLOWLIST: readonly string[] = [
   'User_customer_store_chk',
   'ProductVideo_position_check',
   'ProductVideo_product_id_featured_key',
+  'ProductReview_rating_chk',
+  'ProductReview_target_chk',
 ];
 
 const ROOT = join(__dirname, '..');
