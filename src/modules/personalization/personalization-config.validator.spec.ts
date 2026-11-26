@@ -255,6 +255,20 @@ describe('validateFieldConfig (M4.1 §4.1)', () => {
     expect(codes({ type: 'COLOR_PALETTE' })).toContain('options:INVALID_VALUE');
   });
 
+  it('ui.transform: uppercase, capitalize (M173) and none only', () => {
+    for (const transform of ['uppercase', 'capitalize', 'none']) {
+      expect(codes({ ui: { transform } })).toEqual([]);
+    }
+    expect(codes({ type: 'TEXTAREA', ui: { transform: 'capitalize' } })).toEqual(
+      [],
+    );
+    for (const transform of ['Capitalize', 'title', 'lowercase', '', null, 1, true]) {
+      expect(codes({ ui: { transform } })).toEqual([
+        'ui.transform:INVALID_VALUE',
+      ]);
+    }
+  });
+
   it('linked_validation.target must be a sibling in the same set (C16)', () => {
     expect(
       codes({

@@ -618,6 +618,7 @@ function checkUi(
   if (
     raw.transform !== undefined &&
     raw.transform !== 'uppercase' &&
+    raw.transform !== 'capitalize' &&
     raw.transform !== 'none'
   ) {
     bad('transform');
