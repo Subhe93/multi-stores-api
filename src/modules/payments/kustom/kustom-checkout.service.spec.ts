@@ -1569,3 +1569,104 @@ describe('KustomCheckoutService per market payment methods (M157)', () => {
     );
   });
 });
+
+// M175: the "c/o" line of the delivery address is stored with the address
+// row the Kustom-first order is created with.
+describe('KustomCheckoutService.handleValidation (M175 care_of)', () => {
+  const body = {
+    order_id: 'k-1',
+    order_amount: 29900,
+    purchase_currency: 'SEK',
+    billing_address: kustomAddress,
+    shipping_address: kustomAddress,
+  };
+  const createdAddress = (prisma: { address: { create: jest.Mock } }) =>
+    (
+      prisma.address.create.mock.calls[0] as [{ data: Record<string, unknown> }]
+    )[0].data;
+  const run = async (overrides: Record<string, unknown>) => {
+    const { service, prisma } = build(null, {
+      session: sessionRow(),
+      customer: loggedIn,
+    });
+    const res = await service.handleValidation('sess-1', 'cb-token', {
+      ...body,
+      ...overrides,
+    });
+    expect(res).toEqual({ ok: true, body: { ok: true } });
+    return prisma;
+  };
+
+  it('stores the trimmed c/o of the shipping address and matches on it', async () => {
+    const prisma = await run({
+      billing_address: { ...kustomAddress, care_of: 'Billing Person' },
+      shipping_address: {
+        ...kustomAddress,
+        given_name: 'Karin',
+        family_name: 'Berg',
+        care_of: '  Familjen Lind  ',
+      },
+    });
+    expect(createdAddress(prisma)).toMatchObject({
+      full_name: 'Karin Berg',
+      care_of: 'Familjen Lind',
+    });
+    expect(
+      (prisma.address.findFirst.mock.calls[0] as [{ where: object }])[0].where,
+    ).toMatchObject({ care_of: 'Familjen Lind' });
+  });
+
+  it('caps c/o at 120 characters', async () => {
+    const prisma = await run({
+      shipping_address: { ...kustomAddress, care_of: 'x'.repeat(300) },
+    });
+    expect(createdAddress(prisma).care_of).toBe('x'.repeat(120));
+  });
+
+  it('no c/o, or a blank one, is stored as null', async () => {
+    for (const care_of of [undefined, '', '   ']) {
+      const prisma = await run({
+        shipping_address: { ...kustomAddress, care_of },
+      });
+      expect(createdAddress(prisma).care_of).toBeNull();
+    }
+  });
+
+  it('a c/o on the billing address is not attached to a separate delivery address', async () => {
+    const prisma = await run({
+      billing_address: { ...kustomAddress, care_of: 'Billing Person' },
+      shipping_address: kustomAddress,
+    });
+    expect(createdAddress(prisma).care_of).toBeNull();
+  });
+
+  it('without a shipping address the billing address and its c/o are used', async () => {
+    const prisma = await run({
+      billing_address: { ...kustomAddress, care_of: 'Billing Person' },
+      shipping_address: undefined,
+    });
+    expect(createdAddress(prisma).care_of).toBe('Billing Person');
+  });
+
+  it('stores the Kustom billing name as the buyer of the order', async () => {
+    const prisma = await run({
+      billing_address: {
+        ...kustomAddress,
+        given_name: 'Erik',
+        family_name: 'Berg',
+      },
+      shipping_address: {
+        ...kustomAddress,
+        given_name: 'Karin',
+        family_name: 'Berg',
+      },
+    });
+    const updates = (prisma.order.update as jest.Mock).mock.calls.map(
+      (c) => (c as [{ data: Record<string, unknown> }])[0].data,
+    );
+    expect(updates).toContainEqual(
+      expect.objectContaining({ kustom_order_id: 'k-1', buyer_name: 'Erik Berg' }),
+    );
+    expect(createdAddress(prisma).full_name).toBe('Karin Berg');
+  });
+});

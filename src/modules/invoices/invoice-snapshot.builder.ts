@@ -103,6 +103,8 @@ export interface SnapshotOrderAddress {
   state?: string | null;
   country_code: string;
   phone?: string | null;
+  /** M175: "c/o" line of the delivery address. */
+  care_of?: string | null;
 }
 
 export interface SnapshotOrder {
@@ -128,6 +130,8 @@ export interface SnapshotOrder {
   org_number?: string | null;
   vat_number?: string | null;
   buyer_reference?: string | null;
+  /** M175: who bought (Kustom billing name); null without one. */
+  buyer_name?: string | null;
   /** b2b app M2.5: why the order carries no VAT (null = taxed). */
   tax_exempt_reason?: TaxExemptReason | null;
   /** b2b app M2.5: VatEvidence JSON of the exemption decision. */
@@ -323,8 +327,22 @@ function copyAddress(
     state: a.state || null,
     country_code: a.country_code,
     phone: a.phone || null,
+    // Only when there is one, so a snapshot without it keeps its old shape.
+    ...(a.care_of?.trim() ? { care_of: a.care_of.trim() } : {}),
   };
 }
+
+/** The billing copy of an address whose "c/o" belongs to the delivery. */
+function withoutCareOf(a: InvoiceAddress): InvoiceAddress {
+  const copy = { ...a };
+  delete copy.care_of;
+  return copy;
+}
+
+/** Same person: case and spacing do not make a different name. */
+const sameName = (a: string, b: string) =>
+  a.replace(/\s+/g, ' ').trim().toLowerCase() ===
+  b.replace(/\s+/g, ' ').trim().toLowerCase();
 
 const EXEMPT_REASONS: readonly TaxExemptReason[] = [
   'REVERSE_CHARGE',
@@ -403,15 +421,28 @@ function buildTaxExemption(
 function buildBuyer(order: SnapshotOrder): InvoiceBuyer {
   const type = order.customer_type ?? 'PERSON';
   const company = type === 'COMPANY';
-  const personName = [order.customer?.first_name, order.customer?.last_name]
+  // M175: an invoice names who BOUGHT, not who receives the parcel. The
+  // buyer of THIS order is Order.buyer_name (the Kustom billing name); the
+  // address name (Address.full_name) is the recipient and may be another
+  // person. The account profile is never the source while either exists: an
+  // existing profile is not renamed by a later order. Without a stored buyer
+  // name (no Kustom, or placed before M175) the order of precedence is the
+  // old one: address name, then profile. The address spelling is kept when
+  // both name the same person, so that document is the pre-M175 one.
+  const recipientName = order.address?.full_name?.trim() ?? '';
+  const buyerName = order.buyer_name?.trim() ?? '';
+  const profileName = [order.customer?.first_name, order.customer?.last_name]
     .filter((s) => !!s && s.trim())
     .join(' ')
     .trim();
-  const name =
-    (company && order.company_name) ||
-    order.address?.full_name ||
-    personName ||
-    '—';
+  const personName =
+    buyerName && recipientName && !sameName(buyerName, recipientName)
+      ? buyerName
+      : recipientName || buyerName || profileName;
+  // True only when the buyer is known to be another person than the
+  // recipient: the one address row is then the delivery address.
+  const buyerDiffers = !!recipientName && personName !== recipientName;
+  const name = (company && order.company_name) || personName || '—';
   const address = copyAddress(order.address);
   return {
     type,
@@ -430,7 +461,15 @@ function buildBuyer(order: SnapshotOrder): InvoiceBuyer {
     reference: company ? order.buyer_reference || null : null,
     email: order.customer?.user?.email || null,
     // The Address row is mutable and shared, so it is copied, not referenced.
-    billing_address: address,
+    // The order has one address; its billing copy carries the buyer's name
+    // (the contact person of a company), its delivery copy the recipient's.
+    // The "c/o" line belongs to the delivery address: it is not printed
+    // under a buyer who is another person.
+    billing_address: address
+      ? buyerDiffers
+        ? withoutCareOf({ ...address, name: personName })
+        : address
+      : null,
     // No delivery address on an order that required no shipping.
     shipping_address:
       address && orderRequiresShipping(order) ? { ...address } : null,

@@ -34,6 +34,7 @@ export interface WorkspaceOrderSource {
     postal_code?: string | null;
     country_code?: string | null;
     phone?: string | null;
+    care_of?: string | null;
   } | null;
   market?: { key: string; name: string; currency: string } | null;
   items: {
@@ -234,6 +235,7 @@ export function buildWorkspace(input: {
       shipping_address: order.address
         ? {
             full_name: order.address.full_name ?? null,
+            care_of: order.address.care_of ?? null,
             line1: order.address.line1 ?? null,
             line2: order.address.line2 ?? null,
             city: order.address.city ?? null,

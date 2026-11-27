@@ -26,6 +26,7 @@ import {
   formatPercent,
 } from './invoice-format';
 import { INVOICE_FONT_STACK } from './fonts';
+import { careOfLine } from '../../../common/address/care-of';
 import type {
   PdfAddress,
   PdfLine,
@@ -122,6 +123,8 @@ function addressLines(
   return [
     a.company,
     a.name,
+    // M175: "c/o" on its own line under the name (new snapshots only).
+    careOfLine(a.care_of),
     a.line1,
     a.line2,
     cityLine,
@@ -691,7 +694,13 @@ function supplierBannerBlock(p: InvoicePhrases): string {
 </div>`;
 }
 
-/** Buyer name + delivery address only (what is needed to ship). */
+/**
+ * Delivery address only (what is needed to ship). The heading is the
+ * RECIPIENT of the parcel: for a person that is the name on the delivery
+ * address (M175: it may differ from the buyer), for a company the company
+ * with the recipient listed below. Snapshots from before M175 carry the
+ * same name in both places, so they print exactly as before.
+ */
 function supplierDeliveryBlock(
   s: SnapshotForPdf,
   p: InvoicePhrases,
@@ -701,8 +710,10 @@ function supplierDeliveryBlock(
   const ship = b.shipping_address;
   // No delivery address (e.g. a digital order): no block at all.
   if (!ship) return '';
+  const heading =
+    b.type !== 'COMPANY' && present(ship.name) ? ship.name : b.name;
   const same = (v: string | null | undefined) =>
-    present(v) && String(v).trim() === String(b.name ?? '').trim();
+    present(v) && String(v).trim() === String(heading ?? '').trim();
   const lines = addressLines(
     {
       ...ship,
@@ -716,7 +727,7 @@ function supplierDeliveryBlock(
 <div class="parties">
 <div class="party">
   <h2>${esc(p.deliveryAddress)}</h2>
-  <div class="name">${txt(b.name)}</div>
+  <div class="name">${txt(heading)}</div>
   <div>${lines.map(txt).join('<br>')}</div>
 </div>
 </div>`;

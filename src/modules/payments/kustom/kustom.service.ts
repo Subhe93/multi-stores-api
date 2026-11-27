@@ -38,6 +38,8 @@ import {
 import {
   buildKustomCheckoutPayload,
   expectedKustomAmount,
+  kustomBuyerName,
+  kustomCareOf,
   resolveStoreBase,
 } from './kustom.mapper';
 import {
@@ -79,6 +81,7 @@ function liveBillingAddress(a: KustomAddress | undefined) {
     full_name:
       [a.given_name, a.family_name].filter(Boolean).join(' ').trim() || null,
     company_name: s(a.organization_name),
+    care_of: s(a.care_of),
     line1: s(a.street_address),
     line2: s(a.street_address2),
     postal_code: s(a.postal_code),
@@ -1207,6 +1210,7 @@ export class KustomService implements OnModuleInit {
     try {
       await this.syncShippingAddress(order.id, live);
       await this.fillCompanySnapshot(order.id, live);
+      await this.syncBuyerName(order.id, live);
     } catch (err) {
       this.logger.warn(
         `Order ${order.id}: could not sync the Kustom address / organisation details: ${
@@ -1403,6 +1407,35 @@ export class KustomService implements OnModuleInit {
   }
 
   /**
+   * M175: the name of the person who bought, from Kustom's billing address
+   * (the shopper may edit it inside the iframe). Written only when Kustom
+   * reports one and it differs, so a replay is a no-op. Best-effort.
+   */
+  private async syncBuyerName(orderId: string, live: KustomManagementOrder) {
+    const buyerName = kustomBuyerName(
+      live.billing_address,
+      live.shipping_address,
+    );
+    if (!buyerName) return;
+    try {
+      await this.prisma.order.updateMany({
+        // A null column does not match `not`, so it is named explicitly.
+        where: {
+          id: orderId,
+          OR: [{ buyer_name: null }, { buyer_name: { not: buyerName } }],
+        },
+        data: { buyer_name: buyerName },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Order ${orderId}: could not store the Kustom buyer name: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /**
    * The customer may change the shipping address inside the Kustom iframe.
    * When it differs from the address the order was placed with, a new
    * Address row is created for the customer and the order re-pointed to it;
@@ -1434,6 +1467,8 @@ export class KustomService implements OnModuleInit {
       .filter(Boolean)
       .join(' ')
       .trim();
+    // M175: "c/o" of the same address object the street comes from.
+    const careOf = kustomCareOf(remote);
     const current = order.address;
     const same =
       norm(current.full_name) === norm(fullName || current.full_name) &&
@@ -1441,7 +1476,9 @@ export class KustomService implements OnModuleInit {
       norm(current.line2) === norm(remote.street_address2) &&
       norm(current.city) === norm(remote.city) &&
       norm(current.postal_code) === norm(remote.postal_code) &&
-      norm(current.country_code) === norm(remote.country);
+      norm(current.country_code) === norm(remote.country) &&
+      // A changed, added or removed "c/o" is a different delivery address.
+      norm(current.care_of) === norm(careOf);
     if (same) return;
 
     try {
@@ -1452,10 +1489,24 @@ export class KustomService implements OnModuleInit {
         line1: remote.street_address,
         line2: remote.street_address2 || null,
         city: remote.city,
-        state: remote.region || null,
+        // Kustom often omits the region; the stored one still applies while
+        // the postcode and country are the same.
+        state:
+          remote.region ||
+          (norm(current.postal_code) === norm(remote.postal_code) &&
+          norm(current.country_code) === norm(remote.country)
+            ? current.state
+            : null) ||
+          null,
         postal_code: remote.postal_code,
         country_code: remote.country.toUpperCase().slice(0, 2),
         phone: remote.phone || current.phone || null,
+        care_of: careOf,
+        // b2b app: the company columns of the row being replaced go with
+        // the new one; Kustom's shipping address does not carry them.
+        company_name: current.company_name ?? null,
+        org_number: current.org_number ?? null,
+        buyer_reference: current.buyer_reference ?? null,
         is_default: false,
       };
       // Push and confirmation can race here; reuse an identical row written
@@ -1470,6 +1521,10 @@ export class KustomService implements OnModuleInit {
           city: data.city,
           postal_code: data.postal_code,
           country_code: data.country_code,
+          care_of: data.care_of,
+          company_name: data.company_name,
+          org_number: data.org_number,
+          buyer_reference: data.buyer_reference,
         },
         select: { id: true },
       });

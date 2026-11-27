@@ -177,6 +177,9 @@ export class GuestOrderService {
       postal_code: address.postal_code.trim(),
       country_code: country,
       phone: text(address.phone),
+      // M175: the guest form has no "c/o" field. Part of the match, so a
+      // row a Kustom checkout stored with one is never reused here.
+      care_of: null,
       company_name: text(address.company_name)?.replace(/\s+/g, ' ') ?? null,
       org_number: org ? normalizeOrgNumber(country, org) || null : null,
       buyer_reference: text(address.buyer_reference),

@@ -92,6 +92,8 @@ export interface KustomAddressInput {
   postal_code: string;
   country_code: string;
   phone?: string | null;
+  /** M175: the "c/o" line of the address; sent to Kustom when set. */
+  care_of?: string | null;
 }
 
 /** The amounts every line builder needs; an Order row satisfies it. */
@@ -286,6 +288,55 @@ export function splitFullName(fullName: string): {
   };
 }
 
+/** Longest buyer name stored (Order.buyer_name is VARCHAR(200)). */
+export const BUYER_NAME_MAX_LENGTH = 200;
+
+/**
+ * M175: the name of the person who BOUGHT, as stored on Order.buyer_name:
+ * the name on Kustom's billing address, else (no billing name reported) the
+ * one on the shipping address. Null when Kustom reported no name at all.
+ */
+export function kustomBuyerName(
+  billing:
+    | { given_name?: string | null; family_name?: string | null }
+    | null
+    | undefined,
+  shipping?:
+    | { given_name?: string | null; family_name?: string | null }
+    | null
+    | undefined,
+): string | null {
+  const nameOf = (
+    a:
+      | { given_name?: string | null; family_name?: string | null }
+      | null
+      | undefined,
+  ) =>
+    [a?.given_name, a?.family_name]
+      .map((p) => (typeof p === 'string' ? p.trim() : ''))
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .slice(0, BUYER_NAME_MAX_LENGTH)
+      .trim();
+  return nameOf(billing) || nameOf(shipping) || null;
+}
+
+/** Longest "c/o" value stored (Address.care_of is VARCHAR(120)). */
+export const CARE_OF_MAX_LENGTH = 120;
+
+/**
+ * M175: the "c/o" line of a Kustom address as stored on Address.care_of:
+ * trimmed, capped at the column length, null when absent or blank.
+ */
+export function kustomCareOf(
+  address: { care_of?: string | null } | null | undefined,
+): string | null {
+  const raw = address?.care_of;
+  if (typeof raw !== 'string') return null;
+  return raw.trim().slice(0, CARE_OF_MAX_LENGTH).trim() || null;
+}
+
 export function buildKustomAddress(
   order: Pick<KustomOrderInput, 'address' | 'customer'> & KustomCompanyInput,
 ): KustomAddress {
@@ -305,6 +356,10 @@ export function buildKustomAddress(
   if (a.state) address.region = a.state;
   if (email) address.email = email;
   if (phone) address.phone = phone;
+  // M175: a stored "c/o" line goes back to Kustom, so the address the
+  // shopper confirms in the iframe keeps it (documented address field).
+  const careOf = kustomCareOf(a);
+  if (careOf) address.care_of = careOf;
   // b2b app: organisation fields, only on a company purchase (Kustom API
   // reference names: organization_name, buyer_reference).
   if (isCompany(order)) {

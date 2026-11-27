@@ -719,3 +719,185 @@ describe('buildInvoiceSnapshot (order without shipping)', () => {
     expect(off.lines).toEqual(on.lines);
   });
 });
+
+// M175: an invoice names the BUYER of the order: the company, else the name
+// stored on the order (Order.buyer_name, the Kustom billing name). The name
+// on the order's address is the parcel's recipient. The account profile is
+// only the last fallback: it is not renamed by a later order.
+describe('buildInvoiceSnapshot (M175 buyer name vs recipient)', () => {
+  const base = (company = false) =>
+    makeOrder({
+      mode: TaxPricingMode.INCLUSIVE,
+      currency: 'SEK',
+      lines: LINE_SETS.single25,
+      shipping: 49,
+      discount: 0,
+      company,
+    });
+  const giftTo = (order: SnapshotOrder, fullName: string): SnapshotOrder => ({
+    ...order,
+    address: { ...order.address!, full_name: fullName },
+  });
+  const boughtBy = (order: SnapshotOrder, buyerName: string): SnapshotOrder => ({
+    ...order,
+    buyer_name: buyerName,
+  });
+
+  it('person: buyer and recipient the same → the snapshot built before', () => {
+    const plain = buildInvoiceSnapshot(input(base()));
+    expect(plain.buyer.name).toBe('Anna Svensson');
+    expect(plain.buyer.billing_address).toMatchObject({
+      name: 'Anna Svensson',
+    });
+    expect(plain.buyer.shipping_address).toEqual(plain.buyer.billing_address);
+    expect(plain.buyer.billing_address).not.toHaveProperty('care_of');
+    // A stored buyer name equal to the address name changes nothing.
+    expect(
+      buildInvoiceSnapshot(input(boughtBy(base(), 'Anna Svensson'))),
+    ).toEqual(plain);
+  });
+
+  it('person: a parcel for someone else still invoices the buyer', () => {
+    const order = boughtBy(giftTo(base(), 'Karin Berg'), 'Anna Svensson');
+    const s = buildInvoiceSnapshot(input(order));
+    expect(s.buyer.name).toBe('Anna Svensson');
+    expect(s.buyer.billing_address).toMatchObject({
+      name: 'Anna Svensson',
+      line1: 'Gatan 2',
+    });
+    expect(s.buyer.shipping_address).toMatchObject({
+      name: 'Karin Berg',
+      line1: 'Gatan 2',
+    });
+    expect(snapshotInvariantErrors(s)).toEqual([]);
+  });
+
+  it('without a stored buyer name the address name comes first, as before M175', () => {
+    // The profile differs from the address, but the profile is not the buyer
+    // of this order (no Kustom billing name was stored).
+    const s = buildInvoiceSnapshot(input(giftTo(base(), 'Karin Berg')));
+    expect(s.buyer.name).toBe('Karin Berg');
+    expect(s.buyer.billing_address).toMatchObject({ name: 'Karin Berg' });
+    expect(s.buyer.shipping_address).toEqual(s.buyer.billing_address);
+  });
+
+  it('a returning account with an old profile name is not the buyer', () => {
+    // Profile "Sara Berg" from an earlier order; Kustom billing and shipping
+    // of this order both say "Erik Berg".
+    const order: SnapshotOrder = {
+      ...boughtBy(giftTo(base(), 'Erik Berg'), 'Erik Berg'),
+      customer: {
+        first_name: 'Sara',
+        last_name: 'Berg',
+        user: { email: 'sara@example.com' },
+      },
+    };
+    const s = buildInvoiceSnapshot(input(order));
+    expect(s.buyer.name).toBe('Erik Berg');
+    expect(s.buyer.billing_address).toMatchObject({ name: 'Erik Berg' });
+    expect(s.buyer.shipping_address).toEqual(s.buyer.billing_address);
+  });
+
+  it('the legal name Kustom reported is kept, not the shorter profile name', () => {
+    const order = boughtBy(
+      giftTo(base(), 'Anna Maria Svensson'),
+      'Anna Maria Svensson',
+    );
+    const s = buildInvoiceSnapshot(input(order));
+    expect(s.buyer.name).toBe('Anna Maria Svensson');
+  });
+
+  it('same person spelled differently keeps the address spelling', () => {
+    const order = boughtBy(giftTo(base(), 'anna  SVENSSON'), 'Anna Svensson');
+    const s = buildInvoiceSnapshot(input(order));
+    expect(s.buyer.name).toBe('anna  SVENSSON');
+    expect(s.buyer.shipping_address).toEqual(s.buyer.billing_address);
+  });
+
+  it('company: the company is the buyer, the billing name the contact, the recipient on delivery', () => {
+    const order = boughtBy(giftTo(base(true), 'Karin Berg'), 'Anna Svensson');
+    const s = buildInvoiceSnapshot(input(order));
+    expect(s.buyer).toMatchObject({
+      type: 'COMPANY',
+      name: 'Acme AB',
+      company_name: 'Acme AB',
+    });
+    expect(s.buyer.billing_address).toMatchObject({ name: 'Anna Svensson' });
+    expect(s.buyer.shipping_address).toMatchObject({ name: 'Karin Berg' });
+  });
+
+  it('fallback: no address name uses the stored buyer name, then the profile', () => {
+    const noName = giftTo(base(), '');
+    expect(
+      buildInvoiceSnapshot(input(boughtBy(noName, 'Erik Berg'))).buyer.name,
+    ).toBe('Erik Berg');
+    expect(buildInvoiceSnapshot(input(noName)).buyer.name).toBe(
+      'Anna Svensson',
+    );
+  });
+
+  it('fallback: neither a buyer, a profile nor an address name', () => {
+    const s = buildInvoiceSnapshot(
+      input({ ...giftTo(base(), ''), customer: null }),
+    );
+    expect(s.buyer.name).toBe('—');
+    expect(s.buyer.billing_address).toMatchObject({ name: null });
+  });
+
+  it('c/o stays on the delivery address when the buyer is another person', () => {
+    const order = base();
+    const s = buildInvoiceSnapshot(
+      input({
+        ...boughtBy(order, 'Karl Berg'),
+        address: {
+          ...order.address!,
+          full_name: 'Anna Lind',
+          care_of: 'Familjen Lind',
+        },
+      }),
+    );
+    expect(s.buyer.billing_address).toMatchObject({ name: 'Karl Berg' });
+    expect(s.buyer.billing_address).not.toHaveProperty('care_of');
+    expect(s.buyer.shipping_address).toMatchObject({
+      name: 'Anna Lind',
+      care_of: 'Familjen Lind',
+    });
+  });
+
+  it('c/o is copied onto the address, trimmed, and only when there is one', () => {
+    const order = base();
+    const s = buildInvoiceSnapshot(
+      input({
+        ...order,
+        address: { ...order.address!, care_of: ' Familjen Lind ' },
+      }),
+    );
+    expect(s.buyer.shipping_address).toMatchObject({
+      care_of: 'Familjen Lind',
+    });
+    const blank = buildInvoiceSnapshot(
+      input({ ...order, address: { ...order.address!, care_of: '  ' } }),
+    );
+    expect(blank).toEqual(buildInvoiceSnapshot(input(order)));
+  });
+
+  it('a credit note copies the buyer of the original, whatever the order says now', () => {
+    const original = withNumber(
+      buildInvoiceSnapshot(input(giftTo(base(), 'Karin Berg'))),
+      '1001',
+    );
+    // An invoice issued before M175 named the recipient: it must stay so.
+    const legacy: InvoiceSnapshot = {
+      ...original,
+      buyer: { ...original.buyer, name: 'Karin Berg' },
+    };
+    const credit = buildCreditSnapshot({
+      original: legacy,
+      amount: 'full',
+      priorCredited: 0,
+      issueDate: '2026-10-20',
+      reasonCode: 'refund',
+    });
+    expect(credit.buyer).toEqual(legacy.buyer);
+  });
+});

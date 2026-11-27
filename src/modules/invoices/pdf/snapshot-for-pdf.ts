@@ -23,6 +23,8 @@ export interface PdfAddress {
   /** ISO 3166-1 alpha-2; printed as a localised country name. */
   country_code?: string | null;
   phone?: string | null;
+  /** M175: "c/o" line (absent on older snapshots). */
+  care_of?: string | null;
 }
 
 export interface PdfSeller {
@@ -196,6 +198,7 @@ function address(a: InvoiceAddress | null | undefined): PdfAddress | null {
     state: a.state,
     country_code: a.country_code,
     phone: a.phone,
+    care_of: a.care_of ?? null,
   };
 }
 
@@ -313,6 +316,7 @@ export function toSupplierCopy(
     ? {
         name: ship.name,
         company: ship.company,
+        care_of: ship.care_of ?? null,
         line1: ship.line1,
         line2: ship.line2,
         postal_code: ship.postal_code,

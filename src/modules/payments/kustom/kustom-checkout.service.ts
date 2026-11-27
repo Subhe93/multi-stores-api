@@ -63,6 +63,8 @@ import {
   buildKustomSessionAmounts,
   buildKustomSessionPayload,
   expectedKustomAmount,
+  kustomBuyerName,
+  kustomCareOf,
   resolveStoreBase,
   type KustomAddressInput,
   type KustomOrderItemInput,
@@ -1872,6 +1874,13 @@ export class KustomCheckoutService {
             data: {
               kustom_order_id: session.kustom_order_id,
               kustom_push_token: session.callback_token,
+              // M175: who bought THIS order (Kustom billing name). The
+              // account profile is not it: an existing profile is never
+              // renamed, and the address name is the parcel's recipient.
+              buyer_name: kustomBuyerName(
+                b.billing_address,
+                b.shipping_address,
+              ),
             },
           }),
           this.prisma.kustomCheckoutSession.update({
@@ -2402,6 +2411,9 @@ export class KustomCheckoutService {
       postal_code: a.postal_code,
       country_code: a.country.toUpperCase().slice(0, 2),
       phone: a.phone || billing?.phone || null,
+      // M175: the "c/o" line of the SAME address the street comes from; a
+      // billing c/o is never attached to a separate delivery address.
+      care_of: kustomCareOf(a),
       // b2b app: the billing company of this address (D8); all null for a
       // person, so person rows match exactly as before.
       company_name: company?.company_name || null,
@@ -2420,6 +2432,7 @@ export class KustomCheckoutService {
         state: data.state,
         postal_code: data.postal_code,
         country_code: data.country_code,
+        care_of: data.care_of,
         company_name: data.company_name,
         org_number: data.org_number,
         buyer_reference: data.buyer_reference,

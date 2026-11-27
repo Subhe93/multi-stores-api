@@ -292,6 +292,8 @@ model Address {
   postal_code     String
   country_code    String   @db.VarChar(2)
   phone           String?
+  // M175: "c/o" line of the delivery address (Kustom care_of).
+  care_of         String?  @db.VarChar(120)
   // b2b app: company fields of this (billing) address.
   company_name    String?
   org_number      String?  @db.VarChar(32)
@@ -933,6 +935,10 @@ model Order {
   org_number              String?             @db.VarChar(32)
   vat_number              String?             @db.VarChar(32)
   buyer_reference         String?
+  // M175: the name of the person who BOUGHT this order (Kustom billing
+  // name). The parcel's recipient is Address.full_name and may differ.
+  // Null on orders placed without Kustom or before M175.
+  buyer_name              String?             @db.VarChar(200)
   // b2b app M2.5: why VAT is zero (null = taxed normally) and the evidence
   // (VIES result / manual exemption, a VatEvidence object).
   tax_exempt_reason       TaxExemptReason?

@@ -8,6 +8,7 @@ import {
   PublicStorage,
   publicMediaKeyFromUrl,
 } from '../storage/public-storage';
+import { careOfLine } from '../../common/address/care-of';
 import { currencyDecimals } from '../../common/money/currency.util';
 import { resolveVariantImage } from '../../common/catalog/variant-image.util';
 import {
@@ -1069,14 +1070,19 @@ export function renderShippingAddress(
         postal_code: string;
         country_code: string;
         phone?: string | null;
+        /** M175: "c/o" line, printed on its own line under the recipient. */
+        care_of?: string | null;
       }
     | null
     | undefined,
   locale?: string,
 ): { html: string; text: string } {
   if (!address) return { html: '', text: '' };
+  // The block names the RECIPIENT of the parcel (Address.full_name), who
+  // may be another person than the buyer the email greets.
   const lines = [
     address.full_name,
+    careOfLine(address.care_of),
     address.line1,
     address.line2 || '',
     [address.postal_code, address.city].filter(Boolean).join(' '),
